@@ -1,0 +1,62 @@
+# Stack completo para Coolify: base de datos, Redis, API y worker.
+# Las variables (META_*, OPENROUTER_*, contraseñas) se configuran en Coolify.
+
+x-bot-env: &bot-env
+  DATABASE_URL: ${DATABASE_URL}
+  REDIS_URL: ${REDIS_URL}
+  META_PHONE_NUMBER_ID: ${META_PHONE_NUMBER_ID}
+  META_WABA_ID: ${META_WABA_ID}
+  META_ACCESS_TOKEN: ${META_ACCESS_TOKEN}
+  META_VERIFY_TOKEN: ${META_VERIFY_TOKEN}
+  META_APP_SECRET: ${META_APP_SECRET}
+  OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+  OPENROUTER_MODEL: ${OPENROUTER_MODEL}
+  OPENROUTER_MODEL_FALLBACK: ${OPENROUTER_MODEL_FALLBACK}
+  BUFFER_SEGUNDOS: ${BUFFER_SEGUNDOS}
+  CONVERSACION_TTL: ${CONVERSACION_TTL}
+  MAX_ITERACIONES_AGENTE: ${MAX_ITERACIONES_AGENTE}
+  NEGOCIO_NOMBRE: ${NEGOCIO_NOMBRE}
+  NEGOCIO_UBICACION: ${NEGOCIO_UBICACION}
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-masvida}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-masvidaconsciente}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-masvida}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+
+  web:
+    build: .
+    command: sh -c "python -m app.init_db && uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    environment: *bot-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    ports:
+      - "8000:8000"
+
+  worker:
+    build: .
+    command: celery -A app.workers.celery_app:celery_app worker -l info
+    environment: *bot-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+volumes:
+  pgdata:

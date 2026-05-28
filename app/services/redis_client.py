@@ -1,0 +1,73 @@
+"""Redis: idempotencia, buffer de mensajes, historial de conversación y locks.
+
+Patrón tomado del sistema de referencia (clínica), simplificado:
+- idempotencia: no procesar dos veces el mismo message_id (Meta reenvía)
+- buffer: juntar mensajes rápidos del mismo cliente antes de responder
+- historial: contexto reciente de la conversación (con TTL)
+- lock: que solo un worker procese el buffer de un cliente a la vez
+"""
+import json
+from functools import lru_cache
+
+import redis.asyncio as redis
+
+from app.config import get_settings
+
+settings = get_settings()
+
+
+@lru_cache
+def _client() -> redis.Redis:
+    return redis.from_url(settings.redis_url, decode_responses=True)
+
+
+# ─── Idempotencia ────────────────────────────────────────────────────
+
+async def ya_procesado(message_id: str) -> bool:
+    """True si el message_id ya se vio antes. Marca el id por 24h."""
+    creado = await _client().set(f"msg:{message_id}", "1", nx=True, ex=86400)
+    return creado is None
+
+
+# ─── Buffer de mensajes ──────────────────────────────────────────────
+
+async def agregar_a_buffer(telefono: str, texto: str) -> None:
+    c = _client()
+    await c.rpush(f"buffer:{telefono}", texto)
+    await c.expire(f"buffer:{telefono}", 3600)
+
+
+async def vaciar_buffer(telefono: str) -> list[str]:
+    c = _client()
+    clave = f"buffer:{telefono}"
+    async with c.pipeline(transaction=True) as pipe:
+        pipe.lrange(clave, 0, -1)
+        pipe.delete(clave)
+        mensajes, _ = await pipe.execute()
+    return mensajes or []
+
+
+# ─── Lock de procesamiento ───────────────────────────────────────────
+
+async def adquirir_lock(telefono: str, ttl: int = 120) -> bool:
+    creado = await _client().set(f"lock:{telefono}", "1", nx=True, ex=ttl)
+    return creado is not None
+
+
+async def liberar_lock(telefono: str) -> None:
+    await _client().delete(f"lock:{telefono}")
+
+
+# ─── Historial de conversación ───────────────────────────────────────
+
+async def guardar_historial(telefono: str, rol: str, contenido: str) -> None:
+    c = _client()
+    clave = f"hist:{telefono}"
+    await c.rpush(clave, json.dumps({"role": rol, "content": contenido}))
+    await c.ltrim(clave, -20, -1)  # solo los últimos 20 turnos
+    await c.expire(clave, settings.conversacion_ttl)
+
+
+async def obtener_historial(telefono: str) -> list[dict]:
+    filas = await _client().lrange(f"hist:{telefono}", 0, -1)
+    return [json.loads(f) for f in filas]
