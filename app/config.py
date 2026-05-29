@@ -31,6 +31,11 @@ class Settings(BaseSettings):
     negocio_nombre: str = "masvidaconsciente"
     negocio_ubicacion: str = "Cabudare, Venezuela"
 
+    # Dashboard (login)
+    jwt_secret: str = "cambia-esto-en-produccion"
+    admin_email: str = "admin@masvidaconsciente.com"
+    admin_password: str = "masvida2026"
+
 
 @lru_cache
 def get_settings() -> Settings:

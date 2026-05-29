@@ -36,12 +36,41 @@ async def main() -> None:
         total = (await session.execute(text("SELECT COUNT(*) FROM productos"))).scalar()
         if total and total > 0:
             logger.info("Catálogo ya cargado (%s productos), no se vuelve a sembrar", total)
-            return
+        else:
+            for stmt in _statements(MIGRATIONS / "002_seed_catalogo.sql"):
+                await session.execute(text(stmt))
+            await session.commit()
+            logger.info("Catálogo sembrado")
 
-        for stmt in _statements(MIGRATIONS / "002_seed_catalogo.sql"):
-            await session.execute(text(stmt))
-        await session.commit()
-        logger.info("Catálogo sembrado")
+        # El admin se crea/verifica siempre, exista o no el catálogo
+        await _crear_admin(session)
+
+
+async def _crear_admin(session) -> None:
+    """Crea el usuario admin del dashboard si no existe."""
+    from app.api.security import hash_password
+    from app.config import get_settings
+    from app.models import Usuario
+
+    settings = get_settings()
+    existe = (
+        await session.execute(
+            text("SELECT 1 FROM usuarios WHERE email = :email"),
+            {"email": settings.admin_email},
+        )
+    ).scalar()
+    if existe:
+        logger.info("Usuario admin ya existe")
+        return
+    session.add(
+        Usuario(
+            email=settings.admin_email,
+            password_hash=hash_password(settings.admin_password),
+            nombre="Administrador",
+        )
+    )
+    await session.commit()
+    logger.info("Usuario admin creado: %s", settings.admin_email)
 
 
 if __name__ == "__main__":
