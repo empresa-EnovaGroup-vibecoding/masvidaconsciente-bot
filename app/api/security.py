@@ -1,16 +1,15 @@
 """Autenticación del dashboard: hash de contraseñas y tokens JWT."""
 from datetime import datetime, timedelta, timezone
 
+import bcrypt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
-from passlib.context import CryptContext
 
 from app.config import get_settings
 
 settings = get_settings()
 
-_pwd = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/login")
 
 ALGORITHM = "HS256"
@@ -18,11 +17,17 @@ TOKEN_HORAS = 12
 
 
 def hash_password(password: str) -> str:
-    return _pwd.hash(password)
+    # bcrypt admite máximo 72 bytes; truncamos por seguridad
+    pw = password.encode("utf-8")[:72]
+    return bcrypt.hashpw(pw, bcrypt.gensalt()).decode("utf-8")
 
 
 def verify_password(plain: str, hashed: str) -> bool:
-    return _pwd.verify(plain, hashed)
+    pw = plain.encode("utf-8")[:72]
+    try:
+        return bcrypt.checkpw(pw, hashed.encode("utf-8"))
+    except ValueError:
+        return False
 
 
 def crear_token(email: str) -> str:
