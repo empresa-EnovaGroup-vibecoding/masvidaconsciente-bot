@@ -85,3 +85,18 @@ async def get_cache(clave: str) -> str | None:
 async def set_cache(clave: str, valor: str, ttl: int) -> None:
     """Guarda un valor en cache con expiracion (segundos)."""
     await _client().set(clave, valor, ex=ttl)
+
+
+# ─── Idempotencia del carril de comprobantes (dinero) ────────────────
+# Clave separada del carril de texto (msg:). Se marca SOLO tras procesar el
+# comprobante con exito, para que un fallo transitorio de descarga no haga que
+# el reintento legitimo de Meta se descarte como duplicado y se pierda el pago.
+
+async def comprobante_procesado(message_id: str) -> bool:
+    """True si este comprobante ya se proceso con exito antes (solo lectura)."""
+    return await _client().get(f"comprob:{message_id}") is not None
+
+
+async def marcar_comprobante(message_id: str) -> None:
+    """Marca el comprobante como procesado con exito (24h)."""
+    await _client().set(f"comprob:{message_id}", "1", ex=86400)

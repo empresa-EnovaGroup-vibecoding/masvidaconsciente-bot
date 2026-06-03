@@ -8,6 +8,7 @@ import logging
 from decimal import Decimal
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from app.config import get_settings
 from app.models import Cliente, Configuracion, Pago, Pedido, Producto
@@ -430,7 +431,21 @@ async def registrar_comprobante(
         estado="reportado",
     )
     session.add(pago)
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError:
+        # Carrera con otro reintento concurrente de Meta: el UNIQUE de
+        # comprobante_media_id ya existe. Devolvemos el pago existente (idempotente).
+        await session.rollback()
+        if comprobante_media_id:
+            existente = (
+                await session.execute(
+                    select(Pago).where(Pago.comprobante_media_id == comprobante_media_id)
+                )
+            ).scalars().first()
+            if existente is not None:
+                return {"ok": True, "pago_id": existente.id, "nota": "ese comprobante ya estaba registrado"}
+        raise
     await session.refresh(pago)
     # Relevo a la humana: avisar a la duena que entro un pago para que lo verifique.
     await _avisar_duena(session, pedido, pago)

@@ -87,18 +87,18 @@ async def _encolar_mensaje(mensaje) -> str:
 
 
 async def _encolar_comprobante(mensaje) -> str:
-    """Idempotencia + encolado de un comprobante (imagen/PDF) en su carril propio.
+    """Encola un comprobante (imagen/PDF) en su carril propio.
 
-    NO pasa por el buffer de texto de 15s: el comprobante se procesa aparte.
+    NO pasa por el buffer de texto de 15s. La idempotencia NO se marca aqui:
+    se consolida en el worker SOLO tras un registro exitoso (y la BD la blinda
+    con el UNIQUE de comprobante_media_id), para que un fallo transitorio de
+    descarga no descarte el reintento legitimo de Meta y se pierda el pago.
     """
-    from app.services import redis_client as rc
     from app.workers.tasks import procesar_comprobante
 
     if not mensaje.get("media_id"):
         logger.warning("Comprobante sin media_id de %s", mensaje["telefono"])
         return "sin_media"
-    if await rc.ya_procesado(mensaje["message_id"]):
-        return "duplicado"
 
     procesar_comprobante.apply_async((
         mensaje["telefono"],

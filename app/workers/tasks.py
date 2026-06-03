@@ -67,13 +67,19 @@ def _guardar_comprobante(media_id: str, contenido: bytes, mime: str) -> str:
 @celery_app.task(name="procesar_comprobante")
 def procesar_comprobante(telefono, message_id, media_id, caption=None, nombre=None, mime_type=None):
     """Tarea dedicada (fuera del buffer de texto): descarga y guarda el comprobante."""
-    asyncio.run(_procesar_comprobante(telefono, media_id, caption, nombre, mime_type))
+    asyncio.run(_procesar_comprobante(telefono, message_id, media_id, caption, nombre, mime_type))
 
 
-async def _procesar_comprobante(telefono, media_id, caption, nombre, mime_type) -> None:
+async def _procesar_comprobante(telefono, message_id, media_id, caption, nombre, mime_type) -> None:
+    # Idempotencia del carril de DINERO: se marca SOLO tras un registro exitoso.
+    # Si la descarga o el registro fallan, NO se marca, para que el reintento de
+    # Meta tenga otra oportunidad real (la URL del media caduca a ~5 min).
+    if message_id and await rc.comprobante_procesado(message_id):
+        return
+
     try:
         contenido, mime = await descargar_media(media_id)
-    except Exception:  # noqa: BLE001 — un fallo de descarga no debe tumbar al worker
+    except Exception:  # noqa: BLE001 — fallo transitorio: NO marcar, dejar reintentar
         logger.exception("No se pudo descargar el comprobante %s de %s", media_id, telefono)
         return
     ruta = _guardar_comprobante(media_id, contenido, mime or mime_type or "")
@@ -83,11 +89,19 @@ async def _procesar_comprobante(telefono, media_id, caption, nombre, mime_type) 
     from app.agent.tools import registrar_comprobante
 
     factory = get_session_factory()
-    async with factory() as session:
-        resultado = await registrar_comprobante(
-            session, telefono, comprobante_media_id=media_id, comprobante_url=ruta
-        )
+    try:
+        async with factory() as session:
+            resultado = await registrar_comprobante(
+                session, telefono, comprobante_media_id=media_id, comprobante_url=ruta
+            )
+    except Exception:  # noqa: BLE001 — error de BD: NO marcar, dejar reintentar a Meta
+        logger.exception("No se pudo registrar el comprobante de %s", telefono)
+        return
     logger.info("Comprobante de %s registrado: %s", telefono, resultado)
+
+    # Registro exitoso: marcar para que un reintento de Meta no repita ack/aviso.
+    if message_id:
+        await rc.marcar_comprobante(message_id)
 
     # Cierre con el cliente: Whuilianny REDACTA el mensaje al momento (no es plantilla).
     # El aviso a la duena ya lo disparo registrar_comprobante.
