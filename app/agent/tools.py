@@ -3,12 +3,15 @@
 El número de teléfono del cliente se inyecta server-side (desde el contexto del
 webhook) — el LLM nunca lo ve ni lo puede falsificar.
 """
+import json
 from decimal import Decimal
 
 from sqlalchemy import select
 
-from app.models import Cliente, Configuracion, Pedido, Producto
+from app.models import Cliente, Configuracion, Pago, Pedido, Producto
 from app.services.db import get_session_factory
+from app.services.redis_client import get_cache, set_cache
+from app.services.tasa import obtener_tasa_bcv
 
 # ─── Schemas que ve el LLM (formato OpenAI / OpenRouter) ──────────────
 
@@ -83,6 +86,38 @@ TOOL_SCHEMAS = [
             "name": "ver_pedidos_cliente",
             "description": "Muestra los pedidos previos de este cliente. Úsala si pregunta por su pedido o quiere repetir uno.",
             "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "generar_datos_pago",
+            "description": "Genera el cobro: calcula el total en bolivares (tasa BCV del dia) y devuelve los datos de Pago Movil. Usala JUSTO despues de registrar_pedido, cuando el cliente confirma que quiere pagar.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "pedido_id": {
+                        "type": "integer",
+                        "description": "ID del pedido a cobrar. Omitelo para usar el ultimo pedido del cliente.",
+                    }
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "registrar_comprobante",
+            "description": "Registra que el cliente REPORTO su pago (dio una referencia o dice que ya pago). NO confirma el pago: la duena lo verifica. Usala cuando el cliente diga que pago o te de el numero de referencia.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "referencia": {
+                        "type": "string",
+                        "description": "Numero de referencia del Pago Movil, si el cliente lo proporciona.",
+                    }
+                },
+            },
         },
     },
 ]
@@ -199,12 +234,163 @@ async def ver_pedidos_cliente(session, telefono):
     }
 
 
+# ─── Cobro: datos de Pago Movil y registro de comprobante ────────────
+
+async def get_pedido_esperando_pago(session, telefono):
+    """El ultimo pedido de este cliente que esta esperando pago.
+
+    Clave del diseno: el comprobante se amarra al pedido por TELEFONO + ESTADO
+    en la base de datos, NO por la memoria del LLM (que no persiste entre turnos).
+    """
+    return (
+        await session.execute(
+            select(Pedido)
+            .where(Pedido.cliente_telefono == telefono, Pedido.estado == "esperando_pago")
+            .order_by(Pedido.created_at.desc())
+        )
+    ).scalars().first()
+
+
+async def generar_datos_pago(session, telefono, pedido_id=None):
+    """Calcula el monto en Bs (tasa del dia), deja el pedido en 'esperando_pago'
+    y devuelve los datos de Pago Movil para que el bot los presente."""
+    if pedido_id is not None:
+        pedido = await session.get(Pedido, int(pedido_id))
+        if pedido is None or pedido.cliente_telefono != telefono:
+            return {"ok": False, "nota": "no encontre ese pedido para este cliente"}
+    else:
+        pedido = (
+            await session.execute(
+                select(Pedido)
+                .where(Pedido.cliente_telefono == telefono)
+                .order_by(Pedido.created_at.desc())
+            )
+        ).scalars().first()
+        if pedido is None:
+            return {"ok": False, "nota": "este cliente todavia no tiene un pedido para cobrar"}
+
+    if pedido.total is None:
+        return {"ok": False, "nota": "el pedido no tiene un total definido para cobrar"}
+
+    try:
+        tasa = await obtener_tasa_bcv()
+    except Exception:  # noqa: BLE001
+        return {"ok": False, "nota": "ahora mismo no puedo calcular el monto en bolivares"}
+
+    monto_usd = Decimal(str(pedido.total))
+    monto_bs = (monto_usd * tasa).quantize(Decimal("0.01"))
+
+    pedido.estado = "esperando_pago"
+    await session.commit()
+
+    config = {
+        f.clave: f.valor
+        for f in (await session.execute(select(Configuracion))).scalars().all()
+    }
+
+    # Guarda la cotizacion para amarrarla al comprobante cuando llegue.
+    try:
+        await set_cache(
+            f"cobro:{telefono}",
+            json.dumps({
+                "pedido_id": pedido.id,
+                "monto_usd": str(monto_usd),
+                "tasa": str(tasa),
+                "monto_bs": str(monto_bs),
+            }),
+            86400,
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
+    return {
+        "ok": True,
+        "pedido_id": pedido.id,
+        "monto_usd": float(monto_usd),
+        "tasa_bcv": float(tasa),
+        "monto_bs": float(monto_bs),
+        "banco": config.get("pago_movil_banco"),
+        "cedula": config.get("pago_movil_cedula"),
+        "telefono_pago": config.get("pago_movil_telefono"),
+        "titular": config.get("pago_movil_titular"),
+        "nota": "presenta el monto en Bs y los datos de Pago Movil; pide la captura del comprobante",
+    }
+
+
+async def registrar_comprobante(
+    session, telefono, referencia=None, comprobante_media_id=None, comprobante_url=None
+):
+    """Registra el pago REPORTADO (estado 'reportado'). NO lo confirma: eso lo
+    hace la duena desde el dashboard. Amarra al pedido en 'esperando_pago'."""
+    pedido = await get_pedido_esperando_pago(session, telefono)
+    if pedido is None:
+        return {"ok": False, "nota": "este cliente no tiene un pedido esperando pago"}
+
+    # Idempotencia: si ya existe un pago con ese comprobante, no duplicar.
+    if comprobante_media_id:
+        existente = (
+            await session.execute(
+                select(Pago).where(Pago.comprobante_media_id == comprobante_media_id)
+            )
+        ).scalars().first()
+        if existente is not None:
+            return {"ok": True, "pago_id": existente.id, "nota": "ese comprobante ya estaba registrado"}
+
+    monto_usd = Decimal(str(pedido.total)) if pedido.total is not None else None
+    tasa = None
+    monto_bs = None
+    try:
+        guardado = await get_cache(f"cobro:{telefono}")
+        if guardado:
+            d = json.loads(guardado)
+            if d.get("monto_usd"):
+                monto_usd = Decimal(str(d["monto_usd"]))
+            if d.get("tasa"):
+                tasa = Decimal(str(d["tasa"]))
+            if d.get("monto_bs"):
+                monto_bs = Decimal(str(d["monto_bs"]))
+    except Exception:  # noqa: BLE001
+        pass
+
+    if monto_bs is None and monto_usd is not None:
+        try:
+            tasa = await obtener_tasa_bcv()
+            monto_bs = (monto_usd * tasa).quantize(Decimal("0.01"))
+        except Exception:  # noqa: BLE001
+            tasa = None
+            monto_bs = None
+
+    pago = Pago(
+        pedido_id=pedido.id,
+        metodo="pago_movil",
+        monto_usd=monto_usd,
+        monto_bs=monto_bs,
+        tasa_usada=tasa,
+        referencia=referencia,
+        comprobante_media_id=comprobante_media_id,
+        comprobante_url=comprobante_url,
+        estado="reportado",
+    )
+    session.add(pago)
+    await session.commit()
+    await session.refresh(pago)
+    # Fase 5: avisar a la duena que entro un pago para que lo verifique.
+    return {
+        "ok": True,
+        "pago_id": pago.id,
+        "pedido_id": pedido.id,
+        "nota": "pago reportado; la duena lo verifica y confirma (no afirmes que ya esta confirmado)",
+    }
+
+
 _DISPATCH = {
     "ver_catalogo": ver_catalogo,
     "info_producto": info_producto,
     "registrar_pedido": registrar_pedido,
     "info_negocio": info_negocio,
     "ver_pedidos_cliente": ver_pedidos_cliente,
+    "generar_datos_pago": generar_datos_pago,
+    "registrar_comprobante": registrar_comprobante,
 }
 
 

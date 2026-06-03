@@ -5,6 +5,7 @@ import os
 from app.agent.agent import responder, transcribir_audio
 from app.config import get_settings
 from app.services import redis_client as rc
+from app.services.db import get_session_factory
 from app.services.meta_client import descargar_media, enviar_texto
 from app.workers.celery_app import celery_app
 
@@ -77,8 +78,17 @@ async def _procesar_comprobante(telefono, media_id, caption, nombre, mime_type) 
         return
     ruta = _guardar_comprobante(media_id, contenido, mime or mime_type or "")
     logger.info("Comprobante de %s guardado en %s (%s bytes)", telefono, ruta, len(contenido))
-    # Fase 4/5: aqui se amarrara el comprobante al pedido en 'esperando_pago',
-    # se registrara en la tabla pagos y se avisara a la duena.
+
+    # Amarra el comprobante a su pedido (por telefono + estado) y lo registra en pagos.
+    from app.agent.tools import registrar_comprobante
+
+    factory = get_session_factory()
+    async with factory() as session:
+        resultado = await registrar_comprobante(
+            session, telefono, comprobante_media_id=media_id, comprobante_url=ruta
+        )
+    logger.info("Comprobante de %s registrado: %s", telefono, resultado)
+    # Fase 5: avisar a la duena + responder al cliente que la duena verificara.
 
 
 # ─── Notas de voz y otros eventos (respuesta humana) ─────────────────
