@@ -2,7 +2,7 @@ import asyncio
 import logging
 import os
 
-from app.agent.agent import responder, transcribir_audio
+from app.agent.agent import redactar_mensaje, responder, transcribir_audio
 from app.config import get_settings
 from app.services import redis_client as rc
 from app.services.db import get_session_factory
@@ -88,7 +88,29 @@ async def _procesar_comprobante(telefono, media_id, caption, nombre, mime_type) 
             session, telefono, comprobante_media_id=media_id, comprobante_url=ruta
         )
     logger.info("Comprobante de %s registrado: %s", telefono, resultado)
-    # Fase 5: avisar a la duena + responder al cliente que la duena verificara.
+
+    # Cierre con el cliente: Whuilianny REDACTA el mensaje al momento (no es plantilla).
+    # El aviso a la duena ya lo disparo registrar_comprobante.
+    if resultado.get("ok"):
+        situacion = (
+            "el cliente acaba de enviarte el comprobante de su pago; confirmale con "
+            "calidez que lo recibiste y que lo estas verificando, SIN afirmar que el "
+            "pago ya quedo confirmado"
+        )
+    else:
+        situacion = (
+            "el cliente te envio una imagen pero no hay un pedido esperando pago; "
+            "preguntale con calidez si es un comprobante y en que lo puedes ayudar"
+        )
+    try:
+        historial = await rc.obtener_historial(telefono)
+        mensaje = await redactar_mensaje(situacion, historial, nombre)
+    except Exception:  # noqa: BLE001
+        logger.exception("No se pudo redactar el mensaje al cliente %s", telefono)
+        mensaje = ""
+    if mensaje.strip():
+        await enviar_texto(telefono, mensaje)
+        await rc.guardar_historial(telefono, "assistant", mensaje)
 
 
 # ─── Notas de voz y otros eventos (respuesta humana) ─────────────────

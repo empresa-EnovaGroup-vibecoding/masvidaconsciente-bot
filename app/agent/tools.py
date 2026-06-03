@@ -4,14 +4,19 @@ El número de teléfono del cliente se inyecta server-side (desde el contexto de
 webhook) — el LLM nunca lo ve ni lo puede falsificar.
 """
 import json
+import logging
 from decimal import Decimal
 
 from sqlalchemy import select
 
+from app.config import get_settings
 from app.models import Cliente, Configuracion, Pago, Pedido, Producto
 from app.services.db import get_session_factory
+from app.services.meta_client import enviar_texto
 from app.services.redis_client import get_cache, set_cache
 from app.services.tasa import obtener_tasa_bcv
+
+logger = logging.getLogger(__name__)
 
 # ─── Schemas que ve el LLM (formato OpenAI / OpenRouter) ──────────────
 
@@ -317,6 +322,40 @@ async def generar_datos_pago(session, telefono, pedido_id=None):
     }
 
 
+async def _avisar_duena(session, pedido, pago) -> None:
+    """Relevo a la humana: avisa por WhatsApp a la duena que entro un pago.
+
+    Reusa enviar_texto (free-form). OJO ventana de 24h: WhatsApp solo permite
+    mensajes free-form dentro de las 24h desde el ultimo mensaje de la duena;
+    fuera de esa ventana hara falta una plantilla aprobada (fast-follow).
+    """
+    config = {
+        f.clave: f.valor
+        for f in (await session.execute(select(Configuracion))).scalars().all()
+    }
+    destino = config.get("dueno_telefono") or get_settings().dueno_telefono
+    if not destino:
+        logger.warning("No hay dueno_telefono configurado; no se envia aviso del pago")
+        return
+    monto_usd = f"${pago.monto_usd}" if pago.monto_usd is not None else "?"
+    monto_bs = f"Bs {pago.monto_bs}" if pago.monto_bs is not None else "?"
+    detalle = (
+        f"\nReferencia: {pago.referencia}"
+        if pago.referencia
+        else "\nComprobante: imagen recibida"
+    )
+    mensaje = (
+        f"🔔 *Nuevo pago reportado* — Pedido #{pedido.id}\n"
+        f"Cliente: {pedido.cliente_telefono}\n"
+        f"Total: {monto_usd} ({monto_bs}){detalle}\n\n"
+        f"Verifícalo en tu panel (sección *Pagos*) para confirmar y despachar."
+    )
+    try:
+        await enviar_texto(destino, mensaje)
+    except Exception:  # noqa: BLE001 — un fallo de aviso no debe romper el registro del pago
+        logger.exception("No se pudo avisar a la duena del pago del pedido %s", pedido.id)
+
+
 async def registrar_comprobante(
     session, telefono, referencia=None, comprobante_media_id=None, comprobante_url=None
 ):
@@ -335,6 +374,25 @@ async def registrar_comprobante(
         ).scalars().first()
         if existente is not None:
             return {"ok": True, "pago_id": existente.id, "nota": "ese comprobante ya estaba registrado"}
+
+    # Un solo pago 'reportado' por pedido: si ya hay, lo enriquecemos y NO re-avisamos.
+    reportado = (
+        await session.execute(
+            select(Pago).where(Pago.pedido_id == pedido.id, Pago.estado == "reportado")
+        )
+    ).scalars().first()
+    if reportado is not None:
+        cambiado = False
+        if comprobante_media_id and not reportado.comprobante_media_id:
+            reportado.comprobante_media_id = comprobante_media_id
+            reportado.comprobante_url = comprobante_url
+            cambiado = True
+        if referencia and not reportado.referencia:
+            reportado.referencia = referencia
+            cambiado = True
+        if cambiado:
+            await session.commit()
+        return {"ok": True, "pago_id": reportado.id, "nota": "ya habia un pago reportado para este pedido"}
 
     monto_usd = Decimal(str(pedido.total)) if pedido.total is not None else None
     tasa = None
@@ -374,7 +432,8 @@ async def registrar_comprobante(
     session.add(pago)
     await session.commit()
     await session.refresh(pago)
-    # Fase 5: avisar a la duena que entro un pago para que lo verifique.
+    # Relevo a la humana: avisar a la duena que entro un pago para que lo verifique.
+    await _avisar_duena(session, pedido, pago)
     return {
         "ok": True,
         "pago_id": pago.id,

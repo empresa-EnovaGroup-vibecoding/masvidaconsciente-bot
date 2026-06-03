@@ -86,6 +86,38 @@ async def responder(
     return RESPUESTA_SEGURA
 
 
+async def redactar_mensaje(
+    situacion: str, historial: list | None = None, nombre: str | None = None
+) -> str:
+    """Redacta un mensaje natural para el cliente en la voz de Whuilianny.
+
+    NO es una plantilla: usa el contexto de la conversacion y algo de variacion
+    para que cada mensaje salga distinto y humano. Se usa para momentos que
+    dispara el sistema (comprobante recibido, pago confirmado/rechazado), donde
+    no hay un texto del cliente que responder pero hay que decir algo con calidez.
+    """
+    messages: list = [{"role": "system", "content": construir_system_prompt(nombre)}]
+    if historial:
+        messages.extend(historial)
+    messages.append({
+        "role": "user",
+        "content": (
+            f"[Instruccion interna, NO es un mensaje del cliente] Situacion: {situacion}. "
+            "Escribe SOLO el mensaje de WhatsApp para el cliente, natural, breve y calido, "
+            "en tu voz de siempre. No uses comillas ni expliques nada."
+        ),
+    })
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.post(
+            OPENROUTER_URL,
+            headers={"Authorization": f"Bearer {settings.openrouter_api_key}"},
+            json={"model": settings.openrouter_model, "messages": messages, "temperature": 0.7},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return (data["choices"][0]["message"].get("content") or "").strip()
+
+
 _FORMATOS_AUDIO = {
     "audio/ogg": "ogg",
     "audio/mpeg": "mp3",
