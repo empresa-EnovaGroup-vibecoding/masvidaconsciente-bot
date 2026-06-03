@@ -158,3 +158,22 @@ async def _procesar_audio(telefono, media_id, nombre, mime_type) -> None:
 def procesar_evento(telefono, tipo, nombre=None):
     """Tarea: sticker/video/ubicacion/etc. El agente responde natural, sin robotismos."""
     asyncio.run(_responder_y_enviar(telefono, f"(el cliente envio un {tipo}, sin texto)", nombre))
+
+
+@celery_app.task(name="notificar_cliente_pago")
+def notificar_cliente_pago(telefono, situacion):
+    """Tarea: avisa al cliente (pago confirmado/rechazado) con un mensaje redactado
+    al momento por Whuilianny, en su voz y con contexto — no una plantilla."""
+    asyncio.run(_notificar_cliente_pago(telefono, situacion))
+
+
+async def _notificar_cliente_pago(telefono, situacion) -> None:
+    try:
+        historial = await rc.obtener_historial(telefono)
+        mensaje = await redactar_mensaje(situacion, historial, None)
+    except Exception:  # noqa: BLE001
+        logger.exception("No se pudo redactar el aviso de pago para %s", telefono)
+        return
+    if mensaje.strip():
+        await enviar_texto(telefono, mensaje)
+        await rc.guardar_historial(telefono, "assistant", mensaje)

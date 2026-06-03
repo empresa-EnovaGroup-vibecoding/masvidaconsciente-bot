@@ -54,6 +54,8 @@ class Settings(BaseSettings):
     jwt_secret: str = ""
     admin_email: str = "admin@masvidaconsciente.com"
     admin_password: str = ""
+    # Origen(es) permitido(s) para CORS (dominio del dashboard). Vacio = cualquiera.
+    dashboard_origin: str = ""
 
     @model_validator(mode="after")
     def _exigir_secretos_seguros(self) -> "Settings":

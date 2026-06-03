@@ -9,10 +9,11 @@ settings = get_settings()
 
 app = FastAPI(title="masvidaconsciente-bot", version="0.1.0")
 
+_origenes = [o.strip() for o in settings.dashboard_origin.split(",") if o.strip()] or ["*"]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # el dashboard llama desde su propio dominio
-    allow_credentials=True,
+    allow_origins=_origenes,  # dominio(s) del dashboard; vacio = cualquiera
+    allow_credentials=False,  # el dashboard usa token Bearer, no cookies
     allow_methods=["*"],
     allow_headers=["*"],
 )

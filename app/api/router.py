@@ -1,9 +1,11 @@
 """API REST que alimenta el dashboard. Todo protegido con login (JWT),
 excepto el propio login."""
+import os
 from datetime import date, datetime, time, timezone
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy import func, select
 
@@ -12,7 +14,7 @@ from app.api.security import (
     usuario_actual,
     verify_password,
 )
-from app.models import Cliente, Mensaje, Pedido, Producto
+from app.models import Cliente, Mensaje, Pago, Pedido, Producto, now_utc
 from app.services.db import get_session_factory
 
 router = APIRouter(prefix="/api", tags=["dashboard"])
@@ -36,6 +38,10 @@ class ProductoIn(BaseModel):
 
 class EstadoIn(BaseModel):
     estado: str
+
+
+class RechazoIn(BaseModel):
+    motivo: str | None = None
 
 
 # ─── Login ───────────────────────────────────────────────────────────
@@ -237,3 +243,118 @@ async def detalle_conversacion(telefono: str, _: str = Depends(usuario_actual)):
         {"rol": m.rol, "contenido": m.contenido, "fecha": m.created_at.isoformat()}
         for m in mensajes
     ]
+
+
+# ─── Pagos (cobro) ───────────────────────────────────────────────────
+
+@router.get("/pagos")
+async def listar_pagos(estado: str | None = None, _: str = Depends(usuario_actual)):
+    factory = get_session_factory()
+    async with factory() as session:
+        stmt = select(Pago).order_by(Pago.created_at.desc()).limit(100)
+        if estado:
+            stmt = (
+                select(Pago)
+                .where(Pago.estado == estado)
+                .order_by(Pago.created_at.desc())
+                .limit(100)
+            )
+        pagos = (await session.execute(stmt)).scalars().all()
+        pedidos: dict[int, Pedido] = {}
+        for p in pagos:
+            if p.pedido_id not in pedidos:
+                pedidos[p.pedido_id] = await session.get(Pedido, p.pedido_id)
+    salida = []
+    for p in pagos:
+        ped = pedidos.get(p.pedido_id)
+        salida.append({
+            "id": p.id,
+            "pedido_id": p.pedido_id,
+            "cliente": ped.cliente_telefono if ped else None,
+            "items": ped.items if ped else None,
+            "estado": p.estado,
+            "metodo": p.metodo,
+            "monto_usd": float(p.monto_usd) if p.monto_usd is not None else None,
+            "monto_bs": float(p.monto_bs) if p.monto_bs is not None else None,
+            "tasa_usada": float(p.tasa_usada) if p.tasa_usada is not None else None,
+            "referencia": p.referencia,
+            "tiene_comprobante": bool(p.comprobante_media_id or p.comprobante_url),
+            "confirmado_por": p.confirmado_por,
+            "fecha": p.created_at.isoformat(),
+        })
+    return salida
+
+
+@router.post("/pagos/{pago_id}/confirmar")
+async def confirmar_pago(pago_id: int, usuario: str = Depends(usuario_actual)):
+    factory = get_session_factory()
+    async with factory() as session:
+        pago = await session.get(Pago, pago_id)
+        if pago is None:
+            raise HTTPException(status_code=404, detail="Pago no encontrado")
+        if pago.estado != "reportado":
+            raise HTTPException(status_code=409, detail=f"El pago ya está {pago.estado}")
+        pago.estado = "confirmado"
+        pago.confirmado_por = usuario
+        pago.updated_at = now_utc()
+        pedido = await session.get(Pedido, pago.pedido_id)
+        if pedido is not None:
+            pedido.estado = "pagado"
+        await session.commit()
+        telefono = pedido.cliente_telefono if pedido else None
+
+    if telefono:
+        from app.workers.tasks import notificar_cliente_pago
+
+        notificar_cliente_pago.apply_async((
+            telefono,
+            "la duena acaba de CONFIRMAR el pago del cliente; cierra la venta con calidez, "
+            "agradecele su compra y dile que coordinan la entrega",
+        ))
+    return {"ok": True, "pago_id": pago_id, "estado": "confirmado"}
+
+
+@router.post("/pagos/{pago_id}/rechazar")
+async def rechazar_pago(
+    pago_id: int, datos: RechazoIn | None = None, usuario: str = Depends(usuario_actual)
+):
+    factory = get_session_factory()
+    async with factory() as session:
+        pago = await session.get(Pago, pago_id)
+        if pago is None:
+            raise HTTPException(status_code=404, detail="Pago no encontrado")
+        if pago.estado != "reportado":
+            raise HTTPException(status_code=409, detail=f"El pago ya está {pago.estado}")
+        pago.estado = "rechazado"
+        pago.confirmado_por = usuario
+        pago.motivo_rechazo = datos.motivo if datos else None
+        pago.updated_at = now_utc()
+        pedido = await session.get(Pedido, pago.pedido_id)
+        if pedido is not None:
+            pedido.estado = "esperando_pago"
+        await session.commit()
+        telefono = pedido.cliente_telefono if pedido else None
+
+    if telefono:
+        from app.workers.tasks import notificar_cliente_pago
+
+        notificar_cliente_pago.apply_async((
+            telefono,
+            "no se pudo verificar el pago del cliente; pidele con suavidad y sin alarmar que "
+            "reenvie el comprobante o la referencia correcta",
+        ))
+    return {"ok": True, "pago_id": pago_id, "estado": "rechazado"}
+
+
+@router.get("/pagos/{pago_id}/comprobante")
+async def ver_comprobante(pago_id: int, _: str = Depends(usuario_actual)):
+    """Sirve la imagen/PDF del comprobante. PROTEGIDO: solo con sesion iniciada
+    (trae datos bancarios). El dashboard lo descarga como blob con su token."""
+    factory = get_session_factory()
+    async with factory() as session:
+        pago = await session.get(Pago, pago_id)
+    if pago is None or not pago.comprobante_url:
+        raise HTTPException(status_code=404, detail="Comprobante no encontrado")
+    if not os.path.exists(pago.comprobante_url):
+        raise HTTPException(status_code=404, detail="Archivo de comprobante no disponible")
+    return FileResponse(pago.comprobante_url)
