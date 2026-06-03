@@ -80,6 +80,16 @@ En Coolify, actualizar en el bot:
 - `META_APP_SECRET`: el App Secret de la app Enova API
 - `META_VERIFY_TOKEN`: el token que pusiste en el webhook
 
+**Variables del cobro (Pago Móvil):**
+- `JWT_SECRET`: llave larga y aleatoria para el dashboard (genérala con `openssl rand -hex 32`). Sin ella el bot NO arranca, a propósito.
+- `ADMIN_EMAIL` y `ADMIN_PASSWORD`: credenciales para entrar al dashboard; la contraseña debe ser fuerte (no se aceptan valores por defecto).
+- `DASHBOARD_ORIGIN`: dominio del dashboard del cliente (para CORS).
+- `DUENO_TELEFONO`: número que recibe el aviso cuando entra un pago (en pruebas, el tuyo; en producción, el del cliente).
+- `TASA_API_URL` (Cotizave) y/o `TASA_MANUAL_DEFAULT`: con al menos una, el bot cobra en bolívares (si la API falla, usa la tasa manual).
+- `COMPROBANTES_DIR`: carpeta de los comprobantes (por defecto `/data/comprobantes`).
+
+**Volumen de comprobantes:** en Coolify, marca como **persistente** el volumen `comprobantes` (montado en web y worker), para que las imágenes de los pagos no se borren al redesplegar.
+
 ---
 
 ## Dónde encontrar los datos de Meta

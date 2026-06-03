@@ -1,0 +1,21 @@
+# Entorno y caches
+.venv/
+venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Git e IDE
+.git/
+.gitignore
+.vscode/
+.idea/
+
+# Secretos y documentos internos: NUNCA van dentro de la imagen
+.env
+.env.local
+.env.example
+BRIEF-*.md
+PRP-*.md

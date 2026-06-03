@@ -17,6 +17,18 @@ x-bot-env: &bot-env
   MAX_ITERACIONES_AGENTE: ${MAX_ITERACIONES_AGENTE}
   NEGOCIO_NOMBRE: ${NEGOCIO_NOMBRE}
   NEGOCIO_UBICACION: ${NEGOCIO_UBICACION}
+  # Dashboard / seguridad
+  JWT_SECRET: ${JWT_SECRET}
+  ADMIN_EMAIL: ${ADMIN_EMAIL}
+  ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+  DASHBOARD_ORIGIN: ${DASHBOARD_ORIGIN}
+  # Cobro (Pago Movil)
+  DUENO_TELEFONO: ${DUENO_TELEFONO}
+  TASA_API_URL: ${TASA_API_URL}
+  TASA_API_KEY: ${TASA_API_KEY}
+  TASA_TTL: ${TASA_TTL}
+  TASA_MANUAL_DEFAULT: ${TASA_MANUAL_DEFAULT}
+  COMPROBANTES_DIR: ${COMPROBANTES_DIR:-/data/comprobantes}
 
 services:
   postgres:
@@ -40,6 +52,8 @@ services:
     build: .
     command: sh -c "python -m app.init_db && uvicorn app.main:app --host 0.0.0.0 --port 8000"
     environment: *bot-env
+    volumes:
+      - comprobantes:/data/comprobantes
     depends_on:
       postgres:
         condition: service_healthy
@@ -50,8 +64,10 @@ services:
 
   worker:
     build: .
-    command: celery -A app.workers.celery_app:celery_app worker -l info
+    command: celery -A app.workers.celery_app:celery_app worker -l info --concurrency=2
     environment: *bot-env
+    volumes:
+      - comprobantes:/data/comprobantes
     depends_on:
       postgres:
         condition: service_healthy
@@ -60,3 +76,4 @@ services:
 
 volumes:
   pgdata:
+  comprobantes:
