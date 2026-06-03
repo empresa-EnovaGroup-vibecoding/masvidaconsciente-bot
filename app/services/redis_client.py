@@ -71,3 +71,17 @@ async def guardar_historial(telefono: str, rol: str, contenido: str) -> None:
 async def obtener_historial(telefono: str) -> list[dict]:
     filas = await _client().lrange(f"hist:{telefono}", 0, -1)
     return [json.loads(f) for f in filas]
+
+
+# ─── Cache generico con TTL ──────────────────────────────────────────
+# Usar siempre claves con prefijo 'cache:' (ej. 'cache:tasa:bcv') para no
+# chocar con msg:/buffer:/lock:/hist: que comparten la misma base de Redis.
+
+async def get_cache(clave: str) -> str | None:
+    """Lee un valor de cache. Devuelve None si no existe o ya expiro."""
+    return await _client().get(clave)
+
+
+async def set_cache(clave: str, valor: str, ttl: int) -> None:
+    """Guarda un valor en cache con expiracion (segundos)."""
+    await _client().set(clave, valor, ex=ttl)
