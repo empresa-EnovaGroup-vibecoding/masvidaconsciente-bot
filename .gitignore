@@ -21,3 +21,8 @@ env/
 # Sistema
 .DS_Store
 Thumbs.db
+
+# Documentos internos de planificacion (NO subir al GitHub del cliente)
+# Contienen estrategia de negocio y datos personales de prueba.
+BRIEF-*.md
+PRP-*.md
