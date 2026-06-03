@@ -115,6 +115,9 @@ async def listar_pedidos(_: str = Depends(usuario_actual)):
 
 @router.patch("/pedidos/{pedido_id}")
 async def cambiar_estado(pedido_id: int, datos: EstadoIn, _: str = Depends(usuario_actual)):
+    # Estados que la duena puede fijar manualmente desde el dashboard.
+    # 'esperando_pago' lo pone el bot al generar el cobro, y 'pagado' solo se fija
+    # al confirmar un pago (POST /api/pagos/{id}/confirmar) — nunca por esta via.
     validos = {"pendiente", "confirmado", "preparando", "entregado", "cancelado"}
     if datos.estado not in validos:
         raise HTTPException(status_code=400, detail="Estado inválido")

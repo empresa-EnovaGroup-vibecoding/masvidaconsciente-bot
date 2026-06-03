@@ -33,6 +33,13 @@ async def main() -> None:
         await session.commit()
         logger.info("Tablas listas")
 
+        # 003: capa de cobro (tabla pagos + estados nuevos de pedido + datos de cobro).
+        # Aditiva e idempotente: no toca 001 ni 002, segura de correr en cada arranque.
+        for stmt in _statements(MIGRATIONS / "003_pagos.sql"):
+            await session.execute(text(stmt))
+        await session.commit()
+        logger.info("Migracion 003 (pagos) aplicada")
+
         total = (await session.execute(text("SELECT COUNT(*) FROM productos"))).scalar()
         if total and total > 0:
             logger.info("Catálogo ya cargado (%s productos), no se vuelve a sembrar", total)

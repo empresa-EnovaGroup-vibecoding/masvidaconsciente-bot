@@ -49,7 +49,8 @@ class Pedido(Base):
     __tablename__ = "pedidos"
     __table_args__ = (
         CheckConstraint(
-            "estado IN ('pendiente','confirmado','preparando','entregado','cancelado')",
+            "estado IN ('pendiente','confirmado','preparando','entregado',"
+            "'cancelado','esperando_pago','pagado')",
             name="ck_pedido_estado",
         ),
     )
@@ -93,4 +94,29 @@ class Configuracion(Base):
 
     clave: Mapped[str] = mapped_column(Text, primary_key=True)
     valor: Mapped[str | None] = mapped_column(Text, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+class Pago(Base):
+    __tablename__ = "pagos"
+    __table_args__ = (
+        CheckConstraint(
+            "estado IN ('reportado','confirmado','rechazado')",
+            name="ck_pago_estado",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    pedido_id: Mapped[int] = mapped_column(ForeignKey("pedidos.id"))
+    metodo: Mapped[str] = mapped_column(Text, default="pago_movil")
+    monto_usd: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
+    monto_bs: Mapped[Decimal | None] = mapped_column(Numeric(14, 2), nullable=True)
+    tasa_usada: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)
+    referencia: Mapped[str | None] = mapped_column(Text, nullable=True)
+    comprobante_media_id: Mapped[str | None] = mapped_column(Text, unique=True, nullable=True)
+    comprobante_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    estado: Mapped[str] = mapped_column(Text, default="reportado")
+    confirmado_por: Mapped[str | None] = mapped_column(Text, nullable=True)
+    motivo_rechazo: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
