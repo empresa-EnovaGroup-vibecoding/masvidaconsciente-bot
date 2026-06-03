@@ -3,6 +3,7 @@
 Recibe un mensaje del cliente + su historial, decide qué herramientas usar,
 las ejecuta, y devuelve la respuesta final en la voz de Whuilianny.
 """
+import base64
 import json
 import logging
 
@@ -83,3 +84,50 @@ async def responder(
 
     logger.warning("Agente excedió max iteraciones para %s", telefono)
     return RESPUESTA_SEGURA
+
+
+_FORMATOS_AUDIO = {
+    "audio/ogg": "ogg",
+    "audio/mpeg": "mp3",
+    "audio/mp3": "mp3",
+    "audio/mp4": "m4a",
+    "audio/aac": "aac",
+    "audio/wav": "wav",
+    "audio/x-wav": "wav",
+}
+
+
+async def transcribir_audio(contenido: bytes, mime: str = "audio/ogg") -> str:
+    """Transcribe una nota de voz a texto con el modelo multimodal de OpenRouter.
+
+    WhatsApp manda las notas de voz como audio/ogg (codec opus), que Gemini
+    acepta directo. Si el modelo no logra transcribir, devuelve cadena vacia
+    y el llamador responde con gracia (nunca tumba al bot).
+    """
+    base_mime = (mime or "").split(";")[0].strip().lower()
+    formato = _FORMATOS_AUDIO.get(base_mime, "ogg")
+    b64 = base64.b64encode(contenido).decode("ascii")
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "Transcribe a texto, en espanol, exactamente lo que dice el cliente "
+                "en el audio. Devuelve solo la transcripcion, sin comentarios."
+            ),
+        },
+        {
+            "role": "user",
+            "content": [
+                {"type": "input_audio", "input_audio": {"data": b64, "format": formato}},
+            ],
+        },
+    ]
+    async with httpx.AsyncClient(timeout=60) as client:
+        resp = await client.post(
+            OPENROUTER_URL,
+            headers={"Authorization": f"Bearer {settings.openrouter_api_key}"},
+            json={"model": settings.openrouter_model, "messages": messages, "temperature": 0},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return (data["choices"][0]["message"].get("content") or "").strip()

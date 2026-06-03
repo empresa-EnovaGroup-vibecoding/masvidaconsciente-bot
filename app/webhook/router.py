@@ -43,14 +43,27 @@ async def recibir(request: Request):
     if mensaje is None:
         return {"status": "ignored"}  # status update u otro evento sin mensaje
 
-    if mensaje["tipo"] != "text":
-        logger.info("Mensaje no-texto (%s) de %s", mensaje["tipo"], mensaje["telefono"])
-        # Fase 5: encolar una respuesta "por ahora solo texto"
-        return {"status": "ok", "tipo": mensaje["tipo"]}
+    tipo = mensaje["tipo"]
 
-    logger.info("Mensaje de %s: %s", mensaje["telefono"], mensaje["texto"])
-    estado = await _encolar_mensaje(mensaje)
-    return {"status": estado}
+    if tipo == "text":
+        logger.info("Mensaje de %s: %s", mensaje["telefono"], mensaje["texto"])
+        estado = await _encolar_mensaje(mensaje)
+        return {"status": estado}
+
+    if tipo in ("image", "document"):
+        logger.info("Comprobante (%s) de %s", tipo, mensaje["telefono"])
+        estado = await _encolar_comprobante(mensaje)
+        return {"status": estado, "tipo": tipo}
+
+    if tipo == "audio":
+        logger.info("Nota de voz de %s", mensaje["telefono"])
+        estado = await _encolar_audio(mensaje)
+        return {"status": estado, "tipo": tipo}
+
+    # sticker / video / ubicacion / contactos / etc.: el agente responde como humano.
+    logger.info("Evento %s de %s", tipo, mensaje["telefono"])
+    estado = await _encolar_evento(mensaje)
+    return {"status": estado, "tipo": tipo}
 
 
 async def _encolar_mensaje(mensaje) -> str:
@@ -70,4 +83,59 @@ async def _encolar_mensaje(mensaje) -> str:
         (mensaje["telefono"], mensaje["nombre"]),
         countdown=settings.buffer_segundos,
     )
+    return "ok"
+
+
+async def _encolar_comprobante(mensaje) -> str:
+    """Idempotencia + encolado de un comprobante (imagen/PDF) en su carril propio.
+
+    NO pasa por el buffer de texto de 15s: el comprobante se procesa aparte.
+    """
+    from app.services import redis_client as rc
+    from app.workers.tasks import procesar_comprobante
+
+    if not mensaje.get("media_id"):
+        logger.warning("Comprobante sin media_id de %s", mensaje["telefono"])
+        return "sin_media"
+    if await rc.ya_procesado(mensaje["message_id"]):
+        return "duplicado"
+
+    procesar_comprobante.apply_async((
+        mensaje["telefono"],
+        mensaje["message_id"],
+        mensaje["media_id"],
+        mensaje.get("caption"),
+        mensaje.get("nombre"),
+        mensaje.get("mime_type"),
+    ))
+    return "ok"
+
+
+async def _encolar_audio(mensaje) -> str:
+    """Nota de voz: se descarga, se transcribe y el agente responde como a un texto."""
+    from app.services import redis_client as rc
+    from app.workers.tasks import procesar_audio
+
+    if not mensaje.get("media_id"):
+        return "sin_media"
+    if await rc.ya_procesado(mensaje["message_id"]):
+        return "duplicado"
+    procesar_audio.apply_async((
+        mensaje["telefono"],
+        mensaje["message_id"],
+        mensaje["media_id"],
+        mensaje.get("nombre"),
+        mensaje.get("mime_type"),
+    ))
+    return "ok"
+
+
+async def _encolar_evento(mensaje) -> str:
+    """Sticker/video/ubicacion/etc.: el agente responde natural, sin frases roboticas."""
+    from app.services import redis_client as rc
+    from app.workers.tasks import procesar_evento
+
+    if await rc.ya_procesado(mensaje["message_id"]):
+        return "duplicado"
+    procesar_evento.apply_async((mensaje["telefono"], mensaje["tipo"], mensaje.get("nombre")))
     return "ok"

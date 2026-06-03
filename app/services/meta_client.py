@@ -11,8 +11,12 @@ settings = get_settings()
 GRAPH_VERSION = "v21.0"
 
 
+def _graph_base() -> str:
+    return f"https://graph.facebook.com/{GRAPH_VERSION}"
+
+
 def _url() -> str:
-    return f"https://graph.facebook.com/{GRAPH_VERSION}/{settings.meta_phone_number_id}/messages"
+    return f"{_graph_base()}/{settings.meta_phone_number_id}/messages"
 
 
 def _headers() -> dict:
@@ -41,3 +45,24 @@ async def marcar_leido(message_id: str) -> None:
             await client.post(_url(), headers=_headers(), json=payload)
         except httpx.HTTPError as e:  # no es crítico si falla
             logger.warning("No se pudo marcar como leído: %s", e)
+
+
+async def descargar_media(media_id: str) -> tuple[bytes, str]:
+    """Descarga un archivo (comprobante) de WhatsApp en 2 pasos.
+
+    1) GET /{media_id} -> JSON con una URL temporal (caduca ~5 min) y el mime_type.
+    2) GET de esa URL, con el MISMO token, -> bytes del archivo.
+
+    Devuelve (contenido, mime_type). Lanza si Meta responde error o no da URL.
+    """
+    async with httpx.AsyncClient(timeout=30) as client:
+        meta = await client.get(f"{_graph_base()}/{media_id}", headers=_headers())
+        meta.raise_for_status()
+        info = meta.json()
+        url = info.get("url")
+        mime = info.get("mime_type") or "application/octet-stream"
+        if not url:
+            raise ValueError(f"Meta no devolvio URL de descarga para el media {media_id}")
+        archivo = await client.get(url, headers=_headers())
+        archivo.raise_for_status()
+        return archivo.content, mime
