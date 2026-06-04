@@ -12,11 +12,28 @@ from app.workers.celery_app import celery_app
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
+# Loop de asyncio persistente POR PROCESO del worker.
+#
+# Celery (prefork) corre tareas sincronas. Usar asyncio.run() en cada tarea
+# crea y CIERRA un loop nuevo cada vez, dejando invalidas las conexiones async
+# cacheadas (redis / engine de la BD) -> a partir de la 2da tarea explota con
+# "RuntimeError: Event loop is closed". Reusar UN solo loop por proceso mantiene
+# esas conexiones vivas entre tareas. Cada proceso de Celery tiene el suyo.
+_LOOP = None
+
+
+def _run(coro):
+    global _LOOP
+    if _LOOP is None or _LOOP.is_closed():
+        _LOOP = asyncio.new_event_loop()
+        asyncio.set_event_loop(_LOOP)
+    return _LOOP.run_until_complete(coro)
+
 
 @celery_app.task(name="procesar_buffer")
 def procesar_buffer(telefono: str, nombre: str | None = None):
     """Tarea Celery: procesa los mensajes acumulados de un cliente y responde."""
-    asyncio.run(_procesar(telefono, nombre))
+    _run(_procesar(telefono, nombre))
 
 
 async def _procesar(telefono: str, nombre: str | None) -> None:
@@ -67,7 +84,7 @@ def _guardar_comprobante(media_id: str, contenido: bytes, mime: str) -> str:
 @celery_app.task(name="procesar_comprobante")
 def procesar_comprobante(telefono, message_id, media_id, caption=None, nombre=None, mime_type=None):
     """Tarea dedicada (fuera del buffer de texto): descarga y guarda el comprobante."""
-    asyncio.run(_procesar_comprobante(telefono, message_id, media_id, caption, nombre, mime_type))
+    _run(_procesar_comprobante(telefono, message_id, media_id, caption, nombre, mime_type))
 
 
 async def _procesar_comprobante(telefono, message_id, media_id, caption, nombre, mime_type) -> None:
@@ -149,7 +166,7 @@ async def _responder_y_enviar(telefono: str, texto: str, nombre: str | None) -> 
 @celery_app.task(name="procesar_audio")
 def procesar_audio(telefono, message_id, media_id, nombre=None, mime_type=None):
     """Tarea: descarga la nota de voz, la transcribe y responde como a un texto."""
-    asyncio.run(_procesar_audio(telefono, media_id, nombre, mime_type))
+    _run(_procesar_audio(telefono, media_id, nombre, mime_type))
 
 
 async def _procesar_audio(telefono, media_id, nombre, mime_type) -> None:
@@ -171,14 +188,14 @@ async def _procesar_audio(telefono, media_id, nombre, mime_type) -> None:
 @celery_app.task(name="procesar_evento")
 def procesar_evento(telefono, tipo, nombre=None):
     """Tarea: sticker/video/ubicacion/etc. El agente responde natural, sin robotismos."""
-    asyncio.run(_responder_y_enviar(telefono, f"(el cliente envio un {tipo}, sin texto)", nombre))
+    _run(_responder_y_enviar(telefono, f"(el cliente envio un {tipo}, sin texto)", nombre))
 
 
 @celery_app.task(name="notificar_cliente_pago")
 def notificar_cliente_pago(telefono, situacion):
     """Tarea: avisa al cliente (pago confirmado/rechazado) con un mensaje redactado
     al momento por Whuilianny, en su voz y con contexto — no una plantilla."""
-    asyncio.run(_notificar_cliente_pago(telefono, situacion))
+    _run(_notificar_cliente_pago(telefono, situacion))
 
 
 async def _notificar_cliente_pago(telefono, situacion) -> None:
