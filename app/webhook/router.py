@@ -43,6 +43,11 @@ async def recibir(request: Request):
     if mensaje is None:
         return {"status": "ignored"}  # status update u otro evento sin mensaje
 
+    # Mostrar "escribiendo…" de inmediato: el cliente ve que lo estamos atendiendo
+    # (se siente humano, no robotico). Import perezoso; no critico si falla.
+    from app.services.meta_client import marcar_leido_y_escribiendo
+    await marcar_leido_y_escribiendo(mensaje["message_id"])
+
     tipo = mensaje["tipo"]
 
     if tipo == "text":

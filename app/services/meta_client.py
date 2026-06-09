@@ -38,13 +38,24 @@ async def enviar_texto(telefono: str, texto: str) -> dict:
         return resp.json()
 
 
-async def marcar_leido(message_id: str) -> None:
-    payload = {"messaging_product": "whatsapp", "status": "read", "message_id": message_id}
+async def marcar_leido_y_escribiendo(message_id: str) -> None:
+    """Marca el mensaje como leído (doble check azul) Y muestra "escribiendo…".
+
+    El indicador de tipeo lo borra Meta solo cuando respondemos o a los 25s.
+    Por eso SOLO se llama cuando SÍ vamos a responder (humaniza al agente).
+    No es crítico: si falla, el bot responde igual.
+    """
+    payload = {
+        "messaging_product": "whatsapp",
+        "status": "read",
+        "message_id": message_id,
+        "typing_indicator": {"type": "text"},
+    }
     async with httpx.AsyncClient(timeout=10) as client:
         try:
             await client.post(_url(), headers=_headers(), json=payload)
         except httpx.HTTPError as e:  # no es crítico si falla
-            logger.warning("No se pudo marcar como leído: %s", e)
+            logger.warning("No se pudo marcar leído / mostrar escribiendo: %s", e)
 
 
 async def descargar_media(media_id: str) -> tuple[bytes, str]:
