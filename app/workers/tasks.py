@@ -30,6 +30,39 @@ def _run(coro):
     return _LOOP.run_until_complete(coro)
 
 
+async def _guardar_en_panel(
+    telefono: str, nombre: str | None, texto_usuario: str, respuesta: str
+) -> None:
+    """Persiste la conversacion en Postgres para que aparezca en el panel.
+
+    El historial en Redis es para el contexto del agente; el PANEL lee de Postgres
+    (tablas clientes + mensajes). Sin esto, las charlas no se ven en el panel.
+    No es critico: si falla, el bot ya respondio igual.
+    """
+    from sqlalchemy import select
+
+    from app.models import Cliente, Mensaje, now_utc
+    from app.services.db import get_session_factory
+
+    try:
+        factory = get_session_factory()
+        async with factory() as session:
+            cliente = (
+                await session.execute(select(Cliente).where(Cliente.telefono == telefono))
+            ).scalar_one_or_none()
+            if cliente is None:
+                session.add(Cliente(telefono=telefono, nombre=nombre, ultima_interaccion=now_utc()))
+            else:
+                cliente.ultima_interaccion = now_utc()
+                if nombre and not cliente.nombre:
+                    cliente.nombre = nombre
+            session.add(Mensaje(cliente_telefono=telefono, rol="user", contenido=texto_usuario))
+            session.add(Mensaje(cliente_telefono=telefono, rol="assistant", contenido=respuesta))
+            await session.commit()
+    except Exception:  # noqa: BLE001 — no critico: la respuesta ya se envio
+        logger.exception("No se pudo guardar la conversacion en el panel de %s", telefono)
+
+
 @celery_app.task(name="procesar_buffer")
 def procesar_buffer(telefono: str, nombre: str | None = None):
     """Tarea Celery: procesa los mensajes acumulados de un cliente y responde."""
@@ -53,6 +86,7 @@ async def _procesar(telefono: str, nombre: str | None) -> None:
         await enviar_texto(telefono, respuesta)
         await rc.guardar_historial(telefono, "user", texto)
         await rc.guardar_historial(telefono, "assistant", respuesta)
+        await _guardar_en_panel(telefono, nombre, texto, respuesta)
     except Exception:  # noqa: BLE001
         logger.exception("Error procesando el buffer de %s", telefono)
     finally:
@@ -157,6 +191,7 @@ async def _responder_y_enviar(telefono: str, texto: str, nombre: str | None) -> 
         await enviar_texto(telefono, respuesta)
         await rc.guardar_historial(telefono, "user", texto)
         await rc.guardar_historial(telefono, "assistant", respuesta)
+        await _guardar_en_panel(telefono, nombre, texto, respuesta)
     except Exception:  # noqa: BLE001
         logger.exception("Error respondiendo a %s", telefono)
     finally:
