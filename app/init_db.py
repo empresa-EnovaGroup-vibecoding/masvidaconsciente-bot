@@ -66,13 +66,22 @@ async def _crear_admin(session) -> None:
             {"email": settings.admin_email},
         )
     ).scalar()
+    nuevo_hash = hash_password(settings.admin_password)
     if existe:
-        logger.info("Usuario admin ya existe")
+        # Sincroniza la contrasena del admin con ADMIN_PASSWORD en cada arranque.
+        # Antes el admin se creaba UNA sola vez: cambiar ADMIN_PASSWORD no actualizaba
+        # el login. Ahora cambiar la variable (+ redeploy) si cambia la contrasena real.
+        await session.execute(
+            text("UPDATE usuarios SET password_hash = :ph WHERE email = :email"),
+            {"ph": nuevo_hash, "email": settings.admin_email},
+        )
+        await session.commit()
+        logger.info("Usuario admin: contrasena sincronizada con ADMIN_PASSWORD")
         return
     session.add(
         Usuario(
             email=settings.admin_email,
-            password_hash=hash_password(settings.admin_password),
+            password_hash=nuevo_hash,
             nombre="Administrador",
         )
     )
