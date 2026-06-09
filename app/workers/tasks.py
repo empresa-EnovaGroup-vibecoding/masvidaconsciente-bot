@@ -63,6 +63,42 @@ async def _guardar_en_panel(
         logger.exception("No se pudo guardar la conversacion en el panel de %s", telefono)
 
 
+# ─── Cinturon de seguridad del DINERO (anti-alucinacion) ─────────────
+# Solo la duena confirma un pago, desde el panel (eso dispara notificar_cliente_pago).
+# Si el AGENTE, en una charla normal, afirma que un pago quedo confirmado, es una
+# alucinacion: el bot NUNCA debe confirmar dinero por su cuenta. Lo interceptamos.
+_FRASES_PAGO_CONFIRMADO = (
+    "pago confirmado",
+    "pago fue confirmado",
+    "pago ya confirmado",
+    "pago quedo confirmado",
+    "pago esta confirmado",
+    "confirmado tu pago",
+    "confirme tu pago",
+    "pago verificado",
+    "verifique tu pago",
+    "tu pago ya esta listo",
+    "ya quedo confirmado tu pago",
+)
+_RESPUESTA_PAGO_SEGURA = "¡Recibido! Estoy revisando tu pago y te confirmo en un ratito 😊"
+
+
+def _proteger_afirmacion_de_pago(respuesta: str) -> str:
+    """Si el agente afirma que un pago quedo confirmado (cosa que SOLO la duena
+    puede hacer desde el panel), lo reemplaza por un mensaje seguro de 'revisando'.
+    Compara sin acentos para atrapar 'confirmo'/'confirmo', etc."""
+    import unicodedata
+
+    t = unicodedata.normalize("NFKD", respuesta.lower())
+    t = "".join(c for c in t if not unicodedata.combining(c))
+    if any(frase in t for frase in _FRASES_PAGO_CONFIRMADO):
+        logger.warning(
+            "Anti-alucinacion dinero: el agente afirmo un pago confirmado en charla; reemplazado"
+        )
+        return _RESPUESTA_PAGO_SEGURA
+    return respuesta
+
+
 @celery_app.task(name="procesar_buffer")
 def procesar_buffer(telefono: str, nombre: str | None = None):
     """Tarea Celery: procesa los mensajes acumulados de un cliente y responde."""
@@ -82,6 +118,7 @@ async def _procesar(telefono: str, nombre: str | None) -> None:
         historial = await rc.obtener_historial(telefono)
 
         respuesta = await responder(telefono, texto, historial, nombre)
+        respuesta = _proteger_afirmacion_de_pago(respuesta)
 
         await enviar_texto(telefono, respuesta)
         await rc.guardar_historial(telefono, "user", texto)
@@ -188,6 +225,7 @@ async def _responder_y_enviar(telefono: str, texto: str, nombre: str | None) -> 
     try:
         historial = await rc.obtener_historial(telefono)
         respuesta = await responder(telefono, texto, historial, nombre)
+        respuesta = _proteger_afirmacion_de_pago(respuesta)
         await enviar_texto(telefono, respuesta)
         await rc.guardar_historial(telefono, "user", texto)
         await rc.guardar_historial(telefono, "assistant", respuesta)
