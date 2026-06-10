@@ -151,14 +151,41 @@ async def ver_catalogo(session, telefono, categoria=None):
     }
 
 
-async def info_producto(session, telefono, nombre):
+async def _buscar_producto(session, nombre: str, solo_disponibles: bool = False):
+    """Busca un producto de forma tolerante: primero por la frase completa y, si
+    no calza, exigiendo que TODAS las palabras significativas (>2 letras) aparezcan
+    en el nombre. Así 'empanada carne mechada' encuentra 'Empanada de carne mechada'."""
+    def base():
+        s = select(Producto)
+        return s.where(Producto.disponible.is_(True)) if solo_disponibles else s
+
     prod = (
-        await session.execute(
-            select(Producto).where(Producto.nombre.ilike(f"%{nombre}%"))
-        )
+        await session.execute(base().where(Producto.nombre.ilike(f"%{nombre}%")))
     ).scalars().first()
+    if prod is not None:
+        return prod
+    palabras = [p for p in nombre.lower().split() if len(p) > 2]
+    if not palabras:
+        return None
+    stmt = base()
+    for p in palabras:
+        stmt = stmt.where(Producto.nombre.ilike(f"%{p}%"))
+    return (await session.execute(stmt)).scalars().first()
+
+
+async def info_producto(session, telefono, nombre):
+    prod = await _buscar_producto(session, nombre)
     if prod is None:
-        return {"encontrado": False, "nota": f"no tengo un producto llamado '{nombre}'"}
+        disponibles = (
+            await session.execute(
+                select(Producto.nombre).where(Producto.disponible.is_(True)).limit(40)
+            )
+        ).scalars().all()
+        return {
+            "encontrado": False,
+            "nota": f"no hay un producto que calce exacto con '{nombre}'; ofrece el mas parecido de la lista",
+            "productos_disponibles": disponibles,
+        }
     return {
         "encontrado": True,
         "nombre": prod.nombre,
@@ -180,14 +207,7 @@ async def registrar_pedido(session, telefono, items, notas=None):
     items_pedido = []
     total = Decimal("0")
     for it in items:
-        prod = (
-            await session.execute(
-                select(Producto).where(
-                    Producto.nombre.ilike(f"%{it['producto']}%"),
-                    Producto.disponible.is_(True),
-                )
-            )
-        ).scalars().first()
+        prod = await _buscar_producto(session, it["producto"], solo_disponibles=True)
         if prod is None:
             return {"ok": False, "nota": f"no encontré el producto '{it['producto']}'"}
         cantidad = int(it.get("cantidad", 1))
