@@ -7,6 +7,7 @@ Patrón tomado del sistema de referencia (clínica), simplificado:
 - lock: que solo un worker procese el buffer de un cliente a la vez
 """
 import json
+from datetime import datetime, timezone
 from functools import lru_cache
 
 import redis.asyncio as redis
@@ -100,3 +101,28 @@ async def comprobante_procesado(message_id: str) -> bool:
 async def marcar_comprobante(message_id: str) -> None:
     """Marca el comprobante como procesado con exito (24h)."""
     await _client().set(f"comprob:{message_id}", "1", ex=86400)
+
+
+# ─── Anti-abuso / tope de gasto ──────────────────────────────────────
+# Cuenta los mensajes de un cliente por dia (UTC). Frena bucles o trolls que
+# dispararian costo de IA sin control. Los comprobantes NO cuentan (es dinero).
+
+def _hoy() -> str:
+    return datetime.now(timezone.utc).strftime("%Y%m%d")
+
+
+async def contar_mensaje_dia(telefono: str) -> int:
+    """Incrementa y devuelve cuantos mensajes lleva HOY este cliente."""
+    clave = f"abuso:{telefono}:{_hoy()}"
+    n = await _client().incr(clave)
+    if n == 1:
+        await _client().expire(clave, 93600)  # ~26h
+    return n
+
+
+async def aviso_abuso_nuevo(telefono: str) -> bool:
+    """True solo la PRIMERA vez del dia que se supera el tope (para avisar 1 sola vez)."""
+    creado = await _client().set(
+        f"abuso_avisado:{telefono}:{_hoy()}", "1", nx=True, ex=93600
+    )
+    return creado is not None

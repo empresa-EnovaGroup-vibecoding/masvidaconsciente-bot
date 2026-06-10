@@ -50,6 +50,13 @@ async def recibir(request: Request):
 
     tipo = mensaje["tipo"]
 
+    # Tope de gasto / anti-abuso: los comprobantes (image/document) SIEMPRE pasan
+    # (es dinero); el resto cuenta para el limite diario por cliente.
+    if tipo not in ("image", "document") and await _excede_tope(
+        mensaje["telefono"], mensaje.get("nombre")
+    ):
+        return {"status": "limite"}
+
     if tipo == "text":
         logger.info("Mensaje de %s: %s", mensaje["telefono"], mensaje["texto"])
         estado = await _encolar_mensaje(mensaje)
@@ -144,3 +151,54 @@ async def _encolar_evento(mensaje) -> str:
         return "duplicado"
     procesar_evento.apply_async((mensaje["telefono"], mensaje["tipo"], mensaje.get("nombre")))
     return "ok"
+
+
+async def _excede_tope(telefono: str, nombre: str | None) -> bool:
+    """True si el cliente supero el tope de mensajes del dia: se frena la respuesta
+    automatica y se avisa a la duena (una vez). limite<=0 = sin tope.
+    Cualquier fallo del contador deja pasar el mensaje (no frena el bot)."""
+    limite = settings.limite_mensajes_cliente_dia
+    if limite <= 0:
+        return False
+    from app.services import redis_client as rc
+
+    try:
+        n = await rc.contar_mensaje_dia(telefono)
+    except Exception:  # noqa: BLE001 — un fallo del contador no debe frenar el bot
+        logger.exception("No se pudo contar mensajes de %s", telefono)
+        return False
+    if n <= limite:
+        return False
+    logger.warning("Cliente %s supero el tope diario (%s > %s)", telefono, n, limite)
+    try:
+        if await rc.aviso_abuso_nuevo(telefono):
+            await _avisar_duena_abuso(telefono, nombre, n)
+    except Exception:  # noqa: BLE001
+        logger.exception("No se pudo avisar del abuso de %s", telefono)
+    return True
+
+
+async def _avisar_duena_abuso(telefono: str, nombre: str | None, n: int) -> None:
+    """Avisa a la duena (su WhatsApp) que un cliente supero el tope del dia."""
+    from sqlalchemy import select
+
+    from app.models import Configuracion
+    from app.services.db import get_session_factory
+    from app.services.meta_client import enviar_texto
+
+    factory = get_session_factory()
+    async with factory() as session:
+        fila = (
+            await session.execute(
+                select(Configuracion).where(Configuracion.clave == "dueno_telefono")
+            )
+        ).scalar_one_or_none()
+    destino = (fila.valor if fila else None) or settings.dueno_telefono
+    if not destino:
+        return
+    quien = nombre or telefono
+    await enviar_texto(
+        destino,
+        f"⚠️ {quien} superó el límite de mensajes de hoy ({n}). El bot pausó las "
+        f"respuestas automáticas con ese cliente por hoy; si quieres, escríbele tú.",
+    )

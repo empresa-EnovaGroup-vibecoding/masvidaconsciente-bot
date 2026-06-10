@@ -7,6 +7,19 @@
 
 ---
 
+## 2026-06-09 — Fase 1 (en progreso): blindaje del dinero
+
+**Blindaje 1 — Tasa BCV con margen + candado manual** ✅
+- `tasa.py`: `obtener_tasa_bcv` ahora aplica un **margen (%)** sobre la tasa base BCV y respeta un **candado manual** (tasa fija exacta). Refactor aditivo: sin margen ni candado configurados, devuelve la tasa base de siempre. Cadena de respaldo intacta (caché → API → tasa_manual → default).
+- Backend nuevo: `GET/PUT /api/tasa`. Pantalla nueva `/tasa`: tasa efectiva que se cobra, BCV de referencia, margen y candado.
+
+**Blindaje 2 — Tope de gasto / anti-abuso** ✅
+- `config.py`: `LIMITE_MENSAJES_CLIENTE_DIA` (default **80**, env var; 0 = sin tope).
+- `redis_client.py`: contador de mensajes por cliente/día (`abuso:{tel}:{fecha}`) + aviso único (`aviso_abuso_nuevo`).
+- `webhook/router.py`: si un cliente supera el tope, se **pausan las respuestas automáticas** con él por hoy y se **avisa a la dueña** (una vez). Los **comprobantes (imagen/PDF) SIEMPRE pasan** (es dinero). Cualquier fallo del contador deja pasar el mensaje (no frena el bot).
+
+**Pendiente Fase 1:** Blindaje 3 (pago que no calza — parcial/sobrepago, requiere migración) y Blindaje 4 (respaldo automático — script + Coolify). Redeploy del **bot** (tasa + anti-abuso) y del **dashboard** (pantalla Tasa).
+
 ## 2026-06-09 — Fase 0 del Roadmap: control desde el panel
 
 **Qué se hizo (todo aditivo, no rompe nada):**

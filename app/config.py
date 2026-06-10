@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     buffer_segundos: int = 15
     conversacion_ttl: int = 86400
     max_iteraciones_agente: int = 6
+    # Anti-abuso / tope de gasto: maximo de mensajes por cliente al dia antes de
+    # pausar las respuestas automaticas con el (y avisar a la duena). 0 = sin tope.
+    limite_mensajes_cliente_dia: int = 80
 
     # Negocio
     negocio_nombre: str = "masvidaconsciente"
