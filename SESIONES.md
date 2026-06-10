@@ -15,6 +15,17 @@
 
 ---
 
+## 2026-06-09 — Conocimiento del negocio (Base de FAQ/info que usa el bot)
+
+**Qué se hizo (aditivo):**
+- Migración aditiva **`006_conocimiento.sql`** (tabla conocimiento) + modelo `Conocimiento` + init_db aplica 006.
+- Backend: CRUD `GET/POST/PATCH/DELETE /api/conocimiento`. La info se **inyecta en el system prompt** (`_conocimiento_texto`) para que el bot responda dudas con datos reales, reforzando el anti-invento.
+- **Pantalla nueva `/conocimiento`**: entradas por categoría (FAQ, productos, horarios, políticas, ubicación, empresa) con agregar/editar/borrar. Nav + Conocimiento.
+- **Revisión adversarial (workflow de 4 agentes)** antes de subir → 5 arreglos aplicados: (1) limpiar banner de error en caminos felices; (2) opción dinámica en el select para categorías "otras"; (3) `limit(40)` + truncado a 3500 chars del conocimiento inyectado (no inflar el prompt ni diluir las reglas de cobro); (4) reescribir el bloque: el bot usa el conocimiento solo para dudas generales, y para productos/precios/ingredientes **manda SIEMPRE el catálogo** (si difieren, gana el catálogo); (5) validación pydantic `StringConstraints` (título/contenido no vacíos) + normalizar categoría vacía a None.
+- **Verificado:** bot `compileall` OK; dashboard `build` OK.
+
+**Pendiente:** redeploy del **bot + worker** (corre la migración 006; el worker usa el conocimiento) y del **dashboard** (pantalla Conocimiento).
+
 ## 2026-06-09 — 🐛 Fix (encontrado en pruebas reales): producto no encontrado + bot pegado
 
 - **Error:** al pedir "empanada carne mechada" (nombre real: "Empanada de carne mechada") el bot NO la encontraba (búsqueda por frase exacta `ilike %frase%`) y peor: respondía "dame un segundito / déjame revisar / ya te digo" y NO usaba la herramienta — se quedaba pegado en bucle.

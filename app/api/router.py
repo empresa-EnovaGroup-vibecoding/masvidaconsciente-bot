@@ -3,10 +3,11 @@ excepto el propio login."""
 import os
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, StringConstraints
 from sqlalchemy import func, select
 
 from app.api.security import (
@@ -14,7 +15,7 @@ from app.api.security import (
     usuario_actual,
     verify_password,
 )
-from app.models import Cliente, Configuracion, Mensaje, Pago, Pedido, Producto, now_utc
+from app.models import Cliente, Configuracion, Conocimiento, Mensaje, Pago, Pedido, Producto, now_utc
 from app.services.db import get_session_factory
 
 router = APIRouter(prefix="/api", tags=["dashboard"])
@@ -84,6 +85,12 @@ class ProbarIn(BaseModel):
 
 class NotasIn(BaseModel):
     notas: str | None = None
+
+
+class ConocimientoIn(BaseModel):
+    categoria: str | None = None
+    titulo: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+    contenido: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
 
 # ─── Login ───────────────────────────────────────────────────────────
@@ -543,6 +550,65 @@ async def guardar_notas_cliente(telefono: str, datos: NotasIn, _: str = Depends(
         if cliente is None:
             raise HTTPException(status_code=404, detail="Cliente no encontrado")
         cliente.notas = datos.notas
+        await session.commit()
+    return {"ok": True}
+
+
+# ─── Conocimiento del negocio (FAQ + info que usa el bot) ────────────
+
+@router.get("/conocimiento")
+async def listar_conocimiento(_: str = Depends(usuario_actual)):
+    factory = get_session_factory()
+    async with factory() as session:
+        filas = (
+            await session.execute(
+                select(Conocimiento).order_by(Conocimiento.categoria, Conocimiento.titulo)
+            )
+        ).scalars().all()
+    return [
+        {"id": c.id, "categoria": c.categoria, "titulo": c.titulo, "contenido": c.contenido}
+        for c in filas
+    ]
+
+
+@router.post("/conocimiento")
+async def crear_conocimiento(datos: ConocimientoIn, _: str = Depends(usuario_actual)):
+    factory = get_session_factory()
+    async with factory() as session:
+        c = Conocimiento(
+            categoria=(datos.categoria or "").strip() or None,
+            titulo=datos.titulo,
+            contenido=datos.contenido,
+        )
+        session.add(c)
+        await session.commit()
+        await session.refresh(c)
+    return {"id": c.id}
+
+
+@router.patch("/conocimiento/{cid}")
+async def editar_conocimiento(cid: int, datos: ConocimientoIn, _: str = Depends(usuario_actual)):
+    factory = get_session_factory()
+    async with factory() as session:
+        c = await session.get(Conocimiento, cid)
+        if c is None:
+            raise HTTPException(status_code=404, detail="Entrada no encontrada")
+        c.categoria = (datos.categoria or "").strip() or None
+        c.titulo = datos.titulo
+        c.contenido = datos.contenido
+        c.updated_at = now_utc()
+        await session.commit()
+    return {"ok": True}
+
+
+@router.delete("/conocimiento/{cid}")
+async def borrar_conocimiento(cid: int, _: str = Depends(usuario_actual)):
+    factory = get_session_factory()
+    async with factory() as session:
+        c = await session.get(Conocimiento, cid)
+        if c is None:
+            raise HTTPException(status_code=404, detail="Entrada no encontrada")
+        await session.delete(c)
         await session.commit()
     return {"ok": True}
 

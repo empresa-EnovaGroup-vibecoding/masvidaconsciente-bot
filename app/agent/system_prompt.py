@@ -9,7 +9,7 @@ Se arma en 2 partes:
 from sqlalchemy import select
 
 from app.config import get_settings
-from app.models import Configuracion, Producto
+from app.models import Conocimiento, Configuracion, Producto
 from app.services.db import get_session_factory
 
 settings = get_settings()
@@ -91,6 +91,26 @@ async def _catalogo_texto() -> str:
     return "\n".join(lineas)
 
 
+async def _conocimiento_texto() -> str:
+    """Info y FAQ del negocio (editable desde el panel), para que el bot responda
+    dudas con datos REALES en vez de inventar. Acotado (limit + truncado) para no
+    inflar el prompt ni diluir las reglas blindadas del cobro."""
+    try:
+        factory = get_session_factory()
+        async with factory() as session:
+            filas = (
+                await session.execute(
+                    select(Conocimiento)
+                    .order_by(Conocimiento.categoria, Conocimiento.titulo)
+                    .limit(40)
+                )
+            ).scalars().all()
+    except Exception:  # noqa: BLE001
+        return ""
+    texto = "\n".join(f"- {c.titulo}: {c.contenido}" for c in filas)
+    return texto if len(texto) <= 3500 else texto[:3500] + "…"
+
+
 async def construir_system_prompt(nombre_cliente: str | None = None) -> str:
     prompt = await leer_personalidad() + "\n" + _REGLAS
     catalogo = await _catalogo_texto()
@@ -99,6 +119,14 @@ async def construir_system_prompt(nombre_cliente: str | None = None) -> str:
             "\n\nCATÁLOGO REAL — estos son los ÚNICOS productos que existen. NO menciones, "
             "ofrezcas ni inventes NINGUNO fuera de esta lista; usa el nombre EXACTO. Si te piden "
             "algo que no está, dilo y ofrece de esta lista:\n" + catalogo
+        )
+    info = await _conocimiento_texto()
+    if info:
+        prompt += (
+            "\n\nINFORMACIÓN DEL NEGOCIO (úsala para dudas generales: horarios, envíos, "
+            "políticas, cómo pedir. Para productos, precios e ingredientes manda SIEMPRE el "
+            "catálogo y las herramientas; si esta info y el catálogo difieren, gana el catálogo):\n"
+            + info
         )
     if nombre_cliente:
         prompt += f"\nEl cliente se llama {nombre_cliente}. Salúdalo por su nombre si es natural."

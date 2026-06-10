@@ -98,6 +98,17 @@ class Configuracion(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 
 
+class Conocimiento(Base):
+    __tablename__ = "conocimiento"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    categoria: Mapped[str | None] = mapped_column(Text, nullable=True)
+    titulo: Mapped[str] = mapped_column(Text)
+    contenido: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
 class Pago(Base):
     __tablename__ = "pagos"
     __table_args__ = (
