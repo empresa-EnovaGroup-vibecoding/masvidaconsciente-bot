@@ -101,7 +101,7 @@ class Pago(Base):
     __tablename__ = "pagos"
     __table_args__ = (
         CheckConstraint(
-            "estado IN ('reportado','confirmado','rechazado')",
+            "estado IN ('reportado','confirmado','rechazado','parcial')",
             name="ck_pago_estado",
         ),
     )
@@ -111,6 +111,7 @@ class Pago(Base):
     metodo: Mapped[str] = mapped_column(Text, default="pago_movil")
     monto_usd: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
     monto_bs: Mapped[Decimal | None] = mapped_column(Numeric(14, 2), nullable=True)
+    monto_recibido: Mapped[Decimal | None] = mapped_column(Numeric(14, 2), nullable=True)
     tasa_usada: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)
     referencia: Mapped[str | None] = mapped_column(Text, nullable=True)
     comprobante_media_id: Mapped[str | None] = mapped_column(Text, unique=True, nullable=True)

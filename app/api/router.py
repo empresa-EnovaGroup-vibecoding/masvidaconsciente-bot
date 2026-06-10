@@ -44,6 +44,10 @@ class RechazoIn(BaseModel):
     motivo: str | None = None
 
 
+class MontoIn(BaseModel):
+    monto_recibido: float
+
+
 # Claves de configuracion editables desde el panel. El bot YA las lee
 # (info_negocio, generar_datos_pago y _avisar_duena leen estas mismas claves).
 CLAVES_CONFIG = [
@@ -412,6 +416,7 @@ async def listar_pagos(estado: str | None = None, _: str = Depends(usuario_actua
             "metodo": p.metodo,
             "monto_usd": float(p.monto_usd) if p.monto_usd is not None else None,
             "monto_bs": float(p.monto_bs) if p.monto_bs is not None else None,
+            "monto_recibido": float(p.monto_recibido) if p.monto_recibido is not None else None,
             "tasa_usada": float(p.tasa_usada) if p.tasa_usada is not None else None,
             "referencia": p.referencia,
             "tiene_comprobante": bool(p.comprobante_media_id or p.comprobante_url),
@@ -480,6 +485,65 @@ async def rechazar_pago(
             "reenvie el comprobante o la referencia correcta",
         ))
     return {"ok": True, "pago_id": pago_id, "estado": "rechazado"}
+
+
+@router.post("/pagos/{pago_id}/verificar-monto")
+async def verificar_monto(pago_id: int, datos: MontoIn, usuario: str = Depends(usuario_actual)):
+    """Para cuando el monto pagado NO calza con el cobrado (la tasa cambió, etc.).
+    Registra cuánto se recibió (Bs) y decide:
+      - recibido >= total -> confirmado (si pagó de más, avisa el saldo a favor)
+      - recibido <  total -> parcial (el pedido sigue esperando el resto)
+    """
+    factory = get_session_factory()
+    async with factory() as session:
+        pago = await session.get(Pago, pago_id)
+        if pago is None:
+            raise HTTPException(status_code=404, detail="Pago no encontrado")
+        if pago.estado not in ("reportado", "parcial"):
+            raise HTTPException(status_code=409, detail=f"El pago ya está {pago.estado}")
+        if pago.monto_bs is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Este pago no tiene monto en Bs para comparar; usa Confirmar o Rechazar",
+            )
+        recibido = Decimal(str(datos.monto_recibido))
+        total_bs = pago.monto_bs
+        pago.monto_recibido = recibido
+        pago.confirmado_por = usuario
+        pago.updated_at = now_utc()
+        pedido = await session.get(Pedido, pago.pedido_id)
+        if recibido >= total_bs:
+            pago.estado = "confirmado"
+            if pedido is not None:
+                pedido.estado = "pagado"
+        else:
+            pago.estado = "parcial"
+            if pedido is not None:
+                pedido.estado = "esperando_pago"
+        await session.commit()
+        telefono = pedido.cliente_telefono if pedido else None
+        estado_final = pago.estado
+
+    if telefono:
+        from app.workers.tasks import notificar_cliente_pago
+
+        if estado_final == "confirmado":
+            situacion = (
+                "la duena CONFIRMO el pago del cliente; cierra la venta con calidez y agradece la compra"
+            )
+            if recibido > total_bs:
+                situacion += (
+                    f". Ademas pago Bs {(recibido - total_bs):.2f} de mas: dile con cariño que "
+                    f"le queda ese saldo a favor para su proxima compra"
+                )
+        else:
+            situacion = (
+                f"el cliente pago Bs {recibido:.2f} pero el total era Bs {total_bs:.2f}, asi que "
+                f"faltan Bs {(total_bs - recibido):.2f}. Pidele con suavidad y sin reclamar que "
+                f"complete ese monto restante para poder despachar su pedido"
+            )
+        notificar_cliente_pago.apply_async((telefono, situacion))
+    return {"ok": True, "pago_id": pago_id, "estado": estado_final}
 
 
 @router.get("/pagos/{pago_id}/comprobante")

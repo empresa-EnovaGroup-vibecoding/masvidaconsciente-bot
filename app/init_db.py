@@ -40,6 +40,12 @@ async def main() -> None:
         await session.commit()
         logger.info("Migracion 003 (pagos) aplicada")
 
+        # 004: pago que no calza (estado 'parcial' + monto_recibido). Aditiva e idempotente.
+        for stmt in _statements(MIGRATIONS / "004_pago_parcial.sql"):
+            await session.execute(text(stmt))
+        await session.commit()
+        logger.info("Migracion 004 (pago parcial) aplicada")
+
         total = (await session.execute(text("SELECT COUNT(*) FROM productos"))).scalar()
         if total and total > 0:
             logger.info("Catálogo ya cargado (%s productos), no se vuelve a sembrar", total)

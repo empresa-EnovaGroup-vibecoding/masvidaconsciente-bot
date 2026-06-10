@@ -25,7 +25,12 @@
 - `redis_client.py`: contador de mensajes por cliente/día (`abuso:{tel}:{fecha}`) + aviso único (`aviso_abuso_nuevo`).
 - `webhook/router.py`: si un cliente supera el tope, se **pausan las respuestas automáticas** con él por hoy y se **avisa a la dueña** (una vez). Los **comprobantes (imagen/PDF) SIEMPRE pasan** (es dinero). Cualquier fallo del contador deja pasar el mensaje (no frena el bot).
 
-**Pendiente Fase 1:** Blindaje 3 (pago que no calza — parcial/sobrepago, requiere migración) y Blindaje 4 (respaldo automático — script + Coolify). Redeploy del **bot** (tasa + anti-abuso) y del **dashboard** (pantalla Tasa).
+**Blindaje 3 — Pago que no calza (parcial / sobrepago)** ✅
+- Migración aditiva **`004_pago_parcial.sql`**: estado `parcial` + columna `monto_recibido` (Bs). `models.py` + `init_db.py` actualizados.
+- Backend nuevo: `POST /api/pagos/{id}/verificar-monto` con `{monto_recibido}` (Bs). Si recibido ≥ total → **confirmado** (y si pagó de más, avisa el **saldo a favor**); si < total → **parcial** (el pedido sigue esperando el resto). El agente le avisa al cliente con naturalidad (falta X / saldo a favor X).
+- Panel (Pagos): botón **"Monto distinto"** que abre un campo "¿Cuánto recibiste? Bs" → registra; muestra estado parcial con lo recibido y lo que falta.
+
+**Pendiente Fase 1:** Blindaje 4 (respaldo automático — script + Coolify). Redeploy del **bot** (tasa + anti-abuso + pago parcial, **corre la migración 004 al arrancar**) y del **dashboard** (Tasa + Pagos).
 
 ## 2026-06-09 — Fase 0 del Roadmap: control desde el panel
 
