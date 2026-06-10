@@ -26,7 +26,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "ver_catalogo",
-            "description": "Muestra los productos disponibles. Úsala cuando el cliente pregunte qué hay o pida ver el menú. Puedes filtrar por categoría.",
+            "description": "Lista los productos disponibles en TEXTO (nombres y precios). Úsala para preguntas puntuales de qué productos hay o de una categoría. Si el cliente quiere el CATÁLOGO o FOLLETO completo, usa enviar_catalogo (PDF) en su lugar.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -130,7 +130,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "enviar_catalogo",
-            "description": "Envia al cliente el catalogo en PDF (el folleto bonito). Usala cuando el cliente pida ver el catalogo, el menu o el folleto. Si devuelve que no hay PDF, usa ver_catalogo en su lugar.",
+            "description": "Envía al cliente el CATÁLOGO en PDF (el folleto bonito). Úsala SIEMPRE que el cliente pida el catálogo, el menú o el folleto, o que se lo 'mandes / envíes / muestres'. Si devuelve que no hay PDF, recién ahí usa ver_catalogo (texto).",
             "parameters": {"type": "object", "properties": {}},
         },
     },
