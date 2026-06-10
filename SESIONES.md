@@ -15,6 +15,12 @@
 
 ---
 
+## 2026-06-09 — 🐛 Fix (encontrado en pruebas reales): producto no encontrado + bot pegado
+
+- **Error:** al pedir "empanada carne mechada" (nombre real: "Empanada de carne mechada") el bot NO la encontraba (búsqueda por frase exacta `ilike %frase%`) y peor: respondía "dame un segundito / déjame revisar / ya te digo" y NO usaba la herramienta — se quedaba pegado en bucle.
+- **Fix:** `_buscar_producto` (tools.py) tolerante: intenta la frase completa y, si no, exige que TODAS las palabras >2 letras aparezcan; usado en `info_producto` y `registrar_pedido`. `info_producto` ahora devuelve `productos_disponibles` si no calza, para ofrecer alternativas. Regla BLINDADA nueva en system_prompt: prohíbe "dame un segundito/ya te digo" y obliga a usar la herramienta y responder en el mismo mensaje.
+- **Aplica en:** todos los bots (la búsqueda exacta y el "déjame revisar" son trampas comunes). Requiere redeploy del **worker** (ahí corre el agente).
+
 ## 2026-06-09 — Fase 3: Conoce a tu cliente (CRM simple)
 
 **Qué se hizo (aditivo, reusa datos existentes):**
