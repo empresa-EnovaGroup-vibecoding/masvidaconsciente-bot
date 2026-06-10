@@ -26,7 +26,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "ver_catalogo",
-            "description": "Lista los productos disponibles en TEXTO (nombres y precios). Úsala para preguntas puntuales de qué productos hay o de una categoría. Si el cliente quiere el CATÁLOGO o FOLLETO completo, usa enviar_catalogo (PDF) en su lugar.",
+            "description": "Lista productos en TEXTO. ÚSALA SOLO para una consulta muy puntual de un producto específico o una categoría concreta. Para ver opciones, 'qué tienen', recomendaciones o el catálogo, usa enviar_catalogo (PDF).",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -130,7 +130,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "enviar_catalogo",
-            "description": "Envía al cliente el CATÁLOGO en PDF (el folleto bonito). Úsala SIEMPRE que el cliente pida el catálogo, el menú o el folleto, o que se lo 'mandes / envíes / muestres'. Si devuelve que no hay PDF, recién ahí usa ver_catalogo (texto).",
+            "description": "Envía al cliente el CATÁLOGO en PDF (el folleto bonito) para que vea las opciones y haga su pedido. Úsala cuando el cliente quiera ver opciones, pregunte qué tienen / qué hay, pida una recomendación, diga que quiere algo (sin especificar qué), o pida el catálogo/menú/folleto. Si devuelve que no hay PDF, recién ahí usa ver_catalogo (texto).",
             "parameters": {"type": "object", "properties": {}},
         },
     },
@@ -496,17 +496,12 @@ async def enviar_catalogo(session, telefono):
     if not (fila and fila.valor and fila.valor.strip()):
         return {"ok": False, "nota": "no hay un catalogo PDF cargado; usa ver_catalogo (texto)"}
 
-    import os
-
-    settings = get_settings()
-    # Verifica que el PDF EXISTA en disco (no solo el flag en BD): si el archivo no
-    # está, Meta no podría descargarlo y el cliente quedaría colgado. Mejor caer a texto.
-    ruta = os.path.join(settings.catalogo_dir, "catalogo.pdf")
-    if not os.path.exists(ruta):
-        return {"ok": False, "nota": "no hay un catalogo PDF disponible; usa ver_catalogo (texto)"}
-
+    # El archivo lo guarda y lo SIRVE el bot (su propia URL pública), no el worker.
+    # Worker y bot no comparten disco, así que aquí NO revisamos el archivo local:
+    # basta el flag en BD, y Meta descarga el PDF de la URL pública del bot.
     from app.services.meta_client import enviar_documento
 
+    settings = get_settings()
     link = f"{settings.public_base_url.rstrip('/')}/api/catalogo/archivo"
     try:
         await enviar_documento(telefono, link, "Catalogo.pdf")
