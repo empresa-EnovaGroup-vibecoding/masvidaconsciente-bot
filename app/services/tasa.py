@@ -109,14 +109,11 @@ async def _tasa_de_respaldo() -> Decimal:
     )
 
 
-async def obtener_tasa_bcv() -> Decimal:
-    """Devuelve la tasa BCV (Bs por USD) como Decimal.
+async def _tasa_base() -> Decimal:
+    """Tasa BCV CRUDA (Bs por USD), sin margen ni candado.
 
-    Orden de resolucion: cache Redis -> API en vivo -> tasa_manual (BD) ->
-    TASA_MANUAL_DEFAULT. Cachea el valor de la API por `tasa_ttl` segundos.
-
-    Solo lanza si NO hay ninguna fuente disponible (mala configuracion); en ese
-    caso la herramienta que la llama trata el error con gracia (no tumba al bot).
+    Orden: cache Redis -> API en vivo -> tasa_manual (BD) -> TASA_MANUAL_DEFAULT.
+    Cachea el valor de la API por `tasa_ttl` segundos.
     """
     # 1) Cache
     try:
@@ -140,3 +137,73 @@ async def obtener_tasa_bcv() -> Decimal:
 
     # 3) Respaldo (BD -> default)
     return await _tasa_de_respaldo()
+
+
+async def _leer_ajustes_tasa() -> tuple[Decimal, Decimal | None, bool]:
+    """Lee de la tabla configuracion: margen (%), tasa manual y si el candado
+    manual esta activo. Si algo falla, devuelve valores neutros (sin margen,
+    sin candado) para no romper el cobro."""
+    margen = Decimal("0")
+    manual_valor: Decimal | None = None
+    manual_activa = False
+    try:
+        factory = get_session_factory()
+        async with factory() as session:
+            filas = (
+                await session.execute(
+                    select(Configuracion).where(
+                        Configuracion.clave.in_(
+                            ["tasa_margen_pct", "tasa_manual", "tasa_manual_activa"]
+                        )
+                    )
+                )
+            ).scalars().all()
+            cfg = {f.clave: f.valor for f in filas}
+        m = _a_decimal(cfg.get("tasa_margen_pct"))
+        if m is not None:
+            margen = m
+        manual_valor = _a_decimal(cfg.get("tasa_manual"))
+        manual_activa = (cfg.get("tasa_manual_activa") or "").strip().lower() in (
+            "1", "true", "si", "sí", "on",
+        )
+    except Exception as e:  # noqa: BLE001 — leer ajustes nunca debe romper el cobro
+        logger.warning("No se pudieron leer ajustes de tasa: %s", e)
+    return margen, manual_valor, manual_activa
+
+
+async def obtener_tasa_bcv() -> Decimal:
+    """Tasa EFECTIVA que se le cobra al cliente (Bs por USD).
+
+    - Si el CANDADO MANUAL esta activo: usa la tasa fijada por la duena (exacta).
+    - Si no: tasa base (BCV) + el margen (%) que la duena configuro.
+
+    Aditivo: sin margen ni candado configurados, devuelve exactamente la tasa
+    base de siempre. Solo lanza si no hay ninguna fuente (mala configuracion).
+    """
+    margen, manual_valor, manual_activa = await _leer_ajustes_tasa()
+    if manual_activa and manual_valor is not None:
+        return manual_valor
+    base = await _tasa_base()
+    if margen > 0:
+        return (base * (Decimal(1) + margen / Decimal(100))).quantize(Decimal("0.0001"))
+    return base
+
+
+async def estado_tasa() -> dict:
+    """Para el panel: tasa base (BCV), margen, candado manual y tasa efectiva."""
+    margen, manual_valor, manual_activa = await _leer_ajustes_tasa()
+    try:
+        base = await _tasa_base()
+    except Exception:  # noqa: BLE001
+        base = None
+    try:
+        efectiva = await obtener_tasa_bcv()
+    except Exception:  # noqa: BLE001
+        efectiva = None
+    return {
+        "bcv_base": float(base) if base is not None else None,
+        "margen_pct": float(margen),
+        "manual_valor": float(manual_valor) if manual_valor is not None else None,
+        "manual_activa": manual_activa,
+        "tasa_efectiva": float(efectiva) if efectiva is not None else None,
+    }

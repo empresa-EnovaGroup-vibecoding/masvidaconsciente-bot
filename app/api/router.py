@@ -63,6 +63,12 @@ class ConfiguracionIn(BaseModel):
     valores: dict[str, str | None]
 
 
+class TasaIn(BaseModel):
+    margen_pct: float | None = None
+    manual_valor: float | None = None
+    manual_activa: bool | None = None
+
+
 # ─── Login ───────────────────────────────────────────────────────────
 
 @router.post("/login")
@@ -281,6 +287,40 @@ async def guardar_configuracion(datos: ConfiguracionIn, _: str = Depends(usuario
         for clave, valor in datos.valores.items():
             if clave not in CLAVES_CONFIG:
                 continue
+            fila = await session.get(Configuracion, clave)
+            if fila is None:
+                session.add(Configuracion(clave=clave, valor=valor, updated_at=now_utc()))
+            else:
+                fila.valor = valor
+                fila.updated_at = now_utc()
+        await session.commit()
+    return {"ok": True}
+
+
+# ─── Tasa BCV (margen + candado manual) ──────────────────────────────
+
+@router.get("/tasa")
+async def estado_de_tasa(_: str = Depends(usuario_actual)):
+    """Tasa base (BCV), margen, candado manual y tasa efectiva que se cobra hoy."""
+    from app.services.tasa import estado_tasa
+
+    return await estado_tasa()
+
+
+@router.put("/tasa")
+async def guardar_tasa(datos: TasaIn, _: str = Depends(usuario_actual)):
+    """Guarda el margen (%), la tasa manual y si el candado manual esta activo.
+    El cambio se aplica al instante en el proximo cobro."""
+    cambios: dict[str, str] = {}
+    if datos.margen_pct is not None:
+        cambios["tasa_margen_pct"] = str(datos.margen_pct)
+    if datos.manual_valor is not None:
+        cambios["tasa_manual"] = str(datos.manual_valor)
+    if datos.manual_activa is not None:
+        cambios["tasa_manual_activa"] = "1" if datos.manual_activa else "0"
+    factory = get_session_factory()
+    async with factory() as session:
+        for clave, valor in cambios.items():
             fila = await session.get(Configuracion, clave)
             if fila is None:
                 session.add(Configuracion(clave=clave, valor=valor, updated_at=now_utc()))
