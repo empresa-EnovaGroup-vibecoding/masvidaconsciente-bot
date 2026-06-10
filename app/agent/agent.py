@@ -25,7 +25,7 @@ async def _llamar_openrouter(messages: list, tools: list, model: str) -> dict:
         resp = await client.post(
             OPENROUTER_URL,
             headers={"Authorization": f"Bearer {settings.openrouter_api_key}"},
-            json={"model": model, "messages": messages, "tools": tools, "temperature": 0.3},
+            json={"model": model, "messages": messages, "tools": tools, "temperature": 0.15},
         )
         resp.raise_for_status()
         return resp.json()
