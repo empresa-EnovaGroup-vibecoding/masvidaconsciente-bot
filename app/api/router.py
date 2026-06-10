@@ -325,8 +325,8 @@ async def estado_catalogo_pdf(_: str = Depends(usuario_actual)):
 async def subir_catalogo_pdf(archivo: UploadFile = File(...), _: str = Depends(usuario_actual)):
     """Sube el catálogo en PDF (reemplaza el anterior). Máximo 25 MB."""
     contenido = await archivo.read()
-    if len(contenido) > 25 * 1024 * 1024:
-        raise HTTPException(status_code=413, detail="El PDF es muy grande (máximo 25 MB)")
+    if len(contenido) > 100 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="El PDF es muy grande (máximo 100 MB)")
     ct = (archivo.content_type or "").lower()
     if "pdf" not in ct and not (archivo.filename or "").lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="El archivo debe ser un PDF")
