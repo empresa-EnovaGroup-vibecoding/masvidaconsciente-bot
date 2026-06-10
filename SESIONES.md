@@ -11,6 +11,7 @@
 
 - 🔴 **Conectar la tasa BCV AUTOMÁTICA** (`TASA_API_URL` en Coolify) para que la tasa se actualice sola y la dueña NO tenga que ponerla a mano. Hoy (2026-06-09) funciona con una **tasa manual fija** como respaldo (Bs 567,68), pero **NO es automática**. Es parte de la Fase 1 (blindaje del dinero). **Recordárselo a Maired cuando retomemos** — ella pidió diferirlo hasta terminar el panel.
 - 🔴 **Respaldo automático de datos (Blindaje 4)** — DIFERIDO a pedido de Maired (2026-06-09). Plan: capa 1 = respaldo **local** en Coolify (nada sale del servidor); protección REAL = **offsite cifrado** (privado, encriptado con llave que solo ella controla — el cifrado resuelve su preocupación de filtración). Honesto: el local NO salva si muere el servidor entero, y NO incluye las fotos de los comprobantes. **Montar el offsite cifrado ANTES del lanzamiento real con clientes** (cuando haya dato con valor). Recordárselo.
+- 🟡 **Afinar la personalidad como "closer de ventas nato" + ajustes finales de tono** — en la fase de PULIDO FINAL (cuando todo esté armado), escribir un guión de ventas potente en el editor de Personalidad (/bot): manejo de objeciones, cierre con cariño, terminar mensajes con pregunta, etc., y probarlo en el simulador. Maired lo difirió 2026-06-09 para hacerlo "cuando toque afinar todo para que quede perfecto".
 
 ---
 
