@@ -53,7 +53,7 @@ async def responder(
     `llm` y `ejecutar` son inyectables para poder testear el loop sin
     llamar a OpenRouter ni a la base de datos reales.
     """
-    messages: list = [{"role": "system", "content": construir_system_prompt(nombre_cliente)}]
+    messages: list = [{"role": "system", "content": await construir_system_prompt(nombre_cliente)}]
     if historial:
         messages.extend(historial)
     messages.append({"role": "user", "content": mensaje_usuario})
@@ -96,7 +96,7 @@ async def redactar_mensaje(
     dispara el sistema (comprobante recibido, pago confirmado/rechazado), donde
     no hay un texto del cliente que responder pero hay que decir algo con calidez.
     """
-    messages: list = [{"role": "system", "content": construir_system_prompt(nombre)}]
+    messages: list = [{"role": "system", "content": await construir_system_prompt(nombre)}]
     if historial:
         messages.extend(historial)
     messages.append({

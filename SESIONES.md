@@ -14,6 +14,17 @@
 
 ---
 
+## 2026-06-09 — Fase 2: el panel de control (Mi Bot)
+
+**Qué se hizo (aditivo, con el cobro blindado):**
+- **Personalidad editable**: `system_prompt.py` ahora separa la **voz** (editable, clave `personalidad` en configuracion) de las **reglas críticas del cobro** (BLINDADAS, se anexan siempre). `construir_system_prompt` es async y lee la personalidad activa (cae al default si falla). Si la dueña edita la voz, NO puede romper el flujo de dinero.
+- **Simulador**: `POST /api/probar` corre el agente con un teléfono de prueba (`__simulador__`) y devuelve la respuesta SIN enviar nada por WhatsApp.
+- Backend nuevo: `GET/PUT /api/personalidad` (+ default para "restaurar"), `POST /api/probar`.
+- **Pantalla nueva `/bot` ("Mi Bot")**: editor de personalidad (con candado que recuerda que las reglas del cobro están protegidas) + **simulador de chat** lado a lado (estilo SellerChat). Nav + Mi Bot.
+- **Verificado:** bot `compileall` OK; dashboard `build` OK (12 rutas, /bot incluida).
+
+**Pendiente:** redeploy del **bot** (personalidad + simulador) y del **dashboard** (pantalla Mi Bot). Nota: el simulador puede crear pedidos de prueba bajo `__simulador__` (no afecta el reporte, que solo cuenta pagos confirmados).
+
 ## 2026-06-09 — Fase 1 (en progreso): blindaje del dinero
 
 **Blindaje 1 — Tasa BCV con margen + candado manual** ✅

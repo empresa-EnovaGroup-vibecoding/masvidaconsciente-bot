@@ -73,6 +73,15 @@ class TasaIn(BaseModel):
     manual_activa: bool | None = None
 
 
+class PersonalidadIn(BaseModel):
+    personalidad: str
+
+
+class ProbarIn(BaseModel):
+    mensaje: str
+    historial: list[dict] | None = None
+
+
 # ─── Login ───────────────────────────────────────────────────────────
 
 @router.post("/login")
@@ -333,6 +342,48 @@ async def guardar_tasa(datos: TasaIn, _: str = Depends(usuario_actual)):
                 fila.updated_at = now_utc()
         await session.commit()
     return {"ok": True}
+
+
+# ─── Bot: personalidad editable + simulador ──────────────────────────
+
+@router.get("/personalidad")
+async def obtener_personalidad(_: str = Depends(usuario_actual)):
+    """La personalidad activa del bot + la original (para 'restaurar')."""
+    from app.agent.system_prompt import leer_personalidad, personalidad_default
+
+    return {"personalidad": await leer_personalidad(), "default": personalidad_default()}
+
+
+@router.put("/personalidad")
+async def guardar_personalidad(datos: PersonalidadIn, _: str = Depends(usuario_actual)):
+    """Guarda la personalidad editable (clave 'personalidad'). Vacío = vuelve al
+    default. Las reglas críticas del cobro NO se tocan: se anexan siempre aparte."""
+    valor = datos.personalidad.strip()
+    factory = get_session_factory()
+    async with factory() as session:
+        fila = await session.get(Configuracion, "personalidad")
+        if fila is None:
+            session.add(Configuracion(clave="personalidad", valor=valor, updated_at=now_utc()))
+        else:
+            fila.valor = valor
+            fila.updated_at = now_utc()
+        await session.commit()
+    return {"ok": True}
+
+
+@router.post("/probar")
+async def probar_bot(datos: ProbarIn, _: str = Depends(usuario_actual)):
+    """Simulador: corre el agente con un mensaje de prueba y devuelve su respuesta,
+    SIN enviar nada por WhatsApp. Usa un teléfono de prueba ('__simulador__')."""
+    from app.agent.agent import responder
+
+    respuesta = await responder(
+        telefono="__simulador__",
+        mensaje_usuario=datos.mensaje,
+        historial=datos.historial or [],
+        nombre_cliente="Prueba",
+    )
+    return {"respuesta": respuesta}
 
 
 # ─── Conversaciones ──────────────────────────────────────────────────
