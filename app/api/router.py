@@ -1,7 +1,7 @@
 """API REST que alimenta el dashboard. Todo protegido con login (JWT),
 excepto el propio login."""
 import os
-from datetime import date, datetime, time, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -14,7 +14,7 @@ from app.api.security import (
     usuario_actual,
     verify_password,
 )
-from app.models import Cliente, Mensaje, Pago, Pedido, Producto, now_utc
+from app.models import Cliente, Configuracion, Mensaje, Pago, Pedido, Producto, now_utc
 from app.services.db import get_session_factory
 
 router = APIRouter(prefix="/api", tags=["dashboard"])
@@ -42,6 +42,25 @@ class EstadoIn(BaseModel):
 
 class RechazoIn(BaseModel):
     motivo: str | None = None
+
+
+# Claves de configuracion editables desde el panel. El bot YA las lee
+# (info_negocio, generar_datos_pago y _avisar_duena leen estas mismas claves).
+CLAVES_CONFIG = [
+    "negocio_nombre",
+    "negocio_ubicacion",
+    "negocio_pago",
+    "negocio_instagram",
+    "pago_movil_banco",
+    "pago_movil_cedula",
+    "pago_movil_telefono",
+    "pago_movil_titular",
+    "dueno_telefono",
+]
+
+
+class ConfiguracionIn(BaseModel):
+    valores: dict[str, str | None]
 
 
 # ─── Login ───────────────────────────────────────────────────────────
@@ -94,6 +113,51 @@ async def metricas(_: str = Depends(usuario_actual)):
         "clientes_total": clientes_total,
         "pedidos_pendientes": pendientes,
     }
+
+
+# ─── Reporte de ventas (hoy / semana / mes) ──────────────────────────
+
+@router.get("/reporte")
+async def reporte_ventas(_: str = Depends(usuario_actual)):
+    """Ventas COBRADAS (pagos confirmados) + pedidos, por periodo.
+
+    'ventas_usd' suma solo pagos en estado 'confirmado' = dinero realmente
+    cobrado y verificado por la duena (no pedidos sin pagar)."""
+    ahora = now_utc()
+    hoy_inicio = datetime.combine(ahora.date(), time.min, tzinfo=timezone.utc)
+    factory = get_session_factory()
+    async with factory() as session:
+        async def resumen(desde: datetime) -> dict:
+            ventas = (
+                await session.execute(
+                    select(func.coalesce(func.sum(Pago.monto_usd), 0)).where(
+                        Pago.estado == "confirmado", Pago.created_at >= desde
+                    )
+                )
+            ).scalar() or Decimal("0")
+            num_ventas = (
+                await session.execute(
+                    select(func.count()).select_from(Pago).where(
+                        Pago.estado == "confirmado", Pago.created_at >= desde
+                    )
+                )
+            ).scalar() or 0
+            pedidos = (
+                await session.execute(
+                    select(func.count()).select_from(Pedido).where(Pedido.created_at >= desde)
+                )
+            ).scalar() or 0
+            return {
+                "ventas_usd": float(ventas),
+                "num_ventas": num_ventas,
+                "pedidos": pedidos,
+            }
+
+        return {
+            "hoy": await resumen(hoy_inicio),
+            "semana": await resumen(ahora - timedelta(days=7)),
+            "mes": await resumen(ahora - timedelta(days=30)),
+        }
 
 
 # ─── Pedidos ─────────────────────────────────────────────────────────
@@ -191,6 +255,38 @@ async def editar_producto(producto_id: int, datos: ProductoIn, _: str = Depends(
         prod.precio = Decimal(str(datos.precio)) if datos.precio is not None else None
         prod.presentacion = datos.presentacion
         prod.disponible = datos.disponible
+        await session.commit()
+    return {"ok": True}
+
+
+# ─── Configuración del negocio (datos que el bot usa) ────────────────
+
+@router.get("/configuracion")
+async def obtener_configuracion(_: str = Depends(usuario_actual)):
+    """Devuelve los datos editables del negocio (nombre, ubicacion, Pago Movil,
+    WhatsApp de avisos...). Son las claves que el bot lee para atender y cobrar."""
+    factory = get_session_factory()
+    async with factory() as session:
+        filas = (await session.execute(select(Configuracion))).scalars().all()
+        actual = {f.clave: f.valor for f in filas}
+    return {clave: actual.get(clave) for clave in CLAVES_CONFIG}
+
+
+@router.put("/configuracion")
+async def guardar_configuracion(datos: ConfiguracionIn, _: str = Depends(usuario_actual)):
+    """Guarda (upsert) los datos del negocio. Ignora claves desconocidas por
+    seguridad: solo se aceptan las de CLAVES_CONFIG."""
+    factory = get_session_factory()
+    async with factory() as session:
+        for clave, valor in datos.valores.items():
+            if clave not in CLAVES_CONFIG:
+                continue
+            fila = await session.get(Configuracion, clave)
+            if fila is None:
+                session.add(Configuracion(clave=clave, valor=valor, updated_at=now_utc()))
+            else:
+                fila.valor = valor
+                fila.updated_at = now_utc()
         await session.commit()
     return {"ok": True}
 
