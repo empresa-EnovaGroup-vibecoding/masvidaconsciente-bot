@@ -15,6 +15,17 @@
 
 ---
 
+## 2026-06-10 — Mensajes clave editables (guías; el bot las redacta)
+
+**Qué se hizo (aditivo, "agente no bot"):**
+- Nuevo `app/services/mensajes.py`: `MENSAJES_DEFAULT` (guías de pago confirmado, rechazado, comprobante recibido = los textos que estaban hardcodeados) + `leer_guia(clave)` (config editable o default; nunca lanza).
+- La dueña edita la **intención** de cada momento; el agente **redacta natural** (no plantilla). `confirmar_pago`/`rechazar_pago` (router) y `_procesar_comprobante` (worker) ahora leen la guía editable.
+- Backend: `GET/PUT /api/mensajes`.
+- **Pantalla nueva `/mensajes`**: 3 guías editables (comprobante recibido, pago confirmado, pago rechazado) + nota de que la bienvenida/tono van en Mi Bot y que el "pago confirmado" sigue blindado. Nav + Mensajes.
+- **Verificado:** bot `compileall` OK; dashboard `build` OK.
+
+**Pendiente:** redeploy del **worker** (comprobante) + **bot** (endpoints + confirmar/rechazar) + **dashboard** (pantalla Mensajes).
+
 ## 2026-06-10 — Pausar el bot por conversación ("atiendo yo", estilo SellerChat)
 
 **Qué se hizo (aditivo):**

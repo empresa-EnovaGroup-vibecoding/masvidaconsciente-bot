@@ -272,11 +272,9 @@ async def _procesar_comprobante(telefono, message_id, media_id, caption, nombre,
     # Cierre con el cliente: Whuilianny REDACTA el mensaje al momento (no es plantilla).
     # El aviso a la duena ya lo disparo registrar_comprobante.
     if resultado.get("ok"):
-        situacion = (
-            "el cliente acaba de enviarte el comprobante de su pago; confirmale con "
-            "calidez que lo recibiste y que lo estas verificando, SIN afirmar que el "
-            "pago ya quedo confirmado"
-        )
+        from app.services.mensajes import leer_guia
+
+        situacion = await leer_guia("msg_guia_comprobante")
     else:
         situacion = (
             "el cliente te envio una imagen pero no hay un pedido esperando pago; "

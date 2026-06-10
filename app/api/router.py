@@ -101,6 +101,10 @@ class PausaIn(BaseModel):
     pausado: bool
 
 
+class MensajesIn(BaseModel):
+    valores: dict[str, str]
+
+
 # ─── Login ───────────────────────────────────────────────────────────
 
 @router.post("/login")
@@ -435,6 +439,43 @@ async def guardar_bot_estado(datos: BotEstadoIn, _: str = Depends(usuario_actual
     return {"ok": True, "activo": datos.activo}
 
 
+# ─── Mensajes automáticos (guías editables; el bot los redacta) ──────
+
+@router.get("/mensajes")
+async def obtener_mensajes(_: str = Depends(usuario_actual)):
+    from app.services.mensajes import CLAVES_MENSAJES, MENSAJES_DEFAULT
+
+    factory = get_session_factory()
+    async with factory() as session:
+        filas = (
+            await session.execute(
+                select(Configuracion).where(Configuracion.clave.in_(CLAVES_MENSAJES))
+            )
+        ).scalars().all()
+        actual = {f.clave: f.valor for f in filas}
+    return {clave: (actual.get(clave) or MENSAJES_DEFAULT[clave]) for clave in CLAVES_MENSAJES}
+
+
+@router.put("/mensajes")
+async def guardar_mensajes(datos: MensajesIn, _: str = Depends(usuario_actual)):
+    from app.services.mensajes import CLAVES_MENSAJES
+
+    factory = get_session_factory()
+    async with factory() as session:
+        for clave, valor in datos.valores.items():
+            if clave not in CLAVES_MENSAJES:
+                continue
+            limpio = (valor or "").strip()
+            fila = await session.get(Configuracion, clave)
+            if fila is None:
+                session.add(Configuracion(clave=clave, valor=limpio, updated_at=now_utc()))
+            else:
+                fila.valor = limpio
+                fila.updated_at = now_utc()
+        await session.commit()
+    return {"ok": True}
+
+
 # ─── Conversaciones ──────────────────────────────────────────────────
 
 @router.get("/conversaciones")
@@ -727,13 +768,10 @@ async def confirmar_pago(pago_id: int, usuario: str = Depends(usuario_actual)):
         telefono = pedido.cliente_telefono if pedido else None
 
     if telefono:
+        from app.services.mensajes import leer_guia
         from app.workers.tasks import notificar_cliente_pago
 
-        notificar_cliente_pago.apply_async((
-            telefono,
-            "la duena acaba de CONFIRMAR el pago del cliente; cierra la venta con calidez, "
-            "agradecele su compra y dile que coordinan la entrega",
-        ))
+        notificar_cliente_pago.apply_async((telefono, await leer_guia("msg_guia_confirmado")))
     return {"ok": True, "pago_id": pago_id, "estado": "confirmado"}
 
 
@@ -759,13 +797,10 @@ async def rechazar_pago(
         telefono = pedido.cliente_telefono if pedido else None
 
     if telefono:
+        from app.services.mensajes import leer_guia
         from app.workers.tasks import notificar_cliente_pago
 
-        notificar_cliente_pago.apply_async((
-            telefono,
-            "no se pudo verificar el pago del cliente; pidele con suavidad y sin alarmar que "
-            "reenvie el comprobante o la referencia correcta",
-        ))
+        notificar_cliente_pago.apply_async((telefono, await leer_guia("msg_guia_rechazado")))
     return {"ok": True, "pago_id": pago_id, "estado": "rechazado"}
 
 
