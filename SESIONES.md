@@ -7,6 +7,13 @@
 
 ---
 
+## ⏳ Pendientes importantes (no olvidar)
+
+- 🔴 **Conectar la tasa BCV AUTOMÁTICA** (`TASA_API_URL` en Coolify) para que la tasa se actualice sola y la dueña NO tenga que ponerla a mano. Hoy (2026-06-09) funciona con una **tasa manual fija** como respaldo (Bs 567,68), pero **NO es automática**. Es parte de la Fase 1 (blindaje del dinero). **Recordárselo a Maired cuando retomemos** — ella pidió diferirlo hasta terminar el panel.
+- Pendiente Fase 1: Blindaje 3 (pago que no calza) y Blindaje 4 (respaldo automático).
+
+---
+
 ## 2026-06-09 — Fase 1 (en progreso): blindaje del dinero
 
 **Blindaje 1 — Tasa BCV con margen + candado manual** ✅
