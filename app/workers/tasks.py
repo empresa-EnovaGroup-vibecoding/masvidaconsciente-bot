@@ -124,6 +124,25 @@ async def _bot_activo() -> bool:
     return True
 
 
+async def _cliente_pausado(telefono: str) -> bool:
+    """True si la dueña pausó el bot SOLO para este cliente (atiende ella ese chat).
+    Ante error de lectura, devuelve False (el bot sigue respondiendo: fail-safe)."""
+    from sqlalchemy import select
+
+    from app.models import Cliente
+    from app.services.db import get_session_factory
+
+    try:
+        factory = get_session_factory()
+        async with factory() as session:
+            cliente = (
+                await session.execute(select(Cliente).where(Cliente.telefono == telefono))
+            ).scalar_one_or_none()
+        return bool(cliente and cliente.bot_pausado)
+    except Exception:  # noqa: BLE001
+        return False
+
+
 async def _guardar_entrante(telefono: str, nombre: str | None, texto: str) -> None:
     """Guarda SOLO el mensaje entrante del cliente (sin respuesta), para que la
     dueña lo vea en Conversaciones cuando el bot está apagado y responda ella."""
@@ -167,9 +186,9 @@ async def _procesar(telefono: str, nombre: str | None) -> None:
 
         texto = "\n".join(mensajes)
 
-        if not await _bot_activo():
-            # Bot apagado: guarda lo que escribió el cliente para que la dueña lo
-            # vea en Conversaciones y responda ella; el bot no responde solo.
+        if not await _bot_activo() or await _cliente_pausado(telefono):
+            # Bot apagado (global o solo en este chat): guarda lo que escribió el
+            # cliente para que la dueña lo vea en Conversaciones y responda ella.
             await rc.guardar_historial(telefono, "user", texto)
             await _guardar_entrante(telefono, nombre, texto)
             return
@@ -282,7 +301,7 @@ async def _responder_y_enviar(telefono: str, texto: str, nombre: str | None) -> 
     if not await rc.adquirir_lock(telefono):
         return
     try:
-        if not await _bot_activo():
+        if not await _bot_activo() or await _cliente_pausado(telefono):
             await rc.guardar_historial(telefono, "user", texto)
             await _guardar_entrante(telefono, nombre, texto)
             return

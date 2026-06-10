@@ -42,6 +42,7 @@ class Cliente(Base):
     telefono: Mapped[str] = mapped_column(Text, unique=True)
     nombre: Mapped[str | None] = mapped_column(Text, nullable=True)
     notas: Mapped[str | None] = mapped_column(Text, nullable=True)
+    bot_pausado: Mapped[bool] = mapped_column(Boolean, default=False)
     primera_interaccion: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
     ultima_interaccion: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 

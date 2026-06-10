@@ -97,6 +97,10 @@ class BotEstadoIn(BaseModel):
     activo: bool
 
 
+class PausaIn(BaseModel):
+    pausado: bool
+
+
 # ─── Login ───────────────────────────────────────────────────────────
 
 @router.post("/login")
@@ -459,6 +463,7 @@ async def listar_conversaciones(_: str = Depends(usuario_actual)):
                     "nombre": c.nombre,
                     "ultimo_mensaje": ultimo.contenido if ultimo else None,
                     "ultima_interaccion": c.ultima_interaccion.isoformat(),
+                    "bot_pausado": c.bot_pausado,
                 }
             )
     return resultado
@@ -586,6 +591,21 @@ async def guardar_notas_cliente(telefono: str, datos: NotasIn, _: str = Depends(
         cliente.notas = datos.notas
         await session.commit()
     return {"ok": True}
+
+
+@router.put("/clientes/{telefono}/pausa")
+async def pausar_bot_cliente(telefono: str, datos: PausaIn, _: str = Depends(usuario_actual)):
+    """Pausa/reactiva el bot SOLO para este cliente (la dueña atiende ese chat)."""
+    factory = get_session_factory()
+    async with factory() as session:
+        cliente = (
+            await session.execute(select(Cliente).where(Cliente.telefono == telefono))
+        ).scalar_one_or_none()
+        if cliente is None:
+            raise HTTPException(status_code=404, detail="Cliente no encontrado")
+        cliente.bot_pausado = datos.pausado
+        await session.commit()
+    return {"ok": True, "pausado": datos.pausado}
 
 
 # ─── Conocimiento del negocio (FAQ + info que usa el bot) ────────────

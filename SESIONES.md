@@ -15,6 +15,17 @@
 
 ---
 
+## 2026-06-10 — Pausar el bot por conversación ("atiendo yo", estilo SellerChat)
+
+**Qué se hizo (aditivo):**
+- Migración **`007_cliente_bot_pausado.sql`** (columna `bot_pausado` en clientes) + modelo + init_db.
+- **Worker**: `_cliente_pausado(telefono)`; el chequeo ahora es `if not _bot_activo() OR _cliente_pausado(telefono)` → si la dueña pausó SOLO ese chat, el bot no responde a ese número pero **sigue atendiendo a todos los demás**. Fail-safe: ante error de lectura, no se pausa.
+- Backend: `PUT /api/clientes/{telefono}/pausa` + `bot_pausado` en la lista de conversaciones.
+- **Frontend**: en cada conversación abierta (`/conversaciones`), botón **"Pausar bot aquí" / "Reactivar bot aquí"** + aviso ámbar cuando está pausado. (El interruptor global de "Mi Bot" sigue siendo el maestro.)
+- **Verificado:** bot `compileall` OK; dashboard `build` OK.
+
+**Pendiente:** redeploy del **worker** (chequeo) + **bot** (endpoints + migración 007) + **dashboard** (toggle en Conversaciones).
+
 ## 2026-06-10 — Encender / apagar el bot (interruptor de seguridad)
 
 **Qué se hizo (aditivo):**
