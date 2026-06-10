@@ -9,7 +9,7 @@ Se arma en 2 partes:
 from sqlalchemy import select
 
 from app.config import get_settings
-from app.models import Configuracion
+from app.models import Configuracion, Producto
 from app.services.db import get_session_factory
 
 settings = get_settings()
@@ -69,8 +69,37 @@ async def leer_personalidad() -> str:
     return personalidad_default()
 
 
+async def _catalogo_texto() -> str:
+    """Lista compacta del catálogo REAL, para anclar al agente en CADA mensaje.
+    Es el 'verificador' preventivo: el bot ve los nombres exactos y no inventa."""
+    try:
+        factory = get_session_factory()
+        async with factory() as session:
+            prods = (
+                await session.execute(
+                    select(Producto).order_by(Producto.categoria, Producto.nombre)
+                )
+            ).scalars().all()
+    except Exception:  # noqa: BLE001 — sin catálogo igual responde (las tools lo traen)
+        return ""
+    lineas = []
+    for p in prods:
+        precio = f"${p.precio}" if p.precio is not None else "consultar"
+        cat = f" — {p.categoria}" if p.categoria else ""
+        agotado = "" if p.disponible else " [AGOTADO]"
+        lineas.append(f"- {p.nombre} ({precio}){cat}{agotado}")
+    return "\n".join(lineas)
+
+
 async def construir_system_prompt(nombre_cliente: str | None = None) -> str:
     prompt = await leer_personalidad() + "\n" + _REGLAS
+    catalogo = await _catalogo_texto()
+    if catalogo:
+        prompt += (
+            "\n\nCATÁLOGO REAL — estos son los ÚNICOS productos que existen. NO menciones, "
+            "ofrezcas ni inventes NINGUNO fuera de esta lista; usa el nombre EXACTO. Si te piden "
+            "algo que no está, dilo y ofrece de esta lista:\n" + catalogo
+        )
     if nombre_cliente:
         prompt += f"\nEl cliente se llama {nombre_cliente}. Salúdalo por su nombre si es natural."
     return prompt
