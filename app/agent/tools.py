@@ -496,9 +496,17 @@ async def enviar_catalogo(session, telefono):
     if not (fila and fila.valor and fila.valor.strip()):
         return {"ok": False, "nota": "no hay un catalogo PDF cargado; usa ver_catalogo (texto)"}
 
-    from app.services.meta_client import enviar_documento
+    import os
 
     settings = get_settings()
+    # Verifica que el PDF EXISTA en disco (no solo el flag en BD): si el archivo no
+    # está, Meta no podría descargarlo y el cliente quedaría colgado. Mejor caer a texto.
+    ruta = os.path.join(settings.catalogo_dir, "catalogo.pdf")
+    if not os.path.exists(ruta):
+        return {"ok": False, "nota": "no hay un catalogo PDF disponible; usa ver_catalogo (texto)"}
+
+    from app.services.meta_client import enviar_documento
+
     link = f"{settings.public_base_url.rstrip('/')}/api/catalogo/archivo"
     try:
         await enviar_documento(telefono, link, "Catalogo.pdf")
