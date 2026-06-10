@@ -9,11 +9,17 @@
 
 ## ⏳ Pendientes importantes (no olvidar)
 
-- 🔴 **Conectar la tasa BCV AUTOMÁTICA** (`TASA_API_URL` en Coolify) para que la tasa se actualice sola y la dueña NO tenga que ponerla a mano. Hoy (2026-06-09) funciona con una **tasa manual fija** como respaldo (Bs 567,68), pero **NO es automática**. Es parte de la Fase 1 (blindaje del dinero). **Recordárselo a Maired cuando retomemos** — ella pidió diferirlo hasta terminar el panel.
+- ✅ **Tasa BCV AUTOMÁTICA conectada (2026-06-10)**: fuente `https://ve.dolarapi.com/v1/dolares/oficial` (BCV oficial, campo `promedio`) puesta como default en `tasa.py` (`_FUENTE_BCV_DEFAULT`); `_parsear_tasa` ya la entiende (verificado: da 572,68 ≈ los 567,68 manuales). Se actualiza sola (cache 1h). El candado manual queda como freno de emergencia. OJO: para que use la automática, el candado manual debe estar DESACTIVADO en la pantalla Tasa.
 - 🔴 **Respaldo automático de datos (Blindaje 4)** — DIFERIDO a pedido de Maired (2026-06-09). Plan: capa 1 = respaldo **local** en Coolify (nada sale del servidor); protección REAL = **offsite cifrado** (privado, encriptado con llave que solo ella controla — el cifrado resuelve su preocupación de filtración). Honesto: el local NO salva si muere el servidor entero, y NO incluye las fotos de los comprobantes. **Montar el offsite cifrado ANTES del lanzamiento real con clientes** (cuando haya dato con valor). Recordárselo.
 - 🟡 **Afinar la personalidad como "closer de ventas nato" + ajustes finales de tono** — en la fase de PULIDO FINAL (cuando todo esté armado), escribir un guión de ventas potente en el editor de Personalidad (/bot): manejo de objeciones, cierre con cariño, terminar mensajes con pregunta, etc., y probarlo en el simulador. Maired lo difirió 2026-06-09 para hacerlo "cuando toque afinar todo para que quede perfecto".
 
 ---
+
+## 2026-06-10 — Tasa BCV automática (ya no manual)
+
+- `tasa.py`: `_FUENTE_BCV_DEFAULT = https://ve.dolarapi.com/v1/dolares/oficial`; `_tasa_desde_api` usa `settings.tasa_api_url or _FUENTE_BCV_DEFAULT` (funciona sin env var; se puede sobreescribir con `TASA_API_URL`). El BCV oficial llega en `promedio` y `_parsear_tasa` ya lo lee.
+- Verificado: API real da Bs 572,68; el parser lo extrae OK; bot compila.
+- **Pendiente:** redeploy del **bot + worker**. En la pantalla Tasa, dejar el **candado manual DESACTIVADO** para que use la automática (el candado pasa a ser freno de emergencia). El margen % se sigue sumando encima.
 
 ## 2026-06-10 — Mensajes clave editables (guías; el bot las redacta)
 

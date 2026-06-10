@@ -23,6 +23,10 @@ settings = get_settings()
 
 CACHE_KEY = "cache:tasa:bcv"
 
+# Fuente por defecto del BCV OFICIAL (Bs por USD). Devuelve {"promedio": <tasa>},
+# que _parsear_tasa ya entiende. Se puede sobreescribir con la env var TASA_API_URL.
+_FUENTE_BCV_DEFAULT = "https://ve.dolarapi.com/v1/dolares/oficial"
+
 
 def _a_decimal(valor) -> Decimal | None:
     """Convierte a Decimal positivo, o None si no es un numero valido."""
@@ -69,9 +73,7 @@ def _parsear_tasa(payload: dict) -> Decimal:
 
 
 async def _tasa_desde_api() -> Decimal:
-    url = settings.tasa_api_url
-    if not url:
-        raise ValueError("TASA_API_URL no esta configurada")
+    url = settings.tasa_api_url or _FUENTE_BCV_DEFAULT
     headers = {}
     if settings.tasa_api_key:
         headers["Authorization"] = f"Bearer {settings.tasa_api_key}"
