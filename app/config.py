@@ -53,6 +53,11 @@ class Settings(BaseSettings):
     # Comprobantes de pago (archivos en el volumen del VPS).
     comprobantes_dir: str = "/data/comprobantes"
 
+    # Catálogo en PDF (archivo en el volumen) + URL pública del bot para que Meta
+    # pueda descargar el PDF al enviarlo al cliente.
+    catalogo_dir: str = "/data/catalogo"
+    public_base_url: str = "https://api-masvida.enovagroup.tech"
+
     # Dashboard (login) — SIN defaults inseguros: se exigen al arranque.
     jwt_secret: str = ""
     admin_email: str = "admin@masvidaconsciente.com"

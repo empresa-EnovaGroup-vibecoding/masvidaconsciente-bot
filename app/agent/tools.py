@@ -126,6 +126,14 @@ TOOL_SCHEMAS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "enviar_catalogo",
+            "description": "Envia al cliente el catalogo en PDF (el folleto bonito). Usala cuando el cliente pida ver el catalogo, el menu o el folleto. Si devuelve que no hay PDF, usa ver_catalogo en su lugar.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
 ]
 
 
@@ -477,6 +485,28 @@ async def registrar_comprobante(
     }
 
 
+async def enviar_catalogo(session, telefono):
+    """Envía el catálogo en PDF (si la dueña lo subió). El cliente lo recibe como
+    archivo. Si no hay PDF cargado, avisa para que el agente use ver_catalogo."""
+    fila = (
+        await session.execute(
+            select(Configuracion).where(Configuracion.clave == "catalogo_pdf")
+        )
+    ).scalar_one_or_none()
+    if not (fila and fila.valor and fila.valor.strip()):
+        return {"ok": False, "nota": "no hay un catalogo PDF cargado; usa ver_catalogo (texto)"}
+
+    from app.services.meta_client import enviar_documento
+
+    settings = get_settings()
+    link = f"{settings.public_base_url.rstrip('/')}/api/catalogo/archivo"
+    try:
+        await enviar_documento(telefono, link, "Catalogo.pdf")
+        return {"ok": True, "nota": "catalogo PDF enviado al cliente; confirmaselo con calidez"}
+    except Exception:  # noqa: BLE001
+        return {"ok": False, "nota": "no se pudo enviar el catalogo PDF; usa ver_catalogo (texto)"}
+
+
 _DISPATCH = {
     "ver_catalogo": ver_catalogo,
     "info_producto": info_producto,
@@ -485,6 +515,7 @@ _DISPATCH = {
     "ver_pedidos_cliente": ver_pedidos_cliente,
     "generar_datos_pago": generar_datos_pago,
     "registrar_comprobante": registrar_comprobante,
+    "enviar_catalogo": enviar_catalogo,
 }
 
 

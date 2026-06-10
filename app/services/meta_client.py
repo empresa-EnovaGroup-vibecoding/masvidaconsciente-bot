@@ -38,6 +38,28 @@ async def enviar_texto(telefono: str, texto: str) -> dict:
         return resp.json()
 
 
+async def enviar_documento(
+    telefono: str, link: str, filename: str, caption: str | None = None
+) -> dict:
+    """Envía un documento (PDF) por WhatsApp con un link PÚBLICO que Meta descarga.
+    El link debe ser HTTPS y accesible sin login."""
+    documento: dict = {"link": link, "filename": filename}
+    if caption:
+        documento["caption"] = caption
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": telefono,
+        "type": "document",
+        "document": documento,
+    }
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.post(_url(), headers=_headers(), json=payload)
+        if resp.status_code >= 400:
+            logger.error("Meta rechazó el documento (%s): %s", resp.status_code, resp.text)
+            resp.raise_for_status()
+        return resp.json()
+
+
 async def marcar_leido_y_escribiendo(message_id: str) -> None:
     """Marca el mensaje como leído (doble check azul) Y muestra "escribiendo…".
 

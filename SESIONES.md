@@ -15,6 +15,19 @@
 
 ---
 
+## 2026-06-10 — El bot envía el catálogo en PDF (capacidad nueva: archivos)
+
+**Qué se hizo (aditivo):**
+- `meta_client.enviar_documento(telefono, link, filename)`: envía un documento (PDF) por WhatsApp con link público (Meta lo descarga). El bot antes solo mandaba texto.
+- Tool `enviar_catalogo` (tools.py) + schema + regla en system_prompt (si piden catálogo/menú/folleto → manda el PDF; si no hay, ver_catalogo texto). Lee la config `catalogo_pdf`; link = `public_base_url + /api/catalogo/archivo`. Fallback graceful a texto.
+- Endpoints (router.py): `POST/GET/DELETE /api/catalogo-pdf` (auth) + `GET /api/catalogo/archivo` (**PÚBLICO**, FileResponse para Meta). Subida valida pdf por content-type/extensión **y magic bytes `%PDF`**, máx 25MB. Guarda en `catalogo_dir` (/data/catalogo).
+- config.py: `catalogo_dir` + `public_base_url`. **requirements.txt: + `python-multipart`** (obligatorio para UploadFile).
+- Frontend: sección "Catálogo en PDF" en la pantalla Catálogo (subir multipart con token / estado / quitar).
+- **Revisión:** el workflow adversarial NO corrió (límite de subagentes); revisado a mano → se endureció la validación (magic bytes %PDF). Endpoint público sin path traversal (nombre fijo), sirve solo el PDF (contenido público a propósito).
+- **Verificado:** bot `compileall` OK; dashboard `build` OK.
+
+**Pendiente:** redeploy del **bot + worker** (instala python-multipart; el worker usa el tool) + **dashboard**. La dueña sube su PDF en Catálogo.
+
 ## 2026-06-10 — Tasa BCV automática (ya no manual)
 
 - `tasa.py`: `_FUENTE_BCV_DEFAULT = https://ve.dolarapi.com/v1/dolares/oficial`; `_tasa_desde_api` usa `settings.tasa_api_url or _FUENTE_BCV_DEFAULT` (funciona sin env var; se puede sobreescribir con `TASA_API_URL`). El BCV oficial llega en `promedio` y `_parsear_tasa` ya lo lee.
