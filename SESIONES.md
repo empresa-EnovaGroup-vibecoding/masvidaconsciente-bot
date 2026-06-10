@@ -15,6 +15,16 @@
 
 ---
 
+## 2026-06-09 — Fase 3: Conoce a tu cliente (CRM simple)
+
+**Qué se hizo (aditivo, reusa datos existentes):**
+- Migración aditiva **`005_cliente_notas.sql`**: columna `notas` en clientes. `models.py` + `init_db.py` actualizados.
+- Backend nuevo: `GET /api/clientes` (lista con nº de pedidos, total gastado = pagos confirmados, última compra; excluye `__simulador__`), `GET /api/clientes/{telefono}` (ficha con historial de pedidos), `PUT /api/clientes/{telefono}/notas`.
+- **Pantalla nueva `/clientes`**: lista + buscador (por nombre/teléfono) y ficha del cliente (total gastado, nº pedidos, cliente desde, **notas internas privadas** editables, e historial de pedidos). Nav + Clientes.
+- **Verificado:** bot `compileall` OK; dashboard `build` OK (13 rutas, /clientes incluida).
+
+**Pendiente:** redeploy del **bot** (corre la migración 005) y del **dashboard** (pantalla Clientes).
+
 ## 2026-06-09 — Fase 2: el panel de control (Mi Bot)
 
 **Qué se hizo (aditivo, con el cobro blindado):**

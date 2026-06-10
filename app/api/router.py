@@ -82,6 +82,10 @@ class ProbarIn(BaseModel):
     historial: list[dict] | None = None
 
 
+class NotasIn(BaseModel):
+    notas: str | None = None
+
+
 # ─── Login ───────────────────────────────────────────────────────────
 
 @router.post("/login")
@@ -434,6 +438,113 @@ async def detalle_conversacion(telefono: str, _: str = Depends(usuario_actual)):
         {"rol": m.rol, "contenido": m.contenido, "fecha": m.created_at.isoformat()}
         for m in mensajes
     ]
+
+
+# ─── Clientes (CRM) ──────────────────────────────────────────────────
+
+@router.get("/clientes")
+async def listar_clientes(_: str = Depends(usuario_actual)):
+    """Lista de clientes con sus totales: nº de pedidos, total gastado (pagos
+    confirmados) y última compra. Excluye el cliente de prueba del simulador."""
+    factory = get_session_factory()
+    async with factory() as session:
+        clientes = (
+            await session.execute(
+                select(Cliente)
+                .where(Cliente.telefono != "__simulador__")
+                .order_by(Cliente.ultima_interaccion.desc())
+                .limit(500)
+            )
+        ).scalars().all()
+        ped_rows = (
+            await session.execute(
+                select(Pedido.cliente_telefono, func.count(), func.max(Pedido.created_at))
+                .group_by(Pedido.cliente_telefono)
+            )
+        ).all()
+        ped_stats = {r[0]: (r[1], r[2]) for r in ped_rows}
+        gasto_rows = (
+            await session.execute(
+                select(Pedido.cliente_telefono, func.coalesce(func.sum(Pago.monto_usd), 0))
+                .join(Pago, Pago.pedido_id == Pedido.id)
+                .where(Pago.estado == "confirmado")
+                .group_by(Pedido.cliente_telefono)
+            )
+        ).all()
+        gasto = {r[0]: float(r[1]) for r in gasto_rows}
+    salida = []
+    for c in clientes:
+        num, ultima = ped_stats.get(c.telefono, (0, None))
+        salida.append({
+            "telefono": c.telefono,
+            "nombre": c.nombre,
+            "num_pedidos": num,
+            "total_gastado_usd": gasto.get(c.telefono, 0.0),
+            "ultima_compra": ultima.isoformat() if ultima else None,
+            "ultima_interaccion": c.ultima_interaccion.isoformat(),
+        })
+    return salida
+
+
+@router.get("/clientes/{telefono}")
+async def detalle_cliente(telefono: str, _: str = Depends(usuario_actual)):
+    """Ficha del cliente: datos, notas, total gastado e historial de pedidos."""
+    factory = get_session_factory()
+    async with factory() as session:
+        cliente = (
+            await session.execute(select(Cliente).where(Cliente.telefono == telefono))
+        ).scalar_one_or_none()
+        if cliente is None:
+            raise HTTPException(status_code=404, detail="Cliente no encontrado")
+        pedidos = (
+            await session.execute(
+                select(Pedido)
+                .where(Pedido.cliente_telefono == telefono)
+                .order_by(Pedido.created_at.desc())
+                .limit(50)
+            )
+        ).scalars().all()
+        total = (
+            await session.execute(
+                select(func.coalesce(func.sum(Pago.monto_usd), 0))
+                .join(Pedido, Pago.pedido_id == Pedido.id)
+                .where(Pedido.cliente_telefono == telefono, Pago.estado == "confirmado")
+            )
+        ).scalar() or 0
+    return {
+        "telefono": cliente.telefono,
+        "nombre": cliente.nombre,
+        "notas": cliente.notas,
+        "primera_interaccion": cliente.primera_interaccion.isoformat(),
+        "ultima_interaccion": cliente.ultima_interaccion.isoformat(),
+        "total_gastado_usd": float(total),
+        "num_pedidos": len(pedidos),
+        "pedidos": [
+            {
+                "id": p.id,
+                "estado": p.estado,
+                "items": p.items,
+                "total_usd": float(p.total) if p.total else 0,
+                "fecha": p.created_at.isoformat(),
+            }
+            for p in pedidos
+        ],
+    }
+
+
+@router.put("/clientes/{telefono}/notas")
+async def guardar_notas_cliente(telefono: str, datos: NotasIn, _: str = Depends(usuario_actual)):
+    """Guarda las notas internas del cliente (privadas; el cliente nunca las ve)."""
+    factory = get_session_factory()
+    async with factory() as session:
+        cliente = (
+            await session.execute(select(Cliente).where(Cliente.telefono == telefono))
+        ).scalar_one_or_none()
+        if cliente is None:
+            raise HTTPException(status_code=404, detail="Cliente no encontrado")
+        cliente.notas = datos.notas
+        await session.commit()
+    return {"ok": True}
 
 
 # ─── Pagos (cobro) ───────────────────────────────────────────────────
