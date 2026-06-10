@@ -15,6 +15,17 @@
 
 ---
 
+## 2026-06-10 — Encender / apagar el bot (interruptor de seguridad)
+
+**Qué se hizo (aditivo):**
+- **Worker**: `_bot_activo()` lee la config `bot_activo` (default ENCENDIDO; ante error de BD, queda encendido para no quedar mudo). Cuando está apagado, `_procesar` y `_responder_y_enviar` **guardan el mensaje entrante** (`_guardar_entrante`, para que la dueña lo vea en Conversaciones y responda ella) y **NO responden**. El lock se libera igual (return dentro del try).
+- **Los comprobantes SIEMPRE se procesan** (procesar_comprobante no toca el interruptor): nunca se pierde un pago aunque el bot esté apagado.
+- Backend: `GET/PUT /api/bot-estado`.
+- **Frontend**: toggle Encendido/Apagado arriba en `/bot` ("Mi Bot") con semáforo verde/rojo y explicación.
+- **Verificado:** bot `compileall` OK; dashboard `build` OK.
+
+**Pendiente:** redeploy del **worker** (ahí se chequea el interruptor) + **bot** (endpoint) + **dashboard** (toggle).
+
 ## 2026-06-09 — Conocimiento del negocio (Base de FAQ/info que usa el bot)
 
 **Qué se hizo (aditivo):**

@@ -99,6 +99,57 @@ def _proteger_afirmacion_de_pago(respuesta: str) -> str:
     return respuesta
 
 
+# ─── Interruptor del bot (encender / apagar) ─────────────────────────
+
+async def _bot_activo() -> bool:
+    """Lee el interruptor del bot (config 'bot_activo'). Por defecto ENCENDIDO.
+    Si falla la lectura, deja el bot encendido (no se queda mudo por un error de BD)."""
+    from sqlalchemy import select
+
+    from app.models import Configuracion
+    from app.services.db import get_session_factory
+
+    try:
+        factory = get_session_factory()
+        async with factory() as session:
+            fila = (
+                await session.execute(
+                    select(Configuracion).where(Configuracion.clave == "bot_activo")
+                )
+            ).scalar_one_or_none()
+        if fila and fila.valor is not None:
+            return fila.valor.strip().lower() not in ("0", "false", "no", "off")
+    except Exception:  # noqa: BLE001
+        pass
+    return True
+
+
+async def _guardar_entrante(telefono: str, nombre: str | None, texto: str) -> None:
+    """Guarda SOLO el mensaje entrante del cliente (sin respuesta), para que la
+    dueña lo vea en Conversaciones cuando el bot está apagado y responda ella."""
+    from sqlalchemy import select
+
+    from app.models import Cliente, Mensaje, now_utc
+    from app.services.db import get_session_factory
+
+    try:
+        factory = get_session_factory()
+        async with factory() as session:
+            cliente = (
+                await session.execute(select(Cliente).where(Cliente.telefono == telefono))
+            ).scalar_one_or_none()
+            if cliente is None:
+                session.add(Cliente(telefono=telefono, nombre=nombre, ultima_interaccion=now_utc()))
+            else:
+                cliente.ultima_interaccion = now_utc()
+                if nombre and not cliente.nombre:
+                    cliente.nombre = nombre
+            session.add(Mensaje(cliente_telefono=telefono, rol="user", contenido=texto))
+            await session.commit()
+    except Exception:  # noqa: BLE001
+        logger.exception("No se pudo guardar el mensaje entrante de %s", telefono)
+
+
 @celery_app.task(name="procesar_buffer")
 def procesar_buffer(telefono: str, nombre: str | None = None):
     """Tarea Celery: procesa los mensajes acumulados de un cliente y responde."""
@@ -115,6 +166,14 @@ async def _procesar(telefono: str, nombre: str | None) -> None:
             return  # otra tarea ya lo procesó
 
         texto = "\n".join(mensajes)
+
+        if not await _bot_activo():
+            # Bot apagado: guarda lo que escribió el cliente para que la dueña lo
+            # vea en Conversaciones y responda ella; el bot no responde solo.
+            await rc.guardar_historial(telefono, "user", texto)
+            await _guardar_entrante(telefono, nombre, texto)
+            return
+
         historial = await rc.obtener_historial(telefono)
 
         respuesta = await responder(telefono, texto, historial, nombre)
@@ -223,6 +282,10 @@ async def _responder_y_enviar(telefono: str, texto: str, nombre: str | None) -> 
     if not await rc.adquirir_lock(telefono):
         return
     try:
+        if not await _bot_activo():
+            await rc.guardar_historial(telefono, "user", texto)
+            await _guardar_entrante(telefono, nombre, texto)
+            return
         historial = await rc.obtener_historial(telefono)
         respuesta = await responder(telefono, texto, historial, nombre)
         respuesta = _proteger_afirmacion_de_pago(respuesta)

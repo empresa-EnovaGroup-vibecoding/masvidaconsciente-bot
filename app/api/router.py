@@ -93,6 +93,10 @@ class ConocimientoIn(BaseModel):
     contenido: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
 
+class BotEstadoIn(BaseModel):
+    activo: bool
+
+
 # ─── Login ───────────────────────────────────────────────────────────
 
 @router.post("/login")
@@ -395,6 +399,36 @@ async def probar_bot(datos: ProbarIn, _: str = Depends(usuario_actual)):
         nombre_cliente="Prueba",
     )
     return {"respuesta": respuesta}
+
+
+# ─── Interruptor del bot (encender / apagar) ─────────────────────────
+
+@router.get("/bot-estado")
+async def obtener_bot_estado(_: str = Depends(usuario_actual)):
+    factory = get_session_factory()
+    async with factory() as session:
+        fila = await session.get(Configuracion, "bot_activo")
+    activo = (
+        True
+        if fila is None or fila.valor is None
+        else fila.valor.strip().lower() not in ("0", "false", "no", "off")
+    )
+    return {"activo": activo}
+
+
+@router.put("/bot-estado")
+async def guardar_bot_estado(datos: BotEstadoIn, _: str = Depends(usuario_actual)):
+    factory = get_session_factory()
+    async with factory() as session:
+        fila = await session.get(Configuracion, "bot_activo")
+        valor = "1" if datos.activo else "0"
+        if fila is None:
+            session.add(Configuracion(clave="bot_activo", valor=valor, updated_at=now_utc()))
+        else:
+            fila.valor = valor
+            fila.updated_at = now_utc()
+        await session.commit()
+    return {"ok": True, "activo": datos.activo}
 
 
 # ─── Conversaciones ──────────────────────────────────────────────────
