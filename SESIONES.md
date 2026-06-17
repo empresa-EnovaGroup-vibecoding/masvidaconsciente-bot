@@ -15,6 +15,14 @@
 
 ---
 
+## 2026-06-17 — CLAUDE.md del proyecto (la IA arranca sabiéndolo todo)
+
+**Qué se hizo (aditivo, solo documentación):**
+- Creado **`CLAUDE.md`** en la raíz del bot: instrucciones que la IA carga SOLAS al abrir la carpeta — reglas duras (aditivo, no romper el cobro, humanizar, seguridad Tech Provider con Meta), el stack REAL (no el Trust Stack genérico), decisiones ya tomadas (ej. NO selector de modelo en el panel), y la orden de leer `SESIONES.md` + `ROADMAP.md` al empezar.
+- Objetivo: que cualquier conversación nueva en másvida arranque con todo el contexto y siguiendo las reglas, sin "empezar de cero". Pedido por Maired.
+
+**Pendiente:** ninguno (es documentación; no requiere redeploy).
+
 ## 2026-06-10 — El bot envía el catálogo en PDF (capacidad nueva: archivos)
 
 **Qué se hizo (aditivo):**
