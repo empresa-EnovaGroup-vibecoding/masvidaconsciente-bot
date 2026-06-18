@@ -17,6 +17,18 @@
 
 ---
 
+## 2026-06-18 (cont. 3) — Catálogo "pan es pan" + PDF blindado + registro fino de la voz
+
+**Código (aditivo, verificado `compileall` + prueba del filtro):**
+- `agent/tools.py`: `ver_catalogo` ahora acepta `busqueda` (la palabra que pide el cliente) y filtra por NOMBRE — "pan" trae SOLO los panes (Pan de…), NO "Empanadas" (evita el falso positivo de em-PAN-adas: match por INICIO de palabra). Schema + regla del prompt actualizadas para que el bot use `busqueda` ante un pedido específico. Antes solo filtraba por categoría → "pan" traía toda la panadería.
+- `docker-compose.yml`: **volumen persistente para `/data/catalogo`** (antes el PDF se borraba en cada redeploy porque la carpeta no era persistente; daba 404). Ahora aguanta los redeploys. (El PDF se re-sube UNA vez tras el redeploy del fix y queda permanente.)
+- `agent/agent.py`: `_asegurar_catalogo()` (red de seguridad: si el bot dice que envió el catálogo sin llamar a la herramienta, lo envía de verdad).
+
+**Guión (BRIEF, local):**
+- **Registro de voz afinado:** cálida CON CLASE / educada / decente (estilo "sifrina" fina venezolana), NO callejera ("échale un ojo", "ahí te va" → prohibido) NI confianzuda NI rebuscada. Mensaje del catálogo: corto, variado y con clase (no plantilla, no decir "PDF").
+
+**Pendiente:** redeploy del **bot + worker** para `ver_catalogo`. El registro de la voz se pega en "Mi Bot" (sin redeploy).
+
 ## 2026-06-18 (cont.) — Voz plana, fix del catálogo "fantasma" y orden de documentos
 
 **Código (aditivo, verificado `compileall`):**

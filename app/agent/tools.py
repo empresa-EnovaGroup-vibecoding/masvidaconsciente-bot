@@ -26,15 +26,19 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "ver_catalogo",
-            "description": "Lista productos en TEXTO. ÚSALA SOLO para una consulta muy puntual de un producto específico o una categoría concreta. Para ver opciones, 'qué tienen', recomendaciones o el catálogo, usa enviar_catalogo (PDF).",
+            "description": "Lista productos en TEXTO. Cuando el cliente nombra un TIPO o producto (pan, quesillo, galleta, torta...), USA el parámetro `busqueda` con esa palabra para traer SOLO eso (ej. 'pan' trae solo los panes, NO toda la panadería). Usa `categoria` solo si pide una categoría completa explícita. Para ver TODO / 'qué tienen' / recomendaciones, usa enviar_catalogo (PDF), no esta.",
             "parameters": {
                 "type": "object",
                 "properties": {
+                    "busqueda": {
+                        "type": "string",
+                        "description": "Palabra o tipo que pide el cliente (ej. 'pan', 'quesillo', 'galleta'). Trae solo los productos cuyo NOMBRE empieza por esa palabra.",
+                    },
                     "categoria": {
                         "type": "string",
                         "enum": ["panaderia", "dulceria", "congelados", "artesanal", "harinas"],
-                        "description": "Categoría a mostrar. Omitir para ver todo.",
-                    }
+                        "description": "Categoría completa a mostrar. Omitir si usas búsqueda o para ver todo.",
+                    },
                 },
             },
         },
@@ -139,13 +143,31 @@ TOOL_SCHEMAS = [
 
 # ─── Implementaciones ────────────────────────────────────────────────
 
-async def ver_catalogo(session, telefono, categoria=None):
+def _coincide_busqueda(nombre: str, palabras: list[str]) -> bool:
+    """True si CADA palabra buscada es el INICIO de alguna palabra del nombre.
+    Así 'pan' calza con 'Pan de Sándwich' (palabra 'Pan') pero NO con 'Empanadas'
+    (donde 'pan' solo aparece por dentro). Evita el falso positivo de em-PAN-adas."""
+    tokens = nombre.lower().replace(",", " ").replace(".", " ").split()
+    return all(any(t.startswith(w) for t in tokens) for w in palabras)
+
+
+async def ver_catalogo(session, telefono, categoria=None, busqueda=None):
     stmt = select(Producto).where(Producto.disponible.is_(True))
     if categoria:
         stmt = stmt.where(Producto.categoria == categoria.lower())
     productos = (await session.execute(stmt)).scalars().all()
+    if busqueda:
+        # Filtra por NOMBRE: el cliente pidió algo específico (pan, quesillo...).
+        palabras = [w for w in busqueda.lower().split() if len(w) > 2]
+        if palabras:
+            productos = [p for p in productos if _coincide_busqueda(p.nombre, palabras)]
     if not productos:
-        return {"productos": [], "nota": "no hay productos en esa categoría"}
+        nota = (
+            f"no tienes ningún producto que sea '{busqueda}'; dile con sinceridad que de eso no tienes y ofrécele lo que sí hay"
+            if busqueda
+            else "no hay productos en esa categoría"
+        )
+        return {"productos": [], "nota": nota}
     return {
         "productos": [
             {
