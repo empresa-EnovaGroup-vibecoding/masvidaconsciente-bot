@@ -9,11 +9,53 @@
 
 ## ⏳ Pendientes importantes (no olvidar)
 
+> **⚠️ LEER ESTO PRIMERO (actualizado 2026-06-17):** las notas viejas de abajo que dicen *"Pendiente: redeploy"* están **DESACTUALIZADAS**. Esos redeploys YA SE HICIERON: todo eso está **EN PRODUCCIÓN y funcionando** (verificado en vivo contra `api-masvida.enovagroup.tech` — ver entrada del 2026-06-17 "Inventario verificado"). No las tomes como pendientes. Lo que SÍ sigue pendiente de verdad está listado en esa entrada.
+
 - ✅ **Tasa BCV AUTOMÁTICA conectada (2026-06-10)**: fuente `https://ve.dolarapi.com/v1/dolares/oficial` (BCV oficial, campo `promedio`) puesta como default en `tasa.py` (`_FUENTE_BCV_DEFAULT`); `_parsear_tasa` ya la entiende (verificado: da 572,68 ≈ los 567,68 manuales). Se actualiza sola (cache 1h). El candado manual queda como freno de emergencia. OJO: para que use la automática, el candado manual debe estar DESACTIVADO en la pantalla Tasa.
 - 🔴 **Respaldo automático de datos (Blindaje 4)** — DIFERIDO a pedido de Maired (2026-06-09). Plan: capa 1 = respaldo **local** en Coolify (nada sale del servidor); protección REAL = **offsite cifrado** (privado, encriptado con llave que solo ella controla — el cifrado resuelve su preocupación de filtración). Honesto: el local NO salva si muere el servidor entero, y NO incluye las fotos de los comprobantes. **Montar el offsite cifrado ANTES del lanzamiento real con clientes** (cuando haya dato con valor). Recordárselo.
 - 🟡 **Afinar la personalidad como "closer de ventas nato" + ajustes finales de tono** — en la fase de PULIDO FINAL (cuando todo esté armado), escribir un guión de ventas potente en el editor de Personalidad (/bot): manejo de objeciones, cierre con cariño, terminar mensajes con pregunta, etc., y probarlo en el simulador. Maired lo difirió 2026-06-09 para hacerlo "cuando toque afinar todo para que quede perfecto".
 
 ---
+
+## 2026-06-18 — Personalidad "closer" con la voz REAL de Whuilianny + ajustes de código
+
+**Qué se hizo:**
+- Se armó el guión de personalidad del bot (en `BRIEF-closer-masvida.md`, **LOCAL/gitignored**) copiando el estilo REAL de la dueña (capturas de WhatsApp): mensajes muy cortos, **varios mensajitos**, **plano** (sin viñetas ni negritas), sus frases ("¿De qué lo quieres?", "Para mañana te lo puedo tener"), bendición al **cerrar**. El bot habla en **primera persona COMO Whuilianny** (no "asistente"). Se pega en "Mi Bot" (config, sin redeploy).
+- **Código (aditivo, no rompe el cobro):**
+  - `system_prompt.py`: la regla del cobro reescrita en **1ª persona** (ya no dice "la dueña lo verifica" en 3ª persona; sigue PROHIBIDO afirmar pago confirmado). Nueva regla de formato: **varios mensajitos separados por línea en blanco, PROHIBIDO viñetas/negritas, listar plano**.
+  - `workers/tasks.py`: nuevo `_enviar_en_partes()` que **parte la respuesta del agente en varios mensajes** (por línea en blanco) con pausa breve entre cada uno; usado en texto, audio y comprobante. Tope de 6 globos (anti-spam).
+  - `services/mensajes.py` y `api/router.py`: guías de "pago confirmado" reescritas neutras/1ª persona (sin "la dueña" en 3ª persona).
+  - `agent/tools.py`: descripción/nota del comprobante reescritas (sin "la duena lo verifica").
+- **Verificado:** `compileall` OK.
+
+**Pendiente:** **redeploy del bot + worker** (ahí corren las reglas y el partir en globos). OJO: el **simulador NO muestra los globos partidos** (eso pasa solo en WhatsApp real, vía worker). Pagos **multi-método + descuento divisas (20% + delivery gratis)** = desarrollo **Paso 2**.
+
+## 2026-06-17 — Inventario verificado en vivo (las notas "Pendiente: redeploy" ya están desplegadas)
+
+**Por qué:** las entradas viejas decían "Pendiente: redeploy" y nunca se marcaron como hechas, confundiendo el estado real. Se hizo un inventario **verificando contra la API en producción** (no contra las notas).
+
+**Cómo se verificó:** se consultó `https://api-masvida.enovagroup.tech/openapi.json` (lista de endpoints publicados) y el endpoint público del catálogo PDF. Resultado: **TODOS los endpoints de las features "pendientes" están en vivo.**
+
+**✅ Confirmado DESPLEGADO y funcionando (los redeploys viejos YA se hicieron):**
+- Catálogo y precios editables · agotados 1 clic · Configuración del negocio · Reporte de ventas.
+- **Catálogo en PDF** (`/api/catalogo-pdf` + `/api/catalogo/archivo`) — y el PDF público responde `HTTP 200 application/pdf`: **la dueña YA subió su catálogo**.
+- **Tasa BCV** con margen + candado (`/api/tasa`) — **candado DESACTIVADO → usa la automática** (confirmado por Maired).
+- **Pago que no calza** (`/api/pagos/{id}/verificar-monto`) · Tope de gasto / anti-abuso.
+- **Encender/apagar bot** (`/api/bot-estado`) · **Pausar bot por chat** (`/api/clientes/{tel}/pausa`).
+- **Mi Bot**: personalidad editable + simulador (`/api/personalidad`, `/api/probar`).
+- **Mensajes editables** (`/api/mensajes`) · **Conocimiento/FAQ** (`/api/conocimiento`).
+- **Clientes/CRM** (`/api/clientes`, `/notas`) + ficha + historial.
+
+**🟡 Realidad operativa (al 2026-06-17):**
+- Número conectado = el de **PRUEBA +57 313 2933806** (aún NO el real de másvida en Venezuela).
+- Bot **encendido pero en modo pruebas** (todavía no atiende clientes reales).
+
+**⏳ Pendiente DE VERDAD:**
+- **Respaldo automático (Blindaje 4)** — verificado quirúrgicamente: NO existe en el código (sin script, sin `pg_dump`, sin cron, sin servicio en `docker-compose.yml`). Solo podría estar configurado a mano en Coolify (Postgres → Backups). Montar (local + offsite cifrado) **antes del lanzamiento real con clientes**.
+- **Migrar al número real de másvida (VE)** para atender clientes de verdad.
+- **Afinar personalidad "closer de ventas" + tono final** (diferido para el pulido final).
+- **Onboarding automatizado** (hoy el `override` del webhook es manual).
+- Roadmap aún no construido: plantillas HSM / aviso fuera de 24h, recuperación de pedidos sin pagar, recordatorios de pago, delivery + envío por zona, multi-método de pago, recibo, fotos en catálogo, roles dueña/empleado, horario de atención, etiquetas, más vendidos, campañas.
 
 ## 2026-06-17 — CLAUDE.md del proyecto (la IA arranca sabiéndolo todo)
 

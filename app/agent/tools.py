@@ -114,7 +114,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "registrar_comprobante",
-            "description": "Registra que el cliente REPORTO su pago (dio una referencia o dice que ya pago). NO confirma el pago: la duena lo verifica. Usala cuando el cliente diga que pago o te de el numero de referencia.",
+            "description": "Registra que el cliente REPORTO su pago (dio una referencia o dice que ya pago). NO confirma el pago: el pago se verifica aparte antes de darlo por bueno. Usala cuando el cliente diga que pago o te de el numero de referencia.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -481,7 +481,7 @@ async def registrar_comprobante(
         "ok": True,
         "pago_id": pago.id,
         "pedido_id": pedido.id,
-        "nota": "pago reportado; la duena lo verifica y confirma (no afirmes que ya esta confirmado)",
+        "nota": "pago reportado; aun NO esta confirmado: dile que lo estas verificando y le confirmas enseguida (no afirmes que ya quedo confirmado)",
     }
 
 

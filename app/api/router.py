@@ -923,7 +923,7 @@ async def verificar_monto(pago_id: int, datos: MontoIn, usuario: str = Depends(u
 
         if estado_final == "confirmado":
             situacion = (
-                "la duena CONFIRMO el pago del cliente; cierra la venta con calidez y agradece la compra"
+                "el pago del cliente quedo CONFIRMADO; cierra la venta con calidez y agradece la compra"
             )
             if recibido > total_bs:
                 situacion += (

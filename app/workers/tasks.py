@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import re
 
 from app.agent.agent import redactar_mensaje, responder, transcribir_audio
 from app.config import get_settings
@@ -97,6 +98,26 @@ def _proteger_afirmacion_de_pago(respuesta: str) -> str:
         )
         return _RESPUESTA_PAGO_SEGURA
     return respuesta
+
+
+# ─── Envío humano: varios mensajitos cortos (no un mensajote) ────────
+
+async def _enviar_en_partes(telefono: str, texto: str) -> None:
+    """Envía la respuesta como VARIOS mensajes cortos (como una persona real en
+    WhatsApp), no un mensajote. El agente separa cada globo con una línea en blanco;
+    aquí partimos por esas líneas en blanco y enviamos cada parte por separado, con
+    una pausa breve. Tope de globos para proteger la calidad del número."""
+    if not texto or not texto.strip():
+        return
+    partes = [p.strip() for p in re.split(r"\n\s*\n", texto.strip()) if p.strip()]
+    if not partes:
+        partes = [texto.strip()]
+    if len(partes) > 6:  # tope anti-spam: junta el exceso en el último globo
+        partes = partes[:5] + ["\n\n".join(partes[5:])]
+    for i, parte in enumerate(partes):
+        if i:
+            await asyncio.sleep(1.0)  # pausa breve entre globos, como una persona
+        await enviar_texto(telefono, parte)
 
 
 # ─── Interruptor del bot (encender / apagar) ─────────────────────────
@@ -198,7 +219,7 @@ async def _procesar(telefono: str, nombre: str | None) -> None:
         respuesta = await responder(telefono, texto, historial, nombre)
         respuesta = _proteger_afirmacion_de_pago(respuesta)
 
-        await enviar_texto(telefono, respuesta)
+        await _enviar_en_partes(telefono, respuesta)
         await rc.guardar_historial(telefono, "user", texto)
         await rc.guardar_historial(telefono, "assistant", respuesta)
         await _guardar_en_panel(telefono, nombre, texto, respuesta)
@@ -287,7 +308,7 @@ async def _procesar_comprobante(telefono, message_id, media_id, caption, nombre,
         logger.exception("No se pudo redactar el mensaje al cliente %s", telefono)
         mensaje = ""
     if mensaje.strip():
-        await enviar_texto(telefono, mensaje)
+        await _enviar_en_partes(telefono, mensaje)
         await rc.guardar_historial(telefono, "assistant", mensaje)
 
 
@@ -306,7 +327,7 @@ async def _responder_y_enviar(telefono: str, texto: str, nombre: str | None) -> 
         historial = await rc.obtener_historial(telefono)
         respuesta = await responder(telefono, texto, historial, nombre)
         respuesta = _proteger_afirmacion_de_pago(respuesta)
-        await enviar_texto(telefono, respuesta)
+        await _enviar_en_partes(telefono, respuesta)
         await rc.guardar_historial(telefono, "user", texto)
         await rc.guardar_historial(telefono, "assistant", respuesta)
         await _guardar_en_panel(telefono, nombre, texto, respuesta)
@@ -359,5 +380,5 @@ async def _notificar_cliente_pago(telefono, situacion) -> None:
         logger.exception("No se pudo redactar el aviso de pago para %s", telefono)
         return
     if mensaje.strip():
-        await enviar_texto(telefono, mensaje)
+        await _enviar_en_partes(telefono, mensaje)
         await rc.guardar_historial(telefono, "assistant", mensaje)

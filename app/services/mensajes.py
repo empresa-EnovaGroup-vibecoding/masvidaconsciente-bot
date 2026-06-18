@@ -11,7 +11,7 @@ from app.services.db import get_session_factory
 
 MENSAJES_DEFAULT = {
     "msg_guia_confirmado": (
-        "la dueña acaba de CONFIRMAR el pago del cliente; cierra la venta con calidez, "
+        "el pago del cliente acaba de quedar CONFIRMADO; cierra la venta con calidez, "
         "agradécele su compra y dile que coordinan la entrega"
     ),
     "msg_guia_rechazado": (
