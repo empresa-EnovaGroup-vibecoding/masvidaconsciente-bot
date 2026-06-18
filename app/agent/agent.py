@@ -6,6 +6,7 @@ las ejecuta, y devuelve la respuesta final en la voz de Whuilianny.
 import base64
 import json
 import logging
+import unicodedata
 
 import httpx
 
@@ -18,6 +19,45 @@ settings = get_settings()
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 RESPUESTA_SEGURA = "Dame un momentito y te confirmo 😊"
+
+
+def _sin_acentos(texto: str) -> str:
+    t = unicodedata.normalize("NFKD", (texto or "").lower())
+    return "".join(c for c in t if not unicodedata.combining(c))
+
+
+# Frases con las que el agente AFIRMA haber enviado el catálogo (claim declarativo).
+_AFIRMA_ENVIO_CATALOGO = (
+    "acabo de envi", "acabo de mand",
+    "ya te envi", "ya te mand", "ya te paso", "ya te lo",
+    "te envie", "te mande", "te lo envie", "te lo mande",
+    "aqui te dejo", "aqui tienes",
+)
+
+
+def _afirma_envio_catalogo(texto: str) -> bool:
+    """True si el texto AFIRMA haber enviado el catálogo/menú (no si lo ofrece/pregunta)."""
+    t = _sin_acentos(texto)
+    if "catalogo" not in t and "menu" not in t:
+        return False
+    return any(frase in t for frase in _AFIRMA_ENVIO_CATALOGO)
+
+
+async def _asegurar_catalogo(texto: str, catalogo_ok: bool, telefono: str, ejecutar) -> str:
+    """Red de seguridad: si el bot DICE que envió el catálogo pero no llamó a la
+    herramienta, lo enviamos de verdad (su afirmación se vuelve cierta y el cliente
+    SÍ recibe el PDF, además en el orden correcto: PDF primero, texto después).
+    Si no hay PDF, evitamos dejar una afirmación falsa."""
+    if catalogo_ok or not _afirma_envio_catalogo(texto):
+        return texto
+    try:
+        resultado = await ejecutar("enviar_catalogo", {}, telefono)
+    except Exception:  # noqa: BLE001
+        resultado = {"ok": False}
+    if isinstance(resultado, dict) and resultado.get("ok"):
+        return texto  # ahora SÍ se envió: la afirmación es verdad
+    # No se pudo enviar (no hay PDF): no dejar una afirmación falsa.
+    return "Déjame mostrarte lo que tenemos 😊 ¿Qué estás buscando?"
 
 
 async def _llamar_openrouter(messages: list, tools: list, model: str) -> dict:
@@ -58,6 +98,7 @@ async def responder(
         messages.extend(historial)
     messages.append({"role": "user", "content": mensaje_usuario})
 
+    catalogo_ok = False
     for _ in range(settings.max_iteraciones_agente):
         data = await _llamar_con_fallback(messages, llm)
         msg = data["choices"][0]["message"]
@@ -65,7 +106,8 @@ async def responder(
 
         tool_calls = msg.get("tool_calls")
         if not tool_calls:
-            return (msg.get("content") or "").strip() or RESPUESTA_SEGURA
+            texto = (msg.get("content") or "").strip() or RESPUESTA_SEGURA
+            return await _asegurar_catalogo(texto, catalogo_ok, telefono, ejecutar)
 
         for tc in tool_calls:
             nombre_tool = tc["function"]["name"]
@@ -74,6 +116,8 @@ async def responder(
             except json.JSONDecodeError:
                 args = {}
             resultado = await ejecutar(nombre_tool, args, telefono)
+            if nombre_tool == "enviar_catalogo" and isinstance(resultado, dict) and resultado.get("ok"):
+                catalogo_ok = True
             messages.append(
                 {
                     "role": "tool",

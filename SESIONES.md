@@ -1,4 +1,4 @@
-# Bitácora de sesiones — masvidaconsciente
+# 📔 SESIONES = lo que YA hicimos (el diario de másvida)
 
 > **Dos prácticas adoptadas (inspiradas en el sistema del mentor Erwin), para no romper lo que funciona:**
 >
@@ -16,6 +16,19 @@
 - 🟡 **Afinar la personalidad como "closer de ventas nato" + ajustes finales de tono** — en la fase de PULIDO FINAL (cuando todo esté armado), escribir un guión de ventas potente en el editor de Personalidad (/bot): manejo de objeciones, cierre con cariño, terminar mensajes con pregunta, etc., y probarlo en el simulador. Maired lo difirió 2026-06-09 para hacerlo "cuando toque afinar todo para que quede perfecto".
 
 ---
+
+## 2026-06-18 (cont.) — Voz plana, fix del catálogo "fantasma" y orden de documentos
+
+**Código (aditivo, verificado `compileall`):**
+- `workers/tasks.py`: `_aplanar()` quita a la fuerza viñetas, *negritas* y los ".00" de los precios antes de enviar (el modelo a veces ignora la regla). Mensajes 100% planos.
+- `agent/agent.py`: `_asegurar_catalogo()` — red de seguridad: si el bot DICE que envió el catálogo pero NO llamó a `enviar_catalogo`, el sistema lo envía de verdad (PDF primero, texto después). Si no hay PDF, evita la afirmación falsa. + `system_prompt`: regla "nunca afirmes un envío que no hiciste".
+- Regla "no re-saludar en cada mensaje" (otro día sí saluda) — en el guión (BRIEF).
+
+**Documentación (orden, a pedido de Maired):**
+- Cada documento con su etiqueta: **ROADMAP = lo que FALTA · SESIONES = lo HECHO · BRIEF = cómo HABLA el bot**. Mapa en CLAUDE.md §6.
+- ROADMAP limpiado: muestra **solo lo pendiente** + un resumen "ya funciona"; FASES 0–3 marcadas hechas. Se borró el `PRP-INDICE` duplicado (la lista vive en ROADMAP).
+
+**Pendiente:** redeploy del **bot + worker**. Próximo: **Plan A** (memoria/ficha, será su propio PRP). Bug en cola: comprobantes (Plan B).
 
 ## 2026-06-18 — Personalidad "closer" con la voz REAL de Whuilianny + ajustes de código
 

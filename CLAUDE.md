@@ -37,8 +37,13 @@ Antes de tocar datos reales, probar el cambio dentro de una transacción y hacer
 - Ver la lista completa de "lo que NO se construye" en `ROADMAP.md`.
 
 ## 6. Dónde está cada cosa
-- `SESIONES.md` → bitácora · `ROADMAP.md` → plan · `ENOVA_BLUEPRINT.md` → cómo montar un cliente nuevo.
-- `BRIEF-*.md`, `PRP-*.md` → documentos internos **LOCALES** (gitignored): tienen datos sensibles (cédula, estrategia), **NO se suben**.
+- **`CLAUDE.md`** (este archivo) → las reglas del proyecto + este mapa de documentos.
+- **`ROADMAP.md`** → la visión COMPLETA (qué se construye y qué NO) + la sección **"EN QUÉ ESTAMOS AHORA"** (la lista de pendientes, en orden).
+- **`SESIONES.md`** → bitácora: qué se hizo cada día (el historial).
+- **`ENOVA_BLUEPRINT.md`** → cómo montar un cliente nuevo (la fábrica).
+- **`BRIEF-*.md`** → el diseño detallado de UN tema continuo (ej. `BRIEF-closer-masvida.md` = la voz/personalidad del bot).
+- **`PRP-*.md`** → la receta de construcción de UNA mejora, antes de hacerla (**un PRP por mejora**).
+- ⚠️ `BRIEF-*` y `PRP-*` son **LOCALES (gitignored)**: tienen estrategia/datos sensibles, **NO se suben** a GitHub.
 - Código del bot: `app/` (`webhook/`, `agent/`, `services/`, `workers/`, `api/`). Migraciones: `migrations/`.
 
 ## 7. Principios de código (de Praxis, lo que aplica)
