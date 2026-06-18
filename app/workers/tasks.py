@@ -100,15 +100,28 @@ def _proteger_afirmacion_de_pago(respuesta: str) -> str:
     return respuesta
 
 
-# ─── Envío humano: varios mensajitos cortos (no un mensajote) ────────
+# ─── Envío humano: plano + varios mensajitos cortos (no un mensajote) ─
+
+def _aplanar(texto: str) -> str:
+    """Quita el formato que delata a un bot: viñetas (* - •) al inicio de línea,
+    negritas/cursivas markdown (*texto*) y los decimales .00 de los precios.
+    La dueña escribe PLANO; esto es una red de seguridad por si el modelo igual
+    mete formato (a veces ignora la instrucción)."""
+    lineas = [re.sub(r"^[ \t]*[\*\-•]+[ \t]+", "", ln) for ln in texto.split("\n")]
+    t = "\n".join(lineas)
+    t = t.replace("*", "")  # negritas / asteriscos sueltos
+    t = re.sub(r"\$\s?(\d+)\.00(?!\d)", r"$\1", t)  # $18.00 -> $18
+    return t
+
 
 async def _enviar_en_partes(telefono: str, texto: str) -> None:
-    """Envía la respuesta como VARIOS mensajes cortos (como una persona real en
-    WhatsApp), no un mensajote. El agente separa cada globo con una línea en blanco;
-    aquí partimos por esas líneas en blanco y enviamos cada parte por separado, con
-    una pausa breve. Tope de globos para proteger la calidad del número."""
+    """Envía la respuesta PLANA y como VARIOS mensajes cortos (como una persona real
+    en WhatsApp), no un mensajote. El agente separa cada globo con una línea en blanco;
+    aquí aplanamos el formato, partimos por las líneas en blanco y enviamos cada parte
+    por separado, con una pausa breve. Tope de globos para proteger la calidad del número."""
     if not texto or not texto.strip():
         return
+    texto = _aplanar(texto)
     partes = [p.strip() for p in re.split(r"\n\s*\n", texto.strip()) if p.strip()]
     if not partes:
         partes = [texto.strip()]
