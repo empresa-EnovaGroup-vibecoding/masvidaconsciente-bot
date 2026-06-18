@@ -17,6 +17,17 @@
 
 ---
 
+## 2026-06-18 (cont. 4) — Catálogo PDF AHORA EN LA BASE DE DATOS (fin del 404)
+
+**El problema:** el volumen persistente para `/data/catalogo` (docker-compose) NO aguantó en Coolify — el PDF se borraba en cada redeploy (daba 404), aunque los comprobantes (otro volumen) sí persistían. No se pudo controlar desde fuera.
+
+**Solución definitiva (aditiva, verificado `compileall`):** guardar el PDF **dentro de Postgres** (que SÍ sobrevive redeploys, como productos/clientes), en vez del disco.
+- Migración **`008_catalogo_pdf.sql`**: tabla `catalogo_pdf` (una fila, `contenido BYTEA`). `models.py` + `init_db.py` aplican la 008.
+- `api/router.py`: subir / servir / estado / borrar del catálogo leen y escriben en la BD (serve público devuelve `Response(bytes)` en vez de `FileResponse`).
+- `agent/tools.py`: `enviar_catalogo` chequea la fila de la BD (no el flag + archivo).
+
+**Pendiente:** **redeploy** del bot + worker (corre la migración 008) + **re-subir el PDF UNA vez** → queda permanente para siempre (en la BD).
+
 ## 2026-06-18 (cont. 3) — Catálogo "pan es pan" + PDF blindado + registro fino de la voz
 
 **Código (aditivo, verificado `compileall` + prueba del filtro):**

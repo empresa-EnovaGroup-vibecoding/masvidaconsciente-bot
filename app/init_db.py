@@ -64,6 +64,12 @@ async def main() -> None:
         await session.commit()
         logger.info("Migracion 007 (bot pausado por cliente) aplicada")
 
+        # 008: catálogo PDF guardado en la BD (sobrevive redeploys). Aditiva e idempotente.
+        for stmt in _statements(MIGRATIONS / "008_catalogo_pdf.sql"):
+            await session.execute(text(stmt))
+        await session.commit()
+        logger.info("Migracion 008 (catalogo pdf en BD) aplicada")
+
         total = (await session.execute(text("SELECT COUNT(*) FROM productos"))).scalar()
         if total and total > 0:
             logger.info("Catálogo ya cargado (%s productos), no se vuelve a sembrar", total)

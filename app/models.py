@@ -6,6 +6,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    LargeBinary,
     Numeric,
     Text,
 )
@@ -108,6 +109,16 @@ class Conocimiento(Base):
     contenido: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+class CatalogoPdf(Base):
+    """El catálogo en PDF guardado EN LA BASE DE DATOS (sobrevive redeploys, a
+    diferencia del disco). Una sola fila (id=1)."""
+    __tablename__ = "catalogo_pdf"
+
+    id: Mapped[int] = mapped_column(primary_key=True, default=1)
+    contenido: Mapped[bytes] = mapped_column(LargeBinary)
+    actualizado: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 
 
 class Pago(Base):

@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from app.config import get_settings
-from app.models import Cliente, Configuracion, Pago, Pedido, Producto
+from app.models import CatalogoPdf, Cliente, Configuracion, Pago, Pedido, Producto
 from app.services.db import get_session_factory
 from app.services.meta_client import enviar_texto
 from app.services.redis_client import get_cache, set_cache
@@ -508,14 +508,10 @@ async def registrar_comprobante(
 
 
 async def enviar_catalogo(session, telefono):
-    """Envía el catálogo en PDF (si la dueña lo subió). El cliente lo recibe como
+    """Envía el catálogo en PDF (guardado en la BD). El cliente lo recibe como
     archivo. Si no hay PDF cargado, avisa para que el agente use ver_catalogo."""
-    fila = (
-        await session.execute(
-            select(Configuracion).where(Configuracion.clave == "catalogo_pdf")
-        )
-    ).scalar_one_or_none()
-    if not (fila and fila.valor and fila.valor.strip()):
+    fila = await session.get(CatalogoPdf, 1)
+    if fila is None or not fila.contenido:
         return {"ok": False, "nota": "no hay un catalogo PDF cargado; usa ver_catalogo (texto)"}
 
     # El archivo lo guarda y lo SIRVE el bot (su propia URL pública), no el worker.

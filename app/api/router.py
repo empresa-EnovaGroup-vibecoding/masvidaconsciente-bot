@@ -5,7 +5,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, StringConstraints
 from sqlalchemy import func, select
@@ -16,7 +16,17 @@ from app.api.security import (
     usuario_actual,
     verify_password,
 )
-from app.models import Cliente, Configuracion, Conocimiento, Mensaje, Pago, Pedido, Producto, now_utc
+from app.models import (
+    CatalogoPdf,
+    Cliente,
+    Configuracion,
+    Conocimiento,
+    Mensaje,
+    Pago,
+    Pedido,
+    Producto,
+    now_utc,
+)
 from app.services.db import get_session_factory
 
 router = APIRouter(prefix="/api", tags=["dashboard"])
@@ -302,28 +312,20 @@ async def editar_producto(producto_id: int, datos: ProductoIn, _: str = Depends(
     return {"ok": True}
 
 
-# ─── Catálogo en PDF (el folleto que el bot envía) ───────────────────
-
-_CATALOGO_NOMBRE = "catalogo.pdf"
-
-
-def _ruta_catalogo() -> str:
-    return os.path.join(get_settings().catalogo_dir, _CATALOGO_NOMBRE)
-
+# ─── Catálogo en PDF (guardado en la BASE DE DATOS, sobrevive redeploys) ──
 
 @router.get("/catalogo-pdf")
 async def estado_catalogo_pdf(_: str = Depends(usuario_actual)):
     """Indica si hay un catálogo PDF cargado."""
     factory = get_session_factory()
     async with factory() as session:
-        fila = await session.get(Configuracion, "catalogo_pdf")
-    tiene = bool(fila and fila.valor and fila.valor.strip()) and os.path.exists(_ruta_catalogo())
-    return {"tiene": tiene}
+        fila = await session.get(CatalogoPdf, 1)
+    return {"tiene": fila is not None and bool(fila.contenido)}
 
 
 @router.post("/catalogo-pdf")
 async def subir_catalogo_pdf(archivo: UploadFile = File(...), _: str = Depends(usuario_actual)):
-    """Sube el catálogo en PDF (reemplaza el anterior). Máximo 25 MB."""
+    """Sube el catálogo en PDF y lo guarda EN LA BASE DE DATOS (persistente). Máx 100 MB."""
     contenido = await archivo.read()
     if len(contenido) > 100 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="El PDF es muy grande (máximo 100 MB)")
@@ -333,49 +335,43 @@ async def subir_catalogo_pdf(archivo: UploadFile = File(...), _: str = Depends(u
     # Valida que el CONTENIDO sea realmente un PDF (no solo el nombre/tipo declarado).
     if not contenido.startswith(b"%PDF"):
         raise HTTPException(status_code=400, detail="El archivo no parece un PDF válido")
-    os.makedirs(get_settings().catalogo_dir, exist_ok=True)
-    with open(_ruta_catalogo(), "wb") as f:
-        f.write(contenido)
     factory = get_session_factory()
     async with factory() as session:
-        fila = await session.get(Configuracion, "catalogo_pdf")
+        fila = await session.get(CatalogoPdf, 1)
         if fila is None:
-            session.add(
-                Configuracion(clave="catalogo_pdf", valor=_CATALOGO_NOMBRE, updated_at=now_utc())
-            )
+            session.add(CatalogoPdf(id=1, contenido=contenido, actualizado=now_utc()))
         else:
-            fila.valor = _CATALOGO_NOMBRE
-            fila.updated_at = now_utc()
+            fila.contenido = contenido
+            fila.actualizado = now_utc()
         await session.commit()
     return {"ok": True}
 
 
 @router.delete("/catalogo-pdf")
 async def borrar_catalogo_pdf(_: str = Depends(usuario_actual)):
-    ruta = _ruta_catalogo()
-    if os.path.exists(ruta):
-        try:
-            os.remove(ruta)
-        except OSError:
-            pass
     factory = get_session_factory()
     async with factory() as session:
-        fila = await session.get(Configuracion, "catalogo_pdf")
+        fila = await session.get(CatalogoPdf, 1)
         if fila is not None:
-            fila.valor = ""
-            fila.updated_at = now_utc()
+            await session.delete(fila)
             await session.commit()
     return {"ok": True}
 
 
 @router.get("/catalogo/archivo")
 async def servir_catalogo_pdf():
-    """PÚBLICO (sin login): sirve el catálogo PDF para que Meta lo descargue al
-    enviarlo y para que el cliente lo abra. Es contenido público (un folleto)."""
-    ruta = _ruta_catalogo()
-    if not os.path.exists(ruta):
+    """PÚBLICO (sin login): sirve el catálogo PDF (desde la BD) para que Meta lo
+    descargue al enviarlo y para que el cliente lo abra. Es un folleto público."""
+    factory = get_session_factory()
+    async with factory() as session:
+        fila = await session.get(CatalogoPdf, 1)
+    if fila is None or not fila.contenido:
         raise HTTPException(status_code=404, detail="No hay catálogo cargado")
-    return FileResponse(ruta, media_type="application/pdf", filename="Catalogo.pdf")
+    return Response(
+        content=bytes(fila.contenido),
+        media_type="application/pdf",
+        headers={"Content-Disposition": 'inline; filename="Catalogo.pdf"'},
+    )
 
 
 # ─── Configuración del negocio (datos que el bot usa) ────────────────
