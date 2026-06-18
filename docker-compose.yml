@@ -29,6 +29,7 @@ x-bot-env: &bot-env
   TASA_TTL: ${TASA_TTL}
   TASA_MANUAL_DEFAULT: ${TASA_MANUAL_DEFAULT}
   COMPROBANTES_DIR: ${COMPROBANTES_DIR:-/data/comprobantes}
+  CATALOGO_DIR: ${CATALOGO_DIR:-/data/catalogo}
 
 services:
   postgres:
@@ -54,6 +55,7 @@ services:
     environment: *bot-env
     volumes:
       - comprobantes:/data/comprobantes
+      - catalogo:/data/catalogo
     depends_on:
       postgres:
         condition: service_healthy
@@ -68,6 +70,7 @@ services:
     environment: *bot-env
     volumes:
       - comprobantes:/data/comprobantes
+      - catalogo:/data/catalogo
     depends_on:
       postgres:
         condition: service_healthy
@@ -77,3 +80,4 @@ services:
 volumes:
   pgdata:
   comprobantes:
+  catalogo:
