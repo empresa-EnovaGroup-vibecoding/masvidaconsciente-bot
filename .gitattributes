@@ -1,0 +1,5 @@
+# Los scripts y Dockerfiles corren en Linux (Alpine): SIEMPRE finales de línea LF,
+# aunque se editen desde Windows. Un .sh con CRLF se rompe en el contenedor.
+*.sh        text eol=lf
+Dockerfile* text eol=lf
+*.sql       text eol=lf
