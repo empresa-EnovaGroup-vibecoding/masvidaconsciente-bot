@@ -17,6 +17,33 @@
 
 ---
 
+## 2026-06-20 — Selector de modelo de IA desde el panel (probar Claude / OpenAI)
+
+**Por qué:** Gemini Flash ignora matices (pan es pan, tono, no-saludar-siempre). Maired
+(proveedora) quiere poder cambiar el modelo ELLA MISMA y probar cuál vende mejor, sin redeploy.
+Reversa MATIZADA de "sin selector de modelo": es palanca de **proveedor**, no de la clienta.
+
+**Qué se hizo (aditivo, verificado `compileall` bot + `tsc` dashboard):**
+- `config.py`: nuevo `openrouter_model_audio` (default Gemini). La voz se transcribe SIEMPRE con
+  Gemini (Claude/GPT no aceptan audio); el selector no la toca. `openrouter_model` queda como semilla/fallback.
+- `agent/system_prompt.py`: `leer_modelo_ia()` — lee la clave `modelo_ia` de la tabla `configuracion`
+  (mismo patrón que `leer_personalidad`); si no hay, cae al env. Cualquier fallo cae al default.
+- `agent/agent.py`: `responder` lee el modelo 1 vez y lo pasa a `_llamar_con_fallback(messages, llm, modelo)`;
+  `redactar_mensaje` usa el modelo elegido; `transcribir_audio` usa `openrouter_model_audio` (FIJO).
+- `api/router.py`: `modelo_ia` agregado a `CLAVES_CONFIG` (el GET/PUT `/configuracion` ya lo aceptan).
+- Dashboard `configuracion/page.tsx` + `lib/api.ts`: dropdown "Modelo de IA (avanzado)" con 4 opciones
+  (Gemini / Claude Haiku 4.5 / Claude Sonnet 4.6 / GPT-4.1) + costo aprox. por 1000 msgs.
+- `CLAUDE.md §5` actualizado (decisión matizada). Plan en `PRP-selector-modelo.md` (local).
+
+**Blindaje confirmado:** las `_REGLAS` del cobro viajan en el system prompt a CUALQUIER modelo →
+cambiar de modelo NO debilita el cobro (nunca confirma pago, precios desde tools).
+
+**Pendiente:** redeploy del bot + worker (no requiere migración: `modelo_ia` se crea al guardar) y
+deploy del dashboard. Luego: en el panel elegir Claude Haiku/Sonnet, mandar mensaje de prueba por
+WhatsApp y **probar una nota de voz** (confirmar que sigue transcribiendo).
+
+---
+
 ## 2026-06-18 (cont. 4) — Catálogo PDF AHORA EN LA BASE DE DATOS (fin del 404)
 
 **El problema:** el volumen persistente para `/data/catalogo` (docker-compose) NO aguantó en Coolify — el PDF se borraba en cada redeploy (daba 404), aunque los comprobantes (otro volumen) sí persistían. No se pudo controlar desde fuera.

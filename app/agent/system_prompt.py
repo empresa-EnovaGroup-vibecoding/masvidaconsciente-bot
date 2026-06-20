@@ -71,6 +71,26 @@ async def leer_personalidad() -> str:
     return personalidad_default()
 
 
+async def leer_modelo_ia() -> str:
+    """Modelo conversacional activo: el que eligió la proveedora (config 'modelo_ia')
+    o, si no hay, el de la variable de entorno. Cualquier fallo de lectura cae al
+    default — el bot nunca se queda sin modelo. (La transcripción de voz NO usa esto:
+    va por settings.openrouter_model_audio.)"""
+    try:
+        factory = get_session_factory()
+        async with factory() as session:
+            fila = (
+                await session.execute(
+                    select(Configuracion).where(Configuracion.clave == "modelo_ia")
+                )
+            ).scalar_one_or_none()
+        if fila and fila.valor and fila.valor.strip():
+            return fila.valor.strip()
+    except Exception:  # noqa: BLE001 — leer el modelo nunca debe romper el bot
+        pass
+    return settings.openrouter_model
+
+
 async def _catalogo_texto() -> str:
     """Lista compacta del catálogo REAL, para anclar al agente en CADA mensaje.
     Es el 'verificador' preventivo: el bot ve los nombres exactos y no inventa."""

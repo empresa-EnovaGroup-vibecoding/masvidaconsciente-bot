@@ -32,7 +32,7 @@ Sistema de **ventas y cobro por WhatsApp** para *masvidaconsciente* (comida salu
 Antes de tocar datos reales, probar el cambio dentro de una transacción y hacer **ROLLBACK** para verificar. Nunca alterar producción sin ese ensayo. Las migraciones deben ser idempotentes (`CREATE TABLE IF NOT EXISTS`, `DROP CONSTRAINT IF EXISTS`, `INSERT ... ON CONFLICT DO NOTHING`).
 
 ## 5. Decisiones ya tomadas (NO re-proponer)
-- **NO** selector de modelo/temperatura en el panel → el modelo lo decide **el proveedor** (Maired), no la clienta. Maired lo cambia por la env `OPENROUTER_MODEL` si hace falta.
+- **Selector de MODELO en el panel = SÍ, pero es palanca de PROVEEDOR (Maired), no de la clienta.** Vive en Configuración (clave `modelo_ia`, ver `leer_modelo_ia()`); cuando la clienta tenga su propio rol/login se le esconde. La **temperatura sigue SIN selector** (fija en código). La **voz (transcripción)** va aparte y FIJA en `OPENROUTER_MODEL_AUDIO` (solo Gemini acepta audio): el selector NUNCA la toca.
 - Cobro: Pago Móvil manual; tasa BCV automática (dolarapi oficial) con **margen %** + **candado manual**; manejo de **pago parcial / sobrepago**.
 - Ver la lista completa de "lo que NO se construye" en `ROADMAP.md`.
 

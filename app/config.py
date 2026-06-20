@@ -24,8 +24,15 @@ class Settings(BaseSettings):
 
     # Motor de IA
     openrouter_api_key: str = ""
+    # Modelo conversacional. Es SEMILLA/fallback: el modelo real lo elige la
+    # proveedora desde el panel (clave 'modelo_ia' en la tabla configuracion),
+    # sin redeploy. Si la BD no tiene valor, se usa este.
     openrouter_model: str = "google/gemini-2.5-flash"
     openrouter_model_fallback: str = "openai/gpt-4.1"
+    # Modelo para transcribir notas de VOZ. Va aparte y FIJO: solo modelos con
+    # entrada de audio (Gemini) sirven aquí; Claude/GPT no aceptan audio. El
+    # selector del panel cambia solo el conversacional, NUNCA este.
+    openrouter_model_audio: str = "google/gemini-2.5-flash"
 
     # Comportamiento
     buffer_segundos: int = 15

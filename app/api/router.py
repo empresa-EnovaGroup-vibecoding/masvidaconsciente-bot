@@ -72,6 +72,9 @@ CLAVES_CONFIG = [
     "pago_movil_telefono",
     "pago_movil_titular",
     "dueno_telefono",
+    # Modelo de IA conversacional, lo elige la PROVEEDORA (no la clienta). El bot
+    # lo lee con leer_modelo_ia(). La voz (transcripción) va aparte y fija.
+    "modelo_ia",
 ]
 
 

@@ -10,7 +10,7 @@ import unicodedata
 
 import httpx
 
-from app.agent.system_prompt import construir_system_prompt
+from app.agent.system_prompt import construir_system_prompt, leer_modelo_ia
 from app.agent.tools import TOOL_SCHEMAS, ejecutar_tool
 from app.config import get_settings
 
@@ -71,11 +71,11 @@ async def _llamar_openrouter(messages: list, tools: list, model: str) -> dict:
         return resp.json()
 
 
-async def _llamar_con_fallback(messages: list, llm) -> dict:
+async def _llamar_con_fallback(messages: list, llm, modelo: str) -> dict:
     try:
-        return await llm(messages, TOOL_SCHEMAS, settings.openrouter_model)
+        return await llm(messages, TOOL_SCHEMAS, modelo)
     except Exception as e:  # noqa: BLE001
-        logger.warning("Modelo principal falló (%s), usando fallback", e)
+        logger.warning("Modelo principal (%s) falló (%s), usando fallback", modelo, e)
         return await llm(messages, TOOL_SCHEMAS, settings.openrouter_model_fallback)
 
 
@@ -98,9 +98,10 @@ async def responder(
         messages.extend(historial)
     messages.append({"role": "user", "content": mensaje_usuario})
 
+    modelo = await leer_modelo_ia()  # el que eligió la proveedora en el panel
     catalogo_ok = False
     for _ in range(settings.max_iteraciones_agente):
-        data = await _llamar_con_fallback(messages, llm)
+        data = await _llamar_con_fallback(messages, llm, modelo)
         msg = data["choices"][0]["message"]
         messages.append(msg)
 
@@ -151,11 +152,12 @@ async def redactar_mensaje(
             "en tu voz de siempre. No uses comillas ni expliques nada."
         ),
     })
+    modelo = await leer_modelo_ia()  # mismo modelo elegido para conversar
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.post(
             OPENROUTER_URL,
             headers={"Authorization": f"Bearer {settings.openrouter_api_key}"},
-            json={"model": settings.openrouter_model, "messages": messages, "temperature": 0.7},
+            json={"model": modelo, "messages": messages, "temperature": 0.7},
         )
         resp.raise_for_status()
         data = resp.json()
@@ -202,7 +204,7 @@ async def transcribir_audio(contenido: bytes, mime: str = "audio/ogg") -> str:
         resp = await client.post(
             OPENROUTER_URL,
             headers={"Authorization": f"Bearer {settings.openrouter_api_key}"},
-            json={"model": settings.openrouter_model, "messages": messages, "temperature": 0},
+            json={"model": settings.openrouter_model_audio, "messages": messages, "temperature": 0},
         )
         resp.raise_for_status()
         data = resp.json()
