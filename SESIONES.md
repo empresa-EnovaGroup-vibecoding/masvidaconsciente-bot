@@ -28,7 +28,7 @@
 - Tasa usa `formatBs` (2 decimales consistentes); login alineado al sistema de diseño (focus-ring + token `accent-fg`); Catálogo: el select de categoría muestra el valor real aunque esté fuera de la lista; Mi Bot: Enter respeta IME.
 - Verificado: la lógica del cobro intacta en todo (revisión vía `git diff`); sin hallazgos críticos.
 
-**Pendiente menor (no crítico):** DRY de `inputCls`/banner de error repetidos (cosmético), labels asociadas en Configuración.
+**Pulido final (HECHO):** DRY — componente `<ErrorBanner>` (`src/components/error-banner.tsx`) + `inputCls` compartido (`src/lib/ui.ts`) aplicados en las 12 pantallas (commit panel `22171f9`, −45 líneas netas); labels asociadas en Configuración con `useId`. Sin duplicación pendiente. Build + lint + tipos OK.
 
 **Despliegue:** requiere redeploy del **BOT** y del **PANEL** en Coolify (manual).
 
