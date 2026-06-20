@@ -316,6 +316,20 @@ async def editar_producto(producto_id: int, datos: ProductoIn, _: str = Depends(
     return {"ok": True}
 
 
+@router.delete("/productos/{producto_id}")
+async def borrar_producto(producto_id: int, _: str = Depends(usuario_actual)):
+    """Elimina un producto del catálogo. Los pedidos anteriores NO se afectan:
+    guardan sus items como copia (JSONB), no dependen del catálogo."""
+    factory = get_session_factory()
+    async with factory() as session:
+        prod = await session.get(Producto, producto_id)
+        if prod is None:
+            raise HTTPException(status_code=404, detail="Producto no encontrado")
+        await session.delete(prod)
+        await session.commit()
+    return {"ok": True}
+
+
 # ─── Catálogo en PDF (guardado en la BASE DE DATOS, sobrevive redeploys) ──
 
 @router.get("/catalogo-pdf")
