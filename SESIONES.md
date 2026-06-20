@@ -17,6 +17,32 @@
 
 ---
 
+## 2026-06-20 (cont. 4) — Rediseño PREMIUM del panel (pantalla Resumen)
+
+**Por qué:** a la dueña no le gustaba el diseño del panel; quería que se viera lo más premium posible. Referencia: los "400 recursos de diseño web" de su mentor (SinergIA / Juan Lara, `app.snrgia.ai`); señaló una plantilla clara/elegante (Nexora).
+
+**Proceso (workflows + render real con Playwright para que ELLA decidiera MIRANDO, no con descripciones):**
+- Pilotos HTML autocontenidos en `docs/design-pilot/` (NO tocan código real hasta aprobar). Rechazó la serif fina ("muy finitas, para otra cosa"); eligió la "Opción C" (Nunito, verde, cálido). Pidió quitar emojis y conservar la zona "Salir" estilo Apple. Se hizo un "pase premium" (paleta calmada, tipografía con criterio, hairlines, sombras sutiles).
+
+**Qué se aplicó al panel real (`masvidaconsciente-dashboard`, ADITIVO, `next build` OK):**
+- `globals.css` + `tailwind.config.ts`: tokens nuevos (light con tinte verde, `warn` ámbar reservado SOLO a "pendiente", sombras `card/soft`, `<alpha-value>` para que funcionen las opacidades) y fuente **Nunito** (`app/layout.tsx`).
+- `(app)/layout.tsx`: sidebar premium — perfil con datos reales (`getConfiguracion`), badge ámbar de pagos, `aria-current`/`aria-label`.
+- `(app)/dashboard/page.tsx`: Resumen premium conectado a datos REALES — métricas, **Cobrado** hoy/semana/mes (`getReporte`), **Tasa BCV** (`getTasa`), **últimos pedidos** (`getPedidos`), **Bot activo** (`getBotEstado`). Bs calculado de la tasa real. SIN inventar números.
+
+**Revisión adversarial (workflow, 4 revisores) — corregido antes de cerrar:**
+- ⚠️ Clave (rozaba la regla del cobro): la tarjeta decía "Ventas hoy" usando `metricas.ventas_hoy_usd` = **facturado** (pedidos del día, pagados o no), mientras la sección usaba `reporte.ventas_usd` = **cobrado** (pagos confirmados). Verificado en `app/api/router.py`. Renombrado: tarjeta = **"Facturado hoy"**; sección = **"Cobrado"** (conteo con `num_ventas`).
+- Contraste de `--fg-faint` subido a nivel AA; quitada la interactividad falsa del avatar; `<caption>` en la tabla; tipografía de h2/thead alineada al diseño aprobado.
+
+**Pendiente (Paso 2):** el gráfico de ventas de 7 días y los deltas "+X% vs ayer" NO existen en el API (hoy `getReporte` solo da agregados hoy/semana/mes). Falta un endpoint de ventas diarias en el bot para activarlos (read-only, bajo riesgo).
+
+**Estado git:** Resumen + shell en `master` (commit `7839fc6`), desplegado y **aprobado en vivo** por la proveedora ("se ve muy lindo"). Luego se restilizaron **Pedidos, Pagos y Tasa** al mismo nivel premium (commit `865ccac`) — **lógica del cobro intacta**, verificado por revisión adversarial vía `git diff`. ⚠️ Coolify es **deploy MANUAL** (un push NO despliega; la proveedora da Redeploy en Coolify). Luego se restilizaron las **8 pantallas restantes** (commit `aa65916`): catálogo, clientes, conversaciones, bot, conocimiento, mensajes, configuración, reporte → **TODO el panel premium y consistente** (build OK; lógica intacta verificada por revisión adversarial vía `git diff`). Reversible con `git revert` + redeploy.
+
+**Ajustes finales (verificados EN VIVO con login de la proveedora):** barra lateral **fija** → "Salir"/perfil siempre visibles sin scroll (`600dda3`); **"Bot activo" clickeable** → lleva a Mi Bot (`aa2b7c1`); **estados de pedido completos** vía módulo único `lib/estados.ts` → "Esperando pago"/"Pagado" con etiqueta+color, y el desplegable de Pedidos muestra el estado real (`131c34a`).
+
+**Paso 2 (gráfico 7 días + deltas "+% vs ayer"): DESCARTADO por ahora** a pedido de la proveedora — no quiere elementos solo-decorativos; el Resumen ya usa datos reales con la tarjeta "Cobrado". Retomar solo si lo pide.
+
+---
+
 ## 2026-06-20 (cont. 3) — Respaldo cifrado offsite (Blindaje 4, por fin)
 
 **Por qué:** auditoría senior marcó que NO había respaldo de la BD = riesgo CRÍTICO hoy (si muere el VPS se pierde todo). Maired aprobó montarlo (destino barato/gratis).
