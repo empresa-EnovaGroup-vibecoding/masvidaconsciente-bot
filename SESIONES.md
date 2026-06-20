@@ -17,6 +17,16 @@
 
 ---
 
+## 2026-06-20 (cont. 6) — Catálogo: arquitectura confirmada + botón Eliminar producto
+
+**Arquitectura del catálogo (CONFIRMADA con la proveedora — NO cambiar):** el bot CONOCE y RESPONDE solo desde el **catálogo digital (BD `Producto`) + base de conocimiento**. El **PDF es SOLO para enviar** (folleto hecho en Canva); el bot **NUNCA lo lee/parsea** (para que no "se vuelva loco"). Verificado en código: `system_prompt._catalogo_texto()` y `tools.ver_catalogo` leen de la BD; `tools.enviar_catalogo` solo manda el archivo (link a `/api/catalogo/archivo`); el system prompt prohíbe inventar productos. Lema: *"el bonito (PDF) para presumir, el digital para vender."* **No se tocó nada de esto** (a la proveedora le gusta cómo envía el PDF hoy).
+
+**Nuevo:** botón **Eliminar producto** (`DELETE /api/productos/{id}`, commit bot `8cb129a`; panel `50928fc`) junto al toggle **Agotado**. Borrar NO afecta pedidos anteriores (`Pedido.items` es JSONB, guarda copia). Guía de uso: **Agotado** = temporal / puede volver (p.ej. el Chucrut que la clienta quitó pero quizá revenda → usar Agotado, no Eliminar); **Eliminar** = descontinuado de verdad.
+
+**Despliegue:** redeploy del bot y del panel.
+
+---
+
 ## 2026-06-20 (cont. 5) — "Borrar chat", scroll del chat y auditoría del panel
 
 **Conversaciones (UX):**
