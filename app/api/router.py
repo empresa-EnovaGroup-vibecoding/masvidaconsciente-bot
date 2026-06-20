@@ -8,7 +8,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, StringConstraints
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 
 from app.config import get_settings
 from app.api.security import (
@@ -28,6 +28,7 @@ from app.models import (
     now_utc,
 )
 from app.services.db import get_session_factory
+from app.services.redis_client import borrar_memoria
 
 router = APIRouter(prefix="/api", tags=["dashboard"])
 
@@ -574,6 +575,8 @@ async def listar_conversaciones(_: str = Depends(usuario_actual)):
                     .limit(1)
                 )
             ).scalar_one_or_none()
+            if ultimo is None:
+                continue  # sin mensajes (p.ej. chat borrado) -> no aparece en Conversaciones
             resultado.append(
                 {
                     "telefono": c.telefono,
@@ -601,6 +604,19 @@ async def detalle_conversacion(telefono: str, _: str = Depends(usuario_actual)):
         {"rol": m.rol, "contenido": m.contenido, "fecha": m.created_at.isoformat()}
         for m in mensajes
     ]
+
+
+@router.delete("/conversaciones/{telefono}")
+async def borrar_conversacion(telefono: str, _: str = Depends(usuario_actual)):
+    """Borra el historial de mensajes de un cliente + su memoria en Redis.
+    NO toca al cliente, ni sus pedidos, ni sus pagos: el registro de cobro queda
+    intacto. Solo limpia el chat del panel y la memoria del bot."""
+    factory = get_session_factory()
+    async with factory() as session:
+        await session.execute(delete(Mensaje).where(Mensaje.cliente_telefono == telefono))
+        await session.commit()
+    await borrar_memoria(telefono)
+    return {"ok": True}
 
 
 # ─── Clientes (CRM) ──────────────────────────────────────────────────

@@ -17,6 +17,23 @@
 
 ---
 
+## 2026-06-20 (cont. 5) — "Borrar chat", scroll del chat y auditoría del panel
+
+**Conversaciones (UX):**
+- Bug de scroll arreglado: el chat baja solo al último mensaje (zona con scroll propio `max-h` + auto-scroll, como WhatsApp). Ya no hay que arrastrar toda la página.
+- **"Borrar chat" (nuevo):** botón con confirmación. Borra los mensajes del cliente + su memoria en Redis (`borrar_memoria`: hist/buffer/lock/anti-abuso de hoy), **SIN tocar cliente, pedidos ni pagos**. Endpoint nuevo `DELETE /api/conversaciones/{telefono}` (solo `delete(Mensaje)`). `listar_conversaciones` ahora omite clientes sin mensajes → el chat borrado desaparece de la lista. **NO toca WhatsApp** (solo la BD). Permitido por Meta (sus reglas son de ENVÍO, no de administrar la propia BD).
+
+**Auditoría del panel (workflow, 4 agentes adversariales) — corregido:**
+- **Formato de dinero unificado:** `formatUSD` ahora usa coma decimal venezolana (es-VE), consistente con `formatBs` y el Resumen (antes Pedidos/Pagos/Reporte/Clientes mostraban punto → "pan es pan" pero un mismo $ se veía distinto).
+- Tasa usa `formatBs` (2 decimales consistentes); login alineado al sistema de diseño (focus-ring + token `accent-fg`); Catálogo: el select de categoría muestra el valor real aunque esté fuera de la lista; Mi Bot: Enter respeta IME.
+- Verificado: la lógica del cobro intacta en todo (revisión vía `git diff`); sin hallazgos críticos.
+
+**Pendiente menor (no crítico):** DRY de `inputCls`/banner de error repetidos (cosmético), labels asociadas en Configuración.
+
+**Despliegue:** requiere redeploy del **BOT** y del **PANEL** en Coolify (manual).
+
+---
+
 ## 2026-06-20 (cont. 4) — Rediseño PREMIUM del panel (pantalla Resumen)
 
 **Por qué:** a la dueña no le gustaba el diseño del panel; quería que se viera lo más premium posible. Referencia: los "400 recursos de diseño web" de su mentor (SinergIA / Juan Lara, `app.snrgia.ai`); señaló una plantilla clara/elegante (Nexora).

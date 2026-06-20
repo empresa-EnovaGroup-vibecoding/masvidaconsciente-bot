@@ -74,6 +74,19 @@ async def obtener_historial(telefono: str) -> list[dict]:
     return [json.loads(f) for f in filas]
 
 
+async def borrar_memoria(telefono: str) -> None:
+    """Borra el historial, buffer, lock y contadores anti-abuso de HOY de un cliente
+    en Redis. Se usa al 'Borrar chat' desde el panel: el bot arranca realmente limpio
+    con esa persona. NO toca claves de dinero (comprob:/msg:)."""
+    await _client().delete(
+        f"hist:{telefono}",
+        f"buffer:{telefono}",
+        f"lock:{telefono}",
+        f"abuso:{telefono}:{_hoy()}",
+        f"abuso_avisado:{telefono}:{_hoy()}",
+    )
+
+
 # ─── Cache generico con TTL ──────────────────────────────────────────
 # Usar siempre claves con prefijo 'cache:' (ej. 'cache:tasa:bcv') para no
 # chocar con msg:/buffer:/lock:/hist: que comparten la misma base de Redis.
