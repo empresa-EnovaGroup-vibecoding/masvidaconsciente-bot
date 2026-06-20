@@ -17,6 +17,23 @@
 
 ---
 
+## 2026-06-20 (cont. 3) — Respaldo cifrado offsite (Blindaje 4, por fin)
+
+**Por qué:** auditoría senior marcó que NO había respaldo de la BD = riesgo CRÍTICO hoy (si muere el VPS se pierde todo). Maired aprobó montarlo (destino barato/gratis).
+
+**Solución (servicio `backup` aislado en docker-compose):** `pg_dump` (con `--no-owner --no-acl`) + las imágenes de `/data/comprobantes` → cifrado con **restic** (clave que solo controla la proveedora) → subido a **Cloudflare R2** (10 GB gratis = $0/mes a este tamaño). Diario, con retención rolling (forget diario + prune los domingos). Si faltan las llaves R2, el servicio se **pausa solo** (no rompe el bot). Mounts de comprobantes/catalogo en `:ro`.
+
+**Archivos nuevos:** `scripts/backup.sh`, `Dockerfile.backup` (alpine + postgresql16-client + restic), servicio `backup` en `docker-compose.yml`, y `RESPALDO.md` (guía paso a paso para crear R2 + poner 4 secretos en Coolify + cómo verificar y RESTAURAR).
+
+**Revisión adversarial (2 agentes) — arreglado antes de subir:**
+- Doc de restauración tenía rutas mal (restic restaura con rutas absolutas) → corregido (`/restore/backup/db_*.sql.gz`, bind-mount real, psql DENTRO de la red compose).
+- `forget --prune` diario silenciado → ahora forget diario visible + prune solo domingos; backoff de 1h en fallo.
+- Build del servicio `backup` es BLOQUEANTE del deploy (si su build falla, no arranca el bot) → paquetes verificados en alpine:3.20; documentado; a futuro publicar imagen pre-construida.
+
+**Pendiente (Maired):** crear cuenta Cloudflare R2 (gratis) + bucket, y pegar 4 secretos en Coolify (RESTIC_REPOSITORY, RESTIC_PASSWORD, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY). Luego: probar UNA restauración. ⚠️ Guardar bien RESTIC_PASSWORD (sin ella el respaldo es ilegible).
+
+---
+
 ## 2026-06-20 (cont. 2) — Pedidos SEPARADOS: el estado del pedido va en código, no en el chat
 
 **El bug (visto en vivo):** cliente pagó un pedido; pidió 1 cosa nueva → el bot mezcló todo en un pedido de $71 (arrastró items viejos del chat) e inventó "ya pagaste $65". Y repreguntó la variante ya dicha ("¿plátano o yuca?" con "de plátano"). La calculadora SÍ quedó bien.

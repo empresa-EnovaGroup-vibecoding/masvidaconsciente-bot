@@ -77,6 +77,27 @@ services:
       redis:
         condition: service_started
 
+  # Respaldo diario CIFRADO de los datos de la clienta, AFUERA del VPS (Cloudflare R2).
+  # Aislado: si falla, NO afecta al bot. Si las llaves no estan configuradas, se pausa solo.
+  # Ver RESPALDO.md para crear la cuenta R2 y poner los secretos en Coolify.
+  backup:
+    build:
+      context: .
+      dockerfile: Dockerfile.backup
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      RESTIC_REPOSITORY: ${RESTIC_REPOSITORY:-}
+      RESTIC_PASSWORD: ${RESTIC_PASSWORD:-}
+      AWS_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY:-}
+    volumes:
+      - comprobantes:/data/comprobantes:ro
+      - catalogo:/data/catalogo:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   pgdata:
   comprobantes:

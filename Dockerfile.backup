@@ -1,0 +1,15 @@
+# Imagen chica solo para el respaldo: pg_dump (PostgreSQL 16) + restic + certificados.
+# OJO 1 (version): 'postgresql16-client' debe COINCIDIR con la major del server (postgres:16-alpine).
+#   Si algun dia el server sube a 17, sube tambien este paquete a postgresql17-client, o pg_dump se niega.
+# OJO 2 (build bloqueante): este build corre en el mismo 'docker compose up' que el bot. Si este
+#   'apk add' fallara (mirror caido, paquete renombrado), bloquearia el deploy de web/worker. Paquetes
+#   verificados en alpine:3.20 (main + community). Para la fabrica conviene a futuro publicar esta imagen
+#   pre-construida (image: ...) y quitar el build inline. Ver RESPALDO.md.
+FROM alpine:3.20
+
+RUN apk add --no-cache postgresql16-client restic ca-certificates tzdata
+
+COPY scripts/backup.sh /usr/local/bin/backup.sh
+RUN chmod +x /usr/local/bin/backup.sh
+
+ENTRYPOINT ["/usr/local/bin/backup.sh"]
