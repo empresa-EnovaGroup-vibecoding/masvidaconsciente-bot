@@ -226,10 +226,23 @@ async def listar_pedidos(_: str = Depends(usuario_actual)):
         pedidos = (
             await session.execute(select(Pedido).order_by(Pedido.created_at.desc()).limit(100))
         ).scalars().all()
+        # Nombre del cliente por telefono (un solo lookup para todos los pedidos).
+        telefonos = {p.cliente_telefono for p in pedidos}
+        nombres: dict[str, str | None] = {}
+        if telefonos:
+            filas = (
+                await session.execute(
+                    select(Cliente.telefono, Cliente.nombre).where(
+                        Cliente.telefono.in_(telefonos)
+                    )
+                )
+            ).all()
+            nombres = {t: n for t, n in filas}
     return [
         {
             "id": p.id,
             "cliente": p.cliente_telefono,
+            "nombre": nombres.get(p.cliente_telefono),
             "estado": p.estado,
             "items": p.items,
             "total_usd": float(p.total) if p.total else 0,
@@ -254,6 +267,45 @@ async def cambiar_estado(pedido_id: int, datos: EstadoIn, _: str = Depends(usuar
         if pedido is None:
             raise HTTPException(status_code=404, detail="Pedido no encontrado")
         pedido.estado = datos.estado
+        await session.commit()
+    return {"ok": True}
+
+
+@router.delete("/pedidos/{pedido_id}")
+async def borrar_pedido(pedido_id: int, _: str = Depends(usuario_actual)):
+    """Elimina un pedido SOLO si no compromete el historial de cobro.
+
+    BLINDAJE: nunca se borra un pedido con dinero de por medio. Si tiene un pago
+    'confirmado'/'parcial' -> usa Cancelar (conserva el historial). Si tiene un
+    pago 'reportado' (por verificar) -> primero hay que confirmarlo o rechazarlo.
+    Solo se puede borrar si no tiene pagos (o únicamente pagos 'rechazado').
+    Los items van en JSONB dentro del propio pedido, así que no quedan huérfanos."""
+    factory = get_session_factory()
+    async with factory() as session:
+        pedido = await session.get(Pedido, pedido_id)
+        if pedido is None:
+            raise HTTPException(status_code=404, detail="Pedido no encontrado")
+        pagos = (
+            await session.execute(select(Pago).where(Pago.pedido_id == pedido_id))
+        ).scalars().all()
+        estados = {pg.estado for pg in pagos}
+        if estados & {"confirmado", "parcial"}:
+            raise HTTPException(
+                status_code=409,
+                detail="No se puede eliminar: el pedido tiene un pago confirmado. "
+                "Usa Cancelar para conservar el historial.",
+            )
+        if "reportado" in estados:
+            raise HTTPException(
+                status_code=409,
+                detail="El pedido tiene un pago por verificar; recházalo o "
+                "confírmalo antes de eliminar.",
+            )
+        # Solo quedan pagos 'rechazado' (o ninguno): se borran junto al pedido
+        # para no violar la FK pagos.pedido_id -> pedidos.id.
+        for pg in pagos:
+            await session.delete(pg)
+        await session.delete(pedido)
         await session.commit()
     return {"ok": True}
 
@@ -447,6 +499,27 @@ async def guardar_tasa(datos: TasaIn, _: str = Depends(usuario_actual)):
         cambios["tasa_manual_activa"] = "1" if datos.manual_activa else "0"
     factory = get_session_factory()
     async with factory() as session:
+        # BLINDAJE DEL COBRO: no dejar el candado manual activo sin una tasa
+        # manual válida (>0). Si quedara activo con valor None/<=0, el bot se
+        # quedaría SIN tasa efectiva y el cobro se rompe.
+        if datos.manual_activa is True:
+            efectivo = datos.manual_valor
+            if efectivo is None:
+                fila_actual = await session.get(Configuracion, "tasa_manual")
+                try:
+                    efectivo = (
+                        float(fila_actual.valor)
+                        if fila_actual is not None and fila_actual.valor not in (None, "")
+                        else None
+                    )
+                except (TypeError, ValueError):
+                    efectivo = None
+            if efectivo is None or efectivo <= 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Para activar el candado manual necesitas un valor de "
+                    "tasa válido (mayor que 0).",
+                )
         for clave, valor in cambios.items():
             fila = await session.get(Configuracion, clave)
             if fila is None:
