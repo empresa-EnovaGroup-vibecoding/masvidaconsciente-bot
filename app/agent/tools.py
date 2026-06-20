@@ -292,7 +292,8 @@ async def registrar_pedido(session, telefono, items, notas=None):
         "total_usd": float(total),
         "resumen": resumen,
         "nota": (
-            "dile al cliente EXACTAMENTE este `resumen` (cópialo, NO recalcules el total). "
+            f"pedido NUEVO #{pedido.id} con SOLO estos items (NO arrastres pedidos anteriores ya cerrados). "
+            "Dile al cliente EXACTAMENTE este `resumen` (cópialo, NO recalcules el total). "
             "Para cobrar, llama a generar_datos_pago con este mismo `pedido_id`."
         ),
     }

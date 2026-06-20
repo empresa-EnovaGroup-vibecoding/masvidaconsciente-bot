@@ -17,6 +17,24 @@
 
 ---
 
+## 2026-06-20 (cont. 2) — Pedidos SEPARADOS: el estado del pedido va en código, no en el chat
+
+**El bug (visto en vivo):** cliente pagó un pedido; pidió 1 cosa nueva → el bot mezcló todo en un pedido de $71 (arrastró items viejos del chat) e inventó "ya pagaste $65". Y repreguntó la variante ya dicha ("¿plátano o yuca?" con "de plátano"). La calculadora SÍ quedó bien.
+
+**Diagnóstico (workflow: mapeo + diseño + crítica adversarial):** el bot NO recibía de la BD qué pedido está abierto/cerrado; lo INFERÍA del historial Redis (20 turnos). El código ya NO arrastra items (registrar_pedido crea pedido nuevo solo con sus items) — el arrastre es pura alucinación del modelo leyendo el chat. La crítica corrigió 3 errores del primer diseño (no tocar redactar_mensaje, alinear con get_pedido_esperando_pago, manejar pendiente/esperando_pago/parcial).
+
+**Qué se hizo (aditivo, compileall OK):**
+- `system_prompt.py`: `_estado_cliente_texto(telefono)` — lee de la BD los últimos pedidos y arma un bloque "ESTADO DEL CLIENTE" inyectado cada turno (pedido en esperando_pago = al que se pega el comprobante; pendiente; o último cerrado → "lo nuevo es pedido NUEVO"). `construir_system_prompt` acepta `telefono` (solo `responder` lo pasa; `redactar_mensaje` NO → sus avisos no se tocan). 2 reglas nuevas en `_REGLAS`: pedidos separados + no inventar reconciliación de pagos; y respetar la variante ya dicha.
+- `agent.py`: `responder` pasa `telefono` a `construir_system_prompt`.
+- `tools.py`: `registrar_pedido` nota = "pedido NUEVO #id con SOLO estos items".
+- Plan en `PRP-pedidos-memoria.md` (local).
+
+**Principio:** igual que el dinero, el ESTADO del pedido lo pone el código y se inyecta; el modelo no adivina.
+
+**Pendiente:** redeploy bot + worker. Probar: pagar → pedir algo nuevo → debe abrir pedido NUEVO (no mezclar, no inventar pago). Y "tortilla de plátano" → sin repreguntar variante.
+
+---
+
 ## 2026-06-20 (cont.) — BLINDAJE del cobro: el modelo NUNCA suma de cabeza
 
 **El bug (visto en vivo con Haiku):** cliente pidió 2 productos de $8 c/u; el bot cobró $8 (la prueba: dijo "8$ o 4.859,14 Bs" = 8×tasa, o sea cobró un pedido incompleto/viejo) y al reclamar sumó $16 de cabeza. La **calculadora del código está bien** (`registrar_pedido` suma en Python); el problema es que el modelo (1) registraba el pedido incompleto y (2) sumaba/decía montos de su cabeza.

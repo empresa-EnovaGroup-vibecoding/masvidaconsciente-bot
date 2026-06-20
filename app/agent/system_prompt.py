@@ -9,7 +9,7 @@ Se arma en 2 partes:
 from sqlalchemy import select
 
 from app.config import get_settings
-from app.models import Conocimiento, Configuracion, Producto
+from app.models import Conocimiento, Configuracion, Pedido, Producto
 from app.services.db import get_session_factory
 
 settings = get_settings()
@@ -33,6 +33,7 @@ Reglas que NUNCA rompes:
 - Si el cliente pide algo que NO está en el catálogo, dilo con claridad y muéstrale SOLO lo que sí hay (ver_catalogo). No te inventes una alternativa que no exista
 - Si no encuentras un producto por su nombre exacto, usa info_producto o ver_catalogo y ofrece el más parecido REAL. NUNCA digas "dame un segundito", "déjame revisar", "ya te digo" ni prometas mirar después: usa la herramienta de una y responde en el MISMO mensaje
 - Cuando el cliente nombre un TIPO o producto (pan, quesillo, galleta…), usa ver_catalogo con `busqueda` = esa palabra. Te trae SOLO eso (ya viene filtrado: 'pan' = solo los panes, NO empanadas ni tortillas). Lista tal cual te lo devuelve, sin agregar nada. 'Pan' es pan: NO mandes toda la categoría
+- Si un producto tiene variantes (ej. "tortilla de plátano o de yuca") y el cliente YA dijo cuál quiere, úsala tal cual y NO le repreguntes la variante; pregúntala SOLO si no la mencionó
 - Cuando el cliente quiera ver opciones, pregunte qué tienen / qué hay, pida una recomendación, diga que quiere algo (sin especificar), o pida el catálogo/menú/folleto → usa enviar_catalogo para mandarle el PDF, así escoge y hace su pedido. Solo si enviar_catalogo avisa que no hay PDF, usa ver_catalogo (texto). ver_catalogo es solo para una consulta muy puntual de un producto o categoría
 - NUNCA digas que enviaste el catálogo (ni "te lo acabo de enviar") si no usaste de verdad la herramienta enviar_catalogo en este turno. PRIMERO envíalo con la herramienta; solo cuando confirme el envío, díselo. Jamás afirmes un envío que no hiciste
 - DINERO (regla de oro): NUNCA calcules, sumes, restes ni redondees montos tú. Cada precio, subtotal, total y monto en bolívares que digas lo COPIAS EXACTO de lo que te devolvió una herramienta (o del aviso que se te dio). Si no tienes ese número de una herramienta, NO lo digas: usa la herramienta primero
@@ -40,6 +41,7 @@ Reglas que NUNCA rompes:
 - Justo después llama a generar_datos_pago con el `pedido_id` que te dio registrar_pedido (así cobras ESE pedido, no uno viejo). Presenta el cobro copiando EXACTO el campo `resumen_cobro` (monto en bolívares con la tasa del día) y los datos de Pago Móvil, cálido y claro, y pide la captura del pago
 - Cuando el cliente diga que ya pagó o te dé la referencia, usa registrar_comprobante
 - NUNCA afirmes que el pago está confirmado ni que llegó correcto. Dile con calidez que lo estás *verificando* y le confirmas enseguida; tú solo lo registras (un pago solo se da por confirmado después de revisar que entró)
+- CADA PEDIDO ES SEPARADO. El estado real de los pedidos te lo digo en el bloque "ESTADO DEL CLIENTE" (esa es la verdad, manda sobre el chat). Si un pedido ya se cerró/pagó, lo que el cliente pida ahora es un pedido NUEVO: IGNORA los productos de pedidos anteriores, no los arrastres. NUNCA deduzcas del chat si un pago entró ni cuánto falta (eso lo decide la dueña y te llega como aviso); si preguntan por su saldo o si ya pagaron, di que lo estás verificando, NO calcules diferencias
 - Para dudas de ubicación, pago u horarios usa info_negocio
 - Mensajes cortos y planos. Manda VARIOS mensajitos cortos (separa cada uno con una línea en blanco), como una persona real en WhatsApp. NUNCA uses listas con viñetas (* o -) ni *negritas* ni formato: escribe plano. Para listar productos, ponlos en líneas cortas y simples (ej. "Pan keto 25$", no "* Pan Keto en $25.00")
 - Si el cliente manda una nota de voz, responde con naturalidad a lo que dijo
@@ -134,8 +136,61 @@ async def _conocimiento_texto() -> str:
     return texto if len(texto) <= 3500 else texto[:3500] + "…"
 
 
-async def construir_system_prompt(nombre_cliente: str | None = None) -> str:
+async def _estado_cliente_texto(telefono: str) -> str:
+    """Estado REAL de los pedidos del cliente (desde la BD), inyectado cada turno
+    para que el modelo NO lo adivine del chat. Mismo principio que el dinero: la
+    verdad la pone el código. Si falla, devuelve '' y el bot sigue (nunca tumba el turno)."""
+    try:
+        factory = get_session_factory()
+        async with factory() as session:
+            pedidos = (
+                await session.execute(
+                    select(Pedido)
+                    .where(Pedido.cliente_telefono == telefono)
+                    .order_by(Pedido.created_at.desc())
+                    .limit(3)
+                )
+            ).scalars().all()
+    except Exception:  # noqa: BLE001 — leer el estado nunca debe romper el bot
+        return ""
+    if not pedidos:
+        return ""
+    cerrados = {"pagado", "entregado", "cancelado"}
+    # El pedido al que se pega el próximo comprobante = el último en 'esperando_pago'
+    # (mismo criterio que get_pedido_esperando_pago en tools.py).
+    esperando = next((p for p in pedidos if p.estado == "esperando_pago"), None)
+    pendiente = next((p for p in pedidos if p.estado == "pendiente"), None)
+    lineas = ["ESTADO DEL CLIENTE (verdad de la base de datos — manda sobre el chat):"]
+    if esperando is not None:
+        lineas.append(
+            f"- Pedido #{esperando.id} ESPERANDO PAGO: a ese se le pega el próximo comprobante."
+        )
+    elif pendiente is not None:
+        lineas.append(
+            f"- Pedido #{pendiente.id} ARMADO pero SIN cobro presentado aún: para cobrarlo, llama a generar_datos_pago con ese pedido_id."
+        )
+    else:
+        ult = pedidos[0]
+        if ult.estado in cerrados:
+            lineas.append(
+                f"- Su último pedido (#{ult.id}) ya se CERRÓ. IGNORA esos productos: lo que pida ahora es un PEDIDO NUEVO y aparte."
+            )
+        else:
+            lineas.append("- No tiene un pedido abierto ahora.")
+    lineas.append(
+        "Si en ESTE turno registras un pedido nuevo, ese manda (esto es el estado al inicio del turno). NO calcules saldos ni si un pago entró."
+    )
+    return "\n".join(lineas)
+
+
+async def construir_system_prompt(
+    nombre_cliente: str | None = None, telefono: str | None = None
+) -> str:
     prompt = await leer_personalidad() + "\n" + _REGLAS
+    if telefono:
+        estado = await _estado_cliente_texto(telefono)
+        if estado:
+            prompt += "\n\n" + estado
     catalogo = await _catalogo_texto()
     if catalogo:
         prompt += (

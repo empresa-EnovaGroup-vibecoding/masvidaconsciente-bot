@@ -93,7 +93,9 @@ async def responder(
     `llm` y `ejecutar` son inyectables para poder testear el loop sin
     llamar a OpenRouter ni a la base de datos reales.
     """
-    messages: list = [{"role": "system", "content": await construir_system_prompt(nombre_cliente)}]
+    messages: list = [
+        {"role": "system", "content": await construir_system_prompt(nombre_cliente, telefono)}
+    ]
     if historial:
         messages.extend(historial)
     messages.append({"role": "user", "content": mensaje_usuario})
