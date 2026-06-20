@@ -61,7 +61,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "registrar_pedido",
-            "description": "Registra el pedido del cliente una vez que confirmó qué quiere. El total se calcula con los precios reales del catálogo.",
+            "description": "Registra el pedido del cliente con TODOS los productos y cantidades en UNA sola llamada (no lo dividas en varias). El total lo calcula el código con los precios reales del catálogo y te devuelve un `resumen` (líneas + total) listo para copiarle al cliente; NUNCA sumes tú.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -102,7 +102,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "generar_datos_pago",
-            "description": "Genera el cobro: calcula el total en bolivares (tasa BCV del dia) y devuelve los datos de Pago Movil. Usala JUSTO despues de registrar_pedido, cuando el cliente confirma que quiere pagar.",
+            "description": "Genera el cobro: calcula el total en bolivares (tasa BCV del dia) y devuelve los datos de Pago Movil y un `resumen_cobro` listo para copiar. Usala JUSTO despues de registrar_pedido, pasando el `pedido_id` que esa te devolvio (para cobrar ESE pedido, no uno viejo).",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -142,6 +142,25 @@ TOOL_SCHEMAS = [
 
 
 # ─── Implementaciones ────────────────────────────────────────────────
+
+def _fmt_usd(x) -> str:
+    """Monto USD listo para mostrar: '$16' si es entero, '$16.50' si no.
+    None -> 'a consultar'. El cobro NUNCA lo calcula el modelo: estos strings
+    se arman aquí (en código) para que el bot solo los copie."""
+    if x is None:
+        return "a consultar"
+    d = Decimal(str(x))
+    if d == d.to_integral_value():
+        return f"${int(d)}"
+    return f"${d.quantize(Decimal('0.01'))}"
+
+
+def _fmt_bs(x) -> str:
+    """Monto en bolívares estilo Venezuela: 9718.28 -> '9.718,28'."""
+    entero, _, dec = f"{Decimal(str(x)):.2f}".partition(".")
+    miles = f"{int(entero):,}".replace(",", ".")
+    return f"{miles},{dec}"
+
 
 def _coincide_busqueda(nombre: str, palabras: list[str]) -> bool:
     """True si CADA palabra buscada es el INICIO de alguna palabra del nombre.
@@ -256,12 +275,26 @@ async def registrar_pedido(session, telefono, items, notas=None):
     session.add(pedido)
     await session.commit()
     await session.refresh(pedido)
+
+    # Recibo YA ARMADO (línea por línea + total) para que el bot lo copie tal cual.
+    # El total lo calculó el código (arriba), NO el modelo: cero sumas de cabeza.
+    lineas = []
+    for it in items_pedido:
+        pu = it["precio_unitario"]
+        subtotal = Decimal(str(pu)) * it["cantidad"] if pu is not None else None
+        lineas.append(f"{it['producto']} x{it['cantidad']} = {_fmt_usd(subtotal)}")
+    resumen = "\n".join(lineas) + f"\nTotal: {_fmt_usd(total)}"
+
     return {
         "ok": True,
         "pedido_id": pedido.id,
         "items": items_pedido,
         "total_usd": float(total),
-        "nota": "pedido registrado; coordina el Pago Móvil con el cliente",
+        "resumen": resumen,
+        "nota": (
+            "dile al cliente EXACTAMENTE este `resumen` (cópialo, NO recalcules el total). "
+            "Para cobrar, llama a generar_datos_pago con este mismo `pedido_id`."
+        ),
     }
 
 
@@ -359,17 +392,21 @@ async def generar_datos_pago(session, telefono, pedido_id=None):
     except Exception:  # noqa: BLE001
         pass
 
+    # Cobro YA ARMADO para copiar tal cual (USD y Bs los calculó el código, no el modelo).
+    resumen_cobro = f"Son {_fmt_usd(monto_usd)} o {_fmt_bs(monto_bs)} Bs"
+
     return {
         "ok": True,
         "pedido_id": pedido.id,
         "monto_usd": float(monto_usd),
         "tasa_bcv": float(tasa),
         "monto_bs": float(monto_bs),
+        "resumen_cobro": resumen_cobro,
         "banco": config.get("pago_movil_banco"),
         "cedula": config.get("pago_movil_cedula"),
         "telefono_pago": config.get("pago_movil_telefono"),
         "titular": config.get("pago_movil_titular"),
-        "nota": "presenta el monto en Bs y los datos de Pago Movil; pide la captura del comprobante",
+        "nota": "presenta el cobro copiando EXACTO `resumen_cobro` (NO recalcules) junto con los datos de Pago Movil; pide la captura del comprobante",
     }
 
 

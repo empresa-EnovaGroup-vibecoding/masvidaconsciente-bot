@@ -17,6 +17,21 @@
 
 ---
 
+## 2026-06-20 (cont.) — BLINDAJE del cobro: el modelo NUNCA suma de cabeza
+
+**El bug (visto en vivo con Haiku):** cliente pidió 2 productos de $8 c/u; el bot cobró $8 (la prueba: dijo "8$ o 4.859,14 Bs" = 8×tasa, o sea cobró un pedido incompleto/viejo) y al reclamar sumó $16 de cabeza. La **calculadora del código está bien** (`registrar_pedido` suma en Python); el problema es que el modelo (1) registraba el pedido incompleto y (2) sumaba/decía montos de su cabeza.
+
+**Diagnóstico (workflow multi-agente):** auditoría confirmó que el plan inicial de 3 capas tenía un hueco — `redactar_mensaje()` (avisos de pago) también podía escribir montos sin regla. Además se decidió el modelo: **quedarse en Haiku 4.5** (mejor voz/tono por su precio; Flash Lite es más barato pero es el más flojo justo en los matices; la matemática ya está en código así que el modelo barato es seguro para la plata). Costos reales: Haiku ~$11–27/mes a 2–5k msgs.
+
+**Qué se hizo (aditivo, `compileall` OK; formateadores probados):**
+- `system_prompt.py` `_REGLAS` (lo comparten chat Y avisos): regla de oro de DINERO — nunca calcular/sumar/redondear; copiar EXACTO el monto de la herramienta; registrar el pedido COMPLETO en una sola llamada y decir el total del campo `resumen`; pasar el `pedido_id` a generar_datos_pago (no cobrar uno viejo).
+- `tools.py`: `_fmt_usd` / `_fmt_bs` (formato Bs venezolano); `registrar_pedido` devuelve `resumen` (línea por línea + Total, ya calculado en código); `generar_datos_pago` devuelve `resumen_cobro` ("Son $X o Y Bs"). Descripciones de las tools reforzadas (todo en una llamada + pasar pedido_id).
+- **Decisión:** NO se metió un validador que parsee montos del texto (frágil, podría dañar mensajes buenos). La plata sale armada desde el código y el modelo solo copia = más robusto.
+
+**Pendiente:** redeploy bot + worker. Probar el MISMO pedido de 2 productos → debe dar **$16** y el cobro en Bs correcto; probar un aviso de pago parcial.
+
+---
+
 ## 2026-06-20 — Selector de modelo de IA desde el panel (probar Claude / OpenAI)
 
 **Por qué:** Gemini Flash ignora matices (pan es pan, tono, no-saludar-siempre). Maired
