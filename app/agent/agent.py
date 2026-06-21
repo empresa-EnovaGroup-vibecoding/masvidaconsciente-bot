@@ -240,23 +240,42 @@ def _parsear_json_comprobante(texto: str) -> dict | None:
         d = json.loads(t)
     except (json.JSONDecodeError, ValueError):
         return None
-    if not isinstance(d, dict):
-        return None
-    # Normaliza es_comprobante a True / False / None (el modelo a veces lo manda
-    # como texto "true"/"false").
-    v = d.get("es_comprobante")
-    if isinstance(v, bool):
-        pass
-    elif isinstance(v, str):
-        vl = v.strip().lower()
-        d["es_comprobante"] = (
-            True if vl in ("true", "si", "sí", "yes", "1")
-            else False if vl in ("false", "no", "0")
-            else None
-        )
-    else:
-        d["es_comprobante"] = None
-    return d
+    return d if isinstance(d, dict) else None
+
+
+def _solo_digitos(s) -> str:
+    return "".join(c for c in str(s or "") if c.isdigit())
+
+
+def _beneficiario_es_duena(
+    parsed: dict, *, titular=None, telefono_pago=None, banco=None, cedula=None
+) -> bool:
+    """True si el BENEFICIARIO del comprobante (quien RECIBE) coincide con la cuenta
+    de la dueña. Señales fuertes: la cédula o el teléfono (últimos dígitos) o el
+    nombre del titular. El banco de QUIEN PAGA no importa; importa que el dinero
+    llegue a la cuenta de la dueña."""
+    ben_nombre = _sin_acentos(parsed.get("beneficiario_nombre") or "")
+    ben_tel = _solo_digitos(parsed.get("beneficiario_telefono"))
+    ben_ced = _solo_digitos(parsed.get("beneficiario_cedula"))
+
+    # Cédula del beneficiario vs la de la dueña (últimos 7 dígitos o contención).
+    ced_cfg = _solo_digitos(cedula)
+    if ced_cfg and ben_ced and (ben_ced[-7:] == ced_cfg[-7:] or ced_cfg in ben_ced or ben_ced in ced_cfg):
+        return True
+
+    # Teléfono del beneficiario vs el de la dueña (últimos 7 dígitos: cubre +58 / 0).
+    tel_cfg = _solo_digitos(telefono_pago)
+    if tel_cfg and ben_tel and len(ben_tel) >= 7 and len(tel_cfg) >= 7 and ben_tel[-7:] == tel_cfg[-7:]:
+        return True
+
+    # Nombre del titular: que aparezcan sus palabras significativas (apellido, etc.).
+    tit = _sin_acentos(titular or "")
+    tokens = [t for t in tit.split() if len(t) >= 3]
+    if tokens and ben_nombre:
+        hits = sum(1 for t in tokens if t in ben_nombre)
+        if hits >= 2 or (len(tokens[-1]) >= 4 and tokens[-1] in ben_nombre):
+            return True
+    return False
 
 
 async def leer_comprobante(
@@ -266,16 +285,18 @@ async def leer_comprobante(
     titular: str | None = None,
     telefono_pago: str | None = None,
     banco: str | None = None,
+    cedula: str | None = None,
 ) -> dict:
-    """Lee una imagen con visión (Gemini) y dice si es un comprobante de pago REAL.
-    Devuelve {es_comprobante, monto, referencia, destinatario, banco, confianza, leido}.
+    """Lee una imagen con visión (Gemini) y decide EN CÓDIGO si es un comprobante de
+    pago a la cuenta de la dueña. La visión solo EXTRAE datos (beneficiario, monto,
+    referencia); el CÓDIGO valida que el beneficiario sea la dueña (cédula/teléfono/
+    nombre). Así una imagen cualquiera no se cuela. Devuelve un dict con
+    {es_comprobante, monto, referencia, beneficiario_*, leido}.
 
-    'leido' indica si la visión SÍ pudo analizar la imagen:
-      - leido=False -> no se pudo (no es imagen/PDF, visión caída, respuesta
-        ilegible): el llamador cae al flujo MANUAL (registrar 'reportado', red de seguridad).
-      - leido=True  -> la visión analizó: el llamador es ESTRICTO (solo es pago si
-        es_comprobante True con monto). Ignora fotos de personas/productos, stickers,
-        capturas de chats/apps/redes. NUNCA lanza.
+    'leido'=False -> no se pudo analizar (PDF / visión caída / respuesta ilegible):
+    el llamador cae al flujo MANUAL (registrar 'reportado', red de seguridad).
+    'leido'=True  -> la visión analizó: es_comprobante True solo si es pantalla
+    bancaria + monto + beneficiario = la dueña. NUNCA lanza.
     """
     base_mime = (mime or "").split(";")[0].strip().lower()
     fmt = _FORMATOS_IMAGEN.get(base_mime)
@@ -283,23 +304,25 @@ async def leer_comprobante(
         return {"es_comprobante": None, "leido": False}  # PDF u otro: a manual
     b64 = base64.b64encode(contenido).decode("ascii")
     data_url = f"data:{fmt};base64,{b64}"
-    cuenta = ", ".join(x for x in (titular, telefono_pago, banco) if x) or "(no configurada)"
     instruccion = (
-        "Eres un verificador ESTRICTO de comprobantes de pago de Venezuela (Pago Móvil, "
-        "transferencia bancaria, pago móvil interbancario). Mira la imagen y responde SOLO "
-        "con un JSON válido, sin ningún texto extra, con EXACTAMENTE estas llaves:\n"
-        '{"es_comprobante": true o false, "monto": "<monto en bolívares, solo números, '
-        'ej 39480.47, o null>", "referencia": "<número de referencia/operación, o null>", '
-        '"destinatario": "<a quién/qué cuenta se pagó, o null>", "banco": "<banco o '
-        'plataforma, o null>", "confianza": "alta" o "media" o "baja"}\n\n'
-        f"La cuenta de la dueña (a quién deben pagarle) es: {cuenta}.\n"
-        "Pon es_comprobante=true SOLO si la imagen es la PANTALLA de un banco o billetera "
-        "que muestra una TRANSFERENCIA o PAGO YA REALIZADO, con un MONTO en bolívares y un "
-        "NÚMERO DE REFERENCIA/OPERACIÓN visibles. Si no logras leer un monto, es_comprobante=false.\n"
-        "Pon es_comprobante=false para CUALQUIER otra imagen: foto de una persona, producto, "
-        "comida, paisaje, meme, logo, sticker, captura de un chat de WhatsApp, captura de una "
-        "app, red social o tutorial, texto suelto, o cualquier imagen que NO sea la pantalla de "
-        "una transacción bancaria. Ante la duda, es_comprobante=false."
+        "Eres un extractor de datos de comprobantes de pago de Venezuela (Pago Móvil, "
+        "transferencia, billetera). Mira la imagen y responde SOLO con un JSON válido, "
+        "sin ningún texto extra, con EXACTAMENTE estas llaves:\n"
+        '{"es_pantalla_bancaria": true o false, '
+        '"monto": "<monto en bolívares, solo números, ej 39480.47, o null>", '
+        '"referencia": "<número de referencia/operación, o null>", '
+        '"beneficiario_nombre": "<nombre de QUIEN RECIBE el pago, o null>", '
+        '"beneficiario_telefono": "<teléfono de quien recibe, o null>", '
+        '"beneficiario_cedula": "<cédula o RIF de quien recibe, o null>", '
+        '"banco_beneficiario": "<banco/plataforma de quien recibe, o null>", '
+        '"confianza": "alta" o "media" o "baja"}\n\n'
+        "es_pantalla_bancaria=true SOLO si la imagen es la PANTALLA de un banco o billetera "
+        "que muestra una transferencia o pago YA REALIZADO (con monto y referencia). "
+        "Para una foto de una persona, producto, comida, paisaje, meme, logo, sticker, "
+        "captura de un chat/app/red social/tutorial, o cualquier cosa que NO sea una "
+        "transacción bancaria, pon es_pantalla_bancaria=false y los demás campos en null.\n"
+        "Extrae SIEMPRE los datos de QUIEN RECIBE el dinero (el beneficiario/destino), NO de "
+        "quien paga. Copia los nombres y números TAL CUAL aparecen en la imagen."
     )
     messages = [
         {"role": "system", "content": instruccion},
@@ -324,5 +347,16 @@ async def leer_comprobante(
     parsed = _parsear_json_comprobante(texto)
     if parsed is None:
         return {"es_comprobante": None, "leido": False}
+
+    # DECISIÓN EN CÓDIGO (no se la dejamos a la IA): es comprobante PARA LA DUEÑA
+    # solo si es pantalla bancaria + hay monto + el beneficiario coincide con su cuenta.
+    pantalla = parsed.get("es_pantalla_bancaria")
+    pantalla = pantalla is True or str(pantalla).strip().lower() in ("true", "si", "sí", "yes", "1")
+    monto = parsed.get("monto")
+    monto_ok = bool(monto) and str(monto).strip().lower() not in ("", "null", "none", "0")
+    beneficiario_ok = _beneficiario_es_duena(
+        parsed, titular=titular, telefono_pago=telefono_pago, banco=banco, cedula=cedula
+    )
+    parsed["es_comprobante"] = bool(pantalla and monto_ok and beneficiario_ok)
     parsed["leido"] = True
     return parsed

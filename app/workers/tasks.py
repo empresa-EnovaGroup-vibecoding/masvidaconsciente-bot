@@ -276,7 +276,7 @@ async def _leer_comprobante_seguro(telefono, contenido, base_mime) -> dict:
 
     from app.models import Configuracion
 
-    titular = telefono_pago = banco = None
+    titular = telefono_pago = banco = cedula = None
     try:
         factory = get_session_factory()
         async with factory() as session:
@@ -287,15 +287,21 @@ async def _leer_comprobante_seguro(telefono, contenido, base_mime) -> dict:
         titular = cfg.get("pago_movil_titular")
         telefono_pago = cfg.get("pago_movil_telefono")
         banco = cfg.get("pago_movil_banco")
+        cedula = cfg.get("pago_movil_cedula")
     except Exception:  # noqa: BLE001
         pass
     try:
         return await leer_comprobante(
-            contenido, base_mime, titular=titular, telefono_pago=telefono_pago, banco=banco
+            contenido,
+            base_mime,
+            titular=titular,
+            telefono_pago=telefono_pago,
+            banco=banco,
+            cedula=cedula,
         )
     except Exception:  # noqa: BLE001 — defensa extra: nunca tumbar el worker
         logger.exception("Fallo leyendo el comprobante de %s", telefono)
-        return {"es_comprobante": None}
+        return {"es_comprobante": None, "leido": False}
 
 
 async def _responder_situacion(telefono: str, situacion: str, nombre: str | None) -> None:
