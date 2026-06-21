@@ -17,6 +17,19 @@
 
 ---
 
+## 2026-06-20 (cont. 9) — LOTE 4: elevación visual "Sereno" tipo Apple (solo panel `9e5d748`)
+
+Se generaron **3 looks** de la pantalla Resumen (Sereno / Cálido / Nítido) como maquetas HTML y la dueña **eligió "Sereno"** (minimalista tipo Apple). Aplicado al **sistema de diseño** (re-skinea las 12 pantallas de una vez, sin reescribirlas):
+- **Lienzo** cálido casi blanco y PLANO (se quitaron los degradados verdes del fondo) → más calma.
+- **Sombras** de tarjeta más suaves, difusas y ligeras (neutras, no verdes); hairline afinado (`globals.css`, `tailwind.config.ts`).
+- **Resumen:** más aire en las tarjetas (`p-6`) y cifras más grandes (`text-4xl`).
+- Verificado EN LOCAL con datos reales (login del dev contra el API en vivo): Resumen + Pagos se ven Sereno y consistentes. build OK.
+- Solo panel → **un redeploy del panel** trae Lote 3 + Lote 4 juntos.
+
+**Con esto el plan de 4 lotes queda COMPLETO** (Pedidos/Tasa, Pagos, robustez/a11y/DRY, visual). Pendiente futuro: lo de siempre en ROADMAP.
+
+---
+
 ## 2026-06-20 (cont. 8) — LOTE 3: robustez + accesibilidad + validaciones + DRY (solo panel `419f691`)
 
 Verificación EN VIVO de Lotes 1-2 OK: el **blindaje del cobro funciona** (intentar eliminar un pedido pagado se bloquea con "Usa Cancelar"), filtros de Pagos y contacto en Pedidos operando. Luego barrido de 14 pantallas (1 agente c/u) + **revisión adversarial** (0 hallazgos altos; 9 medios/bajos corregidos a mano).
