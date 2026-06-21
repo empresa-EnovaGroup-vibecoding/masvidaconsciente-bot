@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import os
 import re
@@ -270,35 +271,34 @@ def _guardar_comprobante(media_id: str, contenido: bytes, mime: str) -> str:
 
 
 async def _leer_comprobante_seguro(telefono, contenido, base_mime) -> dict:
-    """Lee el comprobante con visión, dándole los datos de la cuenta de la dueña
-    (para reconocer SOLO pagos hacia ella). Nunca lanza."""
+    """Lee el comprobante con visión, dándole TODAS las cuentas de pago de la dueña
+    (tabla metodos_pago) para reconocer SOLO pagos hacia alguna de ellas. Nunca lanza."""
     from sqlalchemy import select
 
-    from app.models import Configuracion
+    from app.models import MetodoPago
 
-    titular = telefono_pago = banco = cedula = None
+    cuentas: list[dict] = []
     try:
         factory = get_session_factory()
         async with factory() as session:
-            cfg = {
-                f.clave: f.valor
-                for f in (await session.execute(select(Configuracion))).scalars().all()
+            metodos = (
+                await session.execute(select(MetodoPago).where(MetodoPago.activo.is_(True)))
+            ).scalars().all()
+        cuentas = [
+            {
+                "titular": m.titular,
+                "banco": m.banco,
+                "telefono": m.telefono,
+                "cedula": m.cedula,
+                "correo": m.correo,
+                "wallet": m.wallet,
             }
-        titular = cfg.get("pago_movil_titular")
-        telefono_pago = cfg.get("pago_movil_telefono")
-        banco = cfg.get("pago_movil_banco")
-        cedula = cfg.get("pago_movil_cedula")
+            for m in metodos
+        ]
     except Exception:  # noqa: BLE001
         pass
     try:
-        return await leer_comprobante(
-            contenido,
-            base_mime,
-            titular=titular,
-            telefono_pago=telefono_pago,
-            banco=banco,
-            cedula=cedula,
-        )
+        return await leer_comprobante(contenido, base_mime, cuentas=cuentas)
     except Exception:  # noqa: BLE001 — defensa extra: nunca tumbar el worker
         logger.exception("Fallo leyendo el comprobante de %s", telefono)
         return {"es_comprobante": None, "leido": False}
@@ -317,6 +317,31 @@ async def _responder_situacion(telefono: str, situacion: str, nombre: str | None
     if mensaje.strip():
         await _enviar_en_partes(telefono, mensaje)
         await rc.guardar_historial(telefono, "assistant", mensaje)
+
+
+def _a_float(x):
+    """Convierte un monto leído ('39.480,47' o '39480.47') a float. None si no se puede."""
+    s = "".join(c for c in str(x or "") if c.isdigit() or c in ".,")
+    if not s:
+        return None
+    if "," in s:  # formato venezolano: 39.480,47 -> 39480.47
+        s = s.replace(".", "").replace(",", ".")
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
+async def _monto_cobrado(telefono: str):
+    """Monto en Bs que el bot le cobró a este cliente (de la cotización guardada en
+    Redis). None si no hay."""
+    try:
+        guardado = await rc.get_cache(f"cobro:{telefono}")
+        if guardado:
+            return _a_float(json.loads(guardado).get("monto_bs"))
+    except Exception:  # noqa: BLE001
+        pass
+    return None
 
 
 @celery_app.task(name="procesar_comprobante")
@@ -376,6 +401,18 @@ async def _procesar_comprobante(telefono, message_id, media_id, caption, nombre,
         )
         return
 
+    # ¿El MONTO del comprobante cuadra con lo que el bot cobró? (solo si la visión leyó).
+    monto_cuadra = True
+    if es_imagen:
+        esperado = await _monto_cobrado(telefono)
+        leido_monto = _a_float(monto)
+        if esperado is not None and leido_monto is not None:
+            monto_cuadra = abs(leido_monto - esperado) <= max(1.0, esperado * 0.01)
+        logger.info(
+            "Monto comprobante de %s: leido=%s esperado=%s cuadra=%s",
+            telefono, leido_monto, esperado, monto_cuadra,
+        )
+
     # Aquí: la visión reconoció el comprobante (imagen), O es un PDF/otro -> red de
     # seguridad: se registra como 'reportado' para que la dueña lo revise.
     from app.agent.tools import registrar_comprobante
@@ -406,12 +443,19 @@ async def _procesar_comprobante(telefono, message_id, media_id, caption, nombre,
 
     # Cierre del CLOSER: si se registró el pago, SIGUE la venta (agradece, coordina,
     # ofrece más). No avisa a la dueña (su banco ya le avisa) ni afirma verificación.
-    if resultado.get("ok"):
+    if resultado.get("ok") and monto_cuadra:
         situacion = (
             "el cliente acaba de mandar el comprobante de su pago y ya lo registraste. "
             "Agradécele con calidez, dile que recibiste su pago y que coordinas la "
             "entrega/envío, y déjale la puerta abierta por si quiere algo más. "
             "NO digas que verificaste el pago en el banco ni que está 'confirmado'."
+        )
+    elif resultado.get("ok"):
+        # Registrado, pero el monto NO cuadra con lo cobrado: no afirmar que está completo.
+        situacion = (
+            "el cliente mandó el comprobante pero el MONTO no cuadra con el de su pedido. "
+            "Con calidez dile que ya lo recibiste y lo estás revisando, y que le confirmas "
+            "en un momentito. NO afirmes que el pago está completo ni confirmado."
         )
     else:
         situacion = (

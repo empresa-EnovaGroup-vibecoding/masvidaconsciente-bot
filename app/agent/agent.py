@@ -247,33 +247,27 @@ def _solo_digitos(s) -> str:
     return "".join(c for c in str(s or "") if c.isdigit())
 
 
-def _beneficiario_es_duena(
-    parsed: dict, *, titular=None, telefono_pago=None, banco=None, cedula=None
-) -> bool:
-    """True si el BENEFICIARIO del comprobante (quien RECIBE) coincide con la cuenta
-    de la dueña. Señales fuertes: la cédula o el teléfono (últimos dígitos) o el
-    nombre del titular. El banco de QUIEN PAGA no importa; importa que el dinero
-    llegue a la cuenta de la dueña."""
-    ben_nombre = _sin_acentos(parsed.get("beneficiario_nombre") or "")
+def _beneficiario_coincide(parsed: dict, cuentas: list | None) -> bool:
+    """True si el BENEFICIARIO del comprobante (quien RECIBE) coincide con ALGUNA de
+    las cuentas de la dueña por un identificador FUERTE: teléfono, cédula/RIF, correo
+    (Zelle) o wallet (Binance/USDT). El NOMBRE solo NO basta (hay muchos homónimos:
+    por eso un voucher a 'Maired Hernández' en OTRO banco/cuenta NO debe pasar)."""
     ben_tel = _solo_digitos(parsed.get("beneficiario_telefono"))
     ben_ced = _solo_digitos(parsed.get("beneficiario_cedula"))
-
-    # Cédula del beneficiario vs la de la dueña (últimos 7 dígitos o contención).
-    ced_cfg = _solo_digitos(cedula)
-    if ced_cfg and ben_ced and (ben_ced[-7:] == ced_cfg[-7:] or ced_cfg in ben_ced or ben_ced in ced_cfg):
-        return True
-
-    # Teléfono del beneficiario vs el de la dueña (últimos 7 dígitos: cubre +58 / 0).
-    tel_cfg = _solo_digitos(telefono_pago)
-    if tel_cfg and ben_tel and len(ben_tel) >= 7 and len(tel_cfg) >= 7 and ben_tel[-7:] == tel_cfg[-7:]:
-        return True
-
-    # Nombre del titular: que aparezcan sus palabras significativas (apellido, etc.).
-    tit = _sin_acentos(titular or "")
-    tokens = [t for t in tit.split() if len(t) >= 3]
-    if tokens and ben_nombre:
-        hits = sum(1 for t in tokens if t in ben_nombre)
-        if hits >= 2 or (len(tokens[-1]) >= 4 and tokens[-1] in ben_nombre):
+    ben_correo = _sin_acentos(parsed.get("beneficiario_correo") or "").replace(" ", "")
+    ben_wallet = _sin_acentos(parsed.get("beneficiario_wallet") or "").replace(" ", "")
+    for c in cuentas or []:
+        ced = _solo_digitos(c.get("cedula"))
+        if ced and ben_ced and (ben_ced[-7:] == ced[-7:] or ced in ben_ced or ben_ced in ced):
+            return True
+        tel = _solo_digitos(c.get("telefono"))
+        if tel and ben_tel and len(ben_tel) >= 7 and len(tel) >= 7 and ben_tel[-7:] == tel[-7:]:
+            return True
+        correo = _sin_acentos(c.get("correo") or "").replace(" ", "")
+        if correo and ben_correo and correo == ben_correo:
+            return True
+        wallet = _sin_acentos(c.get("wallet") or "").replace(" ", "")
+        if wallet and ben_wallet and (wallet == ben_wallet or wallet in ben_wallet or ben_wallet in wallet):
             return True
     return False
 
@@ -282,21 +276,18 @@ async def leer_comprobante(
     contenido: bytes,
     mime: str,
     *,
-    titular: str | None = None,
-    telefono_pago: str | None = None,
-    banco: str | None = None,
-    cedula: str | None = None,
+    cuentas: list | None = None,
 ) -> dict:
     """Lee una imagen con visión (Gemini) y decide EN CÓDIGO si es un comprobante de
-    pago a la cuenta de la dueña. La visión solo EXTRAE datos (beneficiario, monto,
-    referencia); el CÓDIGO valida que el beneficiario sea la dueña (cédula/teléfono/
-    nombre). Así una imagen cualquiera no se cuela. Devuelve un dict con
+    pago a UNA de las cuentas de la dueña. La visión solo EXTRAE datos (beneficiario,
+    monto, referencia); el CÓDIGO valida que el beneficiario coincida con alguna de
+    `cuentas` (por teléfono/cédula/correo/wallet). Devuelve un dict con
     {es_comprobante, monto, referencia, beneficiario_*, leido}.
 
-    'leido'=False -> no se pudo analizar (PDF / visión caída / respuesta ilegible):
-    el llamador cae al flujo MANUAL (registrar 'reportado', red de seguridad).
-    'leido'=True  -> la visión analizó: es_comprobante True solo si es pantalla
-    bancaria + monto + beneficiario = la dueña. NUNCA lanza.
+    `cuentas`: lista de dicts {titular, banco, telefono, cedula, correo, wallet}.
+    'leido'=False -> no se pudo analizar (PDF / visión caída / respuesta ilegible).
+    'leido'=True  -> es_comprobante True solo si pantalla bancaria + monto +
+    beneficiario coincide con una cuenta. NUNCA lanza.
     """
     base_mime = (mime or "").split(";")[0].strip().lower()
     fmt = _FORMATOS_IMAGEN.get(base_mime)
@@ -314,6 +305,8 @@ async def leer_comprobante(
         '"beneficiario_nombre": "<nombre de QUIEN RECIBE el pago, o null>", '
         '"beneficiario_telefono": "<teléfono de quien recibe, o null>", '
         '"beneficiario_cedula": "<cédula o RIF de quien recibe, o null>", '
+        '"beneficiario_correo": "<correo de quien recibe (Zelle), o null>", '
+        '"beneficiario_wallet": "<wallet o usuario de quien recibe (Binance/USDT), o null>", '
         '"banco_beneficiario": "<banco/plataforma de quien recibe, o null>", '
         '"confianza": "alta" o "media" o "baja"}\n\n'
         "es_pantalla_bancaria=true SOLO si la imagen es la PANTALLA de un banco o billetera "
@@ -357,9 +350,7 @@ async def leer_comprobante(
     pantalla = pantalla is True or str(pantalla).strip().lower() in ("true", "si", "sí", "yes", "1")
     monto = parsed.get("monto")
     monto_ok = bool(monto) and str(monto).strip().lower() not in ("", "null", "none", "0")
-    beneficiario_ok = _beneficiario_es_duena(
-        parsed, titular=titular, telefono_pago=telefono_pago, banco=banco, cedula=cedula
-    )
+    beneficiario_ok = _beneficiario_coincide(parsed, cuentas)
     parsed["es_comprobante"] = bool(pantalla and monto_ok and beneficiario_ok)
     parsed["leido"] = True
     return parsed

@@ -70,6 +70,12 @@ async def main() -> None:
         await session.commit()
         logger.info("Migracion 008 (catalogo pdf en BD) aplicada")
 
+        # 009: metodos de pago (varias cuentas: Pago Movil, Banesco, Binance, Zelle...).
+        for stmt in _statements(MIGRATIONS / "009_metodos_pago.sql"):
+            await session.execute(text(stmt))
+        await session.commit()
+        logger.info("Migracion 009 (metodos de pago) aplicada")
+
         total = (await session.execute(text("SELECT COUNT(*) FROM productos"))).scalar()
         if total and total > 0:
             logger.info("Catálogo ya cargado (%s productos), no se vuelve a sembrar", total)

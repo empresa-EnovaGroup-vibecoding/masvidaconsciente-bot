@@ -121,6 +121,28 @@ class CatalogoPdf(Base):
     actualizado: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 
 
+class MetodoPago(Base):
+    """Una cuenta/método de pago de la dueña (Pago Móvil, Banesco, Binance, Zelle,
+    Efectivo…). Varias filas; editables desde el panel. El bot las OFRECE al cliente
+    y valida que un comprobante vaya a UNA de estas cuentas."""
+    __tablename__ = "metodos_pago"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    tipo: Mapped[str] = mapped_column(Text, default="pago_movil")
+    titulo: Mapped[str] = mapped_column(Text)
+    titular: Mapped[str | None] = mapped_column(Text, nullable=True)
+    banco: Mapped[str | None] = mapped_column(Text, nullable=True)
+    telefono: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cedula: Mapped[str | None] = mapped_column(Text, nullable=True)
+    correo: Mapped[str | None] = mapped_column(Text, nullable=True)
+    wallet: Mapped[str | None] = mapped_column(Text, nullable=True)
+    instrucciones: Mapped[str | None] = mapped_column(Text, nullable=True)
+    activo: Mapped[bool] = mapped_column(Boolean, default=True)
+    orden: Mapped[int] = mapped_column(default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
 class Pago(Base):
     __tablename__ = "pagos"
     __table_args__ = (
