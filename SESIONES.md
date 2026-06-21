@@ -17,6 +17,20 @@
 
 ---
 
+## 2026-06-20 (cont. 8) — LOTE 3: robustez + accesibilidad + validaciones + DRY (solo panel `419f691`)
+
+Verificación EN VIVO de Lotes 1-2 OK: el **blindaje del cobro funciona** (intentar eliminar un pedido pagado se bloquea con "Usa Cancelar"), filtros de Pagos y contacto en Pedidos operando. Luego barrido de 14 pantallas (1 agente c/u) + **revisión adversarial** (0 hallazgos altos; 9 medios/bajos corregidos a mano).
+
+- **Robustez:** estado **"No se pudo cargar + Reintentar"** (`<ErrorState>`) en todas las pantallas con datos (antes: skeleton infinito si fallaba la carga); badge del sidebar ya no muestra "0" falso; indicador del bot = "desconocido" si no se lee (antes asumía "activo"); **Mi Bot** separa error de carga vs acción y ofrece Reintentar para el interruptor; `cargar()` limpia el error al reintentar (sin banner "fantasma"); el banner no se duplica con ErrorState.
+- **Accesibilidad:** `ErrorBanner role="alert"`; modales (Catálogo, Conocimiento) cierran con Escape y con labels asociados; labels del login.
+- **Validaciones:** precio del catálogo (>0); **WhatsApp de avisos** en Config se NORMALIZA (acepta +/espacios, guarda limpio) y compara por los últimos 10 dígitos contra el número del bot (antes una validación estricta podía bloquear guardar TODO).
+- **DRY:** `<EstadoBadge>`, `<EmptyState>`, `<ErrorState>` (con variante `embedded` para no anidar tarjetas), `formatFecha/formatHora` con guard, estilos de pago en `lib/estados`; dashboard usa `lib/format`.
+- Solo panel → **un redeploy del panel**. tsc + build OK.
+
+**Pendiente:** Lote 4 (elevación visual tipo Apple — con opciones para elegir).
+
+---
+
 ## 2026-06-20 (cont. 7) — Completitud funcional (auditoría + plan en 4 lotes) — LOTE 1
 
 Workflows: **auditoría de ingeniería** (37 hallazgos: robustez/estados de error, validaciones, a11y, DRY/SOLID) + **análisis funcional** (24 acciones faltantes por sección). **Decisiones de la proveedora:** anular pago confirmado = **SÍ** (reversa segura, lote futuro); **NO** borrar definitivamente pagos/clientes (conservar historial → anular/cancelar/ocultar). Plan en 4 lotes: 1) Pedidos+Tasa, 2) Pagos+robustez global, 3) resto de secciones+a11y+DRY, 4) visual Apple.
