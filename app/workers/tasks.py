@@ -3,7 +3,12 @@ import logging
 import os
 import re
 
-from app.agent.agent import redactar_mensaje, responder, transcribir_audio
+from app.agent.agent import (
+    leer_comprobante,
+    redactar_mensaje,
+    responder,
+    transcribir_audio,
+)
 from app.config import get_settings
 from app.services import redis_client as rc
 from app.services.db import get_session_factory
@@ -264,6 +269,50 @@ def _guardar_comprobante(media_id: str, contenido: bytes, mime: str) -> str:
     return ruta
 
 
+async def _leer_comprobante_seguro(telefono, contenido, base_mime) -> dict:
+    """Lee el comprobante con visión, dándole los datos de la cuenta de la dueña
+    (para reconocer SOLO pagos hacia ella). Nunca lanza."""
+    from sqlalchemy import select
+
+    from app.models import Configuracion
+
+    titular = telefono_pago = banco = None
+    try:
+        factory = get_session_factory()
+        async with factory() as session:
+            cfg = {
+                f.clave: f.valor
+                for f in (await session.execute(select(Configuracion))).scalars().all()
+            }
+        titular = cfg.get("pago_movil_titular")
+        telefono_pago = cfg.get("pago_movil_telefono")
+        banco = cfg.get("pago_movil_banco")
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        return await leer_comprobante(
+            contenido, base_mime, titular=titular, telefono_pago=telefono_pago, banco=banco
+        )
+    except Exception:  # noqa: BLE001 — defensa extra: nunca tumbar el worker
+        logger.exception("Fallo leyendo el comprobante de %s", telefono)
+        return {"es_comprobante": None}
+
+
+async def _responder_situacion(telefono: str, situacion: str, nombre: str | None) -> None:
+    """Whuilianny REDACTA un mensaje para el cliente según la situación (no plantilla),
+    lo protege contra afirmaciones de pago, lo envía en partes y lo guarda en historial."""
+    try:
+        historial = await rc.obtener_historial(telefono)
+        mensaje = await redactar_mensaje(situacion, historial, nombre)
+    except Exception:  # noqa: BLE001
+        logger.exception("No se pudo redactar el mensaje al cliente %s", telefono)
+        return
+    mensaje = _proteger_afirmacion_de_pago(mensaje or "")
+    if mensaje.strip():
+        await _enviar_en_partes(telefono, mensaje)
+        await rc.guardar_historial(telefono, "assistant", mensaje)
+
+
 @celery_app.task(name="procesar_comprobante")
 def procesar_comprobante(telefono, message_id, media_id, caption=None, nombre=None, mime_type=None):
     """Tarea dedicada (fuera del buffer de texto): descarga y guarda el comprobante."""
@@ -285,44 +334,77 @@ async def _procesar_comprobante(telefono, message_id, media_id, caption, nombre,
     ruta = _guardar_comprobante(media_id, contenido, mime or mime_type or "")
     logger.info("Comprobante de %s guardado en %s (%s bytes)", telefono, ruta, len(contenido))
 
-    # Amarra el comprobante a su pedido (por telefono + estado) y lo registra en pagos.
+    base_mime = (mime or mime_type or "").split(";")[0].strip().lower()
+
+    # VISIÓN: ¿es un comprobante REAL (a las cuentas de la dueña) o una imagen
+    # cualquiera? Solo para imágenes; PDF o fallo de visión -> es_comprobante None
+    # -> cae al flujo MANUAL de siempre (se registra como 'reportado').
+    lectura = {}
+    if base_mime.startswith("image/"):
+        lectura = await _leer_comprobante_seguro(telefono, contenido, base_mime)
+    es_comprobante = lectura.get("es_comprobante")
+    confianza = str(lectura.get("confianza") or "").strip().lower()
+
+    # RED DE SEGURIDAD DEL DINERO: solo descartamos la imagen (no es venta) si la
+    # visión está SEGURA (confianza alta) de que NO es un comprobante. Si lo niega
+    # con dudas, o no se pudo leer (None), NUNCA arriesgamos un pago real: cae al
+    # flujo MANUAL (se registra como 'reportado' y la dueña lo ve en el panel).
+    if es_comprobante is False and confianza == "alta":
+        logger.info("Imagen de %s NO es comprobante (visión segura); no se registra", telefono)
+        if message_id:
+            await rc.marcar_comprobante(message_id)  # atendido: no reprocesar
+        await _responder_situacion(
+            telefono,
+            "el cliente te envió una IMAGEN que NO es un comprobante de pago (parece "
+            "otra cosa). Con calidez dile que no ves el comprobante y pídele la captura "
+            "del pago donde se vea el monto y la referencia.",
+            nombre,
+        )
+        return
+
+    # Comprobante reconocido, o dudoso/ilegible -> registrar (automático o manual).
     from app.agent.tools import registrar_comprobante
+
+    # La referencia leída por visión solo se confía si RECONOCIÓ el comprobante
+    # (evita guardar una referencia alucinada cuando la lectura fue dudosa).
+    referencia = lectura.get("referencia") if es_comprobante is True else None
+    if not isinstance(referencia, str) or not referencia.strip():
+        referencia = None
 
     factory = get_session_factory()
     try:
         async with factory() as session:
             resultado = await registrar_comprobante(
-                session, telefono, comprobante_media_id=media_id, comprobante_url=ruta
+                session,
+                telefono,
+                referencia=referencia,
+                comprobante_media_id=media_id,
+                comprobante_url=ruta,
             )
     except Exception:  # noqa: BLE001 — error de BD: NO marcar, dejar reintentar a Meta
         logger.exception("No se pudo registrar el comprobante de %s", telefono)
         return
     logger.info("Comprobante de %s registrado: %s", telefono, resultado)
 
-    # Registro exitoso: marcar para que un reintento de Meta no repita ack/aviso.
+    # Registro exitoso: marcar para que un reintento de Meta no repita el cierre.
     if message_id:
         await rc.marcar_comprobante(message_id)
 
-    # Cierre con el cliente: Whuilianny REDACTA el mensaje al momento (no es plantilla).
-    # El aviso a la duena ya lo disparo registrar_comprobante.
+    # Cierre del CLOSER: si se registró el pago, SIGUE la venta (agradece, coordina,
+    # ofrece más). No avisa a la dueña (su banco ya le avisa) ni afirma verificación.
     if resultado.get("ok"):
-        from app.services.mensajes import leer_guia
-
-        situacion = await leer_guia("msg_guia_comprobante")
+        situacion = (
+            "el cliente acaba de mandar el comprobante de su pago y ya lo registraste. "
+            "Agradécele con calidez, dile que recibiste su pago y que coordinas la "
+            "entrega/envío, y déjale la puerta abierta por si quiere algo más. "
+            "NO digas que verificaste el pago en el banco ni que está 'confirmado'."
+        )
     else:
         situacion = (
-            "el cliente te envio una imagen pero no hay un pedido esperando pago; "
-            "preguntale con calidez si es un comprobante y en que lo puedes ayudar"
+            "el cliente te envió una imagen pero no hay un pedido esperando pago; "
+            "pregúntale con calidez si es un comprobante y en qué lo puedes ayudar"
         )
-    try:
-        historial = await rc.obtener_historial(telefono)
-        mensaje = await redactar_mensaje(situacion, historial, nombre)
-    except Exception:  # noqa: BLE001
-        logger.exception("No se pudo redactar el mensaje al cliente %s", telefono)
-        mensaje = ""
-    if mensaje.strip():
-        await _enviar_en_partes(telefono, mensaje)
-        await rc.guardar_historial(telefono, "assistant", mensaje)
+    await _responder_situacion(telefono, situacion, nombre)
 
 
 # ─── Notas de voz y otros eventos (respuesta humana) ─────────────────

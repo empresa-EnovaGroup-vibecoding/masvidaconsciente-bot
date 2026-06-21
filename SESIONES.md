@@ -17,6 +17,18 @@
 
 ---
 
+## 2026-06-21 — Closer que RECONOCE el comprobante y sigue vendiendo (BOT — pendiente de probar en vivo)
+
+A pedido de la proveedora (como su flujo en **SellerChat**). Antes el bot aceptaba **cualquier imagen** como comprobante y se detenía. Ahora:
+- **Visión** (`leer_comprobante` en `agent.py`, modelo Gemini igual que la transcripción de voz): lee la imagen y dice si es un **comprobante real a las cuentas de la dueña** (titular/teléfono/banco de `configuracion`); ignora fotos/stickers/capturas de chats/redes.
+- `_procesar_comprobante` (`tasks.py`): si la visión está **segura (confianza alta)** de que NO es comprobante → pide la captura y no registra; en cualquier otro caso (es comprobante, dudoso o ilegible) → **registra como `reportado`** (red de seguridad: nunca pierde un pago real) y el **closer sigue vendiendo** (agradece, dice que recibió el pago, coordina entrega, ofrece más).
+- **Sin aviso "tienes una venta"** a la dueña (su banco ya le avisa): `registrar_comprobante(... avisar=False)`. El bot **no afirma** que verificó el dinero; la dueña confirma en su banco; el panel queda para auditar/**anular**.
+- `pagado` sigue fijándose solo desde `/confirmar` (no se auto-confirma). Doctrina actualizada en `CLAUDE.md`. Plan/bitácora en `PRP-cobro.md` (doc único del cobro; se borraron PRP-001/002 sueltos).
+- Verificado: compileall OK + **revisión adversarial** (1 ALTA corregida: falso negativo de visión perdía un pago → ahora solo descarta con confianza alta).
+- **PENDIENTE: redeploy del BOT en Coolify + probar con un comprobante REAL en WhatsApp** (y una imagen cualquiera, para ver que la rechaza).
+
+---
+
 ## 2026-06-20 (cont. 9) — LOTE 4: elevación visual "Sereno" tipo Apple (solo panel `9e5d748`)
 
 Se generaron **3 looks** de la pantalla Resumen (Sereno / Cálido / Nítido) como maquetas HTML y la dueña **eligió "Sereno"** (minimalista tipo Apple). Aplicado al **sistema de diseño** (re-skinea las 12 pantallas de una vez, sin reescribirlas):

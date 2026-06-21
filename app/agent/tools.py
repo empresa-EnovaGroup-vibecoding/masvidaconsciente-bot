@@ -446,7 +446,7 @@ async def _avisar_duena(session, pedido, pago) -> None:
 
 
 async def registrar_comprobante(
-    session, telefono, referencia=None, comprobante_media_id=None, comprobante_url=None
+    session, telefono, referencia=None, comprobante_media_id=None, comprobante_url=None, avisar=False
 ):
     """Registra el pago REPORTADO (estado 'reportado'). NO lo confirma: eso lo
     hace la duena desde el dashboard. Amarra al pedido en 'esperando_pago'."""
@@ -535,13 +535,15 @@ async def registrar_comprobante(
                 return {"ok": True, "pago_id": existente.id, "nota": "ese comprobante ya estaba registrado"}
         raise
     await session.refresh(pago)
-    # Relevo a la humana: avisar a la duena que entro un pago para que lo verifique.
-    await _avisar_duena(session, pedido, pago)
+    # Aviso a la duena: DESACTIVADO por defecto (su banco ya le avisa de los pagos).
+    # Se puede reactivar pasando avisar=True (p.ej. plantilla HSM fuera de la ventana 24h).
+    if avisar:
+        await _avisar_duena(session, pedido, pago)
     return {
         "ok": True,
         "pago_id": pago.id,
         "pedido_id": pedido.id,
-        "nota": "pago reportado; aun NO esta confirmado: dile que lo estas verificando y le confirmas enseguida (no afirmes que ya quedo confirmado)",
+        "nota": "comprobante registrado; agradécele, dile que recibiste su pago y que coordinas la entrega, y queda atenta por si quiere algo mas. NO afirmes que verificaste el dinero en el banco ni que esta 'confirmado'.",
     }
 
 

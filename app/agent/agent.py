@@ -211,3 +211,111 @@ async def transcribir_audio(contenido: bytes, mime: str = "audio/ogg") -> str:
         resp.raise_for_status()
         data = resp.json()
         return (data["choices"][0]["message"].get("content") or "").strip()
+
+
+# ─── Visión: reconocer comprobantes de pago ──────────────────────────
+_FORMATOS_IMAGEN = {
+    "image/jpeg": "image/jpeg",
+    "image/jpg": "image/jpeg",
+    "image/png": "image/png",
+    "image/webp": "image/webp",
+    "image/heic": "image/heic",  # iPhone
+    "image/heif": "image/heif",  # iPhone
+}
+
+
+def _parsear_json_comprobante(texto: str) -> dict:
+    """Extrae el JSON de la respuesta del modelo (tolera ```json ... ``` y texto
+    alrededor). Si no se puede parsear, devuelve es_comprobante=None (→ flujo manual)."""
+    t = (texto or "").strip()
+    if t.startswith("```"):
+        t = t.strip("`")
+        if t[:4].lower() == "json":
+            t = t[4:]
+    i, j = t.find("{"), t.rfind("}")
+    if i != -1 and j != -1 and j > i:
+        t = t[i : j + 1]
+    try:
+        d = json.loads(t)
+    except (json.JSONDecodeError, ValueError):
+        return {"es_comprobante": None}
+    if not isinstance(d, dict):
+        return {"es_comprobante": None}
+    # Normaliza es_comprobante a True / False / None (el modelo a veces lo manda
+    # como texto "true"/"false"). Solo un False REAL bloquea el registro; cualquier
+    # otra cosa (None / ausente / valor raro) cae al flujo MANUAL.
+    v = d.get("es_comprobante")
+    if isinstance(v, bool):
+        pass
+    elif isinstance(v, str):
+        vl = v.strip().lower()
+        d["es_comprobante"] = (
+            True if vl in ("true", "si", "sí", "yes", "1")
+            else False if vl in ("false", "no", "0")
+            else None
+        )
+    else:
+        d["es_comprobante"] = None
+    return d
+
+
+async def leer_comprobante(
+    contenido: bytes,
+    mime: str,
+    *,
+    titular: str | None = None,
+    telefono_pago: str | None = None,
+    banco: str | None = None,
+) -> dict:
+    """Lee una imagen con el modelo de visión (Gemini) y dice si es un comprobante
+    de pago REAL a las cuentas de la dueña. Devuelve un dict:
+    {es_comprobante: true|false|None, monto, referencia, destinatario, banco, confianza}.
+
+    Estilo SellerChat: reconoce solo comprobantes bancarios reales; ignora fotos
+    cualquiera, stickers, capturas de chats/apps/tutoriales/redes. NUNCA lanza:
+    ante cualquier fallo (no es imagen, visión caída, respuesta rara) devuelve
+    es_comprobante=None para que el llamador caiga al flujo MANUAL de siempre.
+    """
+    base_mime = (mime or "").split(";")[0].strip().lower()
+    fmt = _FORMATOS_IMAGEN.get(base_mime)
+    if fmt is None:
+        return {"es_comprobante": None}  # PDF u otro: no se lee por visión, va a manual
+    b64 = base64.b64encode(contenido).decode("ascii")
+    data_url = f"data:{fmt};base64,{b64}"
+    cuenta = ", ".join(x for x in (titular, telefono_pago, banco) if x) or "(no configurada)"
+    instruccion = (
+        "Eres un verificador de comprobantes de pago de Venezuela (Pago Móvil, "
+        "transferencia, Pago Móvil interbancario). Mira la imagen y responde SOLO "
+        "con un JSON válido, sin ningún texto extra, con EXACTAMENTE estas llaves:\n"
+        '{"es_comprobante": true o false, "monto": "<monto en bolívares solo números, '
+        'ej 39480.47, o null>", "referencia": "<nro de referencia/operación o null>", '
+        '"destinatario": "<a quién/qué cuenta se pagó, o null>", "banco": "<banco o '
+        'plataforma, o null>", "confianza": "alta" o "media" o "baja"}\n\n'
+        f"La cuenta de la dueña (a quién deben pagarle) es: {cuenta}.\n"
+        "Pon es_comprobante=true SOLO si la imagen es un comprobante bancario REAL que "
+        "muestre un pago YA HECHO (con monto, fecha y referencia) hacia la cuenta de la dueña.\n"
+        "Pon es_comprobante=false si es una foto cualquiera, un sticker, una captura de "
+        "chat/aplicación/tutorial/redes sociales, o no muestra datos bancarios.\n"
+        "Si las cifras se ven borrosas o no estás seguro, igual responde lo que veas y pon confianza 'baja'."
+    )
+    messages = [
+        {"role": "system", "content": instruccion},
+        {
+            "role": "user",
+            "content": [{"type": "image_url", "image_url": {"url": data_url}}],
+        },
+    ]
+    try:
+        async with httpx.AsyncClient(timeout=45) as client:
+            resp = await client.post(
+                OPENROUTER_URL,
+                headers={"Authorization": f"Bearer {settings.openrouter_api_key}"},
+                json={"model": settings.openrouter_model_audio, "messages": messages, "temperature": 0},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            texto = (data["choices"][0]["message"].get("content") or "").strip()
+    except Exception:  # noqa: BLE001 — leer el comprobante nunca debe tumbar el worker
+        logger.exception("No se pudo leer el comprobante con visión")
+        return {"es_comprobante": None}
+    return _parsear_json_comprobante(texto)
