@@ -26,7 +26,9 @@ Workflows: **auditoría de ingeniería** (37 hallazgos: robustez/estados de erro
 - **Pedidos — Cancelar** (botón explícito, estado='cancelado'), **contacto del cliente** (nombre vía join en `GET /pedidos` + enlaces WhatsApp/ficha), **robustez** (try/catch al cambiar estado, `ocupado` por id, select con aria-label).
 - **Tasa — fix de cobro:** no se puede activar el candado manual sin valor válido (>0) — backend `PUT /tasa` → 400 + validación inline en el panel. Evita dejar al bot SIN tasa.
 
-**Pendiente:** Lotes 2-4.
+**LOTE 2 (hecho — bot/panel):** Pagos — **filtros** por estado (Por verificar/Confirmados/Rechazados/Parciales), **reabrir** (`POST /pagos/{id}/reabrir`: rechazado/parcial → reportado), **anular pago confirmado** (`POST /pagos/{id}/anular`: pago → rechazado + pedido 'pagado' → 'esperando_pago' → se descuenta de `/reporte`; sin notificar al cliente; historial conservado, no se borra), validación de monto (NaN/≤0) y fallback de estado desconocido.
+
+**Pendiente:** Lote 3 (robustez global: estados de error/reintentar + validaciones + accesibilidad + DRY) y Lote 4 (elevación visual tipo Apple).
 
 ---
 

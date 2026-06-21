@@ -1042,6 +1042,54 @@ async def verificar_monto(pago_id: int, datos: MontoIn, usuario: str = Depends(u
     return {"ok": True, "pago_id": pago_id, "estado": estado_final}
 
 
+@router.post("/pagos/{pago_id}/reabrir")
+async def reabrir_pago(pago_id: int, _: str = Depends(usuario_actual)):
+    """Devuelve un pago rechazado o parcial a la bandeja "Por verificar"
+    (estado 'reportado'). Correccion interna de la dueña: NO se notifica al cliente."""
+    factory = get_session_factory()
+    async with factory() as session:
+        pago = await session.get(Pago, pago_id)
+        if pago is None:
+            raise HTTPException(status_code=404, detail="Pago no encontrado")
+        if pago.estado not in ("rechazado", "parcial"):
+            raise HTTPException(
+                status_code=409,
+                detail="Solo se puede reabrir un pago rechazado o parcial.",
+            )
+        pago.estado = "reportado"
+        pago.motivo_rechazo = None
+        pago.updated_at = now_utc()
+        await session.commit()
+    return {"ok": True}
+
+
+@router.post("/pagos/{pago_id}/anular")
+async def anular_pago(pago_id: int, usuario: str = Depends(usuario_actual)):
+    """REVERSA SEGURA de un pago confirmado por error. Pasa el pago a 'rechazado'
+    y revierte el pedido a 'esperando_pago', de modo que /reporte (que suma pagos
+    confirmados) deje de contarlo. NO toca montos. Correccion interna de la dueña:
+    NO se notifica al cliente. El registro se conserva (no se borra fisicamente)."""
+    factory = get_session_factory()
+    async with factory() as session:
+        pago = await session.get(Pago, pago_id)
+        if pago is None:
+            raise HTTPException(status_code=404, detail="Pago no encontrado")
+        if pago.estado != "confirmado":
+            raise HTTPException(
+                status_code=409,
+                detail="Solo se puede anular un pago confirmado.",
+            )
+        pago.estado = "rechazado"
+        pago.confirmado_por = usuario
+        pago.motivo_rechazo = "anulado por la dueña"
+        pago.updated_at = now_utc()
+        pedido = await session.get(Pedido, pago.pedido_id)
+        if pedido is not None and pedido.estado == "pagado":
+            pedido.estado = "esperando_pago"
+        await session.commit()
+    return {"ok": True}
+
+
 @router.get("/pagos/{pago_id}/comprobante")
 async def ver_comprobante(pago_id: int, _: str = Depends(usuario_actual)):
     """Sirve la imagen/PDF del comprobante. PROTEGIDO: solo con sesion iniciada
