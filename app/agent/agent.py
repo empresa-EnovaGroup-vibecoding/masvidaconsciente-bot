@@ -328,7 +328,10 @@ async def leer_comprobante(
         {"role": "system", "content": instruccion},
         {
             "role": "user",
-            "content": [{"type": "image_url", "image_url": {"url": data_url}}],
+            "content": [
+                {"type": "text", "text": "Analiza esta imagen y responde SOLO con el JSON pedido."},
+                {"type": "image_url", "image_url": {"url": data_url}},
+            ],
         },
     ]
     try:

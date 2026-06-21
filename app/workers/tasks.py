@@ -341,37 +341,43 @@ async def _procesar_comprobante(telefono, message_id, media_id, caption, nombre,
     logger.info("Comprobante de %s guardado en %s (%s bytes)", telefono, ruta, len(contenido))
 
     base_mime = (mime or mime_type or "").split(";")[0].strip().lower()
+    es_imagen = base_mime.startswith("image/")
 
-    # VISIÓN: ¿es un comprobante REAL (a las cuentas de la dueña) o una imagen
-    # cualquiera? Solo para imágenes; PDF o fallo de visión -> es_comprobante None
-    # -> cae al flujo MANUAL de siempre (se registra como 'reportado').
+    # VISIÓN: extrae los datos y valida EN CÓDIGO que el pago sea A LA CUENTA de la
+    # dueña. Solo para imágenes; un PDF no se analiza por visión.
     lectura = {}
-    if base_mime.startswith("image/"):
+    if es_imagen:
         lectura = await _leer_comprobante_seguro(telefono, contenido, base_mime)
-    leido = bool(lectura.get("leido"))
     es_comprobante = lectura.get("es_comprobante")
     monto = lectura.get("monto")
     monto_ok = bool(monto) and str(monto).strip().lower() not in ("", "null", "none", "0")
+    logger.info(
+        "Visión comprobante de %s: imagen=%s leido=%s es_comprobante=%s pantalla=%s beneficiario=%r monto=%s",
+        telefono, es_imagen, lectura.get("leido"), es_comprobante,
+        lectura.get("es_pantalla_bancaria"), lectura.get("beneficiario_nombre"), monto,
+    )
 
-    # ESTRICTO: si la visión SÍ pudo analizar la imagen, solo la tratamos como pago
-    # cuando reconoció un comprobante REAL con monto. Cualquier otra imagen (foto de
-    # una persona/producto, captura de chat/app, etc.) se rechaza con calidez.
-    if leido and not (es_comprobante is True and monto_ok):
-        logger.info("Imagen de %s NO es un comprobante de pago; no se registra", telefono)
+    # IMÁGENES = ESTRICTO: solo es un pago si la visión RECONOCIÓ un comprobante a la
+    # cuenta de la dueña (es_comprobante True + monto). Si NO lo reconoció —no es
+    # comprobante, es de otra cuenta, o la visión no pudo leer— se PIDE la captura y
+    # NO se registra. (Antes la red de seguridad registraba ante la duda, y por eso
+    # se colaban fotos cualquiera.)
+    if es_imagen and not (es_comprobante is True and monto_ok):
+        logger.info("Imagen de %s NO reconocida como comprobante de la dueña; no se registra", telefono)
         if message_id:
             await rc.marcar_comprobante(message_id)  # atendido: no reprocesar
         await _responder_situacion(
             telefono,
-            "el cliente te envió una IMAGEN que NO es un comprobante de pago (parece "
-            "otra cosa, p.ej. una foto). Con calidez dile que no ves el comprobante del "
-            "pago y pídele la captura donde se vea el monto y el número de referencia.",
+            "el cliente te envió una IMAGEN que NO es un comprobante de pago a tu cuenta "
+            "(parece otra cosa, o no se ve claro). Con calidez dile que no ves el "
+            "comprobante del pago y pídele la captura donde se vean el monto y el número "
+            "de referencia del pago hecho a tu Pago Móvil.",
             nombre,
         )
         return
 
-    # Llegamos aquí si: la visión reconoció un comprobante real con monto, O no se
-    # pudo analizar la imagen (PDF / visión caída -> leido False). El 2º caso es la
-    # RED DE SEGURIDAD: se registra como 'reportado' para que la dueña lo vea.
+    # Aquí: la visión reconoció el comprobante (imagen), O es un PDF/otro -> red de
+    # seguridad: se registra como 'reportado' para que la dueña lo revise.
     from app.agent.tools import registrar_comprobante
 
     # La referencia leída por visión solo se confía si reconoció un comprobante.
