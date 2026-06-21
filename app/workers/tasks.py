@@ -342,31 +342,33 @@ async def _procesar_comprobante(telefono, message_id, media_id, caption, nombre,
     lectura = {}
     if base_mime.startswith("image/"):
         lectura = await _leer_comprobante_seguro(telefono, contenido, base_mime)
+    leido = bool(lectura.get("leido"))
     es_comprobante = lectura.get("es_comprobante")
-    confianza = str(lectura.get("confianza") or "").strip().lower()
+    monto = lectura.get("monto")
+    monto_ok = bool(monto) and str(monto).strip().lower() not in ("", "null", "none", "0")
 
-    # RED DE SEGURIDAD DEL DINERO: solo descartamos la imagen (no es venta) si la
-    # visión está SEGURA (confianza alta) de que NO es un comprobante. Si lo niega
-    # con dudas, o no se pudo leer (None), NUNCA arriesgamos un pago real: cae al
-    # flujo MANUAL (se registra como 'reportado' y la dueña lo ve en el panel).
-    if es_comprobante is False and confianza == "alta":
-        logger.info("Imagen de %s NO es comprobante (visión segura); no se registra", telefono)
+    # ESTRICTO: si la visión SÍ pudo analizar la imagen, solo la tratamos como pago
+    # cuando reconoció un comprobante REAL con monto. Cualquier otra imagen (foto de
+    # una persona/producto, captura de chat/app, etc.) se rechaza con calidez.
+    if leido and not (es_comprobante is True and monto_ok):
+        logger.info("Imagen de %s NO es un comprobante de pago; no se registra", telefono)
         if message_id:
             await rc.marcar_comprobante(message_id)  # atendido: no reprocesar
         await _responder_situacion(
             telefono,
             "el cliente te envió una IMAGEN que NO es un comprobante de pago (parece "
-            "otra cosa). Con calidez dile que no ves el comprobante y pídele la captura "
-            "del pago donde se vea el monto y la referencia.",
+            "otra cosa, p.ej. una foto). Con calidez dile que no ves el comprobante del "
+            "pago y pídele la captura donde se vea el monto y el número de referencia.",
             nombre,
         )
         return
 
-    # Comprobante reconocido, o dudoso/ilegible -> registrar (automático o manual).
+    # Llegamos aquí si: la visión reconoció un comprobante real con monto, O no se
+    # pudo analizar la imagen (PDF / visión caída -> leido False). El 2º caso es la
+    # RED DE SEGURIDAD: se registra como 'reportado' para que la dueña lo vea.
     from app.agent.tools import registrar_comprobante
 
-    # La referencia leída por visión solo se confía si RECONOCIÓ el comprobante
-    # (evita guardar una referencia alucinada cuando la lectura fue dudosa).
+    # La referencia leída por visión solo se confía si reconoció un comprobante.
     referencia = lectura.get("referencia") if es_comprobante is True else None
     if not isinstance(referencia, str) or not referencia.strip():
         referencia = None
