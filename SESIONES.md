@@ -26,6 +26,9 @@ Se generaron **3 looks** de la pantalla Resumen (Sereno / Cálido / Nítido) com
 - Verificado EN LOCAL con datos reales (login del dev contra el API en vivo): Resumen + Pagos se ven Sereno y consistentes. build OK.
 - Solo panel → **un redeploy del panel** trae Lote 3 + Lote 4 juntos.
 
+**Ajuste posterior (commit `a1a5eed`):** la dueña pidió que el Resumen quedara **igual a la maqueta** elegida (no solo el retoque de tokens). Se **reconstruyó el Resumen** para coincidir con el Look A (sin emojis): tarjetas KPI con ícono arriba-derecha + cifra grande, "Pagos por verificar" con barra verde + "Revisar", tarjeta ancha de Tasa con ícono, "Últimos pedidos" como lista limpia mostrando el **nombre** del cliente, y barra lateral con el ítem activo suave (verde tenue + punto) en vez de pastilla sólida. Verificado en local con datos reales.
+- **OJO deploy:** se observó que el sitio en vivo SÍ se actualizó tras el push sin que ella tocara nada (probable webhook de Coolify activo) — pero si "se ve igual", casi siempre es **caché del navegador**: pedir **Ctrl+Shift+R**.
+
 **Con esto el plan de 4 lotes queda COMPLETO** (Pedidos/Tasa, Pagos, robustez/a11y/DRY, visual). Pendiente futuro: lo de siempre en ROADMAP.
 
 ---
