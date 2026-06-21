@@ -25,7 +25,7 @@ Las **FASES 0 a 3 ya están hechas y desplegadas**:
 - 🛠️ **Voz del bot (closer = Whuilianny real)** — en progreso/afinando. Guión en `BRIEF-closer-masvida.md`. Ya desplegado: habla en 1ª persona, varios mensajitos cortos, plano (sin viñetas/negritas), no re-saluda en cada mensaje.
 - **PLAN A — Memoria + ficha del cliente** *(aprobado construir)*: que el bot reconozca al cliente que vuelve (nombre, nº de pedidos, última compra, notas) leyéndolo de Postgres. Decisión pendiente: cuántos días recuerda el detalle de la charla (sugerido 7).
 - **PLAN B — Arreglar los comprobantes de pago** *(bug)*: el bot no reconoce bien las imágenes de comprobante. Toca el dinero → con cuidado.
-- 🐛 **El bot dice que mandó el catálogo pero NO lo manda** *(bug, arreglo rápido)*: debe PRIMERO enviar el PDF (herramienta `enviar_catalogo`) y solo entonces decir "te lo envié". Nunca afirmar un envío que no hizo.
+- ✅ **El bot dice que mandó el catálogo pero NO lo manda** — **RESUELTO** (verificado en código 2026-06-20). Hay red de seguridad en `app/agent/agent.py` (`_asegurar_catalogo` + `_afirma_envio_catalogo`): si el agente afirma el envío sin llamar la herramienta, el código **envía el PDF de verdad**; si no hay PDF, reescribe el texto para no mentir. Riesgo residual mínimo: la detección de "lo afirmó" es por lista de frases (una redacción rara podría escapar).
 - **PLAN C — Pagos multi-método + descuento por divisas** *(Paso 2)*: el bot pregunta el método y por efectivo/divisas aplica 20% + delivery gratis.
 
 ---
@@ -73,7 +73,7 @@ Las **FASES 0 a 3 ya están hechas y desplegadas**:
 - ⚪ **Hora pico de pedidos** — cuándo preparar más stock. *(bajo)*
 
 ### 5) 🛡️ Operación, Confianza y Tech Provider
-- 🟢 **Respaldo automático de los datos** — copia diaria fuera del servidor. **PENDIENTE e importante ANTES del lanzamiento real con clientes.** *(bajo)*
+- 🟠 **Respaldo automático de los datos** — **YA ESTÁ EN CÓDIGO** (verificado 2026-06-20): `scripts/backup.sh` + servicio aislado en `docker-compose.yml` (pg_dump + comprobantes + catálogo, **cifrado con restic** y subido a Cloudflare **R2**, diario, con retención). FALTA **ACTIVARLO**: poner los secretos de R2 en Coolify (sin ellos el script se pausa y NO respalda). ⚠️ **Hasta activarlo, los datos NO tienen respaldo externo.** *(activación, no construcción)*
 - 🟢 **Roles: dueña y empleado** — el empleado atiende pero NO confirma pagos ni ve datos bancarios. *(medio)*
 - 🟡 **Sesiones seguras** (cierre por inactividad, cambiar contraseña). *(bajo)*
 - 🟡 **Salud del negocio (semáforo)** — verde/rojo si WhatsApp se cae o la tasa falla. *(medio)*
