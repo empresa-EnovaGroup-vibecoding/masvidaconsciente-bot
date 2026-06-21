@@ -29,6 +29,8 @@ Se generaron **3 looks** de la pantalla Resumen (Sereno / Cálido / Nítido) com
 **Ajuste posterior (commit `a1a5eed`):** la dueña pidió que el Resumen quedara **igual a la maqueta** elegida (no solo el retoque de tokens). Se **reconstruyó el Resumen** para coincidir con el Look A (sin emojis): tarjetas KPI con ícono arriba-derecha + cifra grande, "Pagos por verificar" con barra verde + "Revisar", tarjeta ancha de Tasa con ícono, "Últimos pedidos" como lista limpia mostrando el **nombre** del cliente, y barra lateral con el ítem activo suave (verde tenue + punto) en vez de pastilla sólida. Verificado en local con datos reales.
 - **OJO deploy:** se observó que el sitio en vivo SÍ se actualizó tras el push sin que ella tocara nada (probable webhook de Coolify activo) — pero si "se ve igual", casi siempre es **caché del navegador**: pedir **Ctrl+Shift+R**.
 
+**Consistencia TOTAL (commit `35993de`):** la dueña pidió que NO solo el Resumen, sino TODA la plataforma tenga el mismo diseño. Se alinearon las **11 pantallas restantes** al lenguaje del molde (1 agente por pantalla + revisión adversarial 11/11 OK, 0 hallazgos): encabezado estándar (h1 `text-[28px]`), tarjetas con aire (`p-6`), tarjetas de cifra estilo KPI en Reporte/Clientes (chip de ícono + cifra grande + barra verde en la destacada), listas limpias (Clientes/Conversaciones: avatar + nombre + meta), botones/inputs uniformes, **sin emojis**. Sin tocar lógica/cobro (verificado). tsc + build OK; verificado en local (Resumen, Reporte, Clientes). **Con esto el panel entero comparte el mismo look Sereno.**
+
 **Con esto el plan de 4 lotes queda COMPLETO** (Pedidos/Tasa, Pagos, robustez/a11y/DRY, visual). Pendiente futuro: lo de siempre en ROADMAP.
 
 ---
