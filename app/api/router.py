@@ -22,6 +22,7 @@ from app.models import (
     Configuracion,
     Conocimiento,
     Mensaje,
+    MetodoPago,
     Pago,
     Pedido,
     Producto,
@@ -118,6 +119,20 @@ class PausaIn(BaseModel):
 
 class MensajesIn(BaseModel):
     valores: dict[str, str]
+
+
+class MetodoPagoIn(BaseModel):
+    tipo: str = "pago_movil"  # pago_movil | transferencia | zelle | binance | efectivo | otro
+    titulo: str
+    titular: str | None = None
+    banco: str | None = None
+    telefono: str | None = None
+    cedula: str | None = None
+    correo: str | None = None
+    wallet: str | None = None
+    instrucciones: str | None = None
+    activo: bool = True
+    orden: int = 0
 
 
 # ─── Login ───────────────────────────────────────────────────────────
@@ -883,6 +898,97 @@ async def borrar_conocimiento(cid: int, _: str = Depends(usuario_actual)):
         if c is None:
             raise HTTPException(status_code=404, detail="Entrada no encontrada")
         await session.delete(c)
+        await session.commit()
+    return {"ok": True}
+
+
+# ─── Métodos de pago (cuentas de la dueña que el bot ofrece y valida) ─
+
+@router.get("/metodos-pago")
+async def listar_metodos_pago(_: str = Depends(usuario_actual)):
+    """Lista TODAS las cuentas/métodos de pago (activos e inactivos)."""
+    factory = get_session_factory()
+    async with factory() as session:
+        metodos = (
+            await session.execute(
+                select(MetodoPago).order_by(MetodoPago.orden, MetodoPago.id)
+            )
+        ).scalars().all()
+    return [
+        {
+            "id": m.id,
+            "tipo": m.tipo,
+            "titulo": m.titulo,
+            "titular": m.titular,
+            "banco": m.banco,
+            "telefono": m.telefono,
+            "cedula": m.cedula,
+            "correo": m.correo,
+            "wallet": m.wallet,
+            "instrucciones": m.instrucciones,
+            "activo": m.activo,
+            "orden": m.orden,
+        }
+        for m in metodos
+    ]
+
+
+@router.post("/metodos-pago")
+async def crear_metodo_pago(datos: MetodoPagoIn, _: str = Depends(usuario_actual)):
+    factory = get_session_factory()
+    async with factory() as session:
+        metodo = MetodoPago(
+            tipo=datos.tipo,
+            titulo=datos.titulo,
+            titular=datos.titular,
+            banco=datos.banco,
+            telefono=datos.telefono,
+            cedula=datos.cedula,
+            correo=datos.correo,
+            wallet=datos.wallet,
+            instrucciones=datos.instrucciones,
+            activo=datos.activo,
+            orden=datos.orden,
+        )
+        session.add(metodo)
+        await session.commit()
+        await session.refresh(metodo)
+    return {"ok": True, "id": metodo.id}
+
+
+@router.put("/metodos-pago/{metodo_id}")
+async def editar_metodo_pago(
+    metodo_id: int, datos: MetodoPagoIn, _: str = Depends(usuario_actual)
+):
+    factory = get_session_factory()
+    async with factory() as session:
+        metodo = await session.get(MetodoPago, metodo_id)
+        if metodo is None:
+            raise HTTPException(status_code=404, detail="Método de pago no encontrado")
+        metodo.tipo = datos.tipo
+        metodo.titulo = datos.titulo
+        metodo.titular = datos.titular
+        metodo.banco = datos.banco
+        metodo.telefono = datos.telefono
+        metodo.cedula = datos.cedula
+        metodo.correo = datos.correo
+        metodo.wallet = datos.wallet
+        metodo.instrucciones = datos.instrucciones
+        metodo.activo = datos.activo
+        metodo.orden = datos.orden
+        metodo.updated_at = now_utc()
+        await session.commit()
+    return {"ok": True}
+
+
+@router.delete("/metodos-pago/{metodo_id}")
+async def borrar_metodo_pago(metodo_id: int, _: str = Depends(usuario_actual)):
+    factory = get_session_factory()
+    async with factory() as session:
+        metodo = await session.get(MetodoPago, metodo_id)
+        if metodo is None:
+            raise HTTPException(status_code=404, detail="Método de pago no encontrado")
+        await session.delete(metodo)
         await session.commit()
     return {"ok": True}
 
