@@ -333,16 +333,18 @@ def _a_float(x):
         return None
 
 
-async def _monto_cobrado(telefono: str):
-    """Monto en Bs que el bot le cobró a este cliente (de la cotización guardada en
-    Redis). None si no hay."""
+async def _montos_cobrados(telefono: str):
+    """Devuelve (monto_bs, monto_usd) que el bot le cobró a este cliente (de la
+    cotización guardada en Redis). (None, None) si no hay. Se compara contra AMBOS
+    porque un comprobante de Binance/Zelle viene en USD/USDT, no en bolívares."""
     try:
         guardado = await rc.get_cache(f"cobro:{telefono}")
         if guardado:
-            return _a_float(json.loads(guardado).get("monto_bs"))
+            d = json.loads(guardado)
+            return _a_float(d.get("monto_bs")), _a_float(d.get("monto_usd"))
     except Exception:  # noqa: BLE001
         pass
-    return None
+    return None, None
 
 
 @celery_app.task(name="procesar_comprobante")
@@ -402,16 +404,19 @@ async def _procesar_comprobante(telefono, message_id, media_id, caption, nombre,
         )
         return
 
-    # ¿El MONTO del comprobante cuadra con lo que el bot cobró? (solo si la visión leyó).
+    # ¿El MONTO del comprobante cuadra con lo cobrado? Comparamos contra el monto en
+    # Bs (Pago Móvil/Transferencia) Y en USD (Binance/Zelle): basta que coincida con UNO.
     monto_cuadra = True
     if es_imagen:
-        esperado = await _monto_cobrado(telefono)
+        esperado_bs, esperado_usd = await _montos_cobrados(telefono)
         leido_monto = _a_float(monto)
-        if esperado is not None and leido_monto is not None:
-            monto_cuadra = abs(leido_monto - esperado) <= max(1.0, esperado * 0.01)
+        if leido_monto is not None and (esperado_bs is not None or esperado_usd is not None):
+            def _cerca(b):
+                return b is not None and abs(leido_monto - b) <= max(1.0, b * 0.02)
+            monto_cuadra = _cerca(esperado_bs) or _cerca(esperado_usd)
         logger.info(
-            "Monto comprobante de %s: leido=%s esperado=%s cuadra=%s",
-            telefono, leido_monto, esperado, monto_cuadra,
+            "Monto comprobante de %s: leido=%s esperado_bs=%s esperado_usd=%s cuadra=%s",
+            telefono, leido_monto, esperado_bs, esperado_usd, monto_cuadra,
         )
 
     # Aquí: la visión reconoció el comprobante (imagen), O es un PDF/otro -> red de
