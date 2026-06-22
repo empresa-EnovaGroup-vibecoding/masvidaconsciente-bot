@@ -17,6 +17,17 @@
 
 ---
 
+## 2026-06-21 — Módulo "Métodos de pago" (varias cuentas) + validación de monto
+
+Tras pruebas: el bot aceptaba mal (un voucher de Provincial pasó por coincidir solo el NOMBRE; y el monto no se comparaba). Decisión de arquitectura (con la proveedora): **los datos de pago viven en la BD/panel (una fuente), NO en el prompt**; el prompt solo "los da la herramienta". Brief: `BRIEF-verificacion-pagos.md`.
+- **Tabla `metodos_pago`** (migración 009, idempotente; siembra el Pago Móvil viejo). Modelo `MetodoPago`. Varias cuentas: Pago Móvil/Transferencia/Zelle/Binance/Efectivo (campos: titular, banco, telefono, cedula, correo, wallet, instrucciones, activo).
+- **Reconocimiento (agent.py/tasks.py):** la visión EXTRAE el beneficiario; el CÓDIGO valida contra TODAS las cuentas activas por identificador FUERTE (teléfono/cédula/correo/wallet — el nombre NO basta). Valida el **monto** contra lo cobrado (`cobro:{telefono}`); si no cuadra, registra pero NO confirma. Imágenes estrictas (memes/fotos → se rechazan). Logs de diagnóstico. (commit `5e57595`)
+- **CRUD + panel:** `/api/metodos-pago` (bot `0f3fd00`) + sección "Métodos de pago" en Configuración (panel `92a3dbf`). La dueña agrega/edita sus cuentas; el bot las usa para reconocer.
+- **OJO deploy:** el reconocimiento corre en el **WORKER** → al tocar el bot hay que redeployar **web + worker**. compileall + build OK.
+- **PENDIENTE:** redeploy bot+worker+panel; la dueña carga sus cuentas reales (Banesco/Zelle/Binance) en el panel; probar con comprobantes reales de cada uno. Mover los datos de pago FUERA del prompt (que el bot los OFREZCA desde la tabla) queda como siguiente paso.
+
+---
+
 ## 2026-06-21 — Closer que RECONOCE el comprobante y sigue vendiendo (BOT — pendiente de probar en vivo)
 
 A pedido de la proveedora (como su flujo en **SellerChat**). Antes el bot aceptaba **cualquier imagen** como comprobante y se detenía. Ahora:
