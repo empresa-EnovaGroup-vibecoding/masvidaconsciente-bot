@@ -254,6 +254,7 @@ def _beneficiario_coincide(parsed: dict, cuentas: list | None) -> bool:
     por eso un voucher a 'Maired Hernández' en OTRO banco/cuenta NO debe pasar)."""
     ben_tel = _solo_digitos(parsed.get("beneficiario_telefono"))
     ben_ced = _solo_digitos(parsed.get("beneficiario_cedula"))
+    ben_cuenta = _solo_digitos(parsed.get("beneficiario_cuenta"))
     ben_correo = _sin_acentos(parsed.get("beneficiario_correo") or "").replace(" ", "")
     ben_wallet = _sin_acentos(parsed.get("beneficiario_wallet") or "").replace(" ", "")
     for c in cuentas or []:
@@ -262,6 +263,9 @@ def _beneficiario_coincide(parsed: dict, cuentas: list | None) -> bool:
             return True
         tel = _solo_digitos(c.get("telefono"))
         if tel and ben_tel and len(ben_tel) >= 7 and len(tel) >= 7 and ben_tel[-7:] == tel[-7:]:
+            return True
+        cta = _solo_digitos(c.get("cuenta"))
+        if cta and ben_cuenta and len(cta) >= 8 and (cta == ben_cuenta or cta in ben_cuenta or ben_cuenta in cta):
             return True
         correo = _sin_acentos(c.get("correo") or "").replace(" ", "")
         if correo and ben_correo and correo == ben_correo:
@@ -305,8 +309,9 @@ async def leer_comprobante(
         '"beneficiario_nombre": "<nombre de QUIEN RECIBE el pago, o null>", '
         '"beneficiario_telefono": "<teléfono de quien recibe, o null>", '
         '"beneficiario_cedula": "<cédula o RIF de quien recibe, o null>", '
+        '"beneficiario_cuenta": "<número de cuenta bancaria de quien recibe (transferencia), o null>", '
         '"beneficiario_correo": "<correo de quien recibe (Zelle), o null>", '
-        '"beneficiario_wallet": "<wallet o usuario de quien recibe (Binance/USDT), o null>", '
+        '"beneficiario_wallet": "<wallet, usuario o ID/UID de quien recibe (Binance/USDT), o null>", '
         '"banco_beneficiario": "<banco/plataforma de quien recibe, o null>", '
         '"confianza": "alta" o "media" o "baja"}\n\n'
         "es_pantalla_bancaria=true SOLO si la imagen es la PANTALLA de un banco o billetera "

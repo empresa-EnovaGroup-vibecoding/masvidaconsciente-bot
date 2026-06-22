@@ -290,6 +290,7 @@ async def _leer_comprobante_seguro(telefono, contenido, base_mime) -> dict:
                 "banco": m.banco,
                 "telefono": m.telefono,
                 "cedula": m.cedula,
+                "cuenta": m.cuenta,
                 "correo": m.correo,
                 "wallet": m.wallet,
             }

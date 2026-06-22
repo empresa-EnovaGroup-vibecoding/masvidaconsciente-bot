@@ -128,6 +128,7 @@ class MetodoPagoIn(BaseModel):
     banco: str | None = None
     telefono: str | None = None
     cedula: str | None = None
+    cuenta: str | None = None
     correo: str | None = None
     wallet: str | None = None
     instrucciones: str | None = None
@@ -923,6 +924,7 @@ async def listar_metodos_pago(_: str = Depends(usuario_actual)):
             "banco": m.banco,
             "telefono": m.telefono,
             "cedula": m.cedula,
+            "cuenta": m.cuenta,
             "correo": m.correo,
             "wallet": m.wallet,
             "instrucciones": m.instrucciones,
@@ -944,6 +946,7 @@ async def crear_metodo_pago(datos: MetodoPagoIn, _: str = Depends(usuario_actual
             banco=datos.banco,
             telefono=datos.telefono,
             cedula=datos.cedula,
+            cuenta=datos.cuenta,
             correo=datos.correo,
             wallet=datos.wallet,
             instrucciones=datos.instrucciones,
@@ -971,6 +974,7 @@ async def editar_metodo_pago(
         metodo.banco = datos.banco
         metodo.telefono = datos.telefono
         metodo.cedula = datos.cedula
+        metodo.cuenta = datos.cuenta
         metodo.correo = datos.correo
         metodo.wallet = datos.wallet
         metodo.instrucciones = datos.instrucciones

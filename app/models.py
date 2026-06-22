@@ -134,6 +134,7 @@ class MetodoPago(Base):
     banco: Mapped[str | None] = mapped_column(Text, nullable=True)
     telefono: Mapped[str | None] = mapped_column(Text, nullable=True)
     cedula: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cuenta: Mapped[str | None] = mapped_column(Text, nullable=True)
     correo: Mapped[str | None] = mapped_column(Text, nullable=True)
     wallet: Mapped[str | None] = mapped_column(Text, nullable=True)
     instrucciones: Mapped[str | None] = mapped_column(Text, nullable=True)
