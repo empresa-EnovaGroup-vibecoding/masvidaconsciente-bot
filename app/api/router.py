@@ -997,56 +997,6 @@ async def borrar_metodo_pago(metodo_id: int, _: str = Depends(usuario_actual)):
     return {"ok": True}
 
 
-@router.get("/debug/comprobante")
-async def debug_comprobante(_: str = Depends(usuario_actual)):
-    """DIAGNÓSTICO (temporal): corre la visión sobre el ÚLTIMO comprobante guardado
-    y devuelve EXACTAMENTE lo que leyó + las cuentas activas + la decisión. Sirve
-    para ver por qué un comprobante se reconoce o se rechaza, sin bucear en los logs."""
-    import glob
-    import os
-
-    from app.agent.agent import leer_comprobante
-
-    settings = get_settings()
-    carpeta = settings.comprobantes_dir
-    try:
-        archivos = sorted(
-            glob.glob(os.path.join(carpeta, "*")), key=os.path.getmtime, reverse=True
-        )
-    except Exception as e:  # noqa: BLE001
-        return {"error": f"no se pudo leer la carpeta: {e}", "dir": carpeta}
-    if not archivos:
-        return {"error": "no hay comprobantes guardados todavía", "dir": carpeta}
-    ruta = archivos[0]
-    with open(ruta, "rb") as f:
-        contenido = f.read()
-    ext = ruta.rsplit(".", 1)[-1].lower()
-    mime = {
-        "jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
-        "webp": "image/webp", "pdf": "application/pdf",
-    }.get(ext, "image/jpeg")
-
-    factory = get_session_factory()
-    async with factory() as session:
-        metodos = (
-            await session.execute(select(MetodoPago).where(MetodoPago.activo.is_(True)))
-        ).scalars().all()
-    cuentas = [
-        {"titular": m.titular, "banco": m.banco, "telefono": m.telefono,
-         "cedula": m.cedula, "cuenta": m.cuenta, "correo": m.correo, "wallet": m.wallet}
-        for m in metodos
-    ]
-    lectura = await leer_comprobante(contenido, mime, cuentas=cuentas)
-    return {
-        "archivo": os.path.basename(ruta),
-        "mime": mime,
-        "bytes": len(contenido),
-        "cuentas_activas": len(cuentas),
-        "cuentas": cuentas,
-        "lectura": lectura,
-    }
-
-
 # ─── Pagos (cobro) ───────────────────────────────────────────────────
 
 @router.get("/pagos")
