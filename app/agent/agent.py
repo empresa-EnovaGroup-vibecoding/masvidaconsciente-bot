@@ -252,26 +252,44 @@ def _beneficiario_coincide(parsed: dict, cuentas: list | None) -> bool:
     las cuentas de la dueña por un identificador FUERTE: teléfono, cédula/RIF, correo
     (Zelle) o wallet (Binance/USDT). El NOMBRE solo NO basta (hay muchos homónimos:
     por eso un voucher a 'Maired Hernández' en OTRO banco/cuenta NO debe pasar)."""
-    ben_tel = _solo_digitos(parsed.get("beneficiario_telefono"))
-    ben_ced = _solo_digitos(parsed.get("beneficiario_cedula"))
-    ben_cuenta = _solo_digitos(parsed.get("beneficiario_cuenta"))
+    # Junta TODOS los números (>=6 dígitos) que la visión leyó del beneficiario, sin
+    # importar en qué campo los puso (Binance/bancos confunden UID/cuenta/cédula).
+    ben_nums: set[str] = set()
+    for k in (
+        "beneficiario_telefono",
+        "beneficiario_cedula",
+        "beneficiario_cuenta",
+        "beneficiario_wallet",
+    ):
+        d = _solo_digitos(parsed.get(k))
+        if len(d) >= 6:
+            ben_nums.add(d)
     ben_correo = _sin_acentos(parsed.get("beneficiario_correo") or "").replace(" ", "")
-    ben_wallet = _sin_acentos(parsed.get("beneficiario_wallet") or "").replace(" ", "")
+    ben_wallet_txt = _sin_acentos(parsed.get("beneficiario_wallet") or "").replace(" ", "")
+
+    def _num_match(id_cuenta, cola: int = 0) -> bool:
+        cid = _solo_digitos(id_cuenta)
+        if len(cid) < 6:
+            return False
+        for bd in ben_nums:
+            if cid == bd or cid in bd or bd in cid:
+                return True
+            if cola and len(cid) >= cola and len(bd) >= cola and cid[-cola:] == bd[-cola:]:
+                return True
+        return False
+
     for c in cuentas or []:
-        ced = _solo_digitos(c.get("cedula"))
-        if ced and ben_ced and (ben_ced[-7:] == ced[-7:] or ced in ben_ced or ben_ced in ced):
+        # Identificadores numéricos de la cuenta (teléfono con cola de 7, el resto exacto/contenido).
+        if _num_match(c.get("telefono"), cola=7):
             return True
-        tel = _solo_digitos(c.get("telefono"))
-        if tel and ben_tel and len(ben_tel) >= 7 and len(tel) >= 7 and ben_tel[-7:] == tel[-7:]:
+        if _num_match(c.get("cedula")) or _num_match(c.get("cuenta")) or _num_match(c.get("wallet")):
             return True
-        cta = _solo_digitos(c.get("cuenta"))
-        if cta and ben_cuenta and len(cta) >= 8 and (cta == ben_cuenta or cta in ben_cuenta or ben_cuenta in cta):
-            return True
+        # Correo (Zelle) y wallet por texto (no numérico).
         correo = _sin_acentos(c.get("correo") or "").replace(" ", "")
         if correo and ben_correo and correo == ben_correo:
             return True
         wallet = _sin_acentos(c.get("wallet") or "").replace(" ", "")
-        if wallet and ben_wallet and (wallet == ben_wallet or wallet in ben_wallet or ben_wallet in wallet):
+        if wallet and ben_wallet_txt and (wallet == ben_wallet_txt or wallet in ben_wallet_txt or ben_wallet_txt in wallet):
             return True
     return False
 
@@ -314,8 +332,9 @@ async def leer_comprobante(
         '"beneficiario_wallet": "<wallet, usuario o ID/UID de quien recibe (Binance/USDT), o null>", '
         '"banco_beneficiario": "<banco/plataforma de quien recibe, o null>", '
         '"confianza": "alta" o "media" o "baja"}\n\n'
-        "es_pantalla_bancaria=true SOLO si la imagen es la PANTALLA de un banco o billetera "
-        "que muestra una transferencia o pago YA REALIZADO (con monto y referencia). "
+        "es_pantalla_bancaria=true si la imagen es la PANTALLA de un banco, billetera o "
+        "app de pago/cripto (Pago Móvil, transferencia, Zelle, Binance, USDT) que muestra "
+        "un pago o transferencia YA REALIZADO, con monto y una referencia o ID de orden. "
         "Para una foto de una persona, producto, comida, paisaje, meme, logo, sticker, "
         "captura de un chat/app/red social/tutorial, o cualquier cosa que NO sea una "
         "transacción bancaria, pon es_pantalla_bancaria=false y los demás campos en null.\n"
