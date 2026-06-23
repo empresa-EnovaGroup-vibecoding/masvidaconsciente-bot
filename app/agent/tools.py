@@ -369,6 +369,9 @@ async def generar_datos_pago(session, telefono, pedido_id=None):
 
     monto_usd = Decimal(str(pedido.total))
     monto_bs = (monto_usd * tasa).quantize(Decimal("0.01"))
+    # 20% de descuento por pagar en DIVISAS (Zelle, Binance o efectivo en dólares).
+    # En Bs (Pago Móvil/transferencia) NO aplica: va el precio completo.
+    monto_usd_divisas = (monto_usd * Decimal("0.80")).quantize(Decimal("0.01"))
 
     pedido.estado = "esperando_pago"
     await session.commit()
@@ -387,6 +390,7 @@ async def generar_datos_pago(session, telefono, pedido_id=None):
                 "monto_usd": str(monto_usd),
                 "tasa": str(tasa),
                 "monto_bs": str(monto_bs),
+                "monto_usd_divisas": str(monto_usd_divisas),
             }),
             86400,
         )
@@ -394,12 +398,17 @@ async def generar_datos_pago(session, telefono, pedido_id=None):
         pass
 
     # Cobro YA ARMADO para copiar tal cual (USD y Bs los calculó el código, no el modelo).
-    resumen_cobro = f"Son {_fmt_usd(monto_usd)} o {_fmt_bs(monto_bs)} Bs"
+    resumen_cobro = (
+        f"Son {_fmt_bs(monto_bs)} Bs por Pago Móvil o transferencia, o "
+        f"{_fmt_usd(monto_usd_divisas)} en dólares (Zelle, Binance o efectivo), "
+        f"ya con el 20% de descuento"
+    )
 
     return {
         "ok": True,
         "pedido_id": pedido.id,
         "monto_usd": float(monto_usd),
+        "monto_usd_divisas": float(monto_usd_divisas),
         "tasa_bcv": float(tasa),
         "monto_bs": float(monto_bs),
         "resumen_cobro": resumen_cobro,

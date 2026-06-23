@@ -334,17 +334,21 @@ def _a_float(x):
 
 
 async def _montos_cobrados(telefono: str):
-    """Devuelve (monto_bs, monto_usd) que el bot le cobró a este cliente (de la
-    cotización guardada en Redis). (None, None) si no hay. Se compara contra AMBOS
-    porque un comprobante de Binance/Zelle viene en USD/USDT, no en bolívares."""
+    """Devuelve (monto_bs, monto_usd, monto_usd_divisas) que el bot le cobró (de la
+    cotización en Redis). El comprobante puede venir en Bs (Pago Móvil/transferencia),
+    en USD pleno, o en USD con 20% de descuento (divisas: Zelle/Binance/efectivo)."""
     try:
         guardado = await rc.get_cache(f"cobro:{telefono}")
         if guardado:
             d = json.loads(guardado)
-            return _a_float(d.get("monto_bs")), _a_float(d.get("monto_usd"))
+            return (
+                _a_float(d.get("monto_bs")),
+                _a_float(d.get("monto_usd")),
+                _a_float(d.get("monto_usd_divisas")),
+            )
     except Exception:  # noqa: BLE001
         pass
-    return None, None
+    return None, None, None
 
 
 @celery_app.task(name="procesar_comprobante")
@@ -408,15 +412,14 @@ async def _procesar_comprobante(telefono, message_id, media_id, caption, nombre,
     # Bs (Pago Móvil/Transferencia) Y en USD (Binance/Zelle): basta que coincida con UNO.
     monto_cuadra = True
     if es_imagen:
-        esperado_bs, esperado_usd = await _montos_cobrados(telefono)
+        esperado_bs, esperado_usd, esperado_div = await _montos_cobrados(telefono)
         leido_monto = _a_float(monto)
-        if leido_monto is not None and (esperado_bs is not None or esperado_usd is not None):
-            def _cerca(b):
-                return b is not None and abs(leido_monto - b) <= max(1.0, b * 0.02)
-            monto_cuadra = _cerca(esperado_bs) or _cerca(esperado_usd)
+        candidatos = [c for c in (esperado_bs, esperado_usd, esperado_div) if c is not None]
+        if leido_monto is not None and candidatos:
+            monto_cuadra = any(abs(leido_monto - c) <= max(1.0, c * 0.02) for c in candidatos)
         logger.info(
-            "Monto comprobante de %s: leido=%s esperado_bs=%s esperado_usd=%s cuadra=%s",
-            telefono, leido_monto, esperado_bs, esperado_usd, monto_cuadra,
+            "Monto comprobante de %s: leido=%s bs=%s usd=%s divisa=%s cuadra=%s",
+            telefono, leido_monto, esperado_bs, esperado_usd, esperado_div, monto_cuadra,
         )
 
     # Aquí: la visión reconoció el comprobante (imagen), O es un PDF/otro -> red de
