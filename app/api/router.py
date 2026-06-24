@@ -274,6 +274,20 @@ async def listar_pedidos(_: str = Depends(usuario_actual)):
                 )
             ).all()
             nombres = {t: n for t, n in filas}
+        # Pago "bloqueante" por pedido (confirmado/parcial/reportado): así el panel sabe,
+        # SIN intentar y fallar, si un pedido se puede editar/eliminar.
+        pedido_ids = [p.id for p in pedidos]
+        bloqueo: dict[int, str] = {}
+        if pedido_ids:
+            prioridad = {"reportado": 1, "parcial": 2, "confirmado": 3}
+            filas_pg = (
+                await session.execute(
+                    select(Pago.pedido_id, Pago.estado).where(Pago.pedido_id.in_(pedido_ids))
+                )
+            ).all()
+            for pid, est in filas_pg:
+                if est in prioridad and prioridad[est] > prioridad.get(bloqueo.get(pid), 0):
+                    bloqueo[pid] = est
     return [
         {
             "id": p.id,
@@ -284,6 +298,7 @@ async def listar_pedidos(_: str = Depends(usuario_actual)):
             "total_usd": float(p.total) if p.total else 0,
             "notas": p.notas,
             "fecha": p.created_at.isoformat(),
+            "pago_bloqueante": bloqueo.get(p.id),  # confirmado|parcial|reportado|None
         }
         for p in pedidos
     ]
@@ -964,9 +979,26 @@ async def detalle_cliente(telefono: str, _: str = Depends(usuario_actual)):
                 .where(Pedido.cliente_telefono == telefono, Pago.estado == "confirmado")
             )
         ).scalar() or 0
+        # ¿Se puede borrar el cliente? No, si tiene algún pago vivo (confirmado/parcial/
+        # reportado): el panel deshabilita el botón en vez de dejar fallar el borrado.
+        pedido_ids = [p.id for p in pedidos]
+        puede_borrar = True
+        if pedido_ids:
+            hay_pago = (
+                await session.execute(
+                    select(Pago.id)
+                    .where(
+                        Pago.pedido_id.in_(pedido_ids),
+                        Pago.estado.in_(["confirmado", "parcial", "reportado"]),
+                    )
+                    .limit(1)
+                )
+            ).first()
+            puede_borrar = hay_pago is None
     return {
         "telefono": cliente.telefono,
         "nombre": cliente.nombre,
+        "puede_borrar": puede_borrar,
         "notas": cliente.notas,
         "primera_interaccion": cliente.primera_interaccion.isoformat(),
         "ultima_interaccion": cliente.ultima_interaccion.isoformat(),
