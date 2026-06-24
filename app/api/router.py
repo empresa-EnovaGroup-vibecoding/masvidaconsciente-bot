@@ -109,6 +109,20 @@ class NotasIn(BaseModel):
     notas: str | None = None
 
 
+class ClienteEditIn(BaseModel):
+    nombre: str | None = None
+    notas: str | None = None
+
+
+class ItemEditIn(BaseModel):
+    producto: str
+    cantidad: int
+
+
+class PedidoItemsIn(BaseModel):
+    items: list[ItemEditIn]
+
+
 class ConocimientoIn(BaseModel):
     categoria: str | None = None
     titulo: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
@@ -330,6 +344,57 @@ async def borrar_pedido(pedido_id: int, _: str = Depends(usuario_actual)):
         await session.delete(pedido)
         await session.commit()
     return {"ok": True}
+
+
+@router.put("/pedidos/{pedido_id}/items")
+async def editar_items_pedido(
+    pedido_id: int, datos: PedidoItemsIn, _: str = Depends(usuario_actual)
+):
+    """Corrige los items/cantidades de un pedido (si el bot los tomó mal). Recalcula el
+    total desde los PRECIOS DEL CATÁLOGO (nunca inventados; mismo emparejamiento que usa el
+    bot). BLINDAJE de cobro: no se edita un pedido con pago confirmado / parcial / por
+    verificar — primero hay que cerrar ese pago (confirmarlo/rechazarlo) o cancelar."""
+    from app.agent.tools import _buscar_producto  # local: evita efectos de import al cargar
+
+    if not datos.items:
+        raise HTTPException(status_code=400, detail="El pedido debe tener al menos un producto.")
+    factory = get_session_factory()
+    async with factory() as session:
+        pedido = await session.get(Pedido, pedido_id)
+        if pedido is None:
+            raise HTTPException(status_code=404, detail="Pedido no encontrado")
+        pagos = (
+            await session.execute(select(Pago).where(Pago.pedido_id == pedido_id))
+        ).scalars().all()
+        if {pg.estado for pg in pagos} & {"confirmado", "parcial", "reportado"}:
+            raise HTTPException(
+                status_code=409,
+                detail="No se puede editar: el pedido tiene un pago confirmado o por "
+                "verificar. Ciérralo (confírmalo o recházalo) o usa Cancelar y arma uno nuevo.",
+            )
+        items_pedido = []
+        total = Decimal("0")
+        for it in datos.items:
+            cantidad = max(1, int(it.cantidad))
+            prod = await _buscar_producto(session, it.producto, solo_disponibles=False)
+            if prod is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"No encontré el producto «{it.producto}» en el catálogo.",
+                )
+            total += (prod.precio or Decimal("0")) * cantidad
+            items_pedido.append(
+                {
+                    "producto": prod.nombre,
+                    "cantidad": cantidad,
+                    "precio_unitario": float(prod.precio) if prod.precio is not None else None,
+                    "presentacion": prod.presentacion,
+                }
+            )
+        pedido.items = items_pedido
+        pedido.total = total
+        await session.commit()
+    return {"ok": True, "total_usd": float(total), "items": items_pedido}
 
 
 # ─── Productos (catálogo) ────────────────────────────────────────────
@@ -948,6 +1013,69 @@ async def pausar_bot_cliente(telefono: str, datos: PausaIn, _: str = Depends(usu
         cliente.bot_pausado = datos.pausado
         await session.commit()
     return {"ok": True, "pausado": datos.pausado}
+
+
+@router.put("/clientes/{telefono}")
+async def editar_cliente(telefono: str, datos: ClienteEditIn, _: str = Depends(usuario_actual)):
+    """Corrige el nombre y/o las notas (ficha) del cliente, si se tomaron mal."""
+    factory = get_session_factory()
+    async with factory() as session:
+        cliente = (
+            await session.execute(select(Cliente).where(Cliente.telefono == telefono))
+        ).scalar_one_or_none()
+        if cliente is None:
+            raise HTTPException(status_code=404, detail="Cliente no encontrado")
+        if datos.nombre is not None:
+            cliente.nombre = datos.nombre.strip() or None
+        if datos.notas is not None:
+            cliente.notas = datos.notas
+        await session.commit()
+    return {"ok": True}
+
+
+@router.delete("/clientes/{telefono}")
+async def borrar_cliente(telefono: str, _: str = Depends(usuario_actual)):
+    """Resetea al cliente por completo: su ficha, pedidos sin cobro, mensajes y memoria
+    del bot (así vuelve a tratarlo como nuevo).
+
+    BLINDAJE de cobro: si el cliente tiene algún pago confirmado / parcial / por verificar
+    (historial de dinero), NO se borra. Primero hay que cerrar esos pagos; el dinero nunca
+    se borra en silencio. (Igual criterio que borrar un pedido.)"""
+    factory = get_session_factory()
+    async with factory() as session:
+        cliente = (
+            await session.execute(select(Cliente).where(Cliente.telefono == telefono))
+        ).scalar_one_or_none()
+        if cliente is None:
+            raise HTTPException(status_code=404, detail="Cliente no encontrado")
+        pedidos = (
+            await session.execute(select(Pedido).where(Pedido.cliente_telefono == telefono))
+        ).scalars().all()
+        pedido_ids = [p.id for p in pedidos]
+        pagos = []
+        if pedido_ids:
+            pagos = (
+                await session.execute(select(Pago).where(Pago.pedido_id.in_(pedido_ids)))
+            ).scalars().all()
+        estados = {pg.estado for pg in pagos}
+        if estados & {"confirmado", "parcial", "reportado"}:
+            raise HTTPException(
+                status_code=409,
+                detail="No se puede borrar: el cliente tiene pagos confirmados o por "
+                "verificar (historial de dinero). Cierra esos pagos primero, o solo borra "
+                "la conversación.",
+            )
+        # Solo quedan pagos 'rechazado' (o ninguno): se limpia todo en orden (pagos →
+        # pedidos → mensajes → cliente) para respetar las FKs.
+        for pg in pagos:
+            await session.delete(pg)
+        for p in pedidos:
+            await session.delete(p)
+        await session.execute(delete(Mensaje).where(Mensaje.cliente_telefono == telefono))
+        await session.delete(cliente)
+        await session.commit()
+    await borrar_memoria(telefono)
+    return {"ok": True}
 
 
 # ─── Conocimiento del negocio (FAQ + info que usa el bot) ────────────
