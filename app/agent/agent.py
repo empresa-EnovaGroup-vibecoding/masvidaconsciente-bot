@@ -7,6 +7,7 @@ import base64
 import json
 import logging
 import unicodedata
+from datetime import datetime, timedelta, timezone
 
 import httpx
 
@@ -79,6 +80,44 @@ async def _llamar_con_fallback(messages: list, llm, modelo: str) -> dict:
         return await llm(messages, TOOL_SCHEMAS, settings.openrouter_model_fallback)
 
 
+_SALUDOS = (
+    "hola", "holaa", "buenas", "buenos dias", "buen dia",
+    "buenas tardes", "buenas noches", "que tal", "saludos", "epale",
+)
+
+
+def _cliente_saludo(texto: str) -> bool:
+    """True si el mensaje del cliente ABRE con un saludo (hola, buenas, etc.)."""
+    t = _sin_acentos(texto or "").lstrip(" ¡!¿?")
+    return any(t.startswith(s) for s in _SALUDOS)
+
+
+def _bot_ya_saludo(texto: str) -> bool:
+    """True si la respuesta del bot ya empieza con algún saludo (para no duplicarlo)."""
+    t = _sin_acentos(texto or "")[:45]
+    return any(s in t for s in ("hola", "buenas", "buenos dias", "buen dia", "epale"))
+
+
+def _es_inicio_conversacion(historial: list | None) -> bool:
+    """True si el bot aún no ha hablado en esta conversación (para no re-saludar a media)."""
+    if not historial:
+        return True
+    return not any((m or {}).get("role") == "assistant" for m in historial)
+
+
+def _asegurar_saludo(texto: str, mensaje_usuario: str, nombre_cliente: str | None) -> str:
+    """Red de seguridad: si el cliente saludó al INICIO y el bot NO devolvió el saludo,
+    se lo anteponemos cálido (con su nombre si lo conocemos + la franja horaria de
+    Venezuela), para que el bot nunca arranque seco. A mitad de conversación no fuerza nada."""
+    if not _cliente_saludo(mensaje_usuario) or _bot_ya_saludo(texto):
+        return texto
+    ahora = datetime.now(timezone.utc) - timedelta(hours=4)  # Venezuela = UTC-4
+    h = ahora.hour
+    franja = "buenos días" if h < 12 else ("buenas tardes" if h < 19 else "buenas noches")
+    nombre = f", {nombre_cliente}" if nombre_cliente else ""
+    return f"¡Hola{nombre}, {franja}! 💚\n\n{texto}"
+
+
 async def responder(
     telefono: str,
     mensaje_usuario: str,
@@ -119,7 +158,10 @@ async def responder(
         tool_calls = msg.get("tool_calls")
         if not tool_calls:
             texto = (msg.get("content") or "").strip() or RESPUESTA_SEGURA
-            return await _asegurar_catalogo(texto, catalogo_ok, telefono, ejecutar)
+            texto = await _asegurar_catalogo(texto, catalogo_ok, telefono, ejecutar)
+            if _es_inicio_conversacion(historial):
+                texto = _asegurar_saludo(texto, mensaje_usuario, nombre_cliente)
+            return texto
 
         for tc in tool_calls:
             nombre_tool = tc["function"]["name"]
