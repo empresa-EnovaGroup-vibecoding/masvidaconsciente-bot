@@ -185,6 +185,15 @@ TOOL_SCHEMAS = [
 ]
 
 
+# Diagnóstico de arranque: deja en los logs QUÉ herramientas trae el código desplegado.
+# Sirve para confirmar de un vistazo si el deploy del worker incluyó enviar_fotos_producto.
+logger.info(
+    "Herramientas cargadas (%d): %s",
+    len(TOOL_SCHEMAS),
+    ", ".join(t["function"]["name"] for t in TOOL_SCHEMAS),
+)
+
+
 # ─── Implementaciones ────────────────────────────────────────────────
 
 def _fmt_usd(x) -> str:
