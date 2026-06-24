@@ -5,6 +5,7 @@ webhook) — el LLM nunca lo ve ni lo puede falsificar.
 """
 import json
 import logging
+import math
 from decimal import Decimal
 
 from sqlalchemy import select, text
@@ -396,17 +397,24 @@ async def info_negocio(session, telefono):
     }
 
 
-async def buscar_info(session, telefono, consulta):
-    """Busca en la base de Conocimiento (FAQ/info del negocio que carga la dueña en
-    el panel) las entradas MÁS relacionadas con la duda del cliente — tolerante a
-    typos y acentos. Devuelve SOLO lo relevante (no toda la base), por eso escala a
-    cientos de entradas sin inflar el prompt. Si no hay nada cargado del tema, lo dice."""
-    q = (consulta or "").strip()
-    if len(q) < 2:
-        return {"resultados": [], "nota": "consulta vacía; pídele al cliente que aclare su duda"}
+def _coseno(a, b) -> float:
+    """Similitud coseno entre dos vectores (1 = igual significado, 0 = nada que ver)."""
+    if not a or not b or len(a) != len(b):
+        return 0.0
+    punto = sum(x * y for x, y in zip(a, b))
+    na = math.sqrt(sum(x * x for x in a))
+    nb = math.sqrt(sum(y * y for y in b))
+    if na == 0.0 or nb == 0.0:
+        return 0.0
+    return punto / (na * nb)
+
+
+async def _buscar_info_lexical(session, q: str):
+    """Búsqueda por PALABRAS (tolerante a typos/acentos, pg_trgm). Filas (id, titulo,
+    contenido). Si pg_trgm no está, cae a un LIKE simple. Nunca rompe."""
     sql = text(
         """
-        SELECT titulo, contenido,
+        SELECT id, titulo, contenido,
                GREATEST(
                  similarity(unaccent(lower(coalesce(titulo, ''))), unaccent(lower(:q))),
                  word_similarity(
@@ -427,16 +435,68 @@ async def buscar_info(session, telefono, consulta):
         """
     )
     try:
-        rows = (await session.execute(sql, {"q": q, "umbral": 0.25})).all()
+        return (await session.execute(sql, {"q": q, "umbral": 0.25})).all()
     except Exception:  # noqa: BLE001 — sin pg_trgm: respaldo por substring simple
-        rows = (
+        return (
             await session.execute(
-                select(Conocimiento.titulo, Conocimiento.contenido)
+                select(Conocimiento.id, Conocimiento.titulo, Conocimiento.contenido)
                 .where(Conocimiento.titulo.ilike(f"%{q}%") | Conocimiento.contenido.ilike(f"%{q}%"))
                 .limit(4)
             )
         ).all()
-    if not rows:
+
+
+async def _buscar_info_semantico(session, q: str):
+    """Búsqueda por SIGNIFICADO (embeddings): así 'apto celíacos' encuentra 'sin gluten'
+    aunque no compartan palabras. Compara el embedding de la consulta con los guardados
+    (coseno). Filas (id, titulo, contenido). [] si no hay embeddings o falla (fail-safe)."""
+    from app.services.embeddings import obtener_embedding
+
+    vec = await obtener_embedding(q)
+    if not vec:
+        return []
+    try:
+        filas = (
+            await session.execute(
+                select(
+                    Conocimiento.id,
+                    Conocimiento.titulo,
+                    Conocimiento.contenido,
+                    Conocimiento.embedding,
+                )
+                .where(Conocimiento.embedding.isnot(None))
+                .limit(500)
+            )
+        ).all()
+    except Exception:  # noqa: BLE001
+        return []
+    puntuadas = [(_coseno(vec, f.embedding), f) for f in filas]
+    # 0.30 descarta lo claramente no relacionado (umbral típico para este modelo).
+    relevantes = [(sim, f) for sim, f in puntuadas if sim >= 0.30]
+    relevantes.sort(key=lambda p: p[0], reverse=True)
+    return [f for _, f in relevantes[:4]]
+
+
+async def buscar_info(session, telefono, consulta):
+    """Busca en la base de Conocimiento (lo que la dueña carga en el panel) las entradas
+    MÁS relacionadas con la duda del cliente. HÍBRIDO: por SIGNIFICADO (embeddings) y por
+    PALABRAS (pg_trgm). Devuelve SOLO lo relevante (no toda la base) → escala a cientos de
+    entradas. Si los embeddings no están disponibles, usa solo lo léxico (nunca se rompe)."""
+    q = (consulta or "").strip()
+    if len(q) < 2:
+        return {"resultados": [], "nota": "consulta vacía; pídele al cliente que aclare su duda"}
+    semanticos = await _buscar_info_semantico(session, q)
+    lexicales = await _buscar_info_lexical(session, q)
+    vistos: set = set()
+    resultados = []
+    for fila in list(semanticos) + list(lexicales):
+        if fila.id in vistos:
+            continue
+        vistos.add(fila.id)
+        resultados.append({"tema": fila.titulo, "info": fila.contenido})
+        if len(resultados) >= 4:
+            break
+    if not resultados:
         return {
             "resultados": [],
             "nota": (
@@ -444,7 +504,7 @@ async def buscar_info(session, telefono, consulta):
                 "ofrece consultarlo con la dueña; NO te lo inventes"
             ),
         }
-    return {"resultados": [{"tema": r.titulo, "info": r.contenido} for r in rows]}
+    return {"resultados": resultados}
 
 
 async def ver_pedidos_cliente(session, telefono):

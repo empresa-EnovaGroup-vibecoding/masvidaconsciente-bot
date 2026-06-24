@@ -5,6 +5,7 @@
 Se ejecuta al arrancar el contenedor web. Seguro de correr varias veces.
 """
 import asyncio
+import json
 import logging
 from pathlib import Path
 
@@ -94,6 +95,12 @@ async def main() -> None:
                 logger.warning("Migracion 011: '%s...' no aplico (%s)", stmt[:40], e)
         logger.info("Migracion 011 (busqueda difusa) aplicada")
 
+        # 012: columna embedding (busqueda semantica del Conocimiento). Aditiva e idempotente.
+        for stmt in _statements(MIGRATIONS / "012_conocimiento_embedding.sql"):
+            await session.execute(text(stmt))
+        await session.commit()
+        logger.info("Migracion 012 (embedding conocimiento) aplicada")
+
         total = (await session.execute(text("SELECT COUNT(*) FROM productos"))).scalar()
         if total and total > 0:
             logger.info("Catálogo ya cargado (%s productos), no se vuelve a sembrar", total)
@@ -105,6 +112,9 @@ async def main() -> None:
 
         # El admin se crea/verifica siempre, exista o no el catálogo
         await _crear_admin(session)
+
+        # Indexa (embeddings) las entradas de Conocimiento que aún no lo tengan.
+        await _backfill_embeddings(session)
 
 
 async def _crear_admin(session) -> None:
@@ -141,6 +151,38 @@ async def _crear_admin(session) -> None:
     )
     await session.commit()
     logger.info("Usuario admin creado: %s", settings.admin_email)
+
+
+async def _backfill_embeddings(session) -> None:
+    """Calcula el embedding de las entradas de Conocimiento que aún no lo tienen
+    (las creadas antes de la búsqueda semántica). Una sola llamada en lote. Fail-safe:
+    si los embeddings fallan (sin saldo, etc.) no pasa nada — la búsqueda léxica sigue."""
+    try:
+        filas = (
+            await session.execute(
+                text("SELECT id, titulo, contenido FROM conocimiento WHERE embedding IS NULL")
+            )
+        ).all()
+        if not filas:
+            return
+        from app.services.embeddings import obtener_embeddings
+
+        textos = [f"{f.titulo}. {f.contenido or ''}" for f in filas]
+        vectores = await obtener_embeddings(textos)
+        actualizados = 0
+        for fila, vec in zip(filas, vectores):
+            if vec is None:
+                continue
+            await session.execute(
+                text("UPDATE conocimiento SET embedding = CAST(:emb AS JSONB) WHERE id = :id"),
+                {"emb": json.dumps(vec), "id": fila.id},
+            )
+            actualizados += 1
+        await session.commit()
+        logger.info("Embeddings backfill: %s entradas indexadas", actualizados)
+    except Exception as e:  # noqa: BLE001 — el backfill es mejora; nunca rompe el arranque
+        await session.rollback()
+        logger.warning("Backfill de embeddings no se hizo (%s)", e)
 
 
 if __name__ == "__main__":

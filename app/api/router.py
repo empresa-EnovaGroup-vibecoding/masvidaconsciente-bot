@@ -863,12 +863,15 @@ async def listar_conocimiento(_: str = Depends(usuario_actual)):
 
 @router.post("/conocimiento")
 async def crear_conocimiento(datos: ConocimientoIn, _: str = Depends(usuario_actual)):
+    from app.services.embeddings import obtener_embedding
+
     factory = get_session_factory()
     async with factory() as session:
         c = Conocimiento(
             categoria=(datos.categoria or "").strip() or None,
             titulo=datos.titulo,
             contenido=datos.contenido,
+            embedding=await obtener_embedding(f"{datos.titulo}. {datos.contenido}"),
         )
         session.add(c)
         await session.commit()
@@ -878,6 +881,8 @@ async def crear_conocimiento(datos: ConocimientoIn, _: str = Depends(usuario_act
 
 @router.patch("/conocimiento/{cid}")
 async def editar_conocimiento(cid: int, datos: ConocimientoIn, _: str = Depends(usuario_actual)):
+    from app.services.embeddings import obtener_embedding
+
     factory = get_session_factory()
     async with factory() as session:
         c = await session.get(Conocimiento, cid)
@@ -886,6 +891,8 @@ async def editar_conocimiento(cid: int, datos: ConocimientoIn, _: str = Depends(
         c.categoria = (datos.categoria or "").strip() or None
         c.titulo = datos.titulo
         c.contenido = datos.contenido
+        # El contenido cambió → recalcula el embedding (búsqueda semántica al día).
+        c.embedding = await obtener_embedding(f"{datos.titulo}. {datos.contenido}")
         c.updated_at = now_utc()
         await session.commit()
     return {"ok": True}

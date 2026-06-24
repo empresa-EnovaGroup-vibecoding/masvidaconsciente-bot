@@ -32,6 +32,12 @@
 - ⚠️ Deploy: **web + worker** (web corre la migración 011; el agente corre en el worker). compileall OK.
 - **Por qué pg_trgm y NO pgvector aún:** OpenRouter no hace embeddings y no hay otro proveedor en el stack; meterlo ahora = dependencia nueva + riesgo de tumbar el bot. pg_trgm resuelve el "encontrar aunque escriban chueco" sin riesgo. Los **vectores/embeddings semánticos** (entender que "celíaco"="sin gluten") quedan para **Fase 2**, fail-safe, sobre esta base ya probada.
 
+**3) Búsqueda semántica — Fase 2 (embeddings, fail-safe, SIN pgvector).** Hallazgos clave al investigar: (a) **OpenRouter SÍ tiene embeddings ahora** (`/api/v1/embeddings`, misma llave → cero dependencia nueva); (b) a escala de cientos de entradas **no hace falta pgvector** — el coseno se calcula en código. Por eso NO se tocó el Postgres (cero riesgo de infra).
+- `app/services/embeddings.py`: `obtener_embedding(s)` vía OpenRouter (modelo `openai/text-embedding-3-small`, config `openrouter_model_embedding`). Fail-safe: si falla/sin saldo → None y se usa solo lo léxico.
+- `conocimiento.embedding` JSONB (migración 012, aditiva). Se llena al crear/editar (router) y un **backfill** en `init_db` indexa lo viejo en lote.
+- `buscar_info` ahora es **HÍBRIDO**: semántico (coseno sobre embeddings) + léxico (pg_trgm), dedupe, top-4. Si no hay embeddings → cae a léxico (= Fase 1). Nunca rompe.
+- Deploy: **web + worker**. compileall OK. Pendiente: probar en vivo (ej. "¿es apto para celíacos?" debe encontrar la entrada de "sin gluten").
+
 ---
 
 ## 2026-06-21 — Módulo "Métodos de pago" (varias cuentas) + validación de monto

@@ -107,6 +107,9 @@ class Conocimiento(Base):
     categoria: Mapped[str | None] = mapped_column(Text, nullable=True)
     titulo: Mapped[str] = mapped_column(Text)
     contenido: Mapped[str] = mapped_column(Text)
+    # Embedding (vector de significado) para la búsqueda semántica. Lista de floats en
+    # JSONB. Nullable: si no se pudo calcular, la entrada igual sirve por búsqueda léxica.
+    embedding: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 

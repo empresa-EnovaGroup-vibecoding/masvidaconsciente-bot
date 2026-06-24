@@ -33,6 +33,10 @@ class Settings(BaseSettings):
     # entrada de audio (Gemini) sirven aquí; Claude/GPT no aceptan audio. El
     # selector del panel cambia solo el conversacional, NUNCA este.
     openrouter_model_audio: str = "google/gemini-2.5-flash"
+    # Modelo de EMBEDDINGS (búsqueda por significado del Conocimiento). Va por la
+    # misma API/llave de OpenRouter (endpoint /embeddings). Multilingüe y barato.
+    # Es una MEJORA: si falla, el bot cae a la búsqueda léxica (pg_trgm) y sigue.
+    openrouter_model_embedding: str = "openai/text-embedding-3-small"
 
     # Comportamiento
     buffer_segundos: int = 15
