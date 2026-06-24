@@ -101,6 +101,12 @@ async def main() -> None:
         await session.commit()
         logger.info("Migracion 012 (embedding conocimiento) aplicada")
 
+        # 013: ficha del producto (duracion, se_congela, apto_diabeticos, info). Aditiva.
+        for stmt in _statements(MIGRATIONS / "013_producto_ficha.sql"):
+            await session.execute(text(stmt))
+        await session.commit()
+        logger.info("Migracion 013 (ficha de producto) aplicada")
+
         total = (await session.execute(text("SELECT COUNT(*) FROM productos"))).scalar()
         if total and total > 0:
             logger.info("Catálogo ya cargado (%s productos), no se vuelve a sembrar", total)

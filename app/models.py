@@ -31,6 +31,12 @@ class Producto(Base):
     descripcion: Mapped[str | None] = mapped_column(Text, nullable=True)
     precio: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
     presentacion: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Ficha del producto para el bot (info ESPECÍFICA de ESTE producto, así no mezcla
+    # con la de otros). Las 3 casillas clave + un texto libre.
+    duracion: Mapped[str | None] = mapped_column(Text, nullable=True)
+    se_congela: Mapped[str | None] = mapped_column(Text, nullable=True)
+    apto_diabeticos: Mapped[str | None] = mapped_column(Text, nullable=True)
+    info: Mapped[str | None] = mapped_column(Text, nullable=True)
     disponible: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)

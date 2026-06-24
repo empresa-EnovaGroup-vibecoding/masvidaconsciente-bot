@@ -47,6 +47,10 @@ class ProductoIn(BaseModel):
     descripcion: str | None = None
     precio: float | None = None
     presentacion: str | None = None
+    duracion: str | None = None
+    se_congela: str | None = None
+    apto_diabeticos: str | None = None
+    info: str | None = None
     disponible: bool = True
 
 
@@ -343,6 +347,10 @@ async def listar_productos(_: str = Depends(usuario_actual)):
             "descripcion": p.descripcion,
             "precio": float(p.precio) if p.precio is not None else None,
             "presentacion": p.presentacion,
+            "duracion": p.duracion,
+            "se_congela": p.se_congela,
+            "apto_diabeticos": p.apto_diabeticos,
+            "info": p.info,
             "disponible": p.disponible,
         }
         for p in productos
@@ -359,6 +367,10 @@ async def crear_producto(datos: ProductoIn, _: str = Depends(usuario_actual)):
             descripcion=datos.descripcion,
             precio=Decimal(str(datos.precio)) if datos.precio is not None else None,
             presentacion=datos.presentacion,
+            duracion=datos.duracion,
+            se_congela=datos.se_congela,
+            apto_diabeticos=datos.apto_diabeticos,
+            info=datos.info,
             disponible=datos.disponible,
         )
         session.add(prod)
@@ -379,6 +391,10 @@ async def editar_producto(producto_id: int, datos: ProductoIn, _: str = Depends(
         prod.descripcion = datos.descripcion
         prod.precio = Decimal(str(datos.precio)) if datos.precio is not None else None
         prod.presentacion = datos.presentacion
+        prod.duracion = datos.duracion
+        prod.se_congela = datos.se_congela
+        prod.apto_diabeticos = datos.apto_diabeticos
+        prod.info = datos.info
         prod.disponible = datos.disponible
         await session.commit()
     return {"ok": True}

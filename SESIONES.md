@@ -37,6 +37,13 @@
 - `conocimiento.embedding` JSONB (migración 012, aditiva). Se llena al crear/editar (router) y un **backfill** en `init_db` indexa lo viejo en lote.
 - `buscar_info` ahora es **HÍBRIDO**: semántico (coseno sobre embeddings) + léxico (pg_trgm), dedupe, top-4. Si no hay embeddings → cae a léxico (= Fase 1). Nunca rompe.
 - Deploy: **web + worker**. compileall OK. Pendiente: probar en vivo (ej. "¿es apto para celíacos?" debe encontrar la entrada de "sin gluten").
+- ✅ Probado en vivo: "sirve para celíacos?" → encontró "sin gluten" (semántico OK).
+
+**4) Ficha por producto (info específica de cada producto, modelo MIXTO).** Detonante: hablando de Galletas, el cliente preguntó "¿se puede congelar?" y el bot aplicó la duración de los PANES ("3 meses") a las galletas → **generalizaba info entre productos**. Solución: cada producto carga SU propia info.
+- `productos` += `duracion`, `se_congela`, `apto_diabeticos`, `info` (texto libre) — migración 013, aditiva. (BOT: modelo, ProductoIn, listar/crear/editar; `info_producto` devuelve la ficha.)
+- **Regla blindada:** detalles de un producto salen de SU ficha (info_producto); JAMÁS se aplica el dato de otro producto; si falta → confirma con la dueña, no inventa. `buscar_info` queda solo para dudas GENERALES (no de un producto puntual).
+- **Panel:** Catálogo → Editar producto → sección "Información para el bot" (3 casillas: Duración, ¿Se congela?, ¿Apto diabéticos? + texto libre "Más información"). Ojo: `toggleDisponible` ahora reenvía la ficha completa para no borrarla al cambiar Disponible/Agotado.
+- Deploy: **web + worker** (bot) + **dashboard** (panel). compileall + tsc OK.
 
 ---
 

@@ -329,7 +329,16 @@ async def info_producto(session, telefono, nombre):
         "descripcion": prod.descripcion,
         "precio_usd": float(prod.precio) if prod.precio is not None else "a consultar",
         "presentacion": prod.presentacion,
+        "duracion": prod.duracion,
+        "se_congela": prod.se_congela,
+        "apto_diabeticos": prod.apto_diabeticos,
+        "info": prod.info,
         "disponible": prod.disponible,
+        "nota": (
+            "Responde sobre ESTE producto SOLO con estos datos. Si el cliente pregunta algo "
+            "que aquí está vacío/None (ej. duración, si se congela), NO lo inventes ni copies "
+            "de otro producto: dile con calidez que lo confirmas con la dueña."
+        ),
     }
 
 
