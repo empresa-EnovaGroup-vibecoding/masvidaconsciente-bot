@@ -807,8 +807,10 @@ async def enviar_fotos_producto(session, telefono, nombre):
     lo dice con sinceridad (NUNCA afirmar que se envió algo que no se envió)."""
     from app.services import r2
 
+    logger.info("enviar_fotos_producto LLAMADA: nombre=%r", nombre)
     prod = await _buscar_producto(session, nombre)
     if prod is None:
+        logger.info("enviar_fotos_producto: producto %r NO encontrado", nombre)
         return {"enviadas": 0, "nota": f"no encontré el producto '{nombre}'; ofrece los que sí hay"}
     medios = (
         await session.execute(
@@ -817,6 +819,10 @@ async def enviar_fotos_producto(session, telefono, nombre):
             .order_by(ProductoMedia.orden, ProductoMedia.id)
         )
     ).scalars().all()
+    logger.info(
+        "enviar_fotos_producto: producto=%s id=%s media=%d r2_config=%s",
+        prod.nombre, prod.id, len(medios), r2.configurado(),
+    )
     if not medios:
         return {
             "enviadas": 0,
@@ -830,6 +836,10 @@ async def enviar_fotos_producto(session, telefono, nombre):
     for m in medios[:8]:  # tope de seguridad
         url = r2.url_publica(m.clave)
         if not url:
+            logger.warning(
+                "enviar_fotos_producto: URL vacía (¿falta R2_PUBLIC_URL en el worker?) media=%s",
+                m.id,
+            )
             continue
         try:
             if m.tipo == "video":
@@ -837,6 +847,7 @@ async def enviar_fotos_producto(session, telefono, nombre):
             else:
                 await enviar_imagen(telefono, url)
             enviadas += 1
+            logger.info("enviar_fotos_producto: enviado %s de %s (url=%s)", m.tipo, prod.nombre, url)
         except Exception as e:  # noqa: BLE001 — si una falla, intentamos las demás
             logger.warning("No se pudo enviar media %s de %s: %s", m.id, prod.nombre, e)
     if enviadas == 0:
