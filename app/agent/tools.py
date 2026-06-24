@@ -169,7 +169,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "enviar_fotos_producto",
-            "description": "Envía al cliente las FOTOS y VIDEOS de UN producto por WhatsApp. Úsala cuando el cliente pida ver fotos/imágenes/un video de un producto específico (ej. 'muéstrame la torta', '¿tienes foto del pan?', 'mándame una imagen de las galletas'). Si el producto no tiene fotos cargadas, te avisa para que lo digas con sinceridad. NO la uses para ver opciones en general (para eso es enviar_catalogo).",
+            "description": "Envía al cliente las FOTOS y VIDEOS de UN producto por WhatsApp. Llámala SIEMPRE que el cliente pida ver/mostrar un producto: 'muéstrame', 'mándame una foto', '¿tienes foto?', 'quiero verlo', 'una foto para verlo', etc. Es la ÚNICA forma de saber si el producto tiene fotos: NO asumas que no hay sin llamarla primero. Si no tiene fotos cargadas, te avisa para que lo digas con sinceridad. (Para ver el menú/opciones en general usa enviar_catalogo.)",
             "parameters": {
                 "type": "object",
                 "properties": {

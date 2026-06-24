@@ -101,6 +101,15 @@ async def responder(
     messages.append({"role": "user", "content": mensaje_usuario})
 
     modelo = await leer_modelo_ia()  # el que eligió la proveedora en el panel
+    # Diagnóstico (corre al procesar el mensaje, sí aparece en los logs): confirma qué
+    # modelo se usa, cuántas herramientas tiene el código corriendo y si está la de fotos.
+    logger.info(
+        "responder: modelo=%s tools=%d fotos_tool=%s msg=%r",
+        modelo,
+        len(TOOL_SCHEMAS),
+        any(t["function"]["name"] == "enviar_fotos_producto" for t in TOOL_SCHEMAS),
+        (mensaje_usuario or "")[:60],
+    )
     catalogo_ok = False
     for _ in range(settings.max_iteraciones_agente):
         data = await _llamar_con_fallback(messages, llm, modelo)
