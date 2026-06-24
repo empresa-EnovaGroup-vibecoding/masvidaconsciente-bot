@@ -17,6 +17,23 @@
 
 ---
 
+## 2026-06-24 (tarde) — Voz: puerta de saludo + decisión anti-sobreguión · Prompt caching · Editar cliente/pedidos
+
+**1) Voz / saludo (bot `7e54049` + `5fad1fe`):** red de seguridad EN CÓDIGO (`_asegurar_saludo` en agent.py) que, SOLO al inicio de la conversación, garantiza que si el cliente saluda y/o pregunta "¿cómo estás?" el bot devuelva el saludo + "Muy bien, gracias a Dios" (con nombre + franja horaria VE). Es la "puerta/gate" determinista que mencionaba su amigo — sin agente extra ni costo.
+- **Decisión clave (de Maired):** NO sobre-guionar la conversación. La puerta queda como **respaldo invisible** (solo actúa si el modelo falla); con un buen modelo no se activa → el bot responde natural y autónomo. Lo único que se BLINDA en código es lo crítico (**dinero, no inventar**). La conversación = libertad del modelo + la personalidad como guía. Maired cambió a un buen modelo y respondió natural → el problema era el MODELO, no faltar reglas. Ver memoria `no-sobreguionar-conversacion-bot`.
+
+**2) Prompt caching (bot `0a640c0`):** `construir_partes_prompt` separa el prompt en ESTABLE (personalidad+reglas+catálogo+índice conocimiento) y DINÁMICO (hora, estado, ficha). El bloque estable se marca `cache_control: ephemeral` → OpenRouter lo cobra a **¼** en los mensajes siguientes. **Misma calidad (mismo texto al modelo), ~mitad de costo.** Aplicado en `agent.responder` y `redactar_mensaje`. Modelo activo: **Haiku 4.5** (~$10–25/mes a volumen real CON caché; $1/M entrada, $5/M salida). `construir_system_prompt` queda como wrapper de compatibilidad.
+
+**3) Editar/borrar cliente + editar items de pedido (bot `d266f00` + dashboard `532b3fc`):**
+- `PUT /clientes/{tel}` (editar nombre/notas) · `DELETE /clientes/{tel}` (resetea cliente: ficha + pedidos sin cobro + mensajes + memoria Redis). UI Clientes: nombre editable + "Guardar cambios" + botón "Borrar cliente" (con confirmación y aviso del blindaje).
+- `PUT /pedidos/{id}/items` (corrige items/cantidades; recalcula el total desde el catálogo con `_buscar_producto`, **nunca inventa**). UI Pedidos: botón "Editar" → editor con selector del catálogo + cantidad + agregar/quitar + total estimado en vivo.
+- **BLINDAJE de cobro (igual que borrar pedido):** NO se borra un cliente ni se editan items si hay pago confirmado/parcial/reportado. El dinero nunca se borra/altera en silencio.
+- compileall (bot) + `tsc --noEmit` (dashboard) OK.
+
+**Deploy pendiente:** bot **web** (API nueva) + **dashboard** (Coolify). El saludo + caché necesitan **web + worker**.
+
+---
+
 ## 2026-06-24 — Ficha por producto, fix de modal, selector de modelos + antiinvención
 
 - **Selector de modelos ampliado (panel `f498a53`):** DeepSeek V3.2, Gemini 2.5 Flash Lite + opción "Personalizado" (pegar cualquier ID de OpenRouter). OpenRouter SÍ tiene embeddings (se usó en Fase 2). Investigado: Gemini subió de precio (3 Flash ~$0,50/$3), DeepSeek bajó (V3.2 ~$0,14/$0,28).
