@@ -17,6 +17,16 @@
 
 ---
 
+## 2026-06-24 — Ficha por producto, fix de modal, selector de modelos + antiinvención
+
+- **Selector de modelos ampliado (panel `f498a53`):** DeepSeek V3.2, Gemini 2.5 Flash Lite + opción "Personalizado" (pegar cualquier ID de OpenRouter). OpenRouter SÍ tiene embeddings (se usó en Fase 2). Investigado: Gemini subió de precio (3 Flash ~$0,50/$3), DeepSeek bajó (V3.2 ~$0,14/$0,28).
+- **Ficha por producto (bot `3cb904f` + panel `64b0ca5`):** `productos` += duracion, se_congela, apto_diabeticos, info (migración 013). Modal "Información para el bot" (3 casillas + texto). `info_producto` devuelve la ficha; regla: detalle de un producto sale de SU ficha, no se generaliza.
+- **Fix modal catálogo (panel `23494d7`):** el modal crecía y se salía de pantalla (overflow, Guardar inalcanzable). Ahora `max-h-[90vh]` + cuerpo con scroll + footer fijo. **Verificado con Playwright en PC (1280) y móvil (390)** vía página temporal `/preview` (ya borrada).
+- ⚠️ **Hallazgo: el modelo importa para "no inventar".** Probando con **DeepSeek (razonamiento)**: con la ficha de Galletas VACÍA, el bot INVENTÓ "duran 5 días en nevera / 3 meses congeladas / envase hermético". Se **reforzó la regla ANTIINVENCIÓN** (1ª regla blindada, muy explícita: prohibido inventar duración/conservación/etc.; si la ficha no lo trae → "lo confirmo con la dueña"). Honesto: con modelos baratos de razonamiento la obediencia es menor; si sigue inventando, usar **Gemini 2.5 Flash** (barato + obediente). Pendiente: reprobar con la regla reforzada.
+- **Planificado (NO construido):** fotos+videos por producto (panel + bot los envía por WhatsApp) vía Cloudflare R2. Ver memoria `plan-media-productos`.
+
+---
+
 ## 2026-06-23 — Descuento 20% en divisas + Búsqueda escalable (Fase 1: pg_trgm)
 
 **1) Descuento 20% por pagar en DIVISAS** (Zelle/Binance/efectivo en dólares; en Bs va completo). Commit `4d51436`.
