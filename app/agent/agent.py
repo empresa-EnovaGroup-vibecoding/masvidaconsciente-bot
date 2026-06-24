@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 
-from app.agent.system_prompt import construir_system_prompt, leer_modelo_ia
+from app.agent.system_prompt import construir_partes_prompt, leer_modelo_ia
 from app.agent.tools import TOOL_SCHEMAS, ejecutar_tool
 from app.config import get_settings
 
@@ -152,8 +152,18 @@ async def responder(
     `llm` y `ejecutar` son inyectables para poder testear el loop sin
     llamar a OpenRouter ni a la base de datos reales.
     """
+    # La parte ESTABLE del prompt se marca con cache_control: el proveedor la cachea y la
+    # cobra a ¼ en los siguientes mensajes (mismo prompt → misma calidad, solo más barato).
+    # La parte DINÁMICA (hora, ficha, estado) va aparte, sin cachear.
+    estable, dinamico = await construir_partes_prompt(nombre_cliente, telefono)
     messages: list = [
-        {"role": "system", "content": await construir_system_prompt(nombre_cliente, telefono)}
+        {
+            "role": "system",
+            "content": [
+                {"type": "text", "text": estable, "cache_control": {"type": "ephemeral"}},
+                {"type": "text", "text": dinamico},
+            ],
+        }
     ]
     if historial:
         messages.extend(historial)
@@ -214,7 +224,16 @@ async def redactar_mensaje(
     dispara el sistema (comprobante recibido, pago confirmado/rechazado), donde
     no hay un texto del cliente que responder pero hay que decir algo con calidez.
     """
-    messages: list = [{"role": "system", "content": await construir_system_prompt(nombre)}]
+    estable, dinamico = await construir_partes_prompt(nombre)
+    messages: list = [
+        {
+            "role": "system",
+            "content": [
+                {"type": "text", "text": estable, "cache_control": {"type": "ephemeral"}},
+                {"type": "text", "text": dinamico},
+            ],
+        }
+    ]
     if historial:
         messages.extend(historial)
     messages.append({

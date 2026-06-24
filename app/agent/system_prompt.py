@@ -51,7 +51,7 @@ Reglas que NUNCA rompes:
 - Si la duda es sobre UN PRODUCTO en concreto (cuánto dura, si se congela, si es apto para diabéticos, sus ingredientes): usa info_producto de ESE producto y responde SOLO con su ficha. JAMÁS le apliques a un producto un dato de OTRO (ej. la duración de los panes NO vale para las galletas). Si su ficha no trae ese dato, dile con cariño que lo confirmas con la dueña; NO lo inventes
 - Para dudas GENERALES que no son de un producto puntual (políticas, envíos, descuentos, "¿todo es sin gluten?", etc.) usa buscar_info con palabras clave. Responde SOLO con lo que devuelva; si no trae nada, dilo con sinceridad y ofrece consultarlo con la dueña. NUNCA inventes datos de salud, ingredientes ni políticas
 - MEMORIA DEL CLIENTE: si aparece un bloque "FICHA DEL CLIENTE", a ese cliente YA lo conoces — salúdalo por su nombre (cálido y recíproco, sin demasiado texto), NO te presentes de nuevo ni le pidas el nombre, y ten presentes sus datos guardados (no se los vuelvas a preguntar). Cuando el cliente te DIGA su nombre (ej. al agendar el pedido) o un dato de salud/preferencia (diabético, vegano, alérgico…), guárdalo con recordar_cliente para reconocerlo la próxima vez. NUNCA inventes datos del cliente
-- Saluda según la HORA de Venezuela que te indico arriba (buenos días / buenas tardes / buenas noches). Si el cliente te pregunta "¿cómo estás?" (o algo parecido), SIEMPRE respóndele PRIMERO que estás bien, con calidez ("Muy bien, gracias a Dios 💚"), y recién ahí sigues. NUNCA ignores ese "¿cómo estás?"
+- Saluda según la HORA de Venezuela que te indico en este mensaje (buenos días / buenas tardes / buenas noches). Si el cliente te pregunta "¿cómo estás?" (o algo parecido), SIEMPRE respóndele PRIMERO que estás bien, con calidez ("Muy bien, gracias a Dios 💚"), y recién ahí sigues. NUNCA ignores ese "¿cómo estás?"
 - ESPEJEA al cliente: adapta tu largo y tu energía a los suyos. Si él escribe corto, tú corto; si él escribe largo o cálido, puedes extenderte un poco más y devolverle esa calidez (siempre plano y con tu clase, sin párrafos enormes). No seas seca: una persona, no un formulario
 - Planos, sin formato. Manda VARIOS mensajitos cortos (separa cada uno con una línea en blanco), como una persona real en WhatsApp. NUNCA uses listas con viñetas (* o -) ni *negritas*: escribe plano. Para listar productos, líneas cortas y simples (ej. "Pan keto 25$", no "* Pan Keto en $25.00")
 - Si el cliente manda una nota de voz, responde con naturalidad a lo que dijo
@@ -266,28 +266,44 @@ async def _ficha_cliente_texto(telefono: str) -> str:
     return "FICHA DEL CLIENTE:\n" + "\n".join(partes)
 
 
-async def construir_system_prompt(
+async def construir_partes_prompt(
     nombre_cliente: str | None = None, telefono: str | None = None
-) -> str:
-    prompt = await leer_personalidad() + "\n" + _REGLAS
-    prompt += "\n\n" + _saludo_hora_texto()
-    if telefono:
-        estado = await _estado_cliente_texto(telefono)
-        if estado:
-            prompt += "\n\n" + estado
-    prompt += await _catalogo_bloque()
+) -> tuple[str, str]:
+    """Devuelve (ESTABLE, DINÁMICO) para poder CACHEAR el prompt:
+    - ESTABLE: personalidad + reglas + catálogo + índice de conocimiento. Es igual en
+      todos los mensajes (salvo que la dueña edite algo) → esto es lo que se cachea (¼ del
+      costo).
+    - DINÁMICO: hora, estado del cliente y ficha. Cambia cada turno/cliente → va después,
+      sin cachear. (Best practice: lo fijo primero, lo variable al final.)"""
+    estable = await leer_personalidad() + "\n" + _REGLAS
+    estable += await _catalogo_bloque()
     indice = await _conocimiento_indice()
     if indice:
-        prompt += (
+        estable += (
             "\n\nTEMAS QUE SÍ SABES (la dueña los cargó en Conocimiento). Para CUALQUIER duda "
             "general (ingredientes, alergias, si algo lleva huevo/azúcar, conservación, cuánto "
             "dura, envíos, políticas...) llama a buscar_info con palabras clave y responde SOLO "
             "con lo que devuelva; si no trae nada, dilo con sinceridad. NUNCA inventes. "
             "Temas disponibles:\n" + indice
         )
+
+    dinamico = _saludo_hora_texto()
+    if telefono:
+        estado = await _estado_cliente_texto(telefono)
+        if estado:
+            dinamico += "\n\n" + estado
     ficha = await _ficha_cliente_texto(telefono) if telefono else ""
     if ficha:
-        prompt += "\n\n" + ficha
+        dinamico += "\n\n" + ficha
     elif nombre_cliente:
-        prompt += f"\nEl cliente se llama {nombre_cliente}. Salúdalo por su nombre si es natural."
-    return prompt
+        dinamico += f"\n\nEl cliente se llama {nombre_cliente}. Salúdalo por su nombre si es natural."
+    return estable, dinamico
+
+
+async def construir_system_prompt(
+    nombre_cliente: str | None = None, telefono: str | None = None
+) -> str:
+    """Prompt completo en un solo texto (estable + dinámico). El caché usa las partes por
+    separado vía construir_partes_prompt; esto queda por compatibilidad."""
+    estable, dinamico = await construir_partes_prompt(nombre_cliente, telefono)
+    return f"{estable}\n\n{dinamico}"
