@@ -38,6 +38,15 @@ class Settings(BaseSettings):
     # Es una MEJORA: si falla, el bot cae a la búsqueda léxica (pg_trgm) y sigue.
     openrouter_model_embedding: str = "openai/text-embedding-3-small"
 
+    # Almacenamiento de fotos/videos de productos en Cloudflare R2 (S3-compatible).
+    # En la BD se guarda solo la RUTA del archivo; el archivo vive en R2. Si estas
+    # variables faltan, la subida/envío de media se desactiva solo (no rompe el bot).
+    r2_account_id: str = ""
+    r2_access_key_id: str = ""
+    r2_secret_access_key: str = ""
+    r2_bucket: str = ""
+    r2_public_url: str = ""
+
     # Comportamiento
     buffer_segundos: int = 15
     conversacion_ttl: int = 86400

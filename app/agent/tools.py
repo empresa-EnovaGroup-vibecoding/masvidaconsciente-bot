@@ -20,9 +20,10 @@ from app.models import (
     Pago,
     Pedido,
     Producto,
+    ProductoMedia,
 )
 from app.services.db import get_session_factory
-from app.services.meta_client import enviar_texto
+from app.services.meta_client import enviar_imagen, enviar_texto, enviar_video
 from app.services.redis_client import get_cache, set_cache
 from app.services.tasa import obtener_tasa_bcv
 
@@ -162,6 +163,23 @@ TOOL_SCHEMAS = [
             "name": "enviar_catalogo",
             "description": "Envía al cliente el CATÁLOGO en PDF (el folleto bonito) para que vea las opciones y haga su pedido. Úsala cuando el cliente quiera ver opciones, pregunte qué tienen / qué hay, pida una recomendación, diga que quiere algo (sin especificar qué), o pida el catálogo/menú/folleto. Si devuelve que no hay PDF, recién ahí usa ver_catalogo (texto).",
             "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "enviar_fotos_producto",
+            "description": "Envía al cliente las FOTOS y VIDEOS de UN producto por WhatsApp. Úsala cuando el cliente pida ver fotos/imágenes/un video de un producto específico (ej. 'muéstrame la torta', '¿tienes foto del pan?', 'mándame una imagen de las galletas'). Si el producto no tiene fotos cargadas, te avisa para que lo digas con sinceridad. NO la uses para ver opciones en general (para eso es enviar_catalogo).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "nombre": {
+                        "type": "string",
+                        "description": "Nombre del producto del que el cliente quiere ver fotos/videos.",
+                    }
+                },
+                "required": ["nombre"],
+            },
         },
     },
 ]
@@ -783,8 +801,62 @@ async def enviar_catalogo(session, telefono):
         return {"ok": False, "nota": "no se pudo enviar el catalogo PDF; usa ver_catalogo (texto)"}
 
 
+async def enviar_fotos_producto(session, telefono, nombre):
+    """Envía al cliente las fotos/videos de UN producto por WhatsApp (cuando las pide).
+    Usa el link público de R2 que Meta descarga. Si el producto no tiene media cargada,
+    lo dice con sinceridad (NUNCA afirmar que se envió algo que no se envió)."""
+    from app.services import r2
+
+    prod = await _buscar_producto(session, nombre)
+    if prod is None:
+        return {"enviadas": 0, "nota": f"no encontré el producto '{nombre}'; ofrece los que sí hay"}
+    medios = (
+        await session.execute(
+            select(ProductoMedia)
+            .where(ProductoMedia.producto_id == prod.id)
+            .order_by(ProductoMedia.orden, ProductoMedia.id)
+        )
+    ).scalars().all()
+    if not medios:
+        return {
+            "enviadas": 0,
+            "nota": (
+                f"'{prod.nombre}' no tiene fotos ni videos cargados. Dile con sinceridad que "
+                "por ahora no tienes fotos de ese y ofrécele el catálogo o más info; NO digas "
+                "que se las enviaste"
+            ),
+        }
+    enviadas = 0
+    for m in medios[:8]:  # tope de seguridad
+        url = r2.url_publica(m.clave)
+        if not url:
+            continue
+        try:
+            if m.tipo == "video":
+                await enviar_video(telefono, url)
+            else:
+                await enviar_imagen(telefono, url)
+            enviadas += 1
+        except Exception as e:  # noqa: BLE001 — si una falla, intentamos las demás
+            logger.warning("No se pudo enviar media %s de %s: %s", m.id, prod.nombre, e)
+    if enviadas == 0:
+        return {
+            "enviadas": 0,
+            "nota": f"no se pudieron enviar las fotos de '{prod.nombre}' ahora; ofrece el catálogo o seguir por texto",
+        }
+    return {
+        "enviadas": enviadas,
+        "producto": prod.nombre,
+        "nota": (
+            f"YA le enviaste {enviadas} archivo(s) de '{prod.nombre}'. Coméntale cálido que ahí "
+            "los tiene y sigue la venta. NO digas que vas a enviarlos: ya están enviados"
+        ),
+    }
+
+
 _DISPATCH = {
     "ver_catalogo": ver_catalogo,
+    "enviar_fotos_producto": enviar_fotos_producto,
     "info_producto": info_producto,
     "registrar_pedido": registrar_pedido,
     "info_negocio": info_negocio,

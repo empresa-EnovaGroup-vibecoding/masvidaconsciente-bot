@@ -4,6 +4,7 @@ import os
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 from typing import Annotated
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse
@@ -26,6 +27,7 @@ from app.models import (
     Pago,
     Pedido,
     Producto,
+    ProductoMedia,
     now_utc,
 )
 from app.services.db import get_session_factory
@@ -410,6 +412,94 @@ async def borrar_producto(producto_id: int, _: str = Depends(usuario_actual)):
         if prod is None:
             raise HTTPException(status_code=404, detail="Producto no encontrado")
         await session.delete(prod)
+        await session.commit()
+    return {"ok": True}
+
+
+# ─── Media de productos (fotos/videos en R2) ─────────────────────────────
+
+_MAX_IMAGEN = 5 * 1024 * 1024   # 5 MB (límite de imagen de WhatsApp)
+_MAX_VIDEO = 16 * 1024 * 1024   # 16 MB (límite de video de WhatsApp)
+
+
+@router.get("/productos/{producto_id}/media")
+async def listar_media(producto_id: int, _: str = Depends(usuario_actual)):
+    from app.services import r2
+
+    factory = get_session_factory()
+    async with factory() as session:
+        filas = (
+            await session.execute(
+                select(ProductoMedia)
+                .where(ProductoMedia.producto_id == producto_id)
+                .order_by(ProductoMedia.orden, ProductoMedia.id)
+            )
+        ).scalars().all()
+    return [{"id": m.id, "tipo": m.tipo, "url": r2.url_publica(m.clave)} for m in filas]
+
+
+@router.post("/productos/{producto_id}/media")
+async def subir_media(
+    producto_id: int, archivo: UploadFile = File(...), _: str = Depends(usuario_actual)
+):
+    """Sube una foto o video del producto a R2. En la BD se guarda solo la ruta (clave)."""
+    from app.services import r2
+
+    if not r2.configurado():
+        raise HTTPException(
+            status_code=503, detail="El almacenamiento de fotos (R2) no está configurado"
+        )
+    ct = (archivo.content_type or "").lower()
+    if ct.startswith("image/"):
+        tipo, limite = "imagen", _MAX_IMAGEN
+    elif ct.startswith("video/"):
+        tipo, limite = "video", _MAX_VIDEO
+    else:
+        raise HTTPException(status_code=400, detail="Solo se aceptan imágenes o videos")
+    ext = (ct.split("/")[-1].split(";")[0] or "bin").strip()
+    contenido = await archivo.read()
+    if len(contenido) > limite:
+        mb = limite // (1024 * 1024)
+        cosa = "videos" if tipo == "video" else "imágenes"
+        raise HTTPException(
+            status_code=413, detail=f"El archivo es muy grande (máximo {mb} MB para {cosa})"
+        )
+    factory = get_session_factory()
+    async with factory() as session:
+        prod = await session.get(Producto, producto_id)
+        if prod is None:
+            raise HTTPException(status_code=404, detail="Producto no encontrado")
+        n = (
+            await session.execute(
+                select(func.count())
+                .select_from(ProductoMedia)
+                .where(ProductoMedia.producto_id == producto_id)
+            )
+        ).scalar() or 0
+        clave = f"productos/{producto_id}/{uuid4().hex}.{ext}"
+        subido = await r2.subir(
+            clave, contenido, archivo.content_type or "application/octet-stream"
+        )
+        if not subido:
+            raise HTTPException(status_code=502, detail="No se pudo subir el archivo a R2")
+        m = ProductoMedia(producto_id=producto_id, tipo=tipo, clave=clave, orden=int(n))
+        session.add(m)
+        await session.commit()
+        await session.refresh(m)
+    return {"id": m.id, "tipo": tipo, "url": r2.url_publica(clave)}
+
+
+@router.delete("/media/{media_id}")
+async def borrar_media(media_id: int, _: str = Depends(usuario_actual)):
+    from app.services import r2
+
+    factory = get_session_factory()
+    async with factory() as session:
+        m = await session.get(ProductoMedia, media_id)
+        if m is None:
+            raise HTTPException(status_code=404, detail="Media no encontrada")
+        await r2.borrar(m.clave)  # si falla en R2, igual quitamos el registro de la BD
+        await session.delete(m)
         await session.commit()
     return {"ok": True}
 

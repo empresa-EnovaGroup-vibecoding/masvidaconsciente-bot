@@ -42,6 +42,19 @@ class Producto(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 
 
+class ProductoMedia(Base):
+    """Una foto o video de un producto, guardado en R2. En la BD va solo la 'clave'
+    (ruta del archivo en R2); la URL pública se arma con R2_PUBLIC_URL al mostrar/enviar."""
+    __tablename__ = "producto_media"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    producto_id: Mapped[int] = mapped_column(ForeignKey("productos.id", ondelete="CASCADE"))
+    tipo: Mapped[str] = mapped_column(Text, default="imagen")  # 'imagen' | 'video'
+    clave: Mapped[str] = mapped_column(Text)  # ruta del objeto en R2
+    orden: Mapped[int] = mapped_column(default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
 class Cliente(Base):
     __tablename__ = "clientes"
 

@@ -60,6 +60,44 @@ async def enviar_documento(
         return resp.json()
 
 
+async def enviar_imagen(telefono: str, link: str, caption: str | None = None) -> dict:
+    """Envía una IMAGEN por WhatsApp con un link PÚBLICO (HTTPS) que Meta descarga."""
+    imagen: dict = {"link": link}
+    if caption:
+        imagen["caption"] = caption
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": telefono,
+        "type": "image",
+        "image": imagen,
+    }
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.post(_url(), headers=_headers(), json=payload)
+        if resp.status_code >= 400:
+            logger.error("Meta rechazó la imagen (%s): %s", resp.status_code, resp.text)
+            resp.raise_for_status()
+        return resp.json()
+
+
+async def enviar_video(telefono: str, link: str, caption: str | None = None) -> dict:
+    """Envía un VIDEO por WhatsApp con un link PÚBLICO (HTTPS) que Meta descarga."""
+    video: dict = {"link": link}
+    if caption:
+        video["caption"] = caption
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": telefono,
+        "type": "video",
+        "video": video,
+    }
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.post(_url(), headers=_headers(), json=payload)
+        if resp.status_code >= 400:
+            logger.error("Meta rechazó el video (%s): %s", resp.status_code, resp.text)
+            resp.raise_for_status()
+        return resp.json()
+
+
 async def marcar_leido_y_escribiendo(message_id: str) -> None:
     """Marca el mensaje como leído (doble check azul) Y muestra "escribiendo…".
 
