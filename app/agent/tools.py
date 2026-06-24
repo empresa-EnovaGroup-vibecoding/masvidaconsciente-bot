@@ -128,6 +128,23 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "recordar_cliente",
+            "description": "Guarda en la ficha del cliente su NOMBRE y/o un dato clave de salud o preferencia (diabético, vegano, alérgico a X, etc.) para reconocerlo y recordarlo la próxima vez. Llámala apenas el cliente te DIGA su nombre (ej. al agendar el pedido) o mencione un dato así. NO inventes: guarda SOLO lo que el cliente dijo.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "nombre": {"type": "string", "description": "Nombre del cliente, si lo dijo."},
+                    "nota": {
+                        "type": "string",
+                        "description": "Dato de salud o preferencia que el cliente mencionó (ej. 'diabético', 'vegana', 'alérgica al maní').",
+                    },
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "generar_datos_pago",
             "description": "Genera el cobro: calcula el total en bolivares (tasa BCV del dia) y devuelve los datos de Pago Movil y un `resumen_cobro` listo para copiar. Usala JUSTO despues de registrar_pedido, pasando el `pedido_id` que esa te devolvio (para cobrar ESE pedido, no uno viejo).",
             "parameters": {
@@ -557,6 +574,29 @@ async def ver_pedidos_cliente(session, telefono):
     }
 
 
+async def recordar_cliente(session, telefono, nombre=None, nota=None):
+    """Guarda en la ficha del cliente su NOMBRE y/o un dato clave (salud/preferencias)
+    para reconocerlo y recordarlo la próxima vez. Solo guarda lo que el cliente dijo."""
+    cliente = (
+        await session.execute(select(Cliente).where(Cliente.telefono == telefono))
+    ).scalar_one_or_none()
+    if cliente is None:
+        cliente = Cliente(telefono=telefono)
+        session.add(cliente)
+    guardado = []
+    if nombre and nombre.strip():
+        cliente.nombre = nombre.strip()[:80]
+        guardado.append(f"nombre={cliente.nombre}")
+    if nota and nota.strip():
+        n = nota.strip()[:200]
+        actuales = (cliente.notas or "").strip()
+        if n.lower() not in actuales.lower():  # no duplicar
+            cliente.notas = f"{actuales}\n{n}".strip() if actuales else n
+            guardado.append("nota")
+    await session.commit()
+    return {"ok": True, "guardado": guardado or "nada nuevo"}
+
+
 # ─── Cobro: datos de Pago Movil y registro de comprobante ────────────
 
 async def get_pedido_esperando_pago(session, telefono):
@@ -881,6 +921,7 @@ _DISPATCH = {
     "registrar_pedido": registrar_pedido,
     "info_negocio": info_negocio,
     "buscar_info": buscar_info,
+    "recordar_cliente": recordar_cliente,
     "ver_pedidos_cliente": ver_pedidos_cliente,
     "generar_datos_pago": generar_datos_pago,
     "registrar_comprobante": registrar_comprobante,

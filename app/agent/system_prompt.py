@@ -7,11 +7,12 @@ Se arma en 2 partes:
   anexan SIEMPRE, así editar la personalidad nunca puede romper el dinero.
 """
 from collections import Counter
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 
 from app.config import get_settings
-from app.models import Conocimiento, Configuracion, Pedido, Producto
+from app.models import Cliente, Conocimiento, Configuracion, Pedido, Producto
 from app.services.db import get_session_factory
 
 settings = get_settings()
@@ -49,6 +50,8 @@ Reglas que NUNCA rompes:
 - Para dudas de ubicación, pago u horarios usa info_negocio
 - Si la duda es sobre UN PRODUCTO en concreto (cuánto dura, si se congela, si es apto para diabéticos, sus ingredientes): usa info_producto de ESE producto y responde SOLO con su ficha. JAMÁS le apliques a un producto un dato de OTRO (ej. la duración de los panes NO vale para las galletas). Si su ficha no trae ese dato, dile con cariño que lo confirmas con la dueña; NO lo inventes
 - Para dudas GENERALES que no son de un producto puntual (políticas, envíos, descuentos, "¿todo es sin gluten?", etc.) usa buscar_info con palabras clave. Responde SOLO con lo que devuelva; si no trae nada, dilo con sinceridad y ofrece consultarlo con la dueña. NUNCA inventes datos de salud, ingredientes ni políticas
+- MEMORIA DEL CLIENTE: si aparece un bloque "FICHA DEL CLIENTE", a ese cliente YA lo conoces — salúdalo por su nombre (cálido y recíproco, sin demasiado texto), NO te presentes de nuevo ni le pidas el nombre, y ten presentes sus datos guardados (no se los vuelvas a preguntar). Cuando el cliente te DIGA su nombre (ej. al agendar el pedido) o un dato de salud/preferencia (diabético, vegano, alérgico…), guárdalo con recordar_cliente para reconocerlo la próxima vez. NUNCA inventes datos del cliente
+- Saluda según la HORA de Venezuela que te indico arriba (buenos días / buenas tardes / buenas noches). Si el cliente te saluda y te pregunta cómo estás, devuélvele el saludo con calidez antes de ayudar
 - Mensajes cortos y planos. Manda VARIOS mensajitos cortos (separa cada uno con una línea en blanco), como una persona real en WhatsApp. NUNCA uses listas con viñetas (* o -) ni *negritas* ni formato: escribe plano. Para listar productos, ponlos en líneas cortas y simples (ej. "Pan keto 25$", no "* Pan Keto en $25.00")
 - Si el cliente manda una nota de voz, responde con naturalidad a lo que dijo
 - Si manda un sticker, emoji o algo sin texto, reacciona breve y calida como una persona; NUNCA digas que "solo lees texto"
@@ -219,10 +222,54 @@ async def _estado_cliente_texto(telefono: str) -> str:
     return "\n".join(lineas)
 
 
+def _saludo_hora_texto() -> str:
+    """Le dice al bot la hora de Venezuela (UTC-4) para que salude acorde (buenos
+    días/tardes/noches). Sin esto, el modelo NO sabe qué hora es y puede equivocarse."""
+    ahora = datetime.now(timezone.utc) - timedelta(hours=4)  # Venezuela = UTC-4
+    h = ahora.hour
+    if h < 12:
+        franja = "buenos días"
+    elif h < 19:
+        franja = "buenas tardes"
+    else:
+        franja = "buenas noches"
+    return f"HORA EN VENEZUELA: son las {ahora:%H:%M} ({franja}). Si saludas, hazlo acorde a la hora."
+
+
+async def _ficha_cliente_texto(telefono: str) -> str:
+    """Ficha del cliente (nombre + datos guardados: salud/preferencias) para que el bot
+    reconozca al que vuelve y recuerde sus datos. Vacío si es nuevo o no tiene datos."""
+    try:
+        factory = get_session_factory()
+        async with factory() as session:
+            c = (
+                await session.execute(select(Cliente).where(Cliente.telefono == telefono))
+            ).scalar_one_or_none()
+    except Exception:  # noqa: BLE001 — leer la ficha nunca debe romper el bot
+        return ""
+    if c is None:
+        return ""
+    partes = []
+    if c.nombre:
+        partes.append(
+            f"Se llama {c.nombre}. YA es cliente conocido: salúdalo por su nombre, cálido y "
+            "recíproco; NO te presentes de nuevo ni le pidas el nombre otra vez."
+        )
+    if c.notas and c.notas.strip():
+        partes.append(
+            "Datos que YA sabes de él/ella (tenlos presente, NO los vuelvas a preguntar): "
+            + c.notas.strip()
+        )
+    if not partes:
+        return ""
+    return "FICHA DEL CLIENTE:\n" + "\n".join(partes)
+
+
 async def construir_system_prompt(
     nombre_cliente: str | None = None, telefono: str | None = None
 ) -> str:
     prompt = await leer_personalidad() + "\n" + _REGLAS
+    prompt += "\n\n" + _saludo_hora_texto()
     if telefono:
         estado = await _estado_cliente_texto(telefono)
         if estado:
@@ -237,6 +284,9 @@ async def construir_system_prompt(
             "con lo que devuelva; si no trae nada, dilo con sinceridad. NUNCA inventes. "
             "Temas disponibles:\n" + indice
         )
-    if nombre_cliente:
+    ficha = await _ficha_cliente_texto(telefono) if telefono else ""
+    if ficha:
+        prompt += "\n\n" + ficha
+    elif nombre_cliente:
         prompt += f"\nEl cliente se llama {nombre_cliente}. Salúdalo por su nombre si es natural."
     return prompt
