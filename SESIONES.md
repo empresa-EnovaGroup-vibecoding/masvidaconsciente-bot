@@ -30,6 +30,8 @@
 - **BLINDAJE de cobro (igual que borrar pedido):** NO se borra un cliente ni se editan items si hay pago confirmado/parcial/reportado. El dinero nunca se borra/altera en silencio.
 - compileall (bot) + `tsc --noEmit` (dashboard) OK.
 
+**4) Decisión "la dueña manda" (bot `faed388`→`a70321e` + dashboard `e2e6375`→`f20bd49`):** primero hice que los botones Borrar/Editar se **deshabilitaran con candado** si el pedido/cliente tenía pago (flags `pago_bloqueante`/`puede_borrar` desde el API). Maired lo rechazó ("muy rígido, candado por todos lados, no le veo la razón"). **Decisión final: SIN candados** — borrar/editar pedido y borrar cliente **siempre disponibles**; antes de tocar plata, el `confirm` muestra la consecuencia ("sale de tus reportes" / "el monto puede no cuadrar") y ella decide. Se quitaron los 409 de `borrar_pedido`/`borrar_cliente`/`editar_items_pedido`; las flags quedan solo para el texto del aviso. Las reglas del BOT con el cobro NO cambian. Ver memoria `panel-la-duena-manda-sin-candados`.
+
 **Deploy pendiente:** bot **web** (API nueva) + **dashboard** (Coolify). El saludo + caché necesitan **web + worker**.
 
 ---
