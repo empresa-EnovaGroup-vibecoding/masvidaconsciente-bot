@@ -389,11 +389,27 @@ async def editar_items_pedido(
 
 @router.get("/productos")
 async def listar_productos(_: str = Depends(usuario_actual)):
+    from app.services import r2
+
     factory = get_session_factory()
     async with factory() as session:
         productos = (
             await session.execute(select(Producto).order_by(Producto.categoria, Producto.nombre))
         ).scalars().all()
+        # Primera FOTO de cada producto, para la miniatura en la tarjeta del catálogo.
+        # UNA sola consulta para todos -> escala a cientos de productos sin N+1.
+        ids = [p.id for p in productos]
+        primera_img: dict[int, str] = {}
+        if ids:
+            filas = (
+                await session.execute(
+                    select(ProductoMedia)
+                    .where(ProductoMedia.producto_id.in_(ids), ProductoMedia.tipo == "imagen")
+                    .order_by(ProductoMedia.producto_id, ProductoMedia.orden, ProductoMedia.id)
+                )
+            ).scalars().all()
+            for m in filas:
+                primera_img.setdefault(m.producto_id, m.clave)  # la primera por orden
     return [
         {
             "id": p.id,
@@ -407,6 +423,7 @@ async def listar_productos(_: str = Depends(usuario_actual)):
             "apto_diabeticos": p.apto_diabeticos,
             "info": p.info,
             "disponible": p.disponible,
+            "imagen": r2.url_publica(primera_img[p.id]) if p.id in primera_img else None,
         }
         for p in productos
     ]
