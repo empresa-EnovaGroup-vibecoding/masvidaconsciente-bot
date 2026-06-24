@@ -105,17 +105,37 @@ def _es_inicio_conversacion(historial: list | None) -> bool:
     return not any((m or {}).get("role") == "assistant" for m in historial)
 
 
+def _pregunta_como_estas(texto: str) -> bool:
+    """True si el cliente pregunta '¿cómo estás?' (o similar)."""
+    t = _sin_acentos(texto or "")
+    return any(p in t for p in ("como estas", "como esta", "como andas", "como te va", "como vas"))
+
+
+def _bot_respondio_estado(texto: str) -> bool:
+    """True si la respuesta del bot ya dice que está bien (para no duplicar)."""
+    t = _sin_acentos(texto or "")
+    return any(p in t for p in ("bien", "gracias a dios", "excelente", "de maravilla"))
+
+
 def _asegurar_saludo(texto: str, mensaje_usuario: str, nombre_cliente: str | None) -> str:
-    """Red de seguridad: si el cliente saludó al INICIO y el bot NO devolvió el saludo,
-    se lo anteponemos cálido (con su nombre si lo conocemos + la franja horaria de
-    Venezuela), para que el bot nunca arranque seco. A mitad de conversación no fuerza nada."""
-    if not _cliente_saludo(mensaje_usuario) or _bot_ya_saludo(texto):
+    """Red de seguridad (la 'puerta' determinista, NO depende del modelo): si el cliente
+    saludó y/o preguntó '¿cómo estás?' al INICIO y el bot no lo devolvió, le anteponemos un
+    saludo cálido (nombre + franja horaria de Venezuela) y/o el "muy bien, gracias a Dios",
+    para que NUNCA arranque seco. A mitad de conversación no fuerza nada."""
+    quiere_saludo = _cliente_saludo(mensaje_usuario) and not _bot_ya_saludo(texto)
+    quiere_estado = _pregunta_como_estas(mensaje_usuario) and not _bot_respondio_estado(texto)
+    if not quiere_saludo and not quiere_estado:
         return texto
-    ahora = datetime.now(timezone.utc) - timedelta(hours=4)  # Venezuela = UTC-4
-    h = ahora.hour
-    franja = "buenos días" if h < 12 else ("buenas tardes" if h < 19 else "buenas noches")
-    nombre = f", {nombre_cliente}" if nombre_cliente else ""
-    return f"¡Hola{nombre}, {franja}! 💚\n\n{texto}"
+    partes = []
+    if quiere_saludo:
+        ahora = datetime.now(timezone.utc) - timedelta(hours=4)  # Venezuela = UTC-4
+        h = ahora.hour
+        franja = "buenos días" if h < 12 else ("buenas tardes" if h < 19 else "buenas noches")
+        nombre = f", {nombre_cliente}" if nombre_cliente else ""
+        partes.append(f"¡Hola{nombre}, {franja}!")
+    if quiere_estado:
+        partes.append("Muy bien, gracias a Dios")
+    return " ".join(partes) + " 💚\n\n" + texto
 
 
 async def responder(
