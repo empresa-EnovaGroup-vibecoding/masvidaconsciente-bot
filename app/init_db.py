@@ -82,6 +82,18 @@ async def main() -> None:
         await session.commit()
         logger.info("Migracion 010 (cuenta en metodos de pago) aplicada")
 
+        # 011: busqueda difusa (pg_trgm + unaccent) para tolerar typos y acentos.
+        # Cada extension/indice va en su PROPIA transaccion: si una falla (p.ej. la
+        # imagen no trae la extension), no tumba las demas ni el arranque del bot.
+        for stmt in _statements(MIGRATIONS / "011_busqueda_difusa.sql"):
+            try:
+                await session.execute(text(stmt))
+                await session.commit()
+            except Exception as e:  # noqa: BLE001 — la busqueda difusa es mejora, no debe romper el deploy
+                await session.rollback()
+                logger.warning("Migracion 011: '%s...' no aplico (%s)", stmt[:40], e)
+        logger.info("Migracion 011 (busqueda difusa) aplicada")
+
         total = (await session.execute(text("SELECT COUNT(*) FROM productos"))).scalar()
         if total and total > 0:
             logger.info("Catálogo ya cargado (%s productos), no se vuelve a sembrar", total)

@@ -17,6 +17,23 @@
 
 ---
 
+## 2026-06-23 — Descuento 20% en divisas + Búsqueda escalable (Fase 1: pg_trgm)
+
+**1) Descuento 20% por pagar en DIVISAS** (Zelle/Binance/efectivo en dólares; en Bs va completo). Commit `4d51436`.
+- `generar_datos_pago` (tools.py): calcula `monto_usd_divisas = monto_usd * 0.80`, lo guarda en `cobro:{tel}` y el `resumen_cobro` ofrece **ambos** precios (Bs por Pago Móvil/transferencia, o USD con 20% en divisas).
+- Reconocimiento (tasks.py): el monto del comprobante **cuadra** si coincide con Bs pleno, USD pleno **O** USD con 20% (divisas). Así un pago por Binance/Zelle con descuento ya NO sale "monto no cuadra".
+- El descuento NO se proclama de más: el precio/detalles solo si preguntan (decisión de la dueña). El "¿sube de precio con alulosa?" → va en **Conocimiento** (no en el prompt).
+
+**2) Búsqueda escalable — Fase 1 (nativa, cero infra nueva).** Detonante: el bot "olvidaba" Conocimiento (tope de 3.500 chars truncaba) y no encontraba productos mal escritos. Este código se replicará a un negocio con **400 productos** → tiene que escalar.
+- **Migración 011** (`011_busqueda_difusa.sql`, idempotente, fail-safe por statement): activa `pg_trgm` + `unaccent` (vienen en `postgres:16`) + índices GIN trigram. Cableada en `init_db.py`.
+- **Búsqueda difusa de productos** (`_buscar_productos_difuso` en tools.py): tolera typos y acentos ("galetas"→Galletas, "limon"→limón). `ver_catalogo`: PRIMERO precisa por prefijo ('pan'=panes, NO empanadas), y SOLO si no calza, difusa. `_buscar_producto` (camino del DINERO): exacto→palabras→difuso con **umbral alto 0.6** (un typo se resuelve, pero jamás se cobra el producto equivocado).
+- **`buscar_info(consulta)`** (nueva herramienta): el bot consulta el Conocimiento **on-demand** (top-4 relevante por trigram) en vez de cargarlo entero → **se acabó el truncado/olvido**. El prompt ya no inyecta el contenido: solo un **índice de títulos** (temas que sabe) y el bot busca el detalle.
+- **Prompt auto-escalable** (`system_prompt.py`): catálogo chico (≤60) = lista completa (ancla anti-invención); catálogo grande = solo categorías + obliga a usar las herramientas. Reglas blindadas: dudas generales → `buscar_info` (nunca inventar).
+- ⚠️ Deploy: **web + worker** (web corre la migración 011; el agente corre en el worker). compileall OK.
+- **Por qué pg_trgm y NO pgvector aún:** OpenRouter no hace embeddings y no hay otro proveedor en el stack; meterlo ahora = dependencia nueva + riesgo de tumbar el bot. pg_trgm resuelve el "encontrar aunque escriban chueco" sin riesgo. Los **vectores/embeddings semánticos** (entender que "celíaco"="sin gluten") quedan para **Fase 2**, fail-safe, sobre esta base ya probada.
+
+---
+
 ## 2026-06-21 — Módulo "Métodos de pago" (varias cuentas) + validación de monto
 
 Tras pruebas: el bot aceptaba mal (un voucher de Provincial pasó por coincidir solo el NOMBRE; y el monto no se comparaba). Decisión de arquitectura (con la proveedora): **los datos de pago viven en la BD/panel (una fuente), NO en el prompt**; el prompt solo "los da la herramienta". Brief: `BRIEF-verificacion-pagos.md`.

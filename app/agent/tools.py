@@ -7,11 +7,19 @@ import json
 import logging
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 
 from app.config import get_settings
-from app.models import CatalogoPdf, Cliente, Configuracion, Pago, Pedido, Producto
+from app.models import (
+    CatalogoPdf,
+    Cliente,
+    Conocimiento,
+    Configuracion,
+    Pago,
+    Pedido,
+    Producto,
+)
 from app.services.db import get_session_factory
 from app.services.meta_client import enviar_texto
 from app.services.redis_client import get_cache, set_cache
@@ -32,7 +40,7 @@ TOOL_SCHEMAS = [
                 "properties": {
                     "busqueda": {
                         "type": "string",
-                        "description": "Palabra o tipo que pide el cliente (ej. 'pan', 'quesillo', 'galleta'). Trae solo los productos cuyo NOMBRE empieza por esa palabra.",
+                        "description": "Palabra o tipo que pide el cliente (ej. 'pan', 'quesillo', 'galleta'). Trae los productos cuyo nombre se parece, tolerando errores de escritura y acentos (ej. 'galetas' o 'limon' igual encuentran).",
                     },
                     "categoria": {
                         "type": "string",
@@ -88,6 +96,23 @@ TOOL_SCHEMAS = [
             "name": "info_negocio",
             "description": "Da información del negocio: ubicación, método de pago y redes. Úsala para dudas de ubicación, cómo pagar, etc.",
             "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "buscar_info",
+            "description": "Busca en la base de conocimiento del negocio (lo que la dueña cargó: ingredientes, alergias, conservación/duración, envíos, garantías, dudas frecuentes...). Úsala SIEMPRE que el cliente haga una pregunta general que no sea precio/pedido (ej. '¿tiene huevo?', '¿cuánto dura?', '¿es apto para diabéticos?', '¿hacen envíos?'). Responde SOLO con lo que devuelva; si no trae nada, dilo con sinceridad y no inventes.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "consulta": {
+                        "type": "string",
+                        "description": "La duda del cliente, en pocas palabras clave (ej. 'huevo', 'duración pan', 'diabéticos', 'envíos nacionales').",
+                    }
+                },
+                "required": ["consulta"],
+            },
         },
     },
     {
@@ -170,16 +195,67 @@ def _coincide_busqueda(nombre: str, palabras: list[str]) -> bool:
     return all(any(t.startswith(w) for t in tokens) for w in palabras)
 
 
+async def _buscar_productos_difuso(
+    session, consulta, *, limite=12, umbral=0.3, solo_disponibles=True
+):
+    """Búsqueda TOLERANTE a errores de tipeo y acentos (pg_trgm + unaccent).
+    Encuentra 'galletas' aunque escriban 'galetas', y 'limón' aunque pongan 'limon'.
+    Devuelve productos ordenados del más parecido al menos. Si pg_trgm aún no está
+    o la consulta falla, devuelve [] y el llamador cae a la búsqueda exacta de
+    siempre: NUNCA rompe el flujo (la búsqueda difusa es una mejora, no un requisito)."""
+    q = (consulta or "").strip()
+    if len(q) < 2:
+        return []
+    cond = "AND disponible IS TRUE" if solo_disponibles else ""
+    sql = text(
+        f"""
+        SELECT id, word_similarity(unaccent(lower(:q)), unaccent(lower(nombre))) AS sim
+        FROM productos
+        WHERE (word_similarity(unaccent(lower(:q)), unaccent(lower(nombre))) >= :umbral
+               OR unaccent(lower(nombre)) LIKE '%' || unaccent(lower(:q)) || '%')
+              {cond}
+        ORDER BY sim DESC
+        LIMIT :lim
+        """
+    )
+    try:
+        rows = (await session.execute(sql, {"q": q, "umbral": umbral, "lim": limite})).all()
+    except Exception:  # noqa: BLE001 — sin pg_trgm: el llamador usa la búsqueda exacta
+        return []
+    ids = [r.id for r in rows]
+    if not ids:
+        return []
+    prods = (
+        await session.execute(select(Producto).where(Producto.id.in_(ids)))
+    ).scalars().all()
+    orden = {pid: i for i, pid in enumerate(ids)}
+    prods.sort(key=lambda p: orden.get(p.id, 10_000))
+    return prods
+
+
 async def ver_catalogo(session, telefono, categoria=None, busqueda=None):
     stmt = select(Producto).where(Producto.disponible.is_(True))
     if categoria:
         stmt = stmt.where(Producto.categoria == categoria.lower())
     productos = (await session.execute(stmt)).scalars().all()
     if busqueda:
-        # Filtra por NOMBRE: el cliente pidió algo específico (pan, quesillo...).
+        # 1) Búsqueda PRECISA por prefijo de palabra: 'pan' = panes, NO empanadas.
         palabras = [w for w in busqueda.lower().split() if len(w) > 2]
-        if palabras:
-            productos = [p for p in productos if _coincide_busqueda(p.nombre, palabras)]
+        exactos = (
+            [p for p in productos if _coincide_busqueda(p.nombre, palabras)]
+            if palabras
+            else productos
+        )
+        if exactos:
+            productos = exactos
+        else:
+            # 2) Nada calzó (typo o nombre suelto): DIFUSA tolerante a errores/acentos.
+            difusos = await _buscar_productos_difuso(
+                session, busqueda, limite=12, umbral=0.4, solo_disponibles=True
+            )
+            if categoria:
+                difusos = [p for p in difusos if (p.categoria or "") == categoria.lower()]
+            productos = difusos
     if not productos:
         nota = (
             f"no tienes ningún producto que sea '{busqueda}'; dile con sinceridad que de eso no tienes y ofrécele lo que sí hay"
@@ -201,9 +277,12 @@ async def ver_catalogo(session, telefono, categoria=None, busqueda=None):
 
 
 async def _buscar_producto(session, nombre: str, solo_disponibles: bool = False):
-    """Busca un producto de forma tolerante: primero por la frase completa y, si
-    no calza, exigiendo que TODAS las palabras significativas (>2 letras) aparezcan
-    en el nombre. Así 'empanada carne mechada' encuentra 'Empanada de carne mechada'."""
+    """Busca UN producto para emparejarlo en el pedido (camino del DINERO).
+    Orden de prioridad, de más a menos preciso:
+    1) frase completa por substring; 2) todas las palabras significativas presentes;
+    3) último recurso DIFUSO con umbral ALTO (typos), para no cobrar el equivocado.
+    Así 'empanada carne mechada' calza con 'Empanada de carne mechada' y 'galetas'
+    con 'Galletas New York', pero un parecido lejano NO se acepta (devuelve None)."""
     def base():
         s = select(Producto)
         return s.where(Producto.disponible.is_(True)) if solo_disponibles else s
@@ -214,12 +293,19 @@ async def _buscar_producto(session, nombre: str, solo_disponibles: bool = False)
     if prod is not None:
         return prod
     palabras = [p for p in nombre.lower().split() if len(p) > 2]
-    if not palabras:
-        return None
-    stmt = base()
-    for p in palabras:
-        stmt = stmt.where(Producto.nombre.ilike(f"%{p}%"))
-    return (await session.execute(stmt)).scalars().first()
+    if palabras:
+        stmt = base()
+        for p in palabras:
+            stmt = stmt.where(Producto.nombre.ilike(f"%{p}%"))
+        prod = (await session.execute(stmt)).scalars().first()
+        if prod is not None:
+            return prod
+    # Último recurso: difuso con umbral ALTO (0.6). Solo acepta un parecido MUY claro,
+    # para que un typo se resuelva pero jamás se cobre un producto distinto.
+    candidatos = await _buscar_productos_difuso(
+        session, nombre, limite=1, umbral=0.6, solo_disponibles=solo_disponibles
+    )
+    return candidatos[0] if candidatos else None
 
 
 async def info_producto(session, telefono, nombre):
@@ -308,6 +394,57 @@ async def info_negocio(session, telefono):
         "pago": config.get("negocio_pago", "Pago Móvil"),
         "instagram": config.get("negocio_instagram", "@masvidaconsciente"),
     }
+
+
+async def buscar_info(session, telefono, consulta):
+    """Busca en la base de Conocimiento (FAQ/info del negocio que carga la dueña en
+    el panel) las entradas MÁS relacionadas con la duda del cliente — tolerante a
+    typos y acentos. Devuelve SOLO lo relevante (no toda la base), por eso escala a
+    cientos de entradas sin inflar el prompt. Si no hay nada cargado del tema, lo dice."""
+    q = (consulta or "").strip()
+    if len(q) < 2:
+        return {"resultados": [], "nota": "consulta vacía; pídele al cliente que aclare su duda"}
+    sql = text(
+        """
+        SELECT titulo, contenido,
+               GREATEST(
+                 similarity(unaccent(lower(coalesce(titulo, ''))), unaccent(lower(:q))),
+                 word_similarity(
+                     unaccent(lower(:q)),
+                     unaccent(lower(coalesce(titulo, '') || ' ' || coalesce(contenido, '')))
+                 )
+               ) AS sim
+        FROM conocimiento
+        WHERE unaccent(lower(coalesce(titulo, '') || ' ' || coalesce(contenido, '')))
+                  LIKE '%' || unaccent(lower(:q)) || '%'
+           OR word_similarity(
+                  unaccent(lower(:q)),
+                  unaccent(lower(coalesce(titulo, '') || ' ' || coalesce(contenido, '')))
+              ) >= :umbral
+           OR similarity(unaccent(lower(coalesce(titulo, ''))), unaccent(lower(:q))) >= :umbral
+        ORDER BY sim DESC
+        LIMIT 4
+        """
+    )
+    try:
+        rows = (await session.execute(sql, {"q": q, "umbral": 0.25})).all()
+    except Exception:  # noqa: BLE001 — sin pg_trgm: respaldo por substring simple
+        rows = (
+            await session.execute(
+                select(Conocimiento.titulo, Conocimiento.contenido)
+                .where(Conocimiento.titulo.ilike(f"%{q}%") | Conocimiento.contenido.ilike(f"%{q}%"))
+                .limit(4)
+            )
+        ).all()
+    if not rows:
+        return {
+            "resultados": [],
+            "nota": (
+                f"no hay información cargada sobre '{q}'. Dilo con sinceridad y, si aplica, "
+                "ofrece consultarlo con la dueña; NO te lo inventes"
+            ),
+        }
+    return {"resultados": [{"tema": r.titulo, "info": r.contenido} for r in rows]}
 
 
 async def ver_pedidos_cliente(session, telefono):
@@ -582,6 +719,7 @@ _DISPATCH = {
     "info_producto": info_producto,
     "registrar_pedido": registrar_pedido,
     "info_negocio": info_negocio,
+    "buscar_info": buscar_info,
     "ver_pedidos_cliente": ver_pedidos_cliente,
     "generar_datos_pago": generar_datos_pago,
     "registrar_comprobante": registrar_comprobante,

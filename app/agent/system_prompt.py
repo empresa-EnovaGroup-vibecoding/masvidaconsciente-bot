@@ -6,6 +6,8 @@ Se arma en 2 partes:
 - REGLAS críticas (BLINDADAS, NO editables): protegen el flujo de cobro. Se
   anexan SIEMPRE, así editar la personalidad nunca puede romper el dinero.
 """
+from collections import Counter
+
 from sqlalchemy import select
 
 from app.config import get_settings
@@ -43,6 +45,7 @@ Reglas que NUNCA rompes:
 - Al registrar el comprobante, agradécele con calidez, dile que RECIBISTE su pago y que coordinas la entrega/envío, y queda atenta por si quiere algo más (eres una closer: NO cortes la conversación). NUNCA digas que verificaste el dinero en el banco ni que el banco ya lo confirmó; tú lo recibes y la dueña lo revisa en su banco
 - CADA PEDIDO ES SEPARADO. El estado real de los pedidos te lo digo en el bloque "ESTADO DEL CLIENTE" (esa es la verdad, manda sobre el chat). Si un pedido ya se cerró/pagó, lo que el cliente pida ahora es un pedido NUEVO: IGNORA los productos de pedidos anteriores, no los arrastres. NUNCA deduzcas del chat si un pago entró ni cuánto falta (eso lo decide la dueña y te llega como aviso); si preguntan por su saldo o si ya pagaron, di que lo estás verificando, NO calcules diferencias
 - Para dudas de ubicación, pago u horarios usa info_negocio
+- Para CUALQUIER otra duda general (ingredientes, alergias, si algo lleva huevo/azúcar, si es apto para diabéticos, conservación, cuánto dura, envíos, garantías, cualquier "¿tiene…?") usa buscar_info con palabras clave de la pregunta. Responde SOLO con lo que devuelva; si no trae nada, dilo con sinceridad y ofrece consultarlo con la dueña. NUNCA inventes ingredientes, datos de salud ni políticas
 - Mensajes cortos y planos. Manda VARIOS mensajitos cortos (separa cada uno con una línea en blanco), como una persona real en WhatsApp. NUNCA uses listas con viñetas (* o -) ni *negritas* ni formato: escribe plano. Para listar productos, ponlos en líneas cortas y simples (ej. "Pan keto 25$", no "* Pan Keto en $25.00")
 - Si el cliente manda una nota de voz, responde con naturalidad a lo que dijo
 - Si manda un sticker, emoji o algo sin texto, reacciona breve y calida como una persona; NUNCA digas que "solo lees texto"
@@ -94,9 +97,19 @@ async def leer_modelo_ia() -> str:
     return settings.openrouter_model
 
 
-async def _catalogo_texto() -> str:
-    """Lista compacta del catálogo REAL, para anclar al agente en CADA mensaje.
-    Es el 'verificador' preventivo: el bot ve los nombres exactos y no inventa."""
+# Si el catálogo tiene MÁS de este número de productos, en el prompt va solo el índice
+# de categorías (no cada producto), para no inflarlo. El detalle lo trae ver_catalogo.
+# Por debajo, va la lista completa como ancla anti-invención (negocio chico, como másvida).
+_CATALOGO_INLINE_MAX = 60
+
+
+async def _catalogo_bloque() -> str:
+    """Sección de catálogo para el prompt. AUTO-ESCALA según el tamaño del catálogo:
+    - Pocos productos: lista completa (nombre + precio), como 'ancla' para que el bot no
+      invente (caso másvida).
+    - Muchos (p.ej. los 400 de otro cliente): solo el índice de CATEGORÍAS; el detalle se
+      consulta con ver_catalogo/info_producto. Así el MISMO código sirve a un negocio chico
+      y a uno grande sin inflar el prompt ni diluir las reglas del cobro."""
     try:
         factory = get_session_factory()
         async with factory() as session:
@@ -107,33 +120,53 @@ async def _catalogo_texto() -> str:
             ).scalars().all()
     except Exception:  # noqa: BLE001 — sin catálogo igual responde (las tools lo traen)
         return ""
-    lineas = []
-    for p in prods:
-        precio = f"${p.precio}" if p.precio is not None else "consultar"
-        cat = f" — {p.categoria}" if p.categoria else ""
-        agotado = "" if p.disponible else " [AGOTADO]"
-        lineas.append(f"- {p.nombre} ({precio}){cat}{agotado}")
-    return "\n".join(lineas)
+    if not prods:
+        return ""
+    if len(prods) <= _CATALOGO_INLINE_MAX:
+        lineas = []
+        for p in prods:
+            precio = f"${p.precio}" if p.precio is not None else "consultar"
+            cat = f" — {p.categoria}" if p.categoria else ""
+            agotado = "" if p.disponible else " [AGOTADO]"
+            lineas.append(f"- {p.nombre} ({precio}){cat}{agotado}")
+        return (
+            "\n\nCATÁLOGO REAL — estos son los ÚNICOS productos que existen. NO menciones, "
+            "ofrezcas ni inventes NINGUNO fuera de esta lista; usa el nombre EXACTO. Si te "
+            "piden algo que no está, dilo y ofrece de esta lista:\n" + "\n".join(lineas)
+        )
+    # Catálogo grande: solo categorías + conteo. El bot NO se lo sabe de memoria.
+    cuenta = Counter((p.categoria or "otros") for p in prods if p.disponible)
+    cats = "\n".join(f"- {cat} ({n} productos)" for cat, n in sorted(cuenta.items()))
+    return (
+        "\n\nCATÁLOGO (grande) — NO te sabes la lista de memoria. Estas son las categorías; "
+        "para ver productos, precios o ingredientes USA SIEMPRE ver_catalogo/info_producto y "
+        "básate SOLO en lo que devuelvan. JAMÁS inventes un producto ni un precio:\n" + cats
+    )
 
 
-async def _conocimiento_texto() -> str:
-    """Info y FAQ del negocio (editable desde el panel), para que el bot responda
-    dudas con datos REALES en vez de inventar. Acotado (limit + truncado) para no
-    inflar el prompt ni diluir las reglas blindadas del cobro."""
+async def _conocimiento_indice() -> str:
+    """ÍNDICE de temas que la dueña cargó en Conocimiento (solo los TÍTULOS, no el
+    contenido). Le dice al bot QUÉ sabe el negocio para que use buscar_info y traiga el
+    detalle on-demand. Antes se inyectaba el contenido completo y se TRUNCABA (el bot
+    'olvidaba' lo que no cabía); ahora el detalle no vive en el prompt, se busca. Escala
+    a cientos de temas sin inflar el prompt ni diluir el cobro."""
     try:
         factory = get_session_factory()
         async with factory() as session:
             filas = (
                 await session.execute(
-                    select(Conocimiento)
+                    select(Conocimiento.titulo)
                     .order_by(Conocimiento.categoria, Conocimiento.titulo)
-                    .limit(40)
+                    .limit(200)
                 )
-            ).scalars().all()
+            ).all()
     except Exception:  # noqa: BLE001
         return ""
-    texto = "\n".join(f"- {c.titulo}: {c.contenido}" for c in filas)
-    return texto if len(texto) <= 3500 else texto[:3500] + "…"
+    titulos = [r.titulo for r in filas if r.titulo]
+    if not titulos:
+        return ""
+    texto = " · ".join(titulos)
+    return texto if len(texto) <= 2000 else texto[:2000] + "…"
 
 
 async def _estado_cliente_texto(telefono: str) -> str:
@@ -191,20 +224,15 @@ async def construir_system_prompt(
         estado = await _estado_cliente_texto(telefono)
         if estado:
             prompt += "\n\n" + estado
-    catalogo = await _catalogo_texto()
-    if catalogo:
+    prompt += await _catalogo_bloque()
+    indice = await _conocimiento_indice()
+    if indice:
         prompt += (
-            "\n\nCATÁLOGO REAL — estos son los ÚNICOS productos que existen. NO menciones, "
-            "ofrezcas ni inventes NINGUNO fuera de esta lista; usa el nombre EXACTO. Si te piden "
-            "algo que no está, dilo y ofrece de esta lista:\n" + catalogo
-        )
-    info = await _conocimiento_texto()
-    if info:
-        prompt += (
-            "\n\nINFORMACIÓN DEL NEGOCIO (úsala para dudas generales: horarios, envíos, "
-            "políticas, cómo pedir. Para productos, precios e ingredientes manda SIEMPRE el "
-            "catálogo y las herramientas; si esta info y el catálogo difieren, gana el catálogo):\n"
-            + info
+            "\n\nTEMAS QUE SÍ SABES (la dueña los cargó en Conocimiento). Para CUALQUIER duda "
+            "general (ingredientes, alergias, si algo lleva huevo/azúcar, conservación, cuánto "
+            "dura, envíos, políticas...) llama a buscar_info con palabras clave y responde SOLO "
+            "con lo que devuelva; si no trae nada, dilo con sinceridad. NUNCA inventes. "
+            "Temas disponibles:\n" + indice
         )
     if nombre_cliente:
         prompt += f"\nEl cliente se llama {nombre_cliente}. Salúdalo por su nombre si es natural."
