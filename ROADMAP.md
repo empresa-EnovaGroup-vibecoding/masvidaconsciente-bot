@@ -20,13 +20,23 @@ Las **FASES 0 a 3 ya están hechas y desplegadas**:
 
 ## 🔨 EN QUÉ ESTAMOS AHORA (lo siguiente, en orden)
 
-> Cada mejora se construye con su propio `PRP-*.md`. Para trabajar una, dime: "trabajemos el Plan A".
+> 📍 **Pestaña NUEVA de Claude: empieza leyendo este bloque + la última entrada de SESIONES.** Ahí está el estado REAL (no asumir de memoria vieja).
 
-- 🛠️ **Voz del bot (closer = Whuilianny real)** — en progreso/afinando. Guión en `BRIEF-closer-masvida.md`. Ya desplegado: habla en 1ª persona, varios mensajitos cortos, plano (sin viñetas/negritas), no re-saluda en cada mensaje.
-- **PLAN A — Memoria + ficha del cliente** *(aprobado construir)*: que el bot reconozca al cliente que vuelve (nombre, nº de pedidos, última compra, notas) leyéndolo de Postgres. Decisión pendiente: cuántos días recuerda el detalle de la charla (sugerido 7).
-- **PLAN B — Arreglar los comprobantes de pago** *(bug)*: el bot no reconoce bien las imágenes de comprobante. Toca el dinero → con cuidado.
-- ✅ **El bot dice que mandó el catálogo pero NO lo manda** — **RESUELTO** (verificado en código 2026-06-20). Hay red de seguridad en `app/agent/agent.py` (`_asegurar_catalogo` + `_afirma_envio_catalogo`): si el agente afirma el envío sin llamar la herramienta, el código **envía el PDF de verdad**; si no hay PDF, reescribe el texto para no mentir. Riesgo residual mínimo: la detección de "lo afirmó" es por lista de frases (una redacción rara podría escapar).
-- **PLAN C — Pagos multi-método + descuento por divisas** *(Paso 2)*: el bot pregunta el método y por efectivo/divisas aplica 20% + delivery gratis.
+**✅ Terminado y verificado en vivo (junio 2026):**
+- Comprobantes multi-método (Pago Móvil/Transferencia/Zelle/Binance) + validación de monto (Bs/USD/USD con descuento).
+- Descuento 20% en divisas (cotiza Y reconoce el monto con descuento).
+- Búsqueda escalable: **Fase 1** pg_trgm (encuentra aunque escriban con errores) + **Fase 2** embeddings semánticos vía OpenRouter (entiende por significado, ej. "celíaco"="sin gluten").
+- **Ficha por producto** (duración, ¿se congela?, ¿apto diabéticos?, + info) y regla antiinvención (no inventa datos del producto).
+- **Fotos y videos por producto**: subir en el panel → Cloudflare R2 → el bot las **envía por WhatsApp** cuando el cliente las pide.
+- El bot "dice que mandó el catálogo": red de seguridad OK (`_asegurar_catalogo`).
+
+**🔨 Pendiente (en orden sugerido):**
+- 🔴 **Seguridad — ROTAR llaves** expuestas en el chat durante el setup de R2: META_ACCESS_TOKEN + META_APP_SECRET, OPENROUTER_API_KEY, JWT_SECRET, ADMIN_PASSWORD, llaves R2. **Antes de lanzar con clientes reales.**
+- 🟡 **Cargar contenido** (trabajo de la dueña, el bot ya está listo): llenar las **fichas** de los productos (duración/congela/diabéticos) y más **Conocimiento** (FAQ: alergias, conservación, envíos…).
+- 🟡 **Voz del bot (closer Whuilianny)** — afinar tono. `BRIEF-closer-masvida.md`.
+- ⚪ **PLAN A — Memoria/ficha del cliente que vuelve**: reconocer al cliente (nombre, nº de pedidos, última compra, notas) desde Postgres. Decidir cuántos días recuerda el detalle (sugerido 7).
+- ⚪ **Orden/limpieza:** redeploy del **web** para igualar versión con el worker; pasar el repo de GitHub a **privado**.
+- ⚪ **(Opcional) Blindar el envío de fotos** con red de seguridad en código (hoy funciona; si el modelo vuelve a "anclarse" en el historial y no llama la herramienta, lo blindamos como el catálogo).
 
 ---
 
