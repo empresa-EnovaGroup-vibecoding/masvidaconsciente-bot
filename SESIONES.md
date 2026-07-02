@@ -17,6 +17,18 @@
 
 ---
 
+## 2026-07-01 — El bot ahora SABE cuántas unidades trae cada producto
+
+**Problema (visto en un chat real):** el cliente pidió "empanadas" y el bot preguntó "¿cuántas quieres?" sin decir cuántas trae el paquete (el cliente terminó preguntando "¿cuántas trae el paquete?"). Causa hallada **mapeando el código real** (workflow de lectura): el menú que se inyecta SIEMPRE en el system prompt (`_catalogo_bloque` en `app/agent/system_prompt.py`) solo llevaba **nombre + precio + categoría** — NO la `presentacion` (el campo de texto libre donde viven las unidades, ej. "8 unidades"). El bot no las conocía en su "menú de cabeza" sin llamar una herramienta, y nada lo empujaba a hacerlo.
+
+**Fix (bot, `_catalogo_bloque`):** cada línea del catálogo permanente ahora incluye la presentación → `- Empanadas ($14, 8 unidades) — Congelados`. Y una nota corta en el encabezado del bloque: puede decirle al cliente cuántas unidades trae "cuando venga al caso" (autónomo, **NO guionado** — respeta la decisión anti-sobreguión). **No toca el cálculo del dinero** (precios/subtotales/total siguen saliendo SIEMPRE de las herramientas). Cambio **aditivo**, en la parte blindada (código, no editable desde el panel). `compileall` OK.
+
+**Deploy pendiente:** bot **web + worker** (Coolify) — el menú permanente lo usan ambos.
+
+**Diferido (acordado con Maired — ir de a uno, sin abrumar):** (B) regla "nombre exacto manda"; (C) desambiguar en `_buscar_producto` cuando el cliente escribe corto ("empanadas" → hoy agarra una de las 3 al azar con `.first()` sin `ORDER BY`; falta priorizar el match exacto y, si de verdad hay varias, preguntar cuál); (D) afinar la voz para seguir el hilo de la venta. Fase 2 opcional: campo de **sinónimos/alias** por producto ("salteñas", "de plátano"). Nota: el seed `002_seed_catalogo.sql` está desactualizado — la verdad son los datos que la dueña editó en el panel.
+
+---
+
 ## 2026-06-24 (tarde) — Voz: puerta de saludo + decisión anti-sobreguión · Prompt caching · Editar cliente/pedidos
 
 **1) Voz / saludo (bot `7e54049` + `5fad1fe`):** red de seguridad EN CÓDIGO (`_asegurar_saludo` en agent.py) que, SOLO al inicio de la conversación, garantiza que si el cliente saluda y/o pregunta "¿cómo estás?" el bot devuelva el saludo + "Muy bien, gracias a Dios" (con nombre + franja horaria VE). Es la "puerta/gate" determinista que mencionaba su amigo — sin agente extra ni costo.

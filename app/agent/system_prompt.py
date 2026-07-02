@@ -135,12 +135,15 @@ async def _catalogo_bloque() -> str:
         lineas = []
         for p in prods:
             precio = f"${p.precio}" if p.precio is not None else "consultar"
+            pres = f", {p.presentacion}" if p.presentacion else ""
             cat = f" — {p.categoria}" if p.categoria else ""
             agotado = "" if p.disponible else " [AGOTADO]"
-            lineas.append(f"- {p.nombre} ({precio}){cat}{agotado}")
+            lineas.append(f"- {p.nombre} ({precio}{pres}){cat}{agotado}")
         return (
             "\n\nCATÁLOGO REAL — estos son los ÚNICOS productos que existen. NO menciones, "
-            "ofrezcas ni inventes NINGUNO fuera de esta lista; usa el nombre EXACTO. Si te "
+            "ofrezcas ni inventes NINGUNO fuera de esta lista; usa el nombre EXACTO. Entre "
+            "paréntesis va el precio y la presentación (cuántas unidades trae): puedes decirle "
+            "al cliente cuántas unidades trae un producto cuando venga al caso. Si te "
             "piden algo que no está, dilo y ofrece de esta lista:\n" + "\n".join(lineas)
         )
     # Catálogo grande: solo categorías + conteo. El bot NO se lo sabe de memoria.
