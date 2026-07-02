@@ -17,13 +17,25 @@
 
 ---
 
+## 2026-07-02 — Arreglo de unidades DESPLEGADO en producción + rescate de acceso a Coolify
+
+**Resultado:** el arreglo de las unidades (commit `8c4d0ce`) ya está **EN PRODUCCIÓN y verificado en vivo**. Bot **web** y **worker** redeployados desde `master`; ambos contenedores nuevos corriendo, con el código nuevo confirmado dentro (`_catalogo_bloque` con "cuántas unidades trae"), worker Celery arrancó limpio, `api-masvida.enovagroup.tech` responde 200. Base de datos del bot, Redis y dashboard **intactos** (no se tocaron).
+
+**Cómo se hizo (con navegador Playwright + SSH):** se entró a Hostinger, se dio acceso SSH a la IA en el VPS viejo (`2.25.139.106`, donde vive el bot) y se desplegó por la **API de Coolify** (habilitada temporalmente y **vuelta a desactivar** al terminar; token temporal borrado).
+
+**Bug de infra encontrado y arreglado (causa por la que Coolify no podía desplegar):** Coolify no podía entrar por SSH a su propio servidor → *"Server is not functional / Permission denied"* → por eso también mostraba todos los contenedores como "exited:unhealthy" (estado falso; los reales estaban *Up*). Causa raíz: en `/root/.ssh/authorized_keys` la **llave RSA del servidor-1 de Coolify quedó corrupta** — al plantar la llave de la IA la sesión previa, el archivo no terminaba en salto de línea y la llave nueva se **concatenó dentro** de la de Coolify, invalidándola. Fix: se reconstruyó `authorized_keys` limpio (llave localhost + llave server-1 de Coolify + llave IA), con **respaldo previo** (`authorized_keys.bak.*`) y validación (`ssh-keygen -l` = 3 llaves OK). Verificado: Coolify ya hace SSH a su server (`COOLIFY_SSH_OK`). **Aprendizaje:** al hacer `echo key >> authorized_keys`, asegurar SIEMPRE que el archivo termine en `\n` antes (o usar un método que lo garantice), o se corrompe la última llave.
+
+**Descubrimiento importante (migración a medias):** `coolify.enovagroup.tech` ya **NO** apunta al VPS viejo — resuelve a **`152.53.194.89`** (otro servidor, seguramente el Coolify NUEVO de la migración). Pero `api-masvida` y `panel-masvida` siguen en el VPS **viejo** (`2.25.139.106`), donde corren el bot/worker/dashboard/BD. Por eso el login de Maired a `coolify.enovagroup.tech` fallaba: el navegador entraba al Coolify **nuevo** mientras las apps y sus datos viven en el **viejo**. **Pendiente:** decidir el plan de migración y arreglar el acceso de Maired al Coolify que de verdad usa (el nuevo, `152.53.194.89`) — requiere acceso a ese servidor. La clave root del VPS viejo se cambió a un valor conocido (entregado a Maired por chat, NO se guarda aquí).
+
+---
+
 ## 2026-07-01 — El bot ahora SABE cuántas unidades trae cada producto
 
 **Problema (visto en un chat real):** el cliente pidió "empanadas" y el bot preguntó "¿cuántas quieres?" sin decir cuántas trae el paquete (el cliente terminó preguntando "¿cuántas trae el paquete?"). Causa hallada **mapeando el código real** (workflow de lectura): el menú que se inyecta SIEMPRE en el system prompt (`_catalogo_bloque` en `app/agent/system_prompt.py`) solo llevaba **nombre + precio + categoría** — NO la `presentacion` (el campo de texto libre donde viven las unidades, ej. "8 unidades"). El bot no las conocía en su "menú de cabeza" sin llamar una herramienta, y nada lo empujaba a hacerlo.
 
 **Fix (bot, `_catalogo_bloque`):** cada línea del catálogo permanente ahora incluye la presentación → `- Empanadas ($14, 8 unidades) — Congelados`. Y una nota corta en el encabezado del bloque: puede decirle al cliente cuántas unidades trae "cuando venga al caso" (autónomo, **NO guionado** — respeta la decisión anti-sobreguión). **No toca el cálculo del dinero** (precios/subtotales/total siguen saliendo SIEMPRE de las herramientas). Cambio **aditivo**, en la parte blindada (código, no editable desde el panel). `compileall` OK.
 
-**Deploy pendiente:** bot **web + worker** (Coolify) — el menú permanente lo usan ambos.
+**Deploy:** ✅ HECHO el 2026-07-02 (bot **web + worker**, verificado en vivo — ver entrada de esa fecha).
 
 **Diferido (acordado con Maired — ir de a uno, sin abrumar):** (B) regla "nombre exacto manda"; (C) desambiguar en `_buscar_producto` cuando el cliente escribe corto ("empanadas" → hoy agarra una de las 3 al azar con `.first()` sin `ORDER BY`; falta priorizar el match exacto y, si de verdad hay varias, preguntar cuál); (D) afinar la voz para seguir el hilo de la venta. Fase 2 opcional: campo de **sinónimos/alias** por producto ("salteñas", "de plátano"). Nota: el seed `002_seed_catalogo.sql` está desactualizado — la verdad son los datos que la dueña editó en el panel.
 
