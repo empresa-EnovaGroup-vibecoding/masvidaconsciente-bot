@@ -17,6 +17,29 @@
 
 ---
 
+## 2026-07-02 (tarde) — 🚀 MIGRACIÓN COMPLETA: de Hostinger a netcup + dominio propio
+
+**Resultado:** másvida corre **100% en el servidor NUEVO** (netcup `152.53.89.118`, hostname `v2202607375079477495`) con **dominio propio** `masvidaconsciente.store`. WhatsApp verificado y funcionando de punta a punta (mensaje real procesado por el bot nuevo → OpenRouter → respuesta → guardado en la BD nueva). El servidor **viejo** (Hostinger `2.25.139.106`) queda **de RESPALDO, intacto — NO borrar** hasta tener días de estabilidad.
+
+**Nuevas URLs (todas con https/Let's Encrypt automático):**
+- Bot / webhook: `https://api.masvidaconsciente.store` (webhook Meta: `/webhook/whatsapp`)
+- Panel de la dueña: `https://panel.masvidaconsciente.store`
+- Coolify infra nuevo: `http://152.53.89.118:8000` (admin `masvidaconsciente1@gmail.com`)
+
+**Cómo se hizo (SSH + API Coolify + Playwright + Graph API):**
+1. **Respaldo doble** de la BD (pg_dump, en viejo + local).
+2. En el Coolify nuevo (ya tenía proyecto "masvida" + deploy keys): se crearon vía **API** PostgreSQL **16.14** + Redis **7.2** (mismas imágenes) y las **3 apps** (bot `/Dockerfile` :8000, worker `/Dockerfile.worker`, dashboard repo dashboard) jalando los repos privados con las deploy keys.
+3. **Datos restaurados** (11 tablas) y **env vars migradas** (decrypt del Coolify viejo → set en el nuevo; se **deduplicaron** `ADMIN_PASSWORD`/`JWT_SECRET`, y se **reapuntaron** `DATABASE_URL`/`REDIS_URL` a las bases nuevas por su UUID interno). Ojo gotcha: el endpoint `envs/bulk` **duplica** cada var → hay que deduplicar por SQL (ROW_NUMBER por key).
+4. **DNS** en Namecheap (Playwright): registros A `api` y `panel` → 152.53.89.118. Dominios asignados en Coolify → https automático.
+5. **Verificado idéntico** viejo vs nuevo (44 mensajes, 3 clientes, 29 productos, 19 config, 36 media…) → sin resync necesario.
+6. **Palanca WhatsApp**: se cambió el webhook por la **Graph API** (`POST /{WABA}/subscribed_apps` con `override_callback_uri` + `verify_token`) — override **POR CLIENTE**, así que **solo másvida** cambió, los otros clientes de la app "Enova API" quedaron intactos. Meta respondió `{"success":true}` y su verificación llegó al bot nuevo (200 OK). **NO se tocó Facebook ni el webhook a nivel de app** (evita riesgo Tech Provider).
+
+**Reversible:** volver a apuntar el `override_callback_uri` al viejo restaura todo al instante (el viejo sigue vivo).
+
+**Pendientes de la migración:** (1) Maired debe **cambiar** las contraseñas que pegó en el chat (Namecheap, Hostinger) y las que se fijaron (root del viejo). (2) Darle acceso al Coolify nuevo si lo quiere (resetear clave de `masvidaconsciente1`). (3) Decomisionar el viejo (Hostinger) cuando haya confianza (semanas), preservando respaldos. (4) Opcional: ponerle una landing al dominio raíz.
+
+---
+
 ## 2026-07-02 — Arreglo de unidades DESPLEGADO en producción + rescate de acceso a Coolify
 
 **Resultado:** el arreglo de las unidades (commit `8c4d0ce`) ya está **EN PRODUCCIÓN y verificado en vivo**. Bot **web** y **worker** redeployados desde `master`; ambos contenedores nuevos corriendo, con el código nuevo confirmado dentro (`_catalogo_bloque` con "cuántas unidades trae"), worker Celery arrancó limpio, `api-masvida.enovagroup.tech` responde 200. Base de datos del bot, Redis y dashboard **intactos** (no se tocaron).
