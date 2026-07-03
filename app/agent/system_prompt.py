@@ -135,27 +135,31 @@ async def _catalogo_bloque() -> str:
     if len(prods) <= _CATALOGO_INLINE_MAX:
         fichas = []
         for p in prods:
-            precio = f"${p.precio}" if p.precio is not None else "consultar"
-            cab = f"• {p.nombre} — {precio}"
-            if p.presentacion:
-                cab += f" — {p.presentacion}"
+            # VISIBLE (lo que el bot puede ofrecer solo): nombre, categoría y "de qué es"
+            # (ingredientes/rellenos) — lo necesita para describir y para filtrar por ingrediente.
+            cab = f"• {p.nombre}"
             if p.categoria:
                 cab += f" — {p.categoria}"
             if not p.disponible:
                 cab += " [AGOTADO]"
-            detalle = []
             if p.descripcion:
-                detalle.append(f"de qué es: {p.descripcion}")
+                cab += f"\n    de qué es: {p.descripcion}"
+            # INTERNO: precio, unidades y detalles (duración, congela, apto, alérgenos). El bot los
+            # CONOCE (así no inventa y responde al instante CUANDO se los piden) pero NO los suelta
+            # por su cuenta — solo si el cliente pregunta o está comprando (ver regla 5).
+            precio = f"${p.precio}" if p.precio is not None else "a consultar"
+            interno = [f"precio {precio}"]
+            if p.presentacion:
+                interno.append(f"trae {p.presentacion}")
             if p.duracion:
-                detalle.append(f"dura: {p.duracion}")
+                interno.append(f"dura {p.duracion}")
             if p.se_congela:
-                detalle.append(f"se congela: {p.se_congela}")
+                interno.append(f"se congela: {p.se_congela}")
             if p.apto_diabeticos:
-                detalle.append(f"apto diabéticos: {p.apto_diabeticos}")
+                interno.append(f"apto diabéticos: {p.apto_diabeticos}")
             if p.info:
-                detalle.append(f"otro: {p.info}")
-            if detalle:
-                cab += "\n    " + " | ".join(detalle)
+                interno.append(f"otro: {p.info}")
+            cab += "\n    [SOLO PARA TI, NO lo digas salvo que lo pregunten]: " + " | ".join(interno)
             fichas.append(cab)
         return (
             "\n\nCATÁLOGO REAL Y COMPLETO — abajo está TODA la info de cada producto y es tu "
@@ -172,8 +176,16 @@ async def _catalogo_bloque() -> str:
             "SOLO los que DE VERDAD lo tienen. Si solo uno aplica, ofrece SOLO ese; NO agregues "
             "productos que no lo tienen para 'dar más opciones', y JAMÁS le cambies ni le inventes "
             "el ingrediente a un producto (si unas empanadas son de yuca/garbanzo, NO digas que "
-            "son de plátano). Nómbralos por su NOMBRE, SIN soltar el precio ni las unidades — deja "
-            "que él pregunte el precio o diga cuánto quiere. Nunca listes todo con precios de golpe.\n\n"
+            "son de plátano).\n"
+            "5) Cada ficha trae una línea [SOLO PARA TI, NO lo digas salvo que lo pregunten] con el "
+            "precio, las unidades (cuántas trae) y detalles (duración, si se congela, apto para "
+            "diabéticos, alérgenos). Eso es tu REFERENCIA INTERNA: lo CONOCES para responder al "
+            "instante, pero NO lo escribes en tu respuesta a menos que el cliente lo pregunte "
+            "('¿cuánto?', '¿cuántas trae?', '¿se congela?') o ya esté decidiendo/comprando. Cuando "
+            "pregunten por un producto, pidan 'información' de uno, o le nombres opciones: responde "
+            "corto y humano con SOLO qué es y sus rellenos/variantes, y pregúntale de cuál o cuántos "
+            "quiere. Nada de muros de texto tipo folleto: plano, en pocas líneas, SIN negritas ni "
+            "listas, como una persona en WhatsApp.\n\n"
             + "\n".join(fichas)
         )
     # Catálogo grande: solo categorías + conteo. El bot NO se lo sabe de memoria.
