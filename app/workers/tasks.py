@@ -398,14 +398,28 @@ async def _procesar_comprobante(telefono, message_id, media_id, caption, nombre,
         logger.info("Imagen de %s NO reconocida como comprobante de la dueña; no se registra", telefono)
         if message_id:
             await rc.marcar_comprobante(message_id)  # atendido: no reprocesar
-        await _responder_situacion(
-            telefono,
-            "el cliente te envió una IMAGEN que NO es un comprobante de pago a tu cuenta "
-            "(parece otra cosa, o no se ve claro). Con calidez dile que no ves el "
-            "comprobante del pago y pídele la captura donde se vean el monto y el número "
-            "de referencia del pago hecho a tu Pago Móvil.",
-            nombre,
-        )
+        _pant = lectura.get("es_pantalla_bancaria")
+        es_pantalla = _pant is True or str(_pant).strip().lower() in ("true", "si", "sí", "yes", "1")
+        if es_pantalla:
+            # SÍ es la pantalla de un pago/transferencia, pero NO a la cuenta de la dueña.
+            situacion = (
+                "El cliente te mandó una imagen de un pago o transferencia, pero ese pago NO te "
+                "aparece hecho a TU cuenta / Pago Móvil (parece que fue a otra cuenta). Contéstale "
+                "con calidez y con TUS PROPIAS PALABRAS, natural y DISTINTA cada vez (JAMÁS repitas "
+                "la misma frase ni suenes a plantilla o robot): dile con cariño que ese pago no te "
+                "aparece a tu cuenta, y pídele que verifique que lo envió a tu Pago Móvil y te "
+                "reenvíe la captura. No lo acuses ni des el pago por hecho; solo pídele que confirme."
+            )
+        else:
+            # No parece un comprobante (foto cualquiera, o no se ve el pago).
+            situacion = (
+                "El cliente te envió una imagen que no parece un comprobante de pago (parece otra "
+                "cosa o no se alcanza a ver el pago). Contéstale con calidez y con TUS PROPIAS "
+                "PALABRAS, natural y DISTINTA cada vez (JAMÁS repitas la misma frase ni suenes a "
+                "plantilla): dile con cariño que ahí no ves el comprobante y pídele que te reenvíe "
+                "la captura clara del pago (donde se vea el monto y la referencia)."
+            )
+        await _responder_situacion(telefono, situacion, nombre)
         return
 
     # ¿El MONTO del comprobante cuadra con lo cobrado? Comparamos contra el monto en
