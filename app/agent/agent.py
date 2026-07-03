@@ -66,6 +66,12 @@ async def _llamar_openrouter(messages: list, tools: list, model: str) -> dict:
         resp = await client.post(
             OPENROUTER_URL,
             headers={"Authorization": f"Bearer {settings.openrouter_api_key}"},
+            # Temperatura = "dial de libertad". Se mantiene BAJA (0.15) a propósito: probado
+            # 2026-07-03 subirla a 0.4/0.5 daba MUY poca variación extra (Haiku converge igual)
+            # pero empezaba a fallar el precio cuando lo piden (info_producto devuelve varios
+            # campos y a veces omitía el monto) — y NO se rompe el cobro. La naturalidad/variación
+            # se logra QUITANDO las frases-ejemplo del prompt (que el modelo copiaba), no subiendo
+            # la temperatura. (redactar_mensaje sí usa 0.7 porque ahí no hay tools ni cobro.)
             json={"model": model, "messages": messages, "tools": tools, "temperature": 0.15},
         )
         resp.raise_for_status()
