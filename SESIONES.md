@@ -17,6 +17,26 @@
 
 ---
 
+## 2026-07-03 (noche) — ✅ Filtrado por ingrediente DETERMINISTA (el bot ya NO ofrece lo que no calza)
+
+**Problema (chat real):** a *"¿tienes empanada de plátano?"* el bot ofrecía también las **Empanadas Horneadas** (yuca/garbanzo), que NO son de plátano. Maired: *"él tiene que ser DIRECTO; si solo hay una empanada de plátano, dila y pregunta cuántas quiere; no metas las horneadas"*. Preguntó (aprendiendo agentes) si convenía **dos agentes** (orquestador + catálogo).
+
+**Diagnóstico (espiando qué tools llama el agente):** el modelo (Haiku) hacía el **filtrado por ingrediente EN SU CABEZA** — respondía de memoria desde el catálogo inline y **lumpeaba** productos que comparten el nombre ("empanadas"). Y la búsqueda `ver_catalogo` existente **solo miraba el NOMBRE**, no los ingredientes ("plátano" no está en el nombre "Empanadas"). O sea: la decisión de "cuáles calzan" la tomaba el modelo (mal) o una herramienta ciega a los ingredientes.
+
+**La lógica de raíz (respuesta a lo de "dos agentes"): NO son dos agentes.** La regla es **"el CÓDIGO elige, el agente redacta"** (RAG/grounding): recuperar lo correcto de forma determinista y solo entonces redactar. Dos agentes = más costo/latencia/piezas que se rompen, sin arreglar la causa (que es dejarle al modelo una decisión que es del código).
+
+**Fix (commit `a33512c`, bot `web`+`worker`):**
+1. **`tools.py` — `ver_catalogo` filtra por NOMBRE + INGREDIENTES** (la descripción), con AND de cada palabra significativa por **prefijo de palabra** y **sin acentos** (`_coincide_texto`). "empanada plátano" → SOLO las que de verdad son de plátano; "pan" no calza con em-**pan**-adas; la categoría NO entra (evita que 'pan' calce con 'panadería'). Devuelve `de_que_es` + precio/unidades (marcados internos).
+2. **`system_prompt.py` — catálogo inline COMPACTO:** solo **nombres** (ancla para no inventar productos) + la línea `[SOLO PARA TI]` con precio/unidades/detalles. **Los INGREDIENTES ya NO van inline** → el modelo NO puede lumpear de memoria: TIENE que usar `ver_catalogo` (determinista) para filtrar/describir. Regla #4 reforzada; regla que da el precio cuando SÍ lo piden.
+
+**⚠️ Lo que se cuidó — ANTI-INVENCIÓN (la regla #1, la más sagrada): INTACTA.** Verificado: "¿las galletas llevan huevo?" → llama tools y da el dato REAL; "¿se congelan?" (dato no cargado) → *"lo verifico y te confirmo"*, **no inventa**. Es la misma lógica del catálogo grande (400 productos) → además **escala**.
+
+**Verificación (exhaustiva):** ~48 casos en TODAS las familias (empanadas, panes, tortillas, tortas, wafles, kombucha, tequeños, galletas, garbanzo, almendra, coco, merey…) + negaciones/multi-pedido + **verificación adversarial con 22 jueces independientes** contra el catálogo real. Resultado: **0 over-offer de producto equivocado, 0 invención real, 0 blurt de precio.** (Los jueces marcaron 5, pero al revisar: 3 eran falsos positivos del juez —su resumen del catálogo no traía "desalmidonada"/"activada"/"búfala", que SÍ están en las fichas reales— y 2 eran estilo menor: ofrecer la otra variante/sabor del MISMO producto pedido, no un producto ajeno.)
+
+**Detalles menores conocidos (no rompen nada, mejorables después):** a veces menciona la otra variante del mismo producto ("tortilla de plátano, también de yuca"); un under-offer ocasional (ej. "algo de merey" solo la harina, no las galletas que llevan merey); una vez repitió un nombre. Ninguno es el bug de over-offer.
+
+---
+
 ## 2026-07-03 (tarde) — ✅ El bot ya CONVERSA como vendedora (no suelta precio/unidades de golpe)
 
 > Resuelve el 🔴 pendiente de la entrada de abajo (2026-07-03 mañana).
