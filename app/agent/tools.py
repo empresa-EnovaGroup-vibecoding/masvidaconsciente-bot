@@ -603,7 +603,15 @@ async def buscar_info(session, telefono, consulta):
                 "ofrece consultarlo con la dueña; NO te lo inventes"
             ),
         }
-    return {"resultados": resultados}
+    return {
+        "resultados": resultados,
+        "nota": (
+            "Usa esto SOLO si de verdad responde lo que preguntó el cliente. Si es un tema "
+            "PARECIDO pero DISTINTO (ej. te preguntan por envío NACIONAL / a otra ciudad y esto "
+            "es la entrega LOCAL), NO lo des como la respuesta: dile que eso puntual se lo "
+            "confirmas. No confundas un tema con otro."
+        ),
+    }
 
 
 async def ver_pedidos_cliente(session, telefono):
