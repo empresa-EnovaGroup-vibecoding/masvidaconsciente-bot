@@ -17,6 +17,36 @@
 
 ---
 
+## 2026-07-03 (tarde) — ✅ El bot ya CONVERSA como vendedora (no suelta precio/unidades de golpe)
+
+> Resuelve el 🔴 pendiente de la entrada de abajo (2026-07-03 mañana).
+
+**Qué pedía Maired:** que al pedir *"información de X"* el bot responda cálido y BREVE (qué es + rellenos), **pregunte relleno/cantidad primero**, y dé precio/unidades SOLO cuando el cliente los pida o vaya a comprar; y que ofrezca **solo** productos que de verdad tengan el ingrediente pedido.
+
+**Raíz (mapeando el código + probando en vivo con `/api/probar`):** eran DOS causas, no una.
+1. **Contradicción en la Personalidad:** la sección `# PRECIO` decía "no des el precio de frente", PERO "EL CAMINO HACIA EL CIERRE" y "CATÁLOGO" decían responder a una pregunta puntual *"con su precio"*. Haiku 4.5 seguía la segunda.
+2. **El precio y las unidades vivían en la CABECERA de cada ficha** del catálogo inyectado (`_catalogo_bloque`): `• Empanadas — $14 — 8 unidades — …`. El modelo los trataba como parte de "describir" el producto y los recitaba (a veces con markdown/folleto). La regla anti-blurt existente solo cubría "¿tienen X?", no "info de X".
+
+**Fix — dos palancas (justo las que sugería la entrada de abajo):**
+- **Personalidad (BD, donde vive el comportamiento):** 3 reemplazos QUIRÚRGICOS que quitan la contradicción (respaldo en `/tmp/personalidad_backup.txt` del contenedor + `BRIEF-personalidad-whuilianny.md` local sincronizado). NO se tocaron datos de pago ni la voz. Es cambio VIVO al instante (se lee de la BD cada turno, sin deploy).
+- **Código `_catalogo_bloque` (commit `51e99ce`):** nuevo formato de ficha. VISIBLE = nombre + categoría + "de qué es" (ingredientes/rellenos — lo necesita para describir y para filtrar por ingrediente). Precio, unidades y detalles (duración, congela, apto, alérgenos) pasan a una línea **`[SOLO PARA TI, NO lo digas salvo que lo pregunten]`** = referencia INTERNA: el bot los CONOCE (no inventa, responde al instante cuando se los piden) pero NO los suelta solo. Regla #5 reescrita para apuntar a esa etiqueta + "nada de folleto ni negritas".
+
+**No rompe el DINERO:** precios/subtotales/total siguen saliendo de las herramientas; solo cambió CUÁNDO se revelan. **Regla dura respetada:** el comportamiento va en la Personalidad; el ajuste de código es la "regla corta en `_catalogo_bloque`" que la bitácora ya autorizaba, atada al dato del catálogo (no se regó comportamiento suelto por el código).
+
+**✅ Verificado en vivo con `/api/probar` (HTTP, código ya desplegado en web+worker):**
+- "info de las empanadas de plátano" → describe qué es + rellenos y pregunta, SIN precio/unidades.
+- "info de las galletas" → describe + sabores, sin markdown ni precio (ojo: a veces menciona las unidades UNA vez — variación de Haiku, menor).
+- "¿cuánto cuestan?" → da $14 + 8 unidades. "¿cuántas trae el pan?" → "18 rebanadas". (precio/unidades cuando SÍ los piden.)
+- "quiero 2 paquetes" → conoce el paquete (8 c/u) y avanza al cierre.
+- "algo de plátano" → solo productos con plátano, sin falsos positivos.
+- Anti-invención OK (galletas "¿se congelan?" → "lo verifico", porque su ficha no trae ese dato).
+
+**⚠️ Deploy — cómo se hizo ESTA vez (importante):** la API de Coolify del viejo NO sirvió para desplegar: `/api/health` da 200 pero `/api/v1/*` devuelve **HTTP 000** (conexión reseteada — probable allowlist de IPs de la API; revisar). Se desplegó por la vía determinista: `docker cp` del archivo commiteado a **web y worker** + `docker restart` de ambos. Es DURABLE (persiste ante restart/reboot; el código está en git, así que un rebuild futuro trae lo mismo). Worker Celery arrancó limpio (`ready`), web sirviendo 200. **Bot uuid `qlfrx5yviileijm6lmovy67i`, worker `erzq5ycbrs323vwkcbam54a9`.**
+
+**Sigue pendiente (aparte):** el dominio `masvidaconsciente.store` (Namecheap bloqueado) — ver entrada de abajo. Maired lo desbloquea desde su dispositivo.
+
+---
+
 ## 2026-07-03 — 🤖 El bot ya LEE la ficha completa; PENDIENTE: que sea conversacional (no suelte precio/unidades) + arreglar el dominio
 
 > **👉 SI RETOMAS ESTO EN UNA SESIÓN NUEVA, empieza por aquí.**
