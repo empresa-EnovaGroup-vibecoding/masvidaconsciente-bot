@@ -17,6 +17,22 @@
 
 ---
 
+## 2026-07-03 — 🤖 El bot ya LEE la ficha completa; PENDIENTE: que sea conversacional (no suelte precio/unidades) + arreglar el dominio
+
+> **👉 SI RETOMAS ESTO EN UNA SESIÓN NUEVA, empieza por aquí.**
+
+**⚠️ Dónde corre TODO ahora mismo:** el bot corre en el **servidor VIEJO** (Hostinger `2.25.139.106`), **NO en netcup**. Se **revirtió** al viejo porque el **dominio nuevo `masvidaconsciente.store` se cayó**: la cuenta de **Namecheap se bloqueó** ("actividad inusual", disparada por logins automatizados) y el DNS dejó de resolver (NXDOMAIN). **Maired debe desbloquear Namecheap desde SU propio dispositivo** + verificar el correo del dominio. **NO automatizar Namecheap.** Mientras tanto: bot + webhook de WhatsApp en el viejo (funciona), panel en `panel-masvida.enovagroup.tech`. El viejo está sano e intacto. (La memoria `infra-actual-masvida-netcup` decía "100% en netcup"; quedó corregida a este estado.)
+
+**✅ Lo que se logró (la RAÍZ de "el bot no lee la info"):** en `app/agent/system_prompt.py` → `_catalogo_bloque()`, el menú del catálogo ahora incluye la **ficha COMPLETA** de cada producto (descripción/ingredientes, duración, se_congela, apto_diabeticos, info), no solo nombre+precio. Verificado en vivo con `/api/probar`: el bot ya lee ingredientes exactos (Keto = almendras/psyllium…), si se congela y apto diabéticos, y **ya NO inventa** (lo de "aptas para diabéticos" en las Empanadas es dato REAL de la ficha, `apto_diabeticos='si'`, no invento del bot). Commits `05f1e6a`, `6e43153`, desplegados al viejo (web+worker).
+
+**🔴 Lo que FALTA pulir (pedido claro de Maired, aún NO resuelto):** el bot **todavía suelta el PRECIO y las UNIDADES de golpe** y recita toda la ficha cuando el cliente pide *"dame información sobre X"* (verificado: a "info sobre las empanadas de plátano" respondió con "$14, 8 unidades" + todo). Ella quiere **comportamiento de vendedora humana**: responder cálido y BREVE (qué es + rellenos), **preguntar relleno/cantidad primero**, y dar **precio/unidades SOLO cuando el cliente pregunte o vaya a comprar**. Además: ofrecer **solo** los productos que de verdad tienen el ingrediente pedido (no meter las Horneadas —yuca/garbanzo— cuando piden "de plátano"). ⚠️ **Regla dura al arreglarlo:** solo el **dinero** va blindado en código (`_REGLAS`); el **estilo/comportamiento** va en la **Personalidad (panel)** — no regar comportamiento por el código. La palanca probable: reforzar la **Personalidad** + una regla corta en `_catalogo_bloque` tipo "no sueltes precio/unidades sin que te los pidan; primero conversa".
+
+**🧪 Cómo PROBAR sin usar WhatsApp:** `POST https://api-masvida.enovagroup.tech/api/login` con `{email:"admin@masvidaconsciente.com", password:<env ADMIN_PASSWORD del contenedor del bot>}` → token; luego `POST /api/probar` con `{mensaje:"..."}` y `Authorization: Bearer <token>` → devuelve la respuesta del bot SIN mandar nada por WhatsApp.
+
+**🚀 Cómo DESPLEGAR al viejo:** la API de Coolify del viejo está **deshabilitada** (seguridad). Para desplegar: SSH al viejo (`/c/Users/herid/.ssh/masvida_vps`) → `docker exec coolify-db psql -U coolify -d coolify` → `update instance_settings set is_api_enabled=true;` + crear token en `personal_access_tokens` (team_id=2) → `curl -k -X POST "https://localhost/api/v1/deploy?uuid=<bot>,<worker>"` con `Host: coolify.enovagroup.tech` y `Authorization: Bearer <token>` → al terminar, volver a `is_api_enabled=false` y borrar el token. **Bot uuid `qlfrx5yviileijm6lmovy67i`, worker `erzq5ycbrs323vwkcbam54a9`.** (El `coolify.enovagroup.tech` público apunta a OTRO server sin acceso; por eso se usa la API local con Host header.)
+
+---
+
 ## 2026-07-02 (tarde) — 🚀 MIGRACIÓN COMPLETA: de Hostinger a netcup + dominio propio
 
 **Resultado:** másvida corre **100% en el servidor NUEVO** (netcup `152.53.89.118`, hostname `v2202607375079477495`) con **dominio propio** `masvidaconsciente.store`. WhatsApp verificado y funcionando de punta a punta (mensaje real procesado por el bot nuevo → OpenRouter → respuesta → guardado en la BD nueva). El servidor **viejo** (Hostinger `2.25.139.106`) queda **de RESPALDO, intacto — NO borrar** hasta tener días de estabilidad.
