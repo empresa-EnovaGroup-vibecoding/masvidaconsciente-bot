@@ -135,15 +135,15 @@ async def _catalogo_bloque() -> str:
     if len(prods) <= _CATALOGO_INLINE_MAX:
         fichas = []
         for p in prods:
-            # VISIBLE (lo que el bot puede ofrecer solo): nombre, categoría y "de qué es"
-            # (ingredientes/rellenos) — lo necesita para describir y para filtrar por ingrediente.
+            # VISIBLE: SOLO el nombre y la categoría. Los INGREDIENTES / "de qué es" NO van inline
+            # A PROPÓSITO: así el bot no puede lumpear de memoria (ofrecer un producto que no tiene
+            # el ingrediente pedido). Para saber de qué es cada uno y CUÁLES calzan con lo que pide
+            # el cliente, TIENE que usar ver_catalogo (filtro determinista en código, ver regla 4).
             cab = f"• {p.nombre}"
             if p.categoria:
                 cab += f" — {p.categoria}"
             if not p.disponible:
                 cab += " [AGOTADO]"
-            if p.descripcion:
-                cab += f"\n    de qué es: {p.descripcion}"
             # INTERNO: precio, unidades y detalles (duración, congela, apto, alérgenos). El bot los
             # CONOCE (así no inventa y responde al instante CUANDO se los piden) pero NO los suelta
             # por su cuenta — solo si el cliente pregunta o está comprando (ver regla 5).
@@ -162,21 +162,29 @@ async def _catalogo_bloque() -> str:
             cab += "\n    [SOLO PARA TI, NO lo digas salvo que lo pregunten]: " + " | ".join(interno)
             fichas.append(cab)
         return (
-            "\n\nCATÁLOGO REAL Y COMPLETO — abajo está TODA la info de cada producto y es tu "
-            "ÚNICA fuente. LÉELA antes de responder cualquier cosa de un producto. Reglas:\n"
-            "1) NO inventes, deduzcas ni redondees NADA. Si un dato no aparece aquí (ni te lo dio "
-            "una herramienta), NO lo digas: dile cálido que ese dato lo verificas y se lo "
+            "\n\nCATÁLOGO — estos son TODOS los productos que existen (usa su NOMBRE EXACTO y NUNCA "
+            "inventes uno que no esté). NO te sabes de memoria sus INGREDIENTES: para saber 'de qué "
+            "es' cada uno, y sobre todo CUÁLES calzan con lo que el cliente pide (por tipo, "
+            "ingrediente, masa o relleno), SIEMPRE usa las herramientas (ver_catalogo/info_producto) "
+            "y ofrece SOLO lo que devuelvan. Reglas:\n"
+            "1) NO inventes, deduzcas ni redondees NADA. Si un dato no te lo dio una herramienta ni "
+            "está en este mensaje, NO lo digas: dile cálido que ese dato lo verificas y se lo "
             "confirmas enseguidita (tú hablas COMO Whuilianny, la dueña: nunca digas 'le "
             "pregunto a la dueña' ni la menciones como si fuera otra persona).\n"
             "2) NO mezcles datos entre productos: cada ficha es SOLO de ESE producto (la duración "
             "o los ingredientes de uno NO valen para otro).\n"
             "3) Usa el nombre EXACTO. Si piden algo que no está, dilo y ofrece de esta lista.\n"
-            "4) Cuando el cliente pregunte '¿tienen X?' o nombre un tipo/ingrediente (plátano, "
-            "keto, sin azúcar, de yuca…), fíjate en el 'de qué es' de CADA producto y ofrécele "
-            "SOLO los que DE VERDAD lo tienen. Si solo uno aplica, ofrece SOLO ese; NO agregues "
-            "productos que no lo tienen para 'dar más opciones', y JAMÁS le cambies ni le inventes "
-            "el ingrediente a un producto (si unas empanadas son de yuca/garbanzo, NO digas que "
-            "son de plátano).\n"
+            "4) Si el cliente pide un producto por TIPO, INGREDIENTE, MASA o RELLENO (empanada de "
+            "plátano, pan de almendra, galleta de chocolate, algo de yuca…): SIEMPRE llama PRIMERO "
+            "a ver_catalogo con esas palabras y ofrécele EXACTAMENTE lo que te devuelva — ni uno "
+            "más — aunque creas saber la respuesta de memoria. Un producto solo 'es de X' si su 'de "
+            "qué es' lo dice (si dice 'harina de almendra', ESE es de almendra; si dice 'masa de "
+            "plátano', ESE es de plátano). Compartir el nombre NO basta: si piden 'de plátano', NO "
+            "ofrezcas los que son de yuca o almendra; si piden 'de almendra', NO ofrezcas los de "
+            "yuca o plátano (ej.: las Empanadas son de plátano/yuca, pero las Horneadas son de "
+            "yuca/garbanzo y las Keto de almendra: NO son de plátano). JAMÁS le cambies ni le "
+            "inventes el ingrediente. Sé DIRECTO: nómbrale SOLO el/los que sí calzan, di de qué son "
+            "y pregúntale de cuál o cuántos quiere.\n"
             "5) Cada ficha trae una línea [SOLO PARA TI, NO lo digas salvo que lo pregunten] con el "
             "precio, las unidades (cuántas trae) y detalles (duración, si se congela, apto para "
             "diabéticos, alérgenos). Eso es tu REFERENCIA INTERNA: lo CONOCES para responder al "
@@ -184,8 +192,11 @@ async def _catalogo_bloque() -> str:
             "('¿cuánto?', '¿cuántas trae?', '¿se congela?') o ya esté decidiendo/comprando. Cuando "
             "pregunten por un producto, pidan 'información' de uno, o le nombres opciones: responde "
             "corto y humano con SOLO qué es y sus rellenos/variantes, y pregúntale de cuál o cuántos "
-            "quiere. Nada de muros de texto tipo folleto: plano, en pocas líneas, SIN negritas ni "
-            "listas, como una persona en WhatsApp.\n\n"
+            "quiere. PERO si el cliente SÍ te pregunta el precio o cuántas trae ('¿cuánto?', '¿a "
+            "cómo?', '¿cuántas trae?'), DÁSELO de una en ese mismo mensaje: nunca desvíes ni "
+            "pospongas la pregunta de precio para preguntarle el relleno primero (puedes darle el "
+            "precio y de una preguntarle el relleno). Nada de muros de texto tipo folleto: plano, "
+            "en pocas líneas, SIN negritas ni listas, como una persona en WhatsApp.\n\n"
             + "\n".join(fichas)
         )
     # Catálogo grande: solo categorías + conteo. El bot NO se lo sabe de memoria.

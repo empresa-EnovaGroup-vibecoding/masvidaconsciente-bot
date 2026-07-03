@@ -6,6 +6,7 @@ webhook) — el LLM nunca lo ve ni lo puede falsificar.
 import json
 import logging
 import math
+import unicodedata
 from decimal import Decimal
 
 from sqlalchemy import select, text
@@ -36,13 +37,13 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "ver_catalogo",
-            "description": "Lista productos en TEXTO. Cuando el cliente nombra un TIPO o producto (pan, quesillo, galleta, torta...), USA el parámetro `busqueda` con esa palabra para traer SOLO eso (ej. 'pan' trae solo los panes, NO toda la panadería). Usa `categoria` solo si pide una categoría completa explícita. Para ver TODO / 'qué tienen' / recomendaciones, usa enviar_catalogo (PDF), no esta.",
+            "description": "Lista DETERMINISTA de los productos que calzan con lo que pide el cliente. SIEMPRE que nombre un TIPO, INGREDIENTE, MASA o RELLENO (pan, quesillo, 'empanada de plátano', 'pan de plátano', 'galleta de chocolate', 'algo de yuca'...), USA `busqueda` con esas palabras (tipo + ingrediente). Busca en el nombre Y en los ingredientes, y devuelve SOLO los que DE VERDAD lo tienen → ofrécele únicamente esos, ni uno más (no decidas tú de tu memoria cuáles calzan). Usa `categoria` solo si pide una categoría completa. Para ver TODO / 'qué tienen' / recomendaciones, usa enviar_catalogo (PDF), no esta.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "busqueda": {
                         "type": "string",
-                        "description": "Palabra o tipo que pide el cliente (ej. 'pan', 'quesillo', 'galleta'). Trae los productos cuyo nombre se parece, tolerando errores de escritura y acentos (ej. 'galetas' o 'limon' igual encuentran).",
+                        "description": "Lo que pide el cliente en palabras clave: tipo + ingrediente/relleno (ej. 'empanada plátano', 'pan plátano', 'galleta chocolate', 'quesillo'). Filtra por nombre e ingredientes, tolerando errores de escritura y acentos.",
                     },
                     "categoria": {
                         "type": "string",
@@ -232,11 +233,47 @@ def _fmt_bs(x) -> str:
     return f"{miles},{dec}"
 
 
-def _coincide_busqueda(nombre: str, palabras: list[str]) -> bool:
-    """True si CADA palabra buscada es el INICIO de alguna palabra del nombre.
-    Así 'pan' calza con 'Pan de Sándwich' (palabra 'Pan') pero NO con 'Empanadas'
-    (donde 'pan' solo aparece por dentro). Evita el falso positivo de em-PAN-adas."""
-    tokens = nombre.lower().replace(",", " ").replace(".", " ").split()
+def _sin_acentos(s: str) -> str:
+    t = unicodedata.normalize("NFKD", (s or "").lower())
+    return "".join(c for c in t if not unicodedata.combining(c))
+
+
+# Palabras vacías que NO deben usarse para filtrar (no son ni tipo ni ingrediente).
+_STOP_BUSQUEDA = {
+    "con", "sin", "los", "las", "una", "uno", "unos", "unas", "por", "para", "del",
+    "que", "tienes", "tienen", "tiene", "quiero", "hay", "algo", "dame", "tipo",
+    "producto", "productos", "relleno", "rellenos", "sabor", "sabores", "masa",
+}
+
+
+def _palabras_busqueda(consulta: str) -> list[str]:
+    """Palabras significativas de la consulta (sin acentos, sin 'stop words').
+    'empanada de plátano' -> ['empanada', 'platano']; 'algo de yuca' -> ['yuca']."""
+    limpio = _sin_acentos(consulta).replace(",", " ").replace(".", " ").replace("/", " ")
+    return [w for w in limpio.split() if len(w) > 2 and w not in _STOP_BUSQUEDA]
+
+
+def _tokens_producto(prod) -> list[str]:
+    """Todas las palabras (sin acentos) de nombre + descripción/ingredientes.
+    Ese es el 'texto real' del producto contra el que se filtra por ingrediente.
+    La CATEGORÍA NO se incluye a propósito: 'pan' no debe calzar con la categoría
+    'panadería' (haría que 'pan de almendra' trajera empanadas de panadería)."""
+    texto = f"{prod.nombre} {prod.descripcion or ''}"
+    limpio = (
+        _sin_acentos(texto)
+        .replace(",", " ").replace(".", " ").replace(":", " ")
+        .replace("/", " ").replace("(", " ").replace(")", " ")
+    )
+    return limpio.split()
+
+
+def _coincide_texto(prod, palabras: list[str]) -> bool:
+    """True si CADA palabra buscada es el INICIO de alguna palabra del producto
+    (nombre + ingredientes). Determinista: 'plátano' calza con la
+    descripción 'masa de plátano', pero 'empanada plátano' NO calza con las
+    Empanadas Horneadas (yuca/garbanzo). Prefijo de PALABRA (no substring): 'pan'
+    calza con 'Pan de Sándwich' pero NO con em-PAN-adas."""
+    tokens = _tokens_producto(prod)
     return all(any(t.startswith(w) for t in tokens) for w in palabras)
 
 
@@ -284,17 +321,17 @@ async def ver_catalogo(session, telefono, categoria=None, busqueda=None):
         stmt = stmt.where(Producto.categoria == categoria.lower())
     productos = (await session.execute(stmt)).scalars().all()
     if busqueda:
-        # 1) Búsqueda PRECISA por prefijo de palabra: 'pan' = panes, NO empanadas.
-        palabras = [w for w in busqueda.lower().split() if len(w) > 2]
+        # Filtro DETERMINISTA por nombre + INGREDIENTES: 'empanada plátano' trae SOLO
+        # las que de verdad son de plátano (no las Horneadas de yuca). El CÓDIGO decide
+        # el match (mira la descripción), no el modelo. 'pan' = panes, NO em-PAN-adas.
+        palabras = _palabras_busqueda(busqueda)
         exactos = (
-            [p for p in productos if _coincide_busqueda(p.nombre, palabras)]
-            if palabras
-            else productos
+            [p for p in productos if _coincide_texto(p, palabras)] if palabras else productos
         )
         if exactos:
             productos = exactos
         else:
-            # 2) Nada calzó (typo o nombre suelto): DIFUSA tolerante a errores/acentos.
+            # Nada calzó (typo o nombre suelto): DIFUSA tolerante a errores/acentos (por nombre).
             difusos = await _buscar_productos_difuso(
                 session, busqueda, limite=12, umbral=0.4, solo_disponibles=True
             )
@@ -303,7 +340,7 @@ async def ver_catalogo(session, telefono, categoria=None, busqueda=None):
             productos = difusos
     if not productos:
         nota = (
-            f"no tienes ningún producto que sea '{busqueda}'; dile con sinceridad que de eso no tienes y ofrécele lo que sí hay"
+            f"no tienes ningún producto que calce con '{busqueda}'; dile con sinceridad que de eso no tienes y ofrécele lo que sí hay"
             if busqueda
             else "no hay productos en esa categoría"
         )
@@ -313,11 +350,18 @@ async def ver_catalogo(session, telefono, categoria=None, busqueda=None):
             {
                 "nombre": p.nombre,
                 "categoria": p.categoria,
+                "de_que_es": p.descripcion,
                 "precio_usd": float(p.precio) if p.precio is not None else "a consultar",
-                "presentacion": p.presentacion,
+                "trae": p.presentacion,
             }
             for p in productos
-        ]
+        ],
+        "nota": (
+            "Estos son los ÚNICOS que calzan con lo que pidió. Ofrécele SOLO estos: nómbralos y "
+            "di de qué son (rellenos/variantes); NO agregues otros aunque tengan nombre parecido. "
+            "El precio_usd y 'trae' (unidades) son INTERNOS: dilos SOLO si el cliente los pregunta "
+            "('¿cuánto?', '¿cuántas trae?') o ya está comprando; nunca de entrada."
+        ),
     }
 
 
