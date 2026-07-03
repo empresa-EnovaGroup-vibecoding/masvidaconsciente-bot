@@ -33,7 +33,9 @@
 
 **Verificación (exhaustiva):** ~48 casos en TODAS las familias (empanadas, panes, tortillas, tortas, wafles, kombucha, tequeños, galletas, garbanzo, almendra, coco, merey…) + negaciones/multi-pedido + **verificación adversarial con 22 jueces independientes** contra el catálogo real. Resultado: **0 over-offer de producto equivocado, 0 invención real, 0 blurt de precio.** (Los jueces marcaron 5, pero al revisar: 3 eran falsos positivos del juez —su resumen del catálogo no traía "desalmidonada"/"activada"/"búfala", que SÍ están en las fichas reales— y 2 eran estilo menor: ofrecer la otra variante/sabor del MISMO producto pedido, no un producto ajeno.)
 
-**Detalles menores conocidos (no rompen nada, mejorables después):** a veces menciona la otra variante del mismo producto ("tortilla de plátano, también de yuca"); un under-offer ocasional (ej. "algo de merey" solo la harina, no las galletas que llevan merey); una vez repitió un nombre. Ninguno es el bug de over-offer.
+**Seguimiento (mismo día) — SIGUE EL HILO (closer):** Maired insistió (con razón) en que a *"empanadas de plátano"* el bot NO debe contestar *"de plátano y yuca"* — la clienta ya eligió plátano; hay que seguir ESE hilo. Matiz que ella pidió: ofrecer la otra variante (yuca) está bien, pero **DESPUÉS y aparte**, no mezclada en la misma respuesta (como un closer). **Fix:** regla de variantes en `_REGLAS` reforzada ("SIGUE EL HILO") + nota de `ver_catalogo` + sección nueva **`# SIGUE EL HILO DEL CLIENTE`** en la Personalidad (BD + BRIEF). Verificado **multi-turno**: el flujo del screenshot queda limpio (plátano → relleno → precio $14/8u → cierra). Commit `5a0f02e`.
+
+**Detalles menores conocidos (no rompen nada):** las Tortillas se llaman literalmente "Tortillas de Plátano o Yuca", así que al nombrarlas menciona ambas masas (artefacto del nombre del producto); under-offer ocasional (ej. "algo de merey" solo la harina). Ninguno es over-offer ni invención.
 
 ---
 
