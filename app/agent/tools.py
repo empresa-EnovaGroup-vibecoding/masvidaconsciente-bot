@@ -357,10 +357,12 @@ async def ver_catalogo(session, telefono, categoria=None, busqueda=None):
             for p in productos
         ],
         "nota": (
-            "Estos son los ÚNICOS que calzan con lo que pidió. Ofrécele SOLO estos: nómbralos y "
-            "di de qué son (rellenos/variantes); NO agregues otros aunque tengan nombre parecido. "
-            "El precio_usd y 'trae' (unidades) son INTERNOS: dilos SOLO si el cliente los pregunta "
-            "('¿cuánto?', '¿cuántas trae?') o ya está comprando; nunca de entrada."
+            "Estos son los ÚNICOS que calzan. Ofrécele SOLO estos y SIGUE EL HILO de lo que pidió: "
+            "si nombró una masa/variante concreta (ej. plátano), preséntalo SOLO con esa (di 'de "
+            "plátano'); NO le sumes la otra (yuca) en el mismo mensaje — esa la ofreces DESPUÉS y "
+            "aparte, si acaso. Sí ofrécele lo que NO eligió aún (ej. el relleno). NO agregues otros "
+            "productos aunque tengan nombre parecido. El precio_usd y 'trae' (unidades) son "
+            "INTERNOS: dilos SOLO si el cliente los pregunta o ya está comprando."
         ),
     }
 
