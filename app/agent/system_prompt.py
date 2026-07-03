@@ -168,9 +168,12 @@ async def _catalogo_bloque() -> str:
             "o los ingredientes de uno NO valen para otro).\n"
             "3) Usa el nombre EXACTO. Si piden algo que no está, dilo y ofrece de esta lista.\n"
             "4) Cuando el cliente pregunte '¿tienen X?' o nombre un tipo/ingrediente (plátano, "
-            "keto, sin azúcar…), fíjate en el 'de qué es' de cada uno y nómbrale SOLO el/los que "
-            "de VERDAD aplican, por su NOMBRE, SIN soltar el precio ni las unidades — deja que él "
-            "pregunte el precio o diga cuánto quiere. Nunca listes todo con precios de golpe.\n\n"
+            "keto, sin azúcar, de yuca…), fíjate en el 'de qué es' de CADA producto y ofrécele "
+            "SOLO los que DE VERDAD lo tienen. Si solo uno aplica, ofrece SOLO ese; NO agregues "
+            "productos que no lo tienen para 'dar más opciones', y JAMÁS le cambies ni le inventes "
+            "el ingrediente a un producto (si unas empanadas son de yuca/garbanzo, NO digas que "
+            "son de plátano). Nómbralos por su NOMBRE, SIN soltar el precio ni las unidades — deja "
+            "que él pregunte el precio o diga cuánto quiere. Nunca listes todo con precios de golpe.\n\n"
             + "\n".join(fichas)
         )
     # Catálogo grande: solo categorías + conteo. El bot NO se lo sabe de memoria.
