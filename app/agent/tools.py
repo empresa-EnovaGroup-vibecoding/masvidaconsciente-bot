@@ -345,6 +345,27 @@ async def ver_catalogo(session, telefono, categoria=None, busqueda=None):
             else "no hay productos en esa categoría"
         )
         return {"productos": [], "nota": nota}
+    _nota_interno = (
+        "El precio_usd y 'trae' (unidades) son INTERNOS: dilos SOLO si el cliente los "
+        "pregunta o ya está comprando."
+    )
+    if len(productos) > 1:
+        # VARIOS productos calzan (ej. 'empanadas' = 3 familias): NO soltar el folleto.
+        # El CÓDIGO decide (por el conteo) que se nombren solo los tipos y se retenga el
+        # 'de_que_es' hasta que el cliente elija — así el agente no lista todos los rellenos.
+        nota = (
+            "Calzan VARIOS productos. NO sueltes un folleto: nómbrale SOLO los TIPOS por su "
+            "nombre (SIN el 'de_que_es' de cada uno) y pregúntale de cuál quiere saber. El "
+            "'de_que_es' (rellenos/ingredientes) se lo das de UNO, DESPUÉS, cuando el cliente "
+            "elija cuál. NO agregues otros productos aunque tengan nombre parecido. " + _nota_interno
+        )
+    else:
+        # UN solo producto: preséntalo corto y sigue el hilo (no sumar otra variante).
+        nota = (
+            "Calza UN solo producto. Preséntalo corto: su nombre y de qué es. SIGUE EL HILO: si "
+            "el cliente ya dijo una masa/variante (ej. plátano), quédate SOLO en esa y ofrécele "
+            "lo que aún no eligió (ej. el relleno). NO agregues otros productos. " + _nota_interno
+        )
     return {
         "productos": [
             {
@@ -356,14 +377,7 @@ async def ver_catalogo(session, telefono, categoria=None, busqueda=None):
             }
             for p in productos
         ],
-        "nota": (
-            "Estos son los ÚNICOS que calzan. Ofrécele SOLO estos y SIGUE EL HILO de lo que pidió: "
-            "si nombró una masa/variante concreta (ej. plátano), preséntalo SOLO con esa (di 'de "
-            "plátano'); NO le sumes la otra (yuca) en el mismo mensaje — esa la ofreces DESPUÉS y "
-            "aparte, si acaso. Sí ofrécele lo que NO eligió aún (ej. el relleno). NO agregues otros "
-            "productos aunque tengan nombre parecido. El precio_usd y 'trae' (unidades) son "
-            "INTERNOS: dilos SOLO si el cliente los pregunta o ya está comprando."
-        ),
+        "nota": nota,
     }
 
 

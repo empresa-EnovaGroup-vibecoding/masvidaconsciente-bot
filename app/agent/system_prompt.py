@@ -142,7 +142,7 @@ async def _catalogo_bloque() -> str:
             # el cliente, TIENE que usar ver_catalogo (filtro determinista en código, ver regla 4).
             cab = f"• {p.nombre}"
             if p.categoria:
-                cab += f" — {p.categoria}"
+                cab += f" ({p.categoria})"
             if not p.disponible:
                 cab += " [AGOTADO]"
             # INTERNO: precio, unidades y detalles (duración, congela, apto, alérgenos). El bot los
@@ -191,8 +191,12 @@ async def _catalogo_bloque() -> str:
             "diabéticos, alérgenos). Eso es tu REFERENCIA INTERNA: lo CONOCES para responder al "
             "instante, pero NO lo escribes en tu respuesta a menos que el cliente lo pregunte "
             "('¿cuánto?', '¿cuántas trae?', '¿se congela?') o ya esté decidiendo/comprando. Cuando "
-            "pregunten por un producto, pidan 'información' de uno, o le nombres opciones: responde "
-            "corto y humano con SOLO qué es y sus rellenos/variantes, y pregúntale de cuál o cuántos "
+            "el cliente pregunte por una CATEGORÍA o pida 'información' en general (ej. 'las "
+            "empanadas', 'qué panes hay') y ver_catalogo te devuelva VARIOS productos: nómbrale "
+            "SOLO los TIPOS por su nombre, sin soltar los rellenos ni ingredientes de todos de "
+            "golpe (eso es un folleto). El 'de qué es' lo das de UNO, cuando el cliente ya eligió "
+            "cuál; si ver_catalogo devuelve UN solo producto, ahí sí le dices de qué es de una. "
+            "Y pregúntale de cuál o cuántos "
             "quiere. PERO si el cliente SÍ te pregunta el precio o cuántas trae ('¿cuánto?', '¿a "
             "cómo?', '¿cuántas trae?'), DÁSELO de una en ese mismo mensaje: nunca desvíes ni "
             "pospongas la pregunta de precio para preguntarle el relleno primero (puedes darle el "

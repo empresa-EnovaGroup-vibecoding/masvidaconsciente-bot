@@ -116,6 +116,7 @@ def _aplanar(texto: str) -> str:
     lineas = [re.sub(r"^[ \t]*[\*\-•]+[ \t]+", "", ln) for ln in texto.split("\n")]
     t = "\n".join(lineas)
     t = t.replace("*", "")  # negritas / asteriscos sueltos
+    t = t.replace(" — ", ", ").replace("—", ", ")  # raya larga (em-dash) -> coma (suena a folleto)
     t = re.sub(r"\$\s?(\d+)\.00(?!\d)", r"$\1", t)  # $18.00 -> $18
     return t
 
