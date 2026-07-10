@@ -17,6 +17,30 @@
 
 ---
 
+## 2026-07-10 — 🚀 PRIMER CLIENTE montado en el servidor NUEVO (netcup) + fix del "folleto" + lista blanca de pruebas
+
+**1. Fix del "folleto" (commit `e0b48cf`, bot `web`+`worker`).** Con Haiku, a *"las empanadas / dame más información"* el bot soltaba un **muro de texto**: nombraba los 3 tipos (Keto/Horneadas/plátano) + TODOS sus rellenos de golpe. **Diagnóstico (workflow multi-agente):** NO era desobediencia — el prompt (reglas 4-5 de `_catalogo_bloque` + la nota de `ver_catalogo`) le ORDENABA *"di de qué son, con sus rellenos"*, y como "empanadas" barre 3 familias, el modelo cumplía. **Fix:** la nota de `ver_catalogo` ahora es **dinámica por conteo** — si devuelve VARIOS productos, "nombra SOLO los tipos y retén el `de_que_es` hasta que el cliente elija cuál"; regla 5 reescrita (conservando la sub-regla de precio y el ancla anti-invención). De paso, `_aplanar` normaliza la **rayita larga `—` → coma** (nacía del separador del catálogo `• nombre — categoria`, que también se cambió a `(categoria)`). Anti-invención INTACTO. Verificado en vivo.
+
+**2. Montaje del PRIMER CLIENTE en el servidor NUEVO (netcup `152.53.89.118`).** Cada cliente = su propia "caja" (fábrica). Lo montado:
+- **Dominio de la clienta: `masvidaconsciente.store`** (Namecheap → Advanced DNS): A records `@`, `www`, `panel`, `api` → `152.53.89.118`. SSL automático por Coolify una vez propagado. (El dominio `.store` NO estaba muerto: es el de la clienta.)
+- **Dashboard:** `NEXT_PUBLIC_API_URL` = `https://api.masvidaconsciente.store` (⚠️ es build-time en Next.js → hay que **Redeploy**, no basta guardar) + dominio `panel.masvidaconsciente.store`. **Bot:** dominio `api.masvidaconsciente.store`.
+- **Meta — override por WABA:** WABA de la clienta = **`100526692613101`** (asset de WhatsApp Manager); phone_number_id = **`500909798292606`** (número +58 424-7047595). Override: `POST /100526692613101/subscribed_apps` con `override_callback_uri=https://api.masvidaconsciente.store/webhook/whatsapp` + `verify_token`. **El PATH del webhook es `/webhook/whatsapp`** (prefix `/webhook` + `@router.post("/whatsapp")` en `app/webhook/router.py`) — NO solo `/webhook` (usar `/webhook` da fallo de verificación).
+- **Token: System User de Enova** (usuario **"Enova-api"**, id `61589674157552`) con `whatsapp_business_management`/`whatsapp_business_messaging` + la WABA masvidaconsciente asignada (control total). ⚠️ El token de USUARIO del Graph API Explorer **NO** sirve para gestionar la WABA de un cliente (da `error 100 / subcode 33` "does not exist / missing permissions") — hay que usar un **System User token**. El `META_VERIFY_TOKEN` del bot nuevo = `masvida-activo-2026`.
+
+**3. Lista blanca de pruebas (commit `f3c947b`).** Nueva var **`NUMEROS_PERMITIDOS`** (`config.py` + helper `_numero_permitido` en `tasks.py`). Si NO está vacía, el bot **SOLO responde a esos números**; a los demás **guarda el mensaje en el panel pero NO responde** (mismo camino que "bot apagado"). Compara por la **cola de 10 dígitos** (tolera código de país). Puesto en los **3 caminos** (texto `_procesar`, voz/eventos `_responder_y_enviar`, comprobantes `_responder_situacion`). Para probar en producción sin contestarle a clientes reales (regla dura de Meta). Valor de prueba: `573005690062` (número de Maired). Para abrir a TODOS: dejar la var vacía + Redeploy.
+
+**4. 🐛 BUG "cayó en otro" — encontrado y arreglado.** El bot tiene **DOS apps** en Coolify: **web** (`masvidaconsciente-bot`, recibe el webhook y encola) y **worker** (`masvidaconsciente-worker`, procesa y ENVÍA). Al montar el nuevo, se actualizó el env del **web** pero el **worker seguía con la config VIEJA de prueba** (`META_PHONE_NUMBER_ID=1116308758237612` = número viejo, token viejo, WABA `1761005704911145`, sin whitelist). → el worker generaba la respuesta de Whuilianny BIEN (logs: OpenRouter 200 OK) pero la **enviaba desde el número viejo** → caía en otro chat. **Fix (vía Coolify UI):** se corrigió el env del **worker** (phone `500909798292606`, token System User, WABA `100526692613101`, `NUMEROS_PERMITIDOS`) + **Redeploy del worker**. Verificado en logs + en vivo: responde desde el número correcto. **APRENDIZAJE CLAVE: el env NO se comparte entre apps — al cambiar Meta hay que tocar bot Y worker.**
+
+**Estado:** primer cliente EN VIVO en el servidor nuevo, con la voz de Whuilianny, arreglo del folleto, y modo de prueba (lista blanca) activo. Modelo = Haiku (`anthropic/claude-haiku-4.5`).
+
+**Pendientes:**
+- 🟡 **Auto-deploy** (webhook GitHub→Coolify) en AMBOS servidores → un push actualiza los dos (solo CÓDIGO; la config/env es por servidor y NO se sincroniza — eso causó el bug de hoy).
+- 🔴 **Rotar** el System User token y el `META_APP_SECRET` (quedaron expuestos en el chat).
+- 🟡 **Limpieza de docs** (revisión en curso — informe pendiente).
+- 🟡 Cuando termine de probar: quitar `NUMEROS_PERMITIDOS` (dejar vacío) + Redeploy para abrir a todos los clientes.
+
+---
+
 ## 2026-07-03 (noche) — ✅ Filtrado por ingrediente DETERMINISTA (el bot ya NO ofrece lo que no calza)
 
 **Problema (chat real):** a *"¿tienes empanada de plátano?"* el bot ofrecía también las **Empanadas Horneadas** (yuca/garbanzo), que NO son de plátano. Maired: *"él tiene que ser DIRECTO; si solo hay una empanada de plátano, dila y pregunta cuántas quiere; no metas las horneadas"*. Preguntó (aprendiendo agentes) si convenía **dos agentes** (orquestador + catálogo).
