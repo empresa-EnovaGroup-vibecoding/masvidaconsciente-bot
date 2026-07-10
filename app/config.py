@@ -54,6 +54,10 @@ class Settings(BaseSettings):
     # Anti-abuso / tope de gasto: maximo de mensajes por cliente al dia antes de
     # pausar las respuestas automaticas con el (y avisar a la duena). 0 = sin tope.
     limite_mensajes_cliente_dia: int = 80
+    # LISTA BLANCA de pruebas: si NO esta vacia (ej. "573005690062,584121234567"), el bot
+    # SOLO responde a esos numeros; a los demas les guarda el mensaje pero NO responde
+    # (probar en produccion sin contestarle a clientes reales). Vacia = responde a todos.
+    numeros_permitidos: str = ""
 
     # Negocio
     negocio_nombre: str = "masvidaconsciente"

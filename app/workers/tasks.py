@@ -210,6 +210,23 @@ async def _guardar_entrante(telefono: str, nombre: str | None, texto: str) -> No
         logger.exception("No se pudo guardar el mensaje entrante de %s", telefono)
 
 
+def _numero_permitido(telefono: str) -> bool:
+    """LISTA BLANCA de pruebas: si settings.numeros_permitidos NO esta vacia, el bot
+    SOLO responde a esos numeros; a los demas les guarda el mensaje pero NO responde
+    (probar en produccion sin contestarle a clientes reales). Vacia = responde a todos.
+    Compara por la COLA de 10 digitos, asi tolera el codigo de pais (+57, 0058...)."""
+    permitidos = (settings.numeros_permitidos or "").strip()
+    if not permitidos:
+        return True  # sin lista blanca = responde a todos (produccion normal)
+
+    def _cola(s: str) -> str:
+        d = "".join(c for c in (s or "") if c.isdigit())
+        return d[-10:] if len(d) >= 10 else d
+
+    objetivo = _cola(telefono)
+    return any(_cola(n) == objetivo for n in permitidos.split(","))
+
+
 @celery_app.task(name="procesar_buffer")
 def procesar_buffer(telefono: str, nombre: str | None = None):
     """Tarea Celery: procesa los mensajes acumulados de un cliente y responde."""
@@ -227,7 +244,7 @@ async def _procesar(telefono: str, nombre: str | None) -> None:
 
         texto = "\n".join(mensajes)
 
-        if not await _bot_activo() or await _cliente_pausado(telefono):
+        if not await _bot_activo() or await _cliente_pausado(telefono) or not _numero_permitido(telefono):
             # Bot apagado (global o solo en este chat): guarda lo que escribió el
             # cliente para que la dueña lo vea en Conversaciones y responda ella.
             await rc.guardar_historial(telefono, "user", texto)
@@ -309,6 +326,8 @@ async def _leer_comprobante_seguro(telefono, contenido, base_mime) -> dict:
 async def _responder_situacion(telefono: str, situacion: str, nombre: str | None) -> None:
     """Whuilianny REDACTA un mensaje para el cliente según la situación (no plantilla),
     lo protege contra afirmaciones de pago, lo envía en partes y lo guarda en historial."""
+    if not _numero_permitido(telefono):
+        return  # lista blanca de pruebas: no responder a numeros fuera de la lista
     try:
         historial = await rc.obtener_historial(telefono)
         mensaje = await redactar_mensaje(situacion, historial, nombre)
@@ -497,7 +516,7 @@ async def _responder_y_enviar(telefono: str, texto: str, nombre: str | None) -> 
     if not await rc.adquirir_lock(telefono):
         return
     try:
-        if not await _bot_activo() or await _cliente_pausado(telefono):
+        if not await _bot_activo() or await _cliente_pausado(telefono) or not _numero_permitido(telefono):
             await rc.guardar_historial(telefono, "user", texto)
             await _guardar_entrante(telefono, nombre, texto)
             return
