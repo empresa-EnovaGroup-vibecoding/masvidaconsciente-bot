@@ -26,3 +26,6 @@ Thumbs.db
 # Contienen estrategia de negocio y datos personales de prueba.
 BRIEF-*.md
 PRP-*.md
+
+# Archivo interno (documentos ya cumplidos, se quedan locales)
+archivo/
