@@ -21,7 +21,7 @@ jobs:
         run: |
           curl -fsS --max-time 90 \
             -H "Authorization: Bearer ${{ secrets.COOLIFY_OLD_TOKEN }}" \
-            "https://coolify.enovagroup.tech/api/v1/deploy?uuid=qlfrx5yviileijm6lmovy67i,erzq5ycbrs323vwkcbam54a9"
+            "http://2.25.139.106:8000/api/v1/deploy?uuid=qlfrx5yviileijm6lmovy67i,erzq5ycbrs323vwkcbam54a9"
 
       - name: Servidor NUEVO (bot + worker)
         if: always()   # Corre aunque el paso anterior falle, para no dejar un servidor sin actualizar.
