@@ -31,12 +31,14 @@
 
 **4. 🐛 BUG "cayó en otro" — encontrado y arreglado.** El bot tiene **DOS apps** en Coolify: **web** (`masvidaconsciente-bot`, recibe el webhook y encola) y **worker** (`masvidaconsciente-worker`, procesa y ENVÍA). Al montar el nuevo, se actualizó el env del **web** pero el **worker seguía con la config VIEJA de prueba** (`META_PHONE_NUMBER_ID=1116308758237612` = número viejo, token viejo, WABA `1761005704911145`, sin whitelist). → el worker generaba la respuesta de Whuilianny BIEN (logs: OpenRouter 200 OK) pero la **enviaba desde el número viejo** → caía en otro chat. **Fix (vía Coolify UI):** se corrigió el env del **worker** (phone `500909798292606`, token System User, WABA `100526692613101`, `NUMEROS_PERMITIDOS`) + **Redeploy del worker**. Verificado en logs + en vivo: responde desde el número correcto. **APRENDIZAJE CLAVE: el env NO se comparte entre apps — al cambiar Meta hay que tocar bot Y worker.**
 
+**5. 🚀 AUTO-DESPLIEGUE activado (GitHub → Coolify, en AMBOS servidores).** El interruptor de Coolify (`is_auto_deploy_enabled`) YA estaba encendido en las 3 apps de los dos servidores; lo que faltaba era el **aviso desde GitHub**: el repo NO tenía ningún webhook (`gh api .../hooks` = `[]`) → por eso un push no desplegaba solo. Coolify (handler `Webhook/Github@manual`) recorre las apps que calzan repo+rama y valida la firma con el **secreto propio de cada app** (`manual_webhook_secret_github`), así que hace falta **un webhook por app**. Creados **6 webhooks** (aditivos, reversibles, SIN tocar la config de los servidores): repo `masvidaconsciente-bot` → 4 (bot+worker × viejo+nuevo); repo `masvidaconsciente-dashboard` → 2 (viejo+nuevo). URL Coolify viejo = `https://coolify.enovagroup.tech/webhooks/source/github/events/manual`; nuevo = `http://152.53.89.118:8000/...`. Ping de creación = **HTTP 200** en ambos. Acceso usado: la llave SSH `~/.ssh/masvida_vps` abre root en LOS DOS servidores (el token guardado de la API de Coolify ya NO sirve). ⚠️ Sigue igual: el **env/config NO se sincroniza** (el auto-deploy mueve solo CÓDIGO; los secretos son por servidor).
+
 **Estado:** primer cliente EN VIVO en el servidor nuevo, con la voz de Whuilianny, arreglo del folleto, y modo de prueba (lista blanca) activo. Modelo = Haiku (`anthropic/claude-haiku-4.5`).
 
 **Pendientes:**
-- 🟡 **Auto-deploy** (webhook GitHub→Coolify) en AMBOS servidores → un push actualiza los dos (solo CÓDIGO; la config/env es por servidor y NO se sincroniza — eso causó el bug de hoy).
+- ✅ **Auto-deploy HECHO** (2026-07-10): 6 webhooks GitHub→Coolify en AMBOS servidores → un push actualiza los dos (solo CÓDIGO; la config/env es por servidor y NO se sincroniza — eso causó el bug de hoy).
 - 🔴 **Rotar** el System User token y el `META_APP_SECRET` (quedaron expuestos en el chat).
-- 🟡 **Limpieza de docs** (revisión en curso — informe pendiente).
+- ✅ **Limpieza de docs HECHA**: borrado `dns-newrow.yml`; carpeta `archivo/` (gitignored) con los PRP ya cumplidos + `MIGRACION.md`; informe entregado + **Tablero visual** creado.
 - 🟡 Cuando termine de probar: quitar `NUMEROS_PERMITIDOS` (dejar vacío) + Redeploy para abrir a todos los clientes.
 
 ---
