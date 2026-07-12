@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 
 from sqlalchemy import (
@@ -17,6 +17,25 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 def now_utc() -> datetime:
     return datetime.now(timezone.utc)
+
+
+# Venezuela = UTC-4 (sin horario de verano). El servidor corre en UTC: a las 8 de la
+# noche de Cabudare el reloj UTC YA es mañana. Usar `date.today()` para el PRECIO DEL DÍA
+# hacía que el precio que la dueña cargó en la mañana DESAPARECIERA a las 20:00 VET, y que
+# el que cargara esa noche se grabara con fecha de MAÑANA y se cobrara todo el día siguiente
+# sin volver a preguntarle: exactamente "reutilizar el precio de ayer", que es lo que el
+# cobro tiene PROHIBIDO. Todo el carril del precio del día usa ESTA función, nunca date.today().
+def hoy_venezuela() -> date:
+    """El día de HOY según el reloj de Venezuela (no el del servidor)."""
+    return (datetime.now(timezone.utc) - timedelta(hours=4)).date()
+
+
+def inicio_dia_venezuela() -> datetime:
+    """Las 00:00 de HOY en Venezuela, expresado en UTC (para comparar con `created_at`).
+
+    Sin esto, el "hoy" del panel arranca a las 8 de la noche de Venezuela: las ventas de
+    la noche se le mostraban a la dueña como si fueran de mañana."""
+    return datetime.combine(hoy_venezuela(), time.min, tzinfo=timezone.utc) + timedelta(hours=4)
 
 
 class Base(DeclarativeBase):

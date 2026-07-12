@@ -19,6 +19,7 @@ from app.models import (
     Pedido,
     PrecioDia,
     Producto,
+    hoy_venezuela,
 )
 from app.services.db import get_session_factory
 
@@ -146,7 +147,7 @@ async def _catalogo_bloque() -> str:
                 for pid, precio in (
                     await session.execute(
                         select(PrecioDia.producto_id, PrecioDia.precio).where(
-                            PrecioDia.fecha == date.today()
+                            PrecioDia.fecha == hoy_venezuela()
                         )
                     )
                 ).all()

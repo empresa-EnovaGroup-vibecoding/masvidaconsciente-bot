@@ -30,6 +30,8 @@ from app.models import (
     PrecioDia,
     Producto,
     ProductoMedia,
+    hoy_venezuela,
+    inicio_dia_venezuela,
     now_utc,
 )
 from app.services.db import get_session_factory
@@ -178,7 +180,7 @@ async def login(datos: LoginIn):
 
 @router.get("/metricas")
 async def metricas(_: str = Depends(usuario_actual)):
-    hoy_inicio = datetime.combine(date.today(), time.min, tzinfo=timezone.utc)
+    hoy_inicio = inicio_dia_venezuela()  # el "hoy" de la dueña, no el del servidor (UTC)
     factory = get_session_factory()
     async with factory() as session:
         pedidos_hoy = (
@@ -219,7 +221,7 @@ async def reporte_ventas(_: str = Depends(usuario_actual)):
     'ventas_usd' suma solo pagos en estado 'confirmado' = dinero realmente
     cobrado y verificado por la duena (no pedidos sin pagar)."""
     ahora = now_utc()
-    hoy_inicio = datetime.combine(ahora.date(), time.min, tzinfo=timezone.utc)
+    hoy_inicio = inicio_dia_venezuela()  # el "hoy" de la dueña, no el del servidor (UTC)
     factory = get_session_factory()
     async with factory() as session:
         async def resumen(desde: datetime) -> dict:
@@ -353,7 +355,8 @@ async def editar_items_pedido(
     total desde los PRECIOS DEL CATÁLOGO (nunca inventados; mismo emparejamiento que usa el
     bot). La dueña manda: si el pedido ya tenía un pago, el panel le avisó que el monto puede
     no cuadrar con lo cobrado y ella confirmó."""
-    from app.agent.tools import _buscar_producto  # local: evita efectos de import al cargar
+    # local: evita efectos de import al cargar
+    from app.agent.tools import _buscar_producto, _precio_efectivo
 
     if not datos.items:
         raise HTTPException(status_code=400, detail="El pedido debe tener al menos un producto.")
@@ -372,12 +375,25 @@ async def editar_items_pedido(
                     status_code=400,
                     detail=f"No encontré el producto «{it.producto}» en el catálogo.",
                 )
-            total += (prod.precio or Decimal("0")) * cantidad
+            # El precio EFECTIVO (fijo, o el precio del día si su precio cambia), igual que
+            # el bot. Antes hacía `(prod.precio or 0) * cantidad`: al editar un pedido con un
+            # producto de PRECIO DEL DÍA, el total se recalculaba en $0 y el pedido quedaba
+            # GRATIS. Sin precio de hoy NO se recalcula: se avisa, nunca se cobra $0.
+            precio = await _precio_efectivo(session, prod)
+            if precio is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"«{prod.nombre}» todavía no tiene precio de hoy. Ponle el precio del día "
+                        f"en «El bot te necesita» y vuelve a guardar el pedido."
+                    ),
+                )
+            total += precio * cantidad
             items_pedido.append(
                 {
                     "producto": prod.nombre,
                     "cantidad": cantidad,
-                    "precio_unitario": float(prod.precio) if prod.precio is not None else None,
+                    "precio_unitario": float(precio),
                     "presentacion": prod.presentacion,
                 }
             )
@@ -1186,7 +1202,7 @@ async def ver_precios_dia(_: str = Depends(usuario_actual)):
             (
                 await session.execute(
                     select(PrecioDia.producto_id, PrecioDia.precio).where(
-                        PrecioDia.fecha == date.today()
+                        PrecioDia.fecha == hoy_venezuela()
                     )
                 )
             ).all()
@@ -1216,7 +1232,7 @@ async def poner_precio_dia(datos: PrecioDiaIn, _: str = Depends(usuario_actual))
         fila = (
             await session.execute(
                 select(PrecioDia).where(
-                    PrecioDia.producto_id == datos.producto_id, PrecioDia.fecha == date.today()
+                    PrecioDia.producto_id == datos.producto_id, PrecioDia.fecha == hoy_venezuela()
                 )
             )
         ).scalar_one_or_none()
@@ -1226,7 +1242,7 @@ async def poner_precio_dia(datos: PrecioDiaIn, _: str = Depends(usuario_actual))
                     producto_id=datos.producto_id,
                     precio=Decimal(str(datos.precio)),
                     nota=datos.nota,
-                    fecha=date.today(),
+                    fecha=hoy_venezuela(),
                 )
             )
         else:

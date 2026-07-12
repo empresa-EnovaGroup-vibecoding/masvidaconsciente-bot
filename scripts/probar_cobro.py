@@ -185,6 +185,164 @@ async def probar_precio_del_dia(session) -> None:
         )
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 6) LA CANTIDAD ES DINERO (precio × CANTIDAD). Con cantidad 0 el ítem entraba
+#    en $0 y el pedido podía cerrarse GRATIS. El schema pide entero >= 1, pero
+#    el modelo puede mandar cualquier cosa: el código tiene que rechazarla.
+# ─────────────────────────────────────────────────────────────────────────────
+async def probar_cantidad(session) -> None:
+    print("\n6) La CANTIDAD también es dinero (nada de pedidos en $0)")
+    prod = (
+        await session.execute(
+            select(Producto).where(Producto.precio.is_not(None)).order_by(Producto.id)
+        )
+    ).scalars().first()
+    if prod is None:
+        check(False, "hay un producto con precio para probar", "no hay ninguno")
+        return
+    for mala in (0, -3, "dos", None):
+        res = await registrar_pedido(session, TELEFONO, [{"producto": prod.nombre, "cantidad": mala}])
+        check(res.get("ok") is False, f"cantidad {mala!r} -> la RECHAZA", str(res)[:110])
+    res = await registrar_pedido(session, TELEFONO, [{"producto": prod.nombre, "cantidad": 2}])
+    check(res.get("ok") is not False, "cantidad 2 -> sigue funcionando normal", str(res)[:110])
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 7) EL PAGO CUADRA CON EL PEDIDO. El monto del cobro se guardaba en una caché
+#    por TELÉFONO: si el cliente cambiaba de pedido (Kombucha de $4 -> la de $7),
+#    el comprobante se grababa con el monto VIEJO. Un pago de $4 sobre $7.
+# ─────────────────────────────────────────────────────────────────────────────
+async def probar_pago_cuadra(session) -> None:
+    print("\n7) El PAGO registrado cuadra con el pedido (no con uno viejo)")
+    from app.agent.tools import generar_datos_pago, registrar_comprobante
+    from app.models import Pago
+
+    prods = (
+        await session.execute(
+            select(Producto).where(Producto.precio.is_not(None)).order_by(Producto.precio)
+        )
+    ).scalars().all()
+    if len(prods) < 2:
+        check(True, "no hay dos productos de precios distintos (nada que probar)")
+        return
+    barato, caro = prods[0], prods[-1]
+    if barato.precio == caro.precio:
+        check(True, "todos valen igual (nada que probar)")
+        return
+
+    # 1º pedido (barato) y su cobro -> deja el monto viejo en la caché.
+    r1 = await registrar_pedido(session, TELEFONO, [{"producto": barato.nombre, "cantidad": 1}])
+    await generar_datos_pago(session, TELEFONO, r1.get("pedido_id"))
+    # 2º pedido (caro): el cliente se cambió. Se cobra ESTE.
+    r2 = await registrar_pedido(session, TELEFONO, [{"producto": caro.nombre, "cantidad": 1}])
+    await generar_datos_pago(session, TELEFONO, r2.get("pedido_id"))
+    await registrar_comprobante(session, TELEFONO, referencia="PRUEBA-CUADRE")
+
+    pedido2 = await session.get(Pedido, r2.get("pedido_id"))
+    pago = (
+        await session.execute(select(Pago).where(Pago.pedido_id == pedido2.id))
+    ).scalars().first()
+    check(pago is not None, "el comprobante quedó registrado", "no se creó el pago")
+    if pago is not None:
+        check(
+            Decimal(str(pago.monto_usd)) == Decimal(str(pedido2.total)),
+            f"el pago dice ${pago.monto_usd} y el pedido ${pedido2.total} -> CUADRAN",
+            f"el pago quedó en ${pago.monto_usd} sobre una venta de ${pedido2.total} "
+            f"(se coló el monto del pedido anterior, ${barato.precio})",
+        )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 8) UN PEDIDO YA PAGADO NO SE RE-COBRA (antes 'resucitaba' a esperando_pago y
+#    se le podía pegar un segundo comprobante encima).
+# ─────────────────────────────────────────────────────────────────────────────
+async def probar_no_recobro(session) -> None:
+    print("\n8) Un pedido ya PAGADO no se cobra otra vez")
+    from app.agent.tools import generar_datos_pago
+
+    prod = (
+        await session.execute(
+            select(Producto).where(Producto.precio.is_not(None)).order_by(Producto.id)
+        )
+    ).scalars().first()
+    r = await registrar_pedido(session, TELEFONO, [{"producto": prod.nombre, "cantidad": 1}])
+    pedido = await session.get(Pedido, r.get("pedido_id"))
+    pedido.estado = "pagado"
+    await session.commit()
+
+    res = await generar_datos_pago(session, TELEFONO, pedido.id)
+    check(res.get("ok") is False, "pidiéndolo por su id -> lo RECHAZA", str(res)[:110])
+    await session.refresh(pedido)
+    check(pedido.estado == "pagado", "el pedido SIGUE 'pagado' (no resucitó)", f"quedó en '{pedido.estado}'")
+
+    # Sin decir el id ("dame los datos otra vez"): puede agarrar OTRO pedido abierto
+    # (eso está bien), pero JAMÁS el que ya está pagado.
+    res2 = await generar_datos_pago(session, TELEFONO, None)
+    check(
+        res2.get("pedido_id") != pedido.id,
+        "sin decir el id -> NUNCA agarra el pedido pagado",
+        f"agarró el pedido pagado ({pedido.id}) y lo revivió",
+    )
+    await session.refresh(pedido)
+    check(pedido.estado == "pagado", "y el pagado sigue intacto", f"quedó en '{pedido.estado}'")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 9) EL PRECIO DEL DÍA VIVE EN EL DÍA DE VENEZUELA (no en el del servidor, que
+#    corre en UTC). A las 8 pm de Cabudare el reloj UTC ya es mañana: el precio
+#    cargado en la mañana desaparecía. Y el de AYER no se reutiliza JAMÁS.
+#    Se prueba dentro de una transacción que se DESHACE (no toca datos reales).
+# ─────────────────────────────────────────────────────────────────────────────
+async def probar_dia_venezuela(factory) -> None:
+    print("\n9) El precio del día usa el día de VENEZUELA (y el de ayer nunca se reutiliza)")
+    from datetime import datetime, timedelta, timezone
+
+    from app.models import PrecioDia, hoy_venezuela
+
+    esperado = (datetime.now(timezone.utc) - timedelta(hours=4)).date()
+    check(hoy_venezuela() == esperado, f"hoy en Venezuela = {esperado} (el servidor va en UTC)")
+
+    async with factory() as s:
+        prod = (
+            await s.execute(select(Producto).where(Producto.precio.is_(None)).order_by(Producto.id))
+        ).scalars().first()
+        if prod is None:
+            check(True, "no hay productos de precio del día (nada que probar)")
+            return
+        ya = (
+            await s.execute(
+                select(PrecioDia).where(
+                    PrecioDia.producto_id == prod.id, PrecioDia.fecha == hoy_venezuela()
+                )
+            )
+        ).scalars().first()
+        if ya is not None:
+            check(True, f"'{prod.nombre}' ya tiene precio de hoy (${ya.precio}); no se toca")
+            return
+        # Ensayo con red: se escribe y se DESHACE (nunca se confirma).
+        s.add(PrecioDia(producto_id=prod.id, precio=Decimal("42.00"), fecha=hoy_venezuela()))
+        await s.flush()
+        p_hoy = await _precio_efectivo(s, prod)
+        check(p_hoy == Decimal("42.00"), f"con precio de HOY -> lo usa (${p_hoy})", f"dio {p_hoy}")
+        await s.rollback()
+
+    async with factory() as s:
+        prod = (
+            await s.execute(select(Producto).where(Producto.precio.is_(None)).order_by(Producto.id))
+        ).scalars().first()
+        s.add(
+            PrecioDia(
+                producto_id=prod.id,
+                precio=Decimal("99.00"),
+                fecha=hoy_venezuela() - timedelta(days=1),  # el de AYER
+            )
+        )
+        await s.flush()
+        p_ayer = await _precio_efectivo(s, prod)
+        check(p_ayer is None, "con el precio de AYER -> NO lo usa (no cobra)", f"usó ${p_ayer}")
+        await s.rollback()
+
+
 async def limpiar(session) -> None:
     """Borra TODO lo que dejó la prueba: el panel y los reportes quedan limpios."""
     from app.models import Cliente, Mensaje, Pago
@@ -214,8 +372,13 @@ async def main() -> int:
             await probar_dinero(session)
             await probar_rechazo(session)
             await probar_precio_del_dia(session)
+            await probar_cantidad(session)
+            await probar_pago_cuadra(session)
+            await probar_no_recobro(session)
         finally:
             await limpiar(session)  # no deja basura en el panel
+
+    await probar_dia_venezuela(factory)  # usa sus propias transacciones (con ROLLBACK)
 
     print("\n" + "=" * 68)
     if _mal:

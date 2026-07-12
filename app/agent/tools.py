@@ -26,6 +26,7 @@ from app.models import (
     PrecioDia,
     Producto,
     ProductoMedia,
+    hoy_venezuela,
 )
 from app.services.db import get_session_factory
 from app.services.meta_client import enviar_imagen, enviar_texto, enviar_video
@@ -86,7 +87,7 @@ TOOL_SCHEMAS = [
                             "type": "object",
                             "properties": {
                                 "producto": {"type": "string"},
-                                "cantidad": {"type": "integer"},
+                                "cantidad": {"type": "integer", "minimum": 1},
                             },
                             "required": ["producto", "cantidad"],
                         },
@@ -442,7 +443,7 @@ async def _precio_efectivo(session, prod):
     return (
         await session.execute(
             select(PrecioDia.precio).where(
-                PrecioDia.producto_id == prod.id, PrecioDia.fecha == date.today()
+                PrecioDia.producto_id == prod.id, PrecioDia.fecha == hoy_venezuela()
             )
         )
     ).scalar_one_or_none()
@@ -599,7 +600,23 @@ async def registrar_pedido(session, telefono, items, notas=None):
                 ),
                 "necesita_ayuda": True,
             }
-        cantidad = int(it.get("cantidad", 1))
+        # La CANTIDAD es el otro factor del dinero (precio × cantidad). El schema pide
+        # entero >= 1, pero el modelo puede mandar 0, "2", -1 o basura y nada lo validaba:
+        # con cantidad=0 el ítem entraba en $0 y el pedido podía cerrarse GRATIS. Aquí se
+        # rechaza — no se "corrige" en silencio: el agente tiene que volver a preguntar.
+        try:
+            cantidad = int(it.get("cantidad", 1))
+        except (TypeError, ValueError):
+            cantidad = 0
+        if cantidad < 1:
+            return {
+                "ok": False,
+                "nota": (
+                    f"la cantidad de '{prod.nombre}' no es válida ({it.get('cantidad')!r}). "
+                    "Pregúntale al cliente CUÁNTOS quiere (mínimo 1) y vuelve a registrar el "
+                    "pedido completo. NO registres cantidades en 0."
+                ),
+            }
         subtotal = precio_hoy * cantidad
         total += subtotal
         items_pedido.append(
@@ -825,20 +842,54 @@ async def get_pedido_esperando_pago(session, telefono):
 async def generar_datos_pago(session, telefono, pedido_id=None):
     """Calcula el monto en Bs (tasa del dia), deja el pedido en 'esperando_pago'
     y devuelve los datos de Pago Movil para que el bot los presente."""
+    # Un pedido CERRADO no se vuelve a cobrar. Antes, si el cliente pedía "los datos otra
+    # vez" y el modelo omitía el pedido_id, el código agarraba el ÚLTIMO pedido de CUALQUIER
+    # estado —incluso uno ya PAGADO— y lo devolvía a 'esperando_pago' (línea de abajo), con
+    # lo que el siguiente comprobante se le pegaba encima con el monto viejo y se creaba un
+    # SEGUNDO pago sobre una venta ya cerrada.
+    _CERRADOS = ("pagado", "entregado", "cancelado")
+    _COBRABLES = ("pendiente", "esperando_pago", "confirmado", "preparando")
+
     if pedido_id is not None:
         pedido = await session.get(Pedido, int(pedido_id))
         if pedido is None or pedido.cliente_telefono != telefono:
             return {"ok": False, "nota": "no encontre ese pedido para este cliente"}
+        if pedido.estado in _CERRADOS:
+            return {
+                "ok": False,
+                "nota": (
+                    f"ese pedido ya esta '{pedido.estado}': NO se cobra de nuevo. Si el cliente "
+                    "quiere comprar otra vez, registra un pedido NUEVO."
+                ),
+            }
     else:
         pedido = (
             await session.execute(
                 select(Pedido)
-                .where(Pedido.cliente_telefono == telefono)
+                .where(
+                    Pedido.cliente_telefono == telefono,
+                    Pedido.estado.in_(_COBRABLES),  # nunca uno pagado/entregado/cancelado
+                )
                 .order_by(Pedido.created_at.desc())
             )
         ).scalars().first()
         if pedido is None:
-            return {"ok": False, "nota": "este cliente todavia no tiene un pedido para cobrar"}
+            return {"ok": False, "nota": "este cliente no tiene ningun pedido abierto para cobrar"}
+
+    # Un pedido que YA tiene un pago confirmado no se re-cobra (aunque su estado diga otra cosa).
+    pago_ok = (
+        await session.execute(
+            select(Pago.id).where(Pago.pedido_id == pedido.id, Pago.estado == "confirmado")
+        )
+    ).scalars().first()
+    if pago_ok is not None:
+        return {
+            "ok": False,
+            "nota": (
+                "ese pedido ya tiene un pago confirmado: NO lo cobres de nuevo. Si quiere "
+                "comprar mas, registra un pedido NUEVO."
+            ),
+        }
 
     if pedido.total is None:
         return {"ok": False, "nota": "el pedido no tiene un total definido para cobrar"}
@@ -1092,12 +1143,24 @@ async def registrar_comprobante(
         guardado = await get_cache(f"cobro:{telefono}")
         if guardado:
             d = json.loads(guardado)
-            if d.get("monto_usd"):
-                monto_usd = Decimal(str(d["monto_usd"]))
-            if d.get("tasa"):
-                tasa = Decimal(str(d["tasa"]))
-            if d.get("monto_bs"):
-                monto_bs = Decimal(str(d["monto_bs"]))
+            # La caché guarda el cobro que se le DIO al cliente (monto en Bs y tasa usada),
+            # pero es por TELÉFONO: si el cliente cambió de pedido (ej. de la Kombucha de $4
+            # a la de $7), traía el monto del cobro VIEJO y el pago quedaba registrado en $4
+            # sobre una venta de $7. Solo vale si es el cobro de ESTE MISMO pedido; si no,
+            # se recalcula desde el total real del pedido.
+            if int(d.get("pedido_id", 0)) == pedido.id:
+                if d.get("monto_usd"):
+                    monto_usd = Decimal(str(d["monto_usd"]))
+                if d.get("tasa"):
+                    tasa = Decimal(str(d["tasa"]))
+                if d.get("monto_bs"):
+                    monto_bs = Decimal(str(d["monto_bs"]))
+            else:
+                logger.info(
+                    "registrar_comprobante: la caché de cobro es del pedido %s pero el "
+                    "comprobante es del %s → se recalcula desde el pedido",
+                    d.get("pedido_id"), pedido.id,
+                )
     except Exception:  # noqa: BLE001
         pass
 
