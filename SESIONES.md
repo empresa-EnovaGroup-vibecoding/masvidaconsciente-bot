@@ -17,6 +17,48 @@
 
 ---
 
+## 2026-07-11 — 🔴 REVERTIDO: recortar el prompt para "des-duplicar" ROMPE EL COBRO (Auto-Blindaje)
+
+**Qué se intentó (Paso 3 del plan):** la "versión senior" del prompt — quitar de la Personalidad las reglas que YA están blindadas en el código (`# PRECIO`, `# CATÁLOGO: cuándo mandarlo`, formato/viñetas, fotos, pasos del cobro, cliente-conocido), **manteniendo la voz de Whuilianny letra por letra**. Bajó de **11.648 → 9.338 chars**.
+
+**Corrección clave de Maired (a mitad de camino):** una primera versión REESCRIBIÓ la voz y la bienvenida ("Soy Whuilianny, **bienvenido**… ¿qué te trae por aquí?"). Ella la rechazó fuerte: *"así NO habla", "yo ya te di la esencia y las imágenes de cómo habla"*. **Regla nueva: la voz + bienvenida + ejemplos son INTOCABLES** (ver memoria `esencia-whuilianny-no-reescribir`). Se rehízo conservando su texto verbatim; la bienvenida salió perfecta (*"Buenas noches 💚 ¿Cómo estás? Soy Whuilianny, de masvidaconsciente. ¿Deseas ver nuestro catálogo…?"*).
+
+**🔴 PERO ROMPIÓ EL COBRO.** A *"quiero 2 paquetes de empanadas de plátano de carne mechada"* el bot **hablaba** de las de plátano pero **REGISTRABA "Empanadas Keto"** ($12/4u → total **$24**) en vez de **"Empanadas"** ($14/8u → **$28**). Verificado **en la BD** (`SELECT items, total FROM pedidos`), no en la respuesta. **A/B con 3 repeticiones por servidor:** prompt limpio → MAL 2/2; prompt original → BIEN 2/2.
+
+**Conclusión (Auto-Blindaje):** con un modelo PEQUEÑO (Haiku) **la redundancia prompt↔código NO es grasa: SOSTIENE la selección de producto**. "Una sola fuente por tema" es buena teoría y mala práctica aquí. **El prompt largo se queda.** Documentado en **CLAUDE.md §8** con la advertencia y el protocolo obligatorio (quitar UNA cosa a la vez + probar el cobro contra la BD antes y después).
+
+**Estado final: TODO REVERTIDO Y VERIFICADO.** Ambos servidores con el prompt original (**11.648 chars, md5 `07ba508a8968798f0e8936b429a9d026`**). Pedidos de prueba del simulador borrados en los dos. Respaldos: `/root/personalidad_backup_pre_limpia_20260711.txt` (viejo) y `/root/personalidad_backup_pre_senior_20260710.txt` (netcup).
+
+**Hallazgos secundarios (útiles):**
+- Las **negritas** (`**Pago Móvil:**`) que se ven al llamar al agente por dentro **NO llegan al cliente**: `_aplanar` (`app/workers/tasks.py:111`) borra asteriscos/viñetas y pasa `$18.00`→`$18` antes de enviar. **No es un defecto.** Ojo: probar con `responder()` a secas ENGAÑA — hay que pasar por `_aplanar` para ver lo que recibe el cliente.
+- ⚠️ **Probar crea pedidos de prueba** (`telefono='__simulador__'`) que **SÍ aparecen en el panel y en los reportes** (solo la lista de *clientes* excluye al simulador). **Borrarlos siempre al terminar.**
+- **Dónde prueba Maired:** en el servidor **VIEJO (Hostinger `2.25.139.106`)**, no en netcup.
+
+---
+
+## 2026-07-10 (noche) — 🧹 Limpieza del prompt (Personalidad): fuera la contradicción del precio + repeticiones
+
+**Contexto:** Maired se sintió bloqueada al mirar el "cerebro" del bot. Mapeando el código real (`app/agent/system_prompt.py`, `tools.py`, `agent.py`) se confirmó que las instrucciones de comportamiento viven en **3 capas** —Personalidad editable (BD) + `_REGLAS` blindadas (código) + notas de las herramientas— y se **repiten** entre ellas y dentro de la propia Personalidad. Se le entregó un **mapa visual** (artifact) del solapamiento. Plan acordado de 4 pasos: (1) ordenar el panel → (2) handoff a lo humano → (3) versión senior del prompt → (4) contenido. Se hizo el **Paso 1**.
+
+**Hallazgo clave:** el texto VIVO del panel había **divergido** del `BRIEF` local: tenía de vuelta la **contradicción del precio** (`# PRECIO` decía "no de frente", pero `# EL CAMINO` paso 2 y `# CATÁLOGO` decían "dile los productos **y su precio**") y le faltaba `# SIGUE EL HILO`. Por eso se leyó y limpió la **BD**, no el BRIEF.
+
+**Lo aplicado (solo el texto `personalidad` en `configuracion`, SIN tocar código):**
+1. **Arreglada la contradicción del precio** — decisión de Maired: **precio SOLO cuando lo pregunten o al comprar**; se unificó todo a eso.
+2. **Quitadas 3 de las 4 repeticiones** de "no digas que el pago quedó confirmado" (queda 1).
+3. **Quitado el bloque `# IMPORTANTE: NUNCA DE MEMORIA`** y los recordatorios de "no calcules el dinero" → ya blindados en `_REGLAS`; repetirlos inflaba el prompt y hacía que Haiku **copiara frases** (causa del "suena a robot").
+4. **Recortadas las reglas técnicas del catálogo** (dejando solo el tono) y **deduplicada** `# QUÉ NO HACER`.
+- **Intactos:** voz, trato, diabéticos, horarios, delivery, ejemplos y **datos de pago** (Pago Móvil/Transferencia/Zelle/Binance).
+
+**Cómo (con red de seguridad):** SSH a netcup (`152.53.89.118`, donde corre el bot HOY — verificado por DNS de `api`/`panel`). **Respaldo** del texto anterior (local + `/root/personalidad_backup_20260710.txt`, 12.968 bytes). Aplicado por `docker exec -i <pg l2z8uksl…> psql` con **dollar-quoting** (`UPDATE 1`). **VIVO al instante** (`leer_personalidad` lee la BD cada turno; sin re-deploy).
+
+**Verificación:** 12.623 → **11.648** chars; contradicción eliminada; "quedó confirmado" 4→1; "NUNCA DE MEMORIA" fuera; datos de pago + emojis intactos. **Prueba en vivo (3 mensajes reales, envíos bloqueados):** "¿tienes pan?" → nombra panes SIN precio ✓ · "¿cuánto cuesta el pan de sándwich?" → da $20 (de la herramienta) ✓ · "¿tienes empanadas de plátano?" → sigue el hilo, solo plátano + rellenos ✓.
+
+**Sincronizado en AMBOS servidores (a pedido de Maired):** aplicado a netcup (VIVO, `152.53.89.118`, pg `l2z8ukslzip59w1nl3omhf1e`) y al viejo (respaldo, `2.25.139.106`, pg `zedzrztx4bntf5227wedzvt7`). **Descubrimiento clave: las BD NO se sincronizan solas entre servidores** (igual que el env) — por eso netcup traía la contradicción (el fix del 2026-07-03 fue al VIEJO) y el viejo NO la tenía (era otra versión, 13.967 chars). Además, tras el primer apply, netcup había **perdido 2 emojis 💚** (en la línea de avisar el catálogo) + el salto final (3 chars; probable guardado/paste en el panel); se repuso el texto INTENDED en ambos. Verificado **md5 idéntico** en los dos (`07ba508a8968798f0e8936b429a9d026`, 11.648 chars). Respaldos: `/root/personalidad_backup_20260710.txt` en cada servidor + local. (En un apply al nuevo hubo un "connection reset" de red — el UPDATE es atómico, no quedó a medias; se reintentó y entró.)
+
+**Pendiente (acordado):** (2) **handoff a lo humano** (SÍ hacen **envío nacional** → el bot debe dejar de responder y notificar a la dueña; y para cualquier cosa que no sepa); (3) **versión senior del prompt desde cero** (menos "NUNCA"/más "haz así", más corto para Haiku, una sola fuente por tema, ejemplos con cuidado); (4) contenido. Base ya buena: blindaje en código + caché. Nota: cambio en la BD, NO se subió a GitHub (no es código).
+
+---
+
 ## 2026-07-10 — 🚀 PRIMER CLIENTE montado en el servidor NUEVO (netcup) + fix del "folleto" + lista blanca de pruebas
 
 **1. Fix del "folleto" (commit `e0b48cf`, bot `web`+`worker`).** Con Haiku, a *"las empanadas / dame más información"* el bot soltaba un **muro de texto**: nombraba los 3 tipos (Keto/Horneadas/plátano) + TODOS sus rellenos de golpe. **Diagnóstico (workflow multi-agente):** NO era desobediencia — el prompt (reglas 4-5 de `_catalogo_bloque` + la nota de `ver_catalogo`) le ORDENABA *"di de qué son, con sus rellenos"*, y como "empanadas" barre 3 familias, el modelo cumplía. **Fix:** la nota de `ver_catalogo` ahora es **dinámica por conteo** — si devuelve VARIOS productos, "nombra SOLO los tipos y retén el `de_que_es` hasta que el cliente elija cuál"; regla 5 reescrita (conservando la sub-regla de precio y el ancla anti-invención). De paso, `_aplanar` normaliza la **rayita larga `—` → coma** (nacía del separador del catálogo `• nombre — categoria`, que también se cambió a `(categoria)`). Anti-invención INTACTO. Verificado en vivo.

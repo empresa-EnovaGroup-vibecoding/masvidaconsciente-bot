@@ -57,9 +57,26 @@ KISS · YAGNI · DRY · una responsabilidad por pieza · nombres claros · archi
 > 2. **`_REGLAS`** (blindadas en `system_prompt.py`, NO editables) = el cobro y las conductas duras.
 > 3. **Catálogo + notas de herramientas** (`_catalogo_bloque`) + **redes de seguridad** en `app/agent/agent.py`.
 >
-> **REGLA:** lo de abajo **YA está en el código**. **NO se escribe en la Personalidad** (se duplica, infla el
-> prompt y hace que Haiku copie frases / "suene a robot"). Si hay que **cambiar** una de estas conductas, se
-> edita el **CÓDIGO** (`system_prompt.py` / `agent.py`), **NUNCA** el prompt del panel.
+> **REGLA:** lo de abajo **YA está en el código**. Al **AGREGAR** cosas nuevas al prompt, NO las repitas aquí.
+> Si hay que **cambiar** una de estas conductas, se edita el **CÓDIGO** (`system_prompt.py` / `agent.py`),
+> **NUNCA** el prompt del panel.
+>
+> ## 🔴 ⚠️ PERO **NO RECORTES EL PROMPT** PARA "DES-DUPLICAR" — YA SE PROBÓ Y **ROMPE EL COBRO**
+> **Experimento del 2026-07-11 (A/B real, 3 repeticiones por servidor):** se quitaron del prompt las reglas
+> que "ya estaban en el código" (secciones `# PRECIO`, `# CATÁLOGO: cuándo mandarlo`, formato, fotos, pasos
+> del cobro). El prompt bajó de 11.648 → 9.338 chars y la voz se mantuvo… **pero el bot empezó a registrar el
+> PRODUCTO EQUIVOCADO**: a *"quiero 2 paquetes de empanadas de plátano"* grabó **"Empanadas Keto"** ($12/4u,
+> total $24) en vez de **"Empanadas"** ($14/8u, total $28). **2 de 2 veces.** Con el prompt original: correcto
+> **2 de 2**. Se revirtió todo.
+>
+> **Conclusión (Auto-Blindaje):** con un modelo PEQUEÑO (Haiku) **la redundancia entre prompt y código NO es
+> grasa: es lo que SOSTIENE la selección de producto**. "Una sola fuente por tema" es buena teoría y MALA
+> práctica aquí. **El prompt largo se queda.**
+>
+> **Si alguna vez se vuelve a tocar el prompt, es OBLIGATORIO:** probar el cobro ANTES y DESPUÉS —registrar un
+> pedido real y **verificar en la BD** (`SELECT items, total FROM pedidos`) que el **producto y el total** son
+> los correctos—, quitar **una sola cosa a la vez**, y revertir a la primera diferencia. Nunca fiarse de que
+> "la respuesta se ve bien": el bot **hablaba** de las de plátano y **cobraba** las Keto.
 
 **Ya vive en el código (no ponerlo en el prompt):**
 - **Formato al escribir:** corto, varios mensajitos, sin viñetas ni negritas, espejear al cliente. → `_REGLAS` (BREVEDAD, "Planos sin formato", ESPEJEA).
