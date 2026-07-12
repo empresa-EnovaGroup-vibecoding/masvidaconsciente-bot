@@ -362,6 +362,16 @@ _MESES = [
 ]
 
 
+def _entre_horas(ahora, apertura: str, cierre: str) -> bool:
+    """¿El negocio está abierto AHORA? (horas en formato HH:MM, hora de Venezuela)."""
+    try:
+        ha, ma = (int(x) for x in apertura.split(":")[:2])
+        hc, mc = (int(x) for x in cierre.split(":")[:2])
+    except ValueError:
+        return True  # horario mal escrito: no bloquear al negocio
+    return (ha, ma) <= (ahora.hour, ahora.minute) < (hc, mc)
+
+
 async def _calendario_texto() -> str:
     """El CALENDARIO del negocio, inyectado en cada mensaje: qué día es hoy y qué días se
     entrega. Va aquí (dinámico) y NO memorizado en la personalidad, para que haya UNA sola
@@ -377,11 +387,27 @@ async def _calendario_texto() -> str:
     try:
         factory = get_session_factory()
         async with factory() as session:
-            dias = (
-                await session.execute(
-                    select(Configuracion.valor).where(Configuracion.clave == "dias_entrega")
+            cfg = dict(
+                (
+                    await session.execute(
+                        select(Configuracion.clave, Configuracion.valor).where(
+                            Configuracion.clave.in_(
+                                ("dias_entrega", "hora_apertura", "hora_cierre", "hora_corte")
+                            )
+                        )
+                    )
+                ).all()
+            )
+            dias = cfg.get("dias_entrega")
+            horas = (
+                (
+                    cfg.get("hora_apertura") or "08:00",
+                    cfg.get("hora_cierre") or "18:00",
+                    cfg.get("hora_corte") or "18:00",
                 )
-            ).scalars().first()
+                if cfg.get("hora_apertura") or cfg.get("hora_cierre") or cfg.get("hora_corte")
+                else None
+            )
             proximos = (
                 await session.execute(
                     select(Feriado.fecha, Feriado.motivo)
@@ -395,6 +421,25 @@ async def _calendario_texto() -> str:
 
     if dias:
         texto += f"\nDÍAS DE ENTREGA: {dias}. Los demás días NO se entrega."
+    if horas:
+        apertura, cierre, corte = horas
+        ahora = datetime.now(timezone.utc) - timedelta(hours=4)  # Venezuela
+        abierto = _entre_horas(ahora, apertura, cierre)
+        texto += (
+            f"\nHORARIO DE ATENCIÓN: de {apertura} a {cierre}. Ahora mismo el negocio está "
+            f"{'ABIERTO' if abierto else 'CERRADO'}."
+        )
+        if not abierto:
+            # Un mensaje sin responder de noche es una venta que se va con la competencia:
+            # el bot atiende igual, pero no promete lo que el negocio no puede cumplir.
+            texto += (
+                " Atiende igual, con calidez, y toma el pedido (NO lo mandes a escribir después), "
+                "pero no prometas una entrega inmediata: agenda para el próximo día de entrega."
+            )
+        texto += (
+            f"\nPEDIDOS PARA HOY MISMO: solo hasta las {corte}. Pasada esa hora ya no se puede "
+            f"entregar hoy (el código te lo rechaza): ofrécele el próximo día de entrega."
+        )
     if proximos:
         lista = ", ".join(
             f"{f.isoformat()}" + (f" ({m})" if m else "") for f, m in proximos

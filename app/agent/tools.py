@@ -7,7 +7,7 @@ import json
 import logging
 import math
 import unicodedata
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 from sqlalchemy import select, text
@@ -659,6 +659,29 @@ async def _primera_fecha_valida(session, desde: date, dias_ok: set[str], anticip
     return f
 
 
+async def _config_hora(session, clave: str, por_defecto: str) -> str:
+    valor = (
+        await session.execute(select(Configuracion.valor).where(Configuracion.clave == clave))
+    ).scalars().first()
+    return (valor or "").strip() or por_defecto
+
+
+def _ahora_venezuela():
+    return datetime.now(timezone.utc) - timedelta(hours=4)
+
+
+async def _paso_la_hora_de_corte(session) -> bool:
+    """¿Ya es demasiado tarde para pedir algo para HOY? Sin esta regla, un cliente puede pedir
+    'para hoy mismo' a las 11 de la noche y el bot se lo acepta. La hora la pone la dueña."""
+    corte = await _config_hora(session, "hora_corte", "18:00")
+    try:
+        h, m = (int(x) for x in corte.split(":")[:2])
+    except ValueError:
+        return False
+    ahora = _ahora_venezuela()
+    return (ahora.hour, ahora.minute) >= (h, m)
+
+
 async def _validar_entrega(session, fecha: date, items_pedido) -> dict | None:
     """Devuelve None si la fecha SIRVE; si no, el motivo + la primera fecha buena."""
     hoy = hoy_venezuela()
@@ -669,6 +692,7 @@ async def _validar_entrega(session, fecha: date, items_pedido) -> dict | None:
     )
 
     motivo = None
+    desde = hoy  # el primer día que se podría, antes de mirar el calendario
     if fecha < hoy:
         motivo = "esa fecha ya pasó"
     elif fecha < hoy + timedelta(days=anticipacion):
@@ -676,6 +700,11 @@ async def _validar_entrega(session, fecha: date, items_pedido) -> dict | None:
             f"ese pedido necesita {anticipacion} día(s) de anticipación "
             f"(hay productos que la dueña prepara por encargo)"
         )
+    elif fecha == hoy and await _paso_la_hora_de_corte(session):
+        # HOY ya no se puede: pasó la hora de corte. El próximo día empieza mañana.
+        corte = await _config_hora(session, "hora_corte", "18:00")
+        motivo = f"para HOY ya pasó la hora (solo se toman pedidos del mismo día hasta las {corte})"
+        desde = hoy + timedelta(days=1)
     elif _DIAS_SEMANA[fecha.weekday()] not in dias_ok:
         motivo = f"los {_DIAS_SEMANA[fecha.weekday()]} el negocio NO entrega"
     elif fecha in feriados:
@@ -684,9 +713,13 @@ async def _validar_entrega(session, fecha: date, items_pedido) -> dict | None:
 
     if motivo is None:
         return None
+
+    # Si ya pasó la hora de corte, "hoy" tampoco sirve como primera fecha válida.
+    if desde == hoy and await _paso_la_hora_de_corte(session):
+        desde = hoy + timedelta(days=1)
     return {
         "motivo": motivo,
-        "primera_fecha_valida": await _primera_fecha_valida(session, hoy, dias_ok, anticipacion),
+        "primera_fecha_valida": await _primera_fecha_valida(session, desde, dias_ok, anticipacion),
     }
 
 

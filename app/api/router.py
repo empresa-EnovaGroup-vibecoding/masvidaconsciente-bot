@@ -105,6 +105,12 @@ CLAVES_CONFIG = [
     # Días en que el negocio SÍ entrega (separados por coma). Es un CANDADO: el código valida
     # la fecha de entrega contra esto y el bot no puede prometer un día cerrado.
     "dias_entrega",
+    # Horario de ATENCIÓN (el bot responde igual fuera de hora, pero lo sabe y ajusta lo que promete).
+    "hora_apertura",
+    "hora_cierre",
+    # Hasta qué hora se aceptan pedidos para el MISMO día. Pasada esa hora, el código deja de
+    # permitir "hoy" y el bot ofrece el próximo día de entrega. Es un CANDADO.
+    "hora_corte",
     # Modelo de IA conversacional, lo elige la PROVEEDORA (no la clienta). El bot
     # lo lee con leer_modelo_ia(). La voz (transcripción) va aparte y fija.
     "modelo_ia",

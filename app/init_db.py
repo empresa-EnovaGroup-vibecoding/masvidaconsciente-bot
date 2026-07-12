@@ -133,6 +133,12 @@ async def main() -> None:
         await session.commit()
         logger.info("Migracion 017 (horario de entrega) aplicada")
 
+        # 018: las HORAS (atención + hora de corte para pedidos del mismo día). Aditiva.
+        for stmt in _statements(MIGRATIONS / "018_horas.sql"):
+            await session.execute(text(stmt))
+        await session.commit()
+        logger.info("Migracion 018 (horas) aplicada")
+
         total = (await session.execute(text("SELECT COUNT(*) FROM productos"))).scalar()
         if total and total > 0:
             logger.info("Catálogo ya cargado (%s productos), no se vuelve a sembrar", total)
