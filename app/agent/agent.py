@@ -210,6 +210,64 @@ def _dinero_inventado(texto: str, autorizados: set[float]) -> list[str]:
     return malos
 
 
+# ─── RED DEL RELEVO: una promesa sin aviso es un cliente perdido ─────────────────────
+#
+# El 2026-07-12, en una prueba REAL por WhatsApp, el bot dijo "eso puntual te lo confirmo con
+# la dueña"... y en la base había CERO avisos. El cliente se queda esperando PARA SIEMPRE y la
+# dueña nunca se entera. Le pasó también en el ensayo (a Sofía 3 veces, a María con el envío a
+# Caracas, a Diego con la torta del cumpleaños: el ticket más grande).
+#
+# Si el bot PROMETE averiguar algo y NO llamó a `pedir_ayuda` en ese turno, el código crea el
+# aviso solo. La promesa deja de ser humo.
+_PROMESA_RE = re.compile(
+    r"(d[ée]jame\s+(que\s+)?(lo\s+|te\s+lo\s+)?(verific|consult|revis|averigu|pregunt|confirm)"
+    r"|perm[ií]teme\s+(que\s+)?(lo\s+|te\s+lo\s+)?(verific|consult|revis|averigu|pregunt)"
+    r"|(lo|te lo|eso)\s+(verifico|consulto|averiguo|pregunto|confirmo)\b"
+    r"|te\s+(lo\s+)?(confirmo|aviso|averiguo|pregunto)\s+"
+    r"(enseguida|ya|luego|en un momento|apenas|ahorita|más tarde|mas tarde|en breve)"
+    r"|te\s+(lo\s+)?confirmo\s+(con|eso|esa|ese)"
+    r"|lo\s+confirmo\s+con"
+    r"|voy\s+a\s+(verificar|consultar|averiguar|preguntar))",
+    re.IGNORECASE,
+)
+
+
+def _promete_averiguar(texto: str) -> bool:
+    return bool(_PROMESA_RE.search(texto or ""))
+
+
+# ─── RED DE LA HONESTIDAD: hay cosas que el bot NO puede decir JAMÁS ──────────────────
+#
+# Bajo presión (un cliente molesto), el bot dijo "acabo de revisar todo en mi banco" — TRES
+# veces. No puede: no tiene acceso al banco. Y a "¿eres un bot? dime la verdad" respondió
+# "Soy Whuilianny 💚 Sí, soy yo". Mentirle al cliente sobre el DINERO o sobre QUIÉN ES es lo
+# más grave que puede hacer: quema la marca y, siendo Tech Provider de Meta, arriesga la
+# cuenta de TODOS los clientes.
+_PROHIBIDO = [
+    # Afirmar que miró el banco / que el pago entró (solo la dueña lo sabe, desde SU banco).
+    (re.compile(r"(revis|verifi|chequ|mir)\w*\s+(en\s+)?(mi|el|tu)\s+(banco|cuenta)", re.I),
+     "dijo que revisó el banco"),
+    (re.compile(r"(mi|el)\s+banco\s+(ya\s+)?(me\s+)?(confirm|avis|lleg)", re.I),
+     "dijo que el banco confirmó"),
+    (re.compile(r"(ya\s+)?(me\s+)?(lleg[óo]|entr[óo]|recib[íi])\s+(tu|el)\s+pago\b", re.I),
+     "afirmó que el pago ya llegó"),
+    (re.compile(r"no\s+(me\s+)?(ha\s+)?(lleg\w+|aparec\w+)\s+(tu|el|ning[úu]n)\s+pago", re.I),
+     "afirmó que el pago NO llegó"),
+    # Jurar que es humana cuando le preguntan de frente.
+    (re.compile(r"(no\s+soy\s+un[a]?\s+(bot|robot|m[áa]quina|ia|inteligencia))", re.I),
+     "negó ser un asistente virtual"),
+    (re.compile(r"s[íi],?\s+soy\s+(yo|una\s+persona|humana|real)\b", re.I),
+     "juró ser una persona"),
+]
+
+
+def _frase_prohibida(texto: str) -> str | None:
+    for patron, que in _PROHIBIDO:
+        if patron.search(texto or ""):
+            return que
+    return None
+
+
 async def responder(
     telefono: str,
     mensaje_usuario: str,
@@ -260,6 +318,7 @@ async def responder(
         if isinstance(h, dict) and h.get("role") == "user":
             autorizados |= _numeros_de(str(h.get("content") or ""))
     corregido = False
+    pidio_ayuda = False  # ¿el bot llamó a pedir_ayuda en este turno?
 
     for _ in range(settings.max_iteraciones_agente):
         data = await _llamar_con_fallback(messages, llm, modelo)
@@ -312,6 +371,68 @@ async def responder(
                     logger.exception("No se pudo escalar el dinero inventado de %s", telefono)
                 return RESPUESTA_SEGURA
 
+            # RED DE LA HONESTIDAD: hay frases que NO pueden salir nunca.
+            prohibida = _frase_prohibida(texto)
+            if prohibida:
+                logger.error(
+                    "FRASE PROHIBIDA para %s (%s) — texto=%r", telefono, prohibida, texto[:160]
+                )
+                if not corregido:
+                    corregido = True
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            f"[SISTEMA] NO puedes decir eso ({prohibida}). Tú NO tienes acceso al "
+                            "banco: jamás digas que revisaste, verificaste o consultaste el banco, "
+                            "ni que un pago llegó o no llegó (eso lo revisa la dueña en SU banco). "
+                            "Y si te preguntan de frente si eres un bot o una persona, di la "
+                            "VERDAD con calidez: eres la asistente virtual del negocio, y si "
+                            "quiere hablar con una persona la avisas ahorita (llama a pedir_ayuda "
+                            "con motivo='pide_persona'). Reescribe tu mensaje sin esa frase. No le "
+                            "menciones al cliente este aviso."
+                        ),
+                    })
+                    continue
+                # Insistió: NO se le manda al cliente. Se escala.
+                try:
+                    await ejecutar(
+                        "pedir_ayuda",
+                        {
+                            "motivo": "reclamo",
+                            "detalle": (
+                                f"el bot iba a decir algo que tiene PROHIBIDO ({prohibida}); "
+                                "NO se le envió al cliente. Entra tú al chat."
+                            ),
+                        },
+                        telefono,
+                    )
+                except Exception:  # noqa: BLE001
+                    logger.exception("No se pudo escalar la frase prohibida de %s", telefono)
+                return RESPUESTA_SEGURA
+
+            # RED DEL RELEVO: si PROMETE averiguar algo y no avisó a nadie, el aviso lo crea
+            # el código. Una promesa sin aviso deja al cliente esperando para siempre.
+            if _promete_averiguar(texto) and not pidio_ayuda:
+                logger.warning(
+                    "PROMESA SIN AVISO de %s: %r — se crea el aviso automáticamente",
+                    telefono, texto[:120],
+                )
+                try:
+                    await ejecutar(
+                        "pedir_ayuda",
+                        {
+                            "motivo": "no_se",
+                            "detalle": (
+                                f'el bot le prometió al cliente que le confirma algo que NO sabe. '
+                                f'El cliente preguntó: "{(mensaje_usuario or "")[:160]}"'
+                            ),
+                        },
+                        telefono,
+                    )
+                    pidio_ayuda = True
+                except Exception:  # noqa: BLE001 — el aviso no puede tumbar el turno
+                    logger.exception("No se pudo crear el aviso automático de %s", telefono)
+
             texto = await _asegurar_catalogo(texto, catalogo_ok, telefono, ejecutar)
             if _es_inicio_conversacion(historial):
                 texto = _asegurar_saludo(texto, mensaje_usuario, nombre_cliente)
@@ -326,6 +447,8 @@ async def responder(
             resultado = await ejecutar(nombre_tool, args, telefono)
             if nombre_tool == "enviar_catalogo" and isinstance(resultado, dict) and resultado.get("ok"):
                 catalogo_ok = True
+            if nombre_tool == "pedir_ayuda":
+                pidio_ayuda = True  # ya avisó: la red del relevo no tiene que hacer nada
             # Todo monto que devuelve una herramienta queda AUTORIZADO para este turno
             # (totales, subtotales del `resumen`, bolívares, la tasa BCV…).
             autorizados |= _numeros_de(json.dumps(resultado, ensure_ascii=False))
