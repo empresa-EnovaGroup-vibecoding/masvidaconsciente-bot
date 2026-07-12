@@ -17,6 +17,32 @@
 
 ---
 
+## 2026-07-12 (noche 6) — 📦 "SE VENDE POR PAQUETE COMPLETO" + 📅 LA ENTREGA (los encontró MAIRED probando)
+
+**Los encontró ella, probando por WhatsApp.** Vale más que cualquier suite: el bot le dijo a un cliente *"Listo, 4 empanadas de pollo"* — y el negocio **NO vende sueltas**: el paquete trae **8 por $14**. Como `cantidad` = PAQUETES, iba a cobrar **4 × $14 = $56** por lo que la clienta creía que eran 4 empanadas. *(No llegó a registrarse: se cazó a tiempo.)*
+
+**Regla de negocio (confirmada por Maired):** la unidad de venta es la **PRESENTACIÓN COMPLETA**, en TODOS los productos. Y lo que el cliente elige **DENTRO** del paquete (relleno, masa, mezcla: *"4 de pollo y 4 de carne"*) **NO cambia el precio**, pero la dueña **lo necesita para cocinar**.
+
+**Dónde va cada cosa (la doctrina, que ella preguntó explícitamente):** *lo que toca el DINERO va en el CÓDIGO; el "cómo decirlo" en el prompt; el Conocimiento es para datos del negocio que cambian.* El Conocimiento **NO** es un candado: es una búsqueda de texto.
+
+**Lo construido (commits `5484794`, `5a04515`, `79759e6` + panel `b2f67d7`):**
+- **Catálogo inyectado:** cada producto dice *"SE VENDE POR PAQUETE COMPLETO: 1 = 8 unidades (NO se vende suelto ni fraccionado)"*.
+- **`_REGLAS`:** pide menos de un paquete → se lo explica y le ofrece el completo · pide 20 (no calza) → le da las **dos opciones reales** y **decide el cliente** (jamás redondea solo) · cantidad **AMBIGUA** ("quiero 4") → **PREGUNTA** si son paquetes o unidades **antes** de registrar.
+- **`cantidad` = PAQUETES** (explícito en el schema) + campo **`opciones`** nuevo (el relleno).
+- **El RECIBO lo hace visible:** *"Empanadas x2 (paquete de 8 unidades) — 4 de pollo y 4 de carne mechada = $28"*. Si el bot se equivoca de paquetes, **el cliente lo canta antes de pagar**.
+- **Verificado (4/4 contra el bot vivo):** a *"Necesito cuatro"* → *"¿son 4 empanadas o 4 paquetes? cada paquete trae 8"* → BD: **1 paquete, $14** (no los $56). "20 empanadas" → ofrece 16 o 24 y decide el cliente → **3 paquetes, $42**. Mezcla de rellenos → **$14** y el relleno guardado. "Dame 2" (Keto) → pregunta.
+
+### 📅 LA ENTREGA — y el CANDADO del domingo
+De esas mismas pruebas salieron **dos fallas nuevas y verificadas**:
+1. El bot **aceptó un pedido "para el domingo"** (*"Perfecto, 3 paquetes para el domingo 💚"*, cobró $42 y pidió el comprobante) — y la dueña **NO entrega los domingos** (está en su propia personalidad: *"lunes a sábado; lo del domingo se entrega el lunes"*). **Reclamo garantizado.**
+2. **La fecha de entrega NO se guardaba en ningún lado**: el cliente dijo "domingo" dos veces y a la dueña le llegaba un pedido de $42 **sin saber para cuándo era**.
+
+**Lo hecho:** `migrations/016_pedido_entrega.sql` (aditiva; **agregada a la lista a mano de `init_db.py`** o el .sql nunca corre) + `Pedido.entrega` + `registrar_pedido(entrega=…)` (texto libre, las palabras del cliente: **no se parsea a fecha a propósito**) + el recibo la dice + el panel la muestra.
+
+**🔴 Y la lección otra vez:** puse la regla del horario en `_REGLAS` (texto) y **NO alcanzó**: probado en vivo, el bot igual contestó *"Perfecto, anotado para el domingo"*. **Lo que vive solo en el texto se rompe.** → **CANDADO en código, manejado por DATOS:** configuración nueva **`dias_sin_entrega`** (editable en el panel; másvida = `domingo`) y `registrar_pedido` **RECHAZA** el pedido si la entrega cae en un día cerrado, ordenándole al agente ofrecer el día hábil siguiente. **Verificado en vivo:** *"las necesito para el domingo"* → *"el domingo no hacemos entregas — lo que pidas para el domingo te lo entrego el lunes. ¿Te viene bien así?"* ✅
+
+---
+
 ## 2026-07-12 (noche 5) — 🎭 ENSAYO GENERAL (12 clientes falsos) → 9 bloqueantes → TANDA 1 del dinero, HECHA Y VERIFICADA
 
 **El método (nuevo, y hay que repetirlo siempre antes de abrir el bot):** 12 **clientes falsos realistas** (el celíaco, la del cumpleaños, el diabético, la de Caracas, el del evento de 60 empanadas, el molesto…) conversando con el **bot VIVO** por el simulador (sin mandar WhatsApp a nadie), + **3 jueces** con lentes distintos (la dueña avergonzada · el dinero · el cliente exigente) revisando las transcripciones. Coste: una hora. **Encontró 9 bloqueantes; solo 2 los conocíamos.**
