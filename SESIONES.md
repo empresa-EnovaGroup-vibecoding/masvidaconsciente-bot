@@ -17,6 +17,34 @@
 
 ---
 
+## 2026-07-12 (noche 4) — 🧭 EL MALENTENDIDO DE LOS DOS SERVIDORES (resuelto) + rescate de lo que Maired editó
+
+**El problema que ella arrastraba (y tenía razón):** *"lo que edito en el viejo no aparece en el nuevo"*. **Cierto.** La distinción que faltaba:
+- **El CÓDIGO sí se sincroniza solo** (GitHub Actions despliega en los dos servidores).
+- **Los DATOS NO.** Cada servidor tiene **su propia base**: catálogo, personalidad, conocimiento, precios. **Nunca se han hablado.**
+
+**Y el otro malentendido, el gordo:** ella creía que estaba "armando el sistema en el viejo" para después pasarlo al nuevo. Pero el **webhook de Meta apunta a netcup desde el 10-jul**: los mensajes de WhatsApp entran ahí. Ella probaba con el **SIMULADOR del panel viejo** (que corre contra el bot y la BD del viejo) → todo le cuadraba allá... mientras el bot que de verdad atiende WhatsApp (netcup) **nunca veía sus cambios**.
+
+**Verificado con números:** netcup = **40 personas escribieron**, el bot respondió a 6, **34 sin respuesta del bot** (último mensaje de cliente: HOY 18:14). El bot **NO está mudo por accidente**: la **lista blanca** (`NUMEROS_PERMITIDOS=573005690062`, bot **y** worker) solo deja que le conteste a Maired. **La dueña responde a mano** (coexistencia) → no se pierden ventas. 🔑 **El interruptor de "atender clientes" NO es el servidor: es la lista blanca.** Cuando esté todo listo, se vacía y el bot atiende a todos. **No hay nada que migrar.**
+
+**Decisión de Maired:** **netcup = el sistema. El viejo = respaldo** (y banco de pruebas donde YO puedo escribir sin tocar clientes).
+
+**Lo aplicado:**
+1. **El panel VIEJO ahora escribe en la BASE VIVA** (`NEXT_PUBLIC_API_URL` → `https://api.masvidaconsciente.store` + rebuild; verificado en el JS compilado). Así, **entre por el panel que entre, edita la base buena**. Ya no puede volver a divergir. *(Si algún día se hace failover al viejo, hay que devolver esta variable.)*
+2. **Rescatado lo que estaba atrapado en el viejo** (ensayo con `BEGIN…ROLLBACK` y luego `COMMIT`):
+   - Producto 4: **"Tortillas de Plátano o Yuca" → "Tortillas"** (renombrado por ella).
+   - **`msg_guia_comprobante`**: el vivo decía *"Destinatario: **Maired Hernandez** / Plataforma: Venezuela"* — **incorrecto**: las cuentas son de **Whuilliany Zabala** (Banesco/Binance, verificado en `metodos_pago`). Puesta la versión correcta. **Afectaba al reconocimiento de comprobantes.**
+   - Conocimiento nuevo: *"Si preguntan algo que no sabes → permíteme verificar y ya te confirmo"*.
+   - **NO se copió** la foto que el viejo tenía de más: su archivo **no existe en R2** (HTTP 404) → era una fila **huérfana** (ella borró esa foto desde netcup). Verificadas **las 35 fotos del vivo: todas existen** (0 rotas).
+   - **NO se copió** el campo `info` de las Empanadas: tenía pegada **una nota MÍA** de otra sesión ("❌ Lo que le falta…"), no datos del producto.
+   - Decisión de ella: la respuesta de **envíos** se queda con la versión **prudente** (la del vivo).
+3. **Banco de pruebas del dinero corrido tras el renombrado**: `'Tortillas'` → Tortillas y `'Tortillas Taco'` → Tortillas Taco (no se confunden). ✅
+4. **fix(panel): el SIMULADOR ya no ensucia el panel ni el reporte** (commit `1abdaf3`). Crea pedidos/pagos REALES con teléfono `__simulador__`; solo la lista de *clientes* lo excluía → sus pruebas **sumaban en el reporte de ventas**. Ahora se excluye en `/metricas`, `/reporte`, `/pedidos` y `/pagos`. **Crítico ahora** que el panel viejo escribe en la base viva. Probado: pedido de prueba en la BD = 1, pedidos que ve la dueña = **0**.
+
+**⚠️ Dato de contenido pendiente:** *"cómo se preparan"* (empanadas: ¿se fríen?, ¿al horno?, ¿air fryer?, ¿cuántos minutos?) **NO está cargado en ningún lado** — buscado en descripciones, `info` y Conocimiento. El catálogo SÍ tiene: duración (21/29), se congela (16/29), apto diabéticos (casi todos) y alérgenos (10 productos).
+
+---
+
 ## 2026-07-12 (noche 3) — 🧾 LOS COMPROBANTES SE PERDÍAN (bug latente, tapado) + 🧹 Hostinger limpio
 
 **🔴 Bug de datos que habría explotado con el PRIMER pago real.** Apareció al montar el respaldo (¿qué hay que respaldar?):
