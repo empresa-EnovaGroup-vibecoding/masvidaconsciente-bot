@@ -30,13 +30,35 @@ Las **FASES 0 a 3 ya están hechas y desplegadas**:
 - **Fotos y videos por producto**: subir en el panel → Cloudflare R2 → el bot las **envía por WhatsApp** cuando el cliente las pide.
 - El bot "dice que mandó el catálogo": red de seguridad OK (`_asegurar_catalogo`).
 
-**🔨 Pendiente (en orden sugerido):**
-- 🔴 **Seguridad — ROTAR llaves** expuestas en el chat durante el setup de R2: META_ACCESS_TOKEN + META_APP_SECRET, OPENROUTER_API_KEY, JWT_SECRET, ADMIN_PASSWORD, llaves R2. **Antes de lanzar con clientes reales.**
-- 🟡 **Cargar contenido** (trabajo de la dueña, el bot ya está listo): llenar las **fichas** de los productos (duración/congela/diabéticos) y más **Conocimiento** (FAQ: alergias, conservación, envíos…).
-- 🟡 **Voz del bot (closer Whuilianny)** — afinar tono. `BRIEF-closer-masvida.md`.
-- ⚪ **PLAN A — Memoria/ficha del cliente que vuelve**: reconocer al cliente (nombre, nº de pedidos, última compra, notas) desde Postgres. Decidir cuántos días recuerda el detalle (sugerido 7).
-- ⚪ **Orden/limpieza:** redeploy del **web** para igualar versión con el worker; pasar el repo de GitHub a **privado**.
-- ⚪ **(Opcional) Blindar el envío de fotos** con red de seguridad en código (hoy funciona; si el modelo vuelve a "anclarse" en el historial y no llama la herramienta, lo blindamos como el catálogo).
+### 🔨 LO QUE SIGUE — en orden (actualizado 2026-07-12)
+
+> **Estamos construyendo el HANDOFF** (traspaso a humano): que el bot, cuando llega a su límite, **deje de responder, avise a la dueña y le pase la conversación**. El motor YA ESTÁ HECHO Y DESPLEGADO. Falta la pantalla y el aviso que siempre llega.
+>
+> ⚠️ **ANTES DE TOCAR EL COBRO, LEE ESTO:** existe un **banco de pruebas** — `scripts/probar_cobro.py`. **Córrelo siempre** después de cualquier cambio en el catálogo, las herramientas o el cobro (`docker exec -w /app -e PYTHONPATH=/app <bot> python scripts/probar_cobro.py`). Si algo sale MAL, **no se despliega**. Ver CLAUDE.md §8 y SESIONES 2026-07-12.
+
+**1. 🔴 La BANDEJA "El bot te necesita" en el PANEL** *(repo `masvidaconsciente-dashboard`)* — **ES LO SIGUIENTE.**
+El backend **ya está listo y desplegado**: `GET /api/intervenciones` · `POST /api/intervenciones/{id}/resolver` (cierra el aviso y **reactiva el bot**) · `GET|PUT /api/precio-dia`. **Falta solo la pantalla.** Hoy el bot avisa **y nadie lo ve**. Debe mostrar: motivo, cliente, lo que preguntó, y —si es un precio del día— un campo para escribir el precio de HOY + botón "Ya lo atendí (reactivar el bot)".
+
+**2. 🔴 Renombrar la KOMBUCHA (parche urgente, 2 min).** Hay **dos productos llamados igual** ("Kombucha", ids 21 y 22: $4/350ml y $7/700ml) → el bot **siempre cobra el de $4** y pierde $3 por venta. Renombrar a **"Kombucha 350ml"** / **"Kombucha 700ml"** **en LOS DOS servidores** (las BD **no se sincronizan solas**). Es un parche: lo correcto son las VARIANTES (punto 5).
+
+**3. 🔴 Configurar `dueno_telefono`** — está **VACÍO** (config y env, bot y worker, en los dos servidores) → el aviso que YA existe ("🔔 Nuevo pago reportado" al entrar un comprobante) **nunca le ha llegado a nadie**.
+
+**4. 🟡 Motor de PLANTILLAS (HSM) — el aviso que SIEMPRE llega.** `meta_client.py` hoy **solo manda `type: "text"`** (free-form) → un aviso solo llega si la dueña le escribió al negocio hace <24h (ventana de Meta). Hace falta: (a) `enviar_plantilla()` en el código, con fallback a texto si la ventana está abierta; (b) que **Maired cree y apruebe** la plantilla `bot_necesita_ayuda` (categoría **Utilidad**) en el WhatsApp Manager. ⚠️ **Es el ladrillo de media hoja de ruta** (recordatorios de pago, recuperar pedidos, campañas, reactivar dormidos).
+
+**5. 🟡 PRODUCTO + VARIANTES + OPCIONES (la estructura correcta).** Hoy el precio vive pegado al producto, y por eso la dueña tuvo que crear **dos productos con el mismo nombre**. Lo correcto son **3 conceptos**:
+- **PRODUCTO** = lo que ES (ficha, ingredientes, fotos). **Nombre ÚNICO.**
+- **PRESENTACIÓN/VARIANTE** = cómo se compra: tamaño **+ PRECIO** (Kombucha: 350ml $4 · 700ml $7).
+- **OPCIÓN** = lo que el cliente escoge: sabor/relleno/masa. **NO cambia el precio** (Empanadas: carne mechada · pollo · queso).
+**La regla sale sola de los datos:** *el bot pregunta SOLO cuando hay más de una presentación.* Arregla: Kombucha · Galletas New York + Mini New York (misma galleta, 2 tamaños) · Tortas keto y torta baja (3 tamaños "250g/500g/1kg" metidos en un texto) · Premezclas. **El panel debe BLOQUEAR nombres repetidos** y llevarla a "agregar presentación". Y `registrar_pedido` pasa a recibir **`variante_id`** de una lista cerrada (el "código de barras") → **imposible cobrar mal**.
+*(NO son variantes, son productos distintos: Tortillas vs Tortillas Taco · Empanadas/Keto/Horneadas · Wafles Salados vs Dulces — distintos ingredientes.)*
+
+**6. 🟡 Contenido** (trabajo de la dueña): fichas de producto (duración/congela/diabéticos) y más **Conocimiento** (FAQ). ⚠️ **Ojo:** cuanto menos Conocimiento haya, **más handoffs** le van a llegar.
+
+**7. ⚪ Modelo de IA** (investigado 2026-07-12, 7 agentes): el mejor costo-beneficio sería **`openai/gpt-5.4-mini`** — **más barato que Haiku 4.5** ($0.75/$4.50 vs $1/$5, caching automático) **y mejor en tool use**. ⚠️ **No acepta `temperature`** (OpenRouter la descarta en silencio) y **todos** los modelos baratos de 2026 son de razonamiento → hay que fijar `reasoning: minimal` o el costo/latencia se disparan. **Falta también** `provider: {require_parameters: true}` en el payload (`agent.py:75`) o OpenRouter puede rutear a un proveedor que **ignore las herramientas** → el bot inventaría precios. **NO es urgente:** el bug de "cobraba mal" era del CÓDIGO, no del modelo.
+
+**8. 🔴 Seguridad — ROTAR llaves** expuestas en el chat durante el setup de R2: META_ACCESS_TOKEN + META_APP_SECRET, OPENROUTER_API_KEY, JWT_SECRET, ADMIN_PASSWORD, llaves R2. **Antes de lanzar con clientes reales.**
+
+**⚪ Otros:** pasar el repo de GitHub a **privado** · afinar la voz (`BRIEF-closer-masvida.md`; ⚠️ **la voz y la bienvenida de Whuilianny son INTOCABLES** — ver SESIONES 2026-07-10/11).
 
 ---
 
