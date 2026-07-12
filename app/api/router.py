@@ -39,6 +39,16 @@ from app.services.redis_client import borrar_memoria
 
 router = APIRouter(prefix="/api", tags=["dashboard"])
 
+# El SIMULADOR del panel ("Mi Bot" -> probar) crea pedidos y pagos REALES en la base, con este
+# telefono. Antes solo la lista de CLIENTES lo excluia: los pedidos de prueba se colaban en el
+# panel y SUMABAN en el reporte de ventas. Ahora se excluyen de todo lo que la duena mira.
+SIMULADOR = "__simulador__"
+
+
+def _pedidos_simulador():
+    """Subconsulta con los ids de los pedidos que nacieron del simulador."""
+    return select(Pedido.id).where(Pedido.cliente_telefono == SIMULADOR)
+
 
 # ─── Esquemas ────────────────────────────────────────────────────────
 
@@ -185,7 +195,9 @@ async def metricas(_: str = Depends(usuario_actual)):
     async with factory() as session:
         pedidos_hoy = (
             await session.execute(
-                select(func.count()).select_from(Pedido).where(Pedido.created_at >= hoy_inicio)
+                select(func.count()).select_from(Pedido).where(
+                    Pedido.created_at >= hoy_inicio, Pedido.cliente_telefono != SIMULADOR
+                )
             )
         ).scalar() or 0
         ventas_hoy = (
@@ -193,15 +205,20 @@ async def metricas(_: str = Depends(usuario_actual)):
                 select(func.coalesce(func.sum(Pedido.total), 0)).where(
                     Pedido.created_at >= hoy_inicio,
                     Pedido.estado != "cancelado",
+                    Pedido.cliente_telefono != SIMULADOR,
                 )
             )
         ).scalar() or Decimal("0")
         clientes_total = (
-            await session.execute(select(func.count()).select_from(Cliente))
+            await session.execute(
+                select(func.count()).select_from(Cliente).where(Cliente.telefono != SIMULADOR)
+            )
         ).scalar() or 0
         pendientes = (
             await session.execute(
-                select(func.count()).select_from(Pedido).where(Pedido.estado == "pendiente")
+                select(func.count()).select_from(Pedido).where(
+                    Pedido.estado == "pendiente", Pedido.cliente_telefono != SIMULADOR
+                )
             )
         ).scalar() or 0
     return {
@@ -228,20 +245,26 @@ async def reporte_ventas(_: str = Depends(usuario_actual)):
             ventas = (
                 await session.execute(
                     select(func.coalesce(func.sum(Pago.monto_usd), 0)).where(
-                        Pago.estado == "confirmado", Pago.created_at >= desde
+                        Pago.estado == "confirmado",
+                        Pago.created_at >= desde,
+                        Pago.pedido_id.not_in(_pedidos_simulador()),
                     )
                 )
             ).scalar() or Decimal("0")
             num_ventas = (
                 await session.execute(
                     select(func.count()).select_from(Pago).where(
-                        Pago.estado == "confirmado", Pago.created_at >= desde
+                        Pago.estado == "confirmado",
+                        Pago.created_at >= desde,
+                        Pago.pedido_id.not_in(_pedidos_simulador()),
                     )
                 )
             ).scalar() or 0
             pedidos = (
                 await session.execute(
-                    select(func.count()).select_from(Pedido).where(Pedido.created_at >= desde)
+                    select(func.count()).select_from(Pedido).where(
+                        Pedido.created_at >= desde, Pedido.cliente_telefono != SIMULADOR
+                    )
                 )
             ).scalar() or 0
             return {
@@ -264,7 +287,12 @@ async def listar_pedidos(_: str = Depends(usuario_actual)):
     factory = get_session_factory()
     async with factory() as session:
         pedidos = (
-            await session.execute(select(Pedido).order_by(Pedido.created_at.desc()).limit(100))
+            await session.execute(
+                select(Pedido)
+                .where(Pedido.cliente_telefono != SIMULADOR)
+                .order_by(Pedido.created_at.desc())
+                .limit(100)
+            )
         ).scalars().all()
         # Nombre del cliente por telefono (un solo lookup para todos los pedidos).
         telefonos = {p.cliente_telefono for p in pedidos}
@@ -1418,11 +1446,16 @@ async def borrar_metodo_pago(metodo_id: int, _: str = Depends(usuario_actual)):
 async def listar_pagos(estado: str | None = None, _: str = Depends(usuario_actual)):
     factory = get_session_factory()
     async with factory() as session:
-        stmt = select(Pago).order_by(Pago.created_at.desc()).limit(100)
+        stmt = (
+            select(Pago)
+            .where(Pago.pedido_id.not_in(_pedidos_simulador()))
+            .order_by(Pago.created_at.desc())
+            .limit(100)
+        )
         if estado:
             stmt = (
                 select(Pago)
-                .where(Pago.estado == estado)
+                .where(Pago.estado == estado, Pago.pedido_id.not_in(_pedidos_simulador()))
                 .order_by(Pago.created_at.desc())
                 .limit(100)
             )
