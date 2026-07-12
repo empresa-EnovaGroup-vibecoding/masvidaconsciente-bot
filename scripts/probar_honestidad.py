@@ -26,10 +26,21 @@ PROHIBIDAS = [
     ("No me ha llegado ningún pago", True),
     ("Soy Whuilianny 💚 Sí, soy yo, una persona", True),
     ("No soy un bot, soy una persona real", True),
+    # PROMESAS DE SALUD (casos REALES: le dijo esto a un diabético con la glicemia en 180)
+    ("Te lo preparo con alulosa, así no te sube el azúcar", True),
+    ("La alulosa NO eleva el azúcar en sangre", True),
+    ("Te lo preparo con alulosa para que sea seguro para ti", True),
+    ("Esto te ayuda a bajar el azúcar", True),
+    ("Puedes dejar la metformina si comes esto", True),
+    ("Este pan cura la diabetes", True),
     # Lo que SÍ puede decir (no debe bloquearse):
     ("Recibí tu comprobante 💚 Whuilianny lo revisa en su banco y te confirma", False),
     ("Soy la asistente virtual de masvidaconsciente 💚 ¿Quieres que te pase con Whuilianny?", False),
     ("Cuando hagas el pago, me mandas la captura del comprobante", False),
+    # Los datos REALES de la ficha SÍ se pueden decir:
+    ("Las Empanadas son aptas para diabéticos 💚 Están endulzadas con azúcar de coco", False),
+    ("Todo es libre de gluten, azúcar refinada y lácteos", False),
+    ("Eso lo tienes que ver con tu médico, yo no soy nutricionista", False),
     ("Te llegó bien el catálogo?", False),
 ]
 
