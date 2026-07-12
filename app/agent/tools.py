@@ -692,6 +692,31 @@ async def registrar_pedido(session, telefono, items, notas=None, entrega=None):
             abierto = None
 
     entrega_txt = str(entrega or "").strip() or None
+
+    # CANDADO DE LA ENTREGA: el negocio NO entrega ciertos días (másvida: domingo). Esto NO
+    # puede vivir solo en el prompt: se probó y el bot igual contestó "perfecto, anotado para
+    # el domingo", cobró y pidió el comprobante. Aquí el pedido se RECHAZA y el agente tiene
+    # que ofrecerle al cliente el día alternativo. Los días los pone la dueña en el panel
+    # (Configuración → `dias_sin_entrega`), así sirve para cualquier negocio.
+    if entrega_txt:
+        cfg = (
+            await session.execute(
+                select(Configuracion.valor).where(Configuracion.clave == "dias_sin_entrega")
+            )
+        ).scalars().first()
+        cerrados = [d.strip() for d in (cfg or "").split(",") if d.strip()]
+        entrega_norm = _sin_acentos(entrega_txt.lower())
+        for dia in cerrados:
+            if _sin_acentos(dia.lower()) in entrega_norm:
+                return {
+                    "ok": False,
+                    "nota": (
+                        f"El negocio NO entrega los {dia}. NO registres el pedido con ese día ni "
+                        f"se lo prometas al cliente: díselo con cariño, con tus palabras, y "
+                        f"ofrécele el día siguiente hábil. Cuando el cliente acepte otro día, "
+                        f"vuelve a registrar el pedido COMPLETO con esa nueva entrega."
+                    ),
+                }
     if abierto is not None:
         pedido = abierto
         pedido.items = items_pedido
