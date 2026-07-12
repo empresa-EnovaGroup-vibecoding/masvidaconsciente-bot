@@ -17,6 +17,37 @@
 
 ---
 
+## 2026-07-12 (noche 8) — 🔴 EL PLAN DE MAIRED, ESCRITO (me lo dijo VARIAS veces y yo seguía sin entenderlo)
+
+> **"Todo lo que vamos a hacer a partir de ahorita es en la instancia vieja, en el número viejo.
+> El servidor de Hostinger se queda hasta dejar lo más perfecto posible todo el sistema, para
+> que quede en el nuevo listo para responder a clientes reales."** — Maired, textual.
+
+| | **TALLER** | **PRODUCCIÓN** |
+|---|---|---|
+| Servidor | **Hostinger viejo** `2.25.139.106` | netcup `152.53.89.118` |
+| Número de WhatsApp | el de PRUEBAS (phone_id `1116308758237612`) — **el que ella tiene conectado** (+57 313 2933806) | el de la CLIENTA (`500909798292606`) |
+| Panel | `panel-masvida.enovagroup.tech` | `panel.masvidaconsciente.store` |
+| Qué hay | donde se construye y se prueba TODO | **clientes REALES** (41 clientes, 316 mensajes) · bot **MUDO** (lista blanca) |
+| Regla | **aquí se trabaja** | **no se toca hasta la mudanza** |
+
+**Al final: se PROMUEVE el contenido del taller a producción** con `scripts/promover_a_produccion.sh` (respalda producción primero, copia SOLO contenido —productos, configuración, conocimiento, métodos de pago, fotos, catálogo PDF, feriados— y **JAMÁS** toca clientes/pedidos/pagos/mensajes). Después: banco de pruebas en producción y **vaciar `NUMEROS_PERMITIDOS`** para abrir el bot.
+
+**🔴 MI ERROR (y por qué ella se molestó, con razón):** horas antes apunté el **panel viejo a la API de netcup** "para que no divergieran". Eso **rompió su taller**: ella editaba en el panel (→ base de netcup) y probaba por WhatsApp en el número viejo (→ bot viejo → **base vieja**). Sus cambios no llegaban a lo que probaba. **REVERTIDO:** el panel viejo vuelve a `api-masvida.enovagroup.tech`. Panel viejo → BD vieja → bot viejo → su número. **Una sola verdad dentro del taller.**
+
+**Sincronizado el taller (para no perder nada al promover):** se trajeron de producción la **personalidad** que ella editó a las 21:30 (le quitó la línea del HORARIO — correcto: ahora el horario vive en su pantalla), la entrada de conocimiento *"¿Se pueden congelar los panes?"* y la versión prudente de *"¿Hacen envíos?"*. Y se borró del taller una **foto huérfana** (su archivo ya no existe en R2). **Verificado: las dos bases tienen HOY el mismo contenido** (mismo md5 en productos, conocimiento, personalidad, métodos de pago y fotos).
+
+**Lo que destapó su prueba por WhatsApp (análisis quirúrgico, con datos):**
+- ✅ **Funcionó lo de hoy:** respetó el paquete de 8, manejó la mezcla de rellenos (4 carne + 2 cabra + 2 pollo = 8) y **rechazó el domingo** ofreciendo el lunes.
+- 🔴 **"te lo confirmo con la dueña" → CERO avisos en la bandeja** (verificado en la BD). La promesa es un **hoyo negro**: el cliente espera para siempre. Es el bloqueante #7 del ensayo, **confirmado en vivo**.
+- 🔴 **"Lo que tengo cargado es envío a Barquisimeto"** — narra su sistema. Ninguna vendedora dice "lo que tengo cargado".
+- 🔴 **Menciona a "la dueña" como si fuera otra persona** — incoherente con la regla actual ("tú ERES Whuilianny") y se delata.
+- 🟡 El cliente pidió **RETIRAR** y el bot habló de **"entregas"** (confunde retiro con delivery).
+- 🟡 Le preguntaron por **envío nacional** y respondió con la entrega LOCAL (Barquisimeto). Debió **callarse y escalar**.
+→ **Todo eso es la TANDA 2.**
+
+---
+
 ## 2026-07-12 (noche 7) — 🗓️ EL CALENDARIO como ARQUITECTURA (una sola fuente de verdad)
 
 **La pregunta de Maired:** *"¿cuál es la mejor arquitectura para los horarios? ¿En el Conocimiento o en otro lado? Quiero saber si esto que hiciste es el mejor."* Respuesta honesta: **el parche de la mañana NO era la mejor.** Buscaba **la palabra "domingo"** en un texto libre → si el cliente decía *"para el 19"* (que cae domingo), **el candado no se enteraba**. Y el horario vivía en **DOS sitios** (el texto de la personalidad + el candado), que es pedir una divergencia.
