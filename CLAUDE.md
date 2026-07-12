@@ -61,22 +61,31 @@ KISS · YAGNI · DRY · una responsabilidad por pieza · nombres claros · archi
 > Si hay que **cambiar** una de estas conductas, se edita el **CÓDIGO** (`system_prompt.py` / `agent.py`),
 > **NUNCA** el prompt del panel.
 >
-> ## 🔴 ⚠️ PERO **NO RECORTES EL PROMPT** PARA "DES-DUPLICAR" — YA SE PROBÓ Y **ROMPE EL COBRO**
-> **Experimento del 2026-07-11 (A/B real, 3 repeticiones por servidor):** se quitaron del prompt las reglas
-> que "ya estaban en el código" (secciones `# PRECIO`, `# CATÁLOGO: cuándo mandarlo`, formato, fotos, pasos
-> del cobro). El prompt bajó de 11.648 → 9.338 chars y la voz se mantuvo… **pero el bot empezó a registrar el
-> PRODUCTO EQUIVOCADO**: a *"quiero 2 paquetes de empanadas de plátano"* grabó **"Empanadas Keto"** ($12/4u,
-> total $24) en vez de **"Empanadas"** ($14/8u, total $28). **2 de 2 veces.** Con el prompt original: correcto
-> **2 de 2**. Se revirtió todo.
+> ## 🔴 AUTO-BLINDAJE: cómo NO repetir el error del 2026-07-11/12
+> **El 2026-07-11 escribí aquí que "recortar el prompt rompe el cobro". ERA FALSO — y peligroso.** Lo dejo
+> escrito para que nadie repita ni el bug ni el razonamiento.
 >
-> **Conclusión (Auto-Blindaje):** con un modelo PEQUEÑO (Haiku) **la redundancia entre prompt y código NO es
-> grasa: es lo que SOSTIENE la selección de producto**. "Una sola fuente por tema" es buena teoría y MALA
-> práctica aquí. **El prompt largo se queda.**
+> **Lo que pasó:** un A/B "probó" que al limpiar el prompt el bot registraba **"Empanadas Keto"** ($12/4u)
+> en vez de **"Empanadas"** ($14/8u). **El A/B estaba VICIADO:** el prompt limpio se corrió en el servidor
+> VIEJO y el original en NETCUP. Lo que cambiaba **era el servidor, no el prompt**.
 >
-> **Si alguna vez se vuelve a tocar el prompt, es OBLIGATORIO:** probar el cobro ANTES y DESPUÉS —registrar un
-> pedido real y **verificar en la BD** (`SELECT items, total FROM pedidos`) que el **producto y el total** son
-> los correctos—, quitar **una sola cosa a la vez**, y revertir a la primera diferencia. Nunca fiarse de que
-> "la respuesta se ve bien": el bot **hablaba** de las de plátano y **cobraba** las Keto.
+> **La causa REAL era un bug del CÓDIGO** (`tools.py` → `_buscar_producto`, el camino del DINERO): buscaba con
+> `ilike('%nombre%')` + `.first()` **SIN `ORDER BY`**. Como hay 3 productos que empiezan con "Empanadas",
+> pedir `"Empanadas"` (¡el nombre EXACTO y correcto!) calzaba con los 3 y **Postgres devolvía uno ARBITRARIO**:
+> el viejo cobraba Keto ($12), netcup cobraba Empanadas ($14), **mismo código, misma consulta**. Además `'pan'`
+> calzaba por substring con em-**pan**-adas. **El modelo nunca se equivocó: mandaba el nombre correcto.**
+> **Arreglado el 2026-07-12** (exacto primero · prefijo de palabra, no substring · orden estable · ambiguo
+> real ⇒ preguntar, jamás adivinar · si no existe ⇒ rechazar con la lista, jamás aproximar). 9/9 en ambos
+> servidores.
+>
+> **Las 3 reglas que quedan (valen para siempre):**
+> 1. **Nunca compares un A/B entre servidores distintos.** Misma máquina, cambia UNA sola variable.
+> 2. **Verifica el cobro en la BD, no en la respuesta:** `SELECT items, total FROM pedidos`. El bot *hablaba*
+>    de las de plátano y *cobraba* las Keto — el texto se veía perfecto.
+> 3. **Antes de culpar al modelo o al prompt, sospecha del código.** Aquí el modelo era inocente.
+>
+> *(Queda pendiente el blindaje definitivo: que `registrar_pedido` reciba un `producto_id` de una lista
+> CERRADA —"código de barras"— en vez de un nombre en texto libre.)*
 
 **Ya vive en el código (no ponerlo en el prompt):**
 - **Formato al escribir:** corto, varios mensajitos, sin viñetas ni negritas, espejear al cliente. → `_REGLAS` (BREVEDAD, "Planos sin formato", ESPEJEA).

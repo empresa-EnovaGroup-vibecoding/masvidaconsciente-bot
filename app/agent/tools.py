@@ -381,32 +381,79 @@ async def ver_catalogo(session, telefono, categoria=None, busqueda=None):
     }
 
 
+def _nombre_norm(texto: str) -> str:
+    """Nombre comparable: sin acentos, minúsculas, sin espacios de más."""
+    return " ".join(_sin_acentos(texto or "").split())
+
+
+def _singular(texto: str) -> str:
+    """Quita la 's' final de cada palabra larga: 'empanadas keto' → 'empanada keto'.
+    Así 'empanada' (singular) calza con 'Empanadas' pero NUNCA con 'Empanadas Keto'."""
+    return " ".join(w[:-1] if len(w) > 3 and w.endswith("s") else w for w in texto.split())
+
+
 async def _buscar_producto(session, nombre: str, solo_disponibles: bool = False):
     """Busca UN producto para emparejarlo en el pedido (camino del DINERO).
-    Orden de prioridad, de más a menos preciso:
-    1) frase completa por substring; 2) todas las palabras significativas presentes;
-    3) último recurso DIFUSO con umbral ALTO (typos), para no cobrar el equivocado.
-    Así 'empanada carne mechada' calza con 'Empanada de carne mechada' y 'galetas'
-    con 'Galletas New York', pero un parecido lejano NO se acepta (devuelve None)."""
-    def base():
-        s = select(Producto)
-        return s.where(Producto.disponible.is_(True)) if solo_disponibles else s
 
-    prod = (
-        await session.execute(base().where(Producto.nombre.ilike(f"%{nombre}%")))
-    ).scalars().first()
-    if prod is not None:
-        return prod
-    palabras = [p for p in nombre.lower().split() if len(p) > 2]
+    REGLA DE ORO: el nombre EXACTO manda y NUNCA se elige al azar. 'Empanadas' es un
+    producto DISTINTO de 'Empanadas Keto': pedir "Empanadas" jamás puede cobrar las Keto.
+
+    Escalones, de más a menos preciso (gana el primero que resuelve):
+    1) nombre EXACTO (sin acentos ni mayúsculas).
+    2) el texto pedido CONTIENE el nombre completo de un producto → gana el MÁS ESPECÍFICO
+       (nombre más largo): "quiero Empanadas Keto" → Empanadas Keto, no Empanadas.
+    3) cada palabra pedida es PREFIJO DE PALABRA del producto (nombre + ingredientes),
+       reusando el filtro determinista del catálogo: 'pan' calza con 'Pan de Sándwich'
+       pero NO con em-PAN-adas, y 'empanada plátano' NO calza con las Keto (almendra).
+       Si calzan varios, gana el nombre más corto (el "a secas") y luego el id menor.
+    4) último recurso DIFUSO con umbral ALTO (typos): 'galetas' → 'Galletas New York'.
+
+    DETERMINISTA a propósito. Antes usaba `ilike('%nombre%')` + `.first()` SIN ORDER BY:
+    (a) 'Empanadas' calzaba por substring con 'Empanadas Keto'/'Horneadas' y Postgres
+    devolvía uno ARBITRARIO — el 2026-07-11 el servidor viejo cobraba 'Empanadas Keto'
+    ($12/4u) y el nuevo 'Empanadas' ($14/8u) con la MISMA consulta y el MISMO código;
+    (b) 'pan' calzaba con em-PAN-adas. Ver SESIONES 2026-07-12.
+    """
+    objetivo = _nombre_norm(nombre)
+    if not objetivo:
+        return None
+
+    stmt = select(Producto).order_by(Producto.id)  # orden ESTABLE en cualquier servidor
+    if solo_disponibles:
+        stmt = stmt.where(Producto.disponible.is_(True))
+    prods = (await session.execute(stmt)).scalars().all()
+    if not prods:
+        return None
+
+    # 1) EXACTO — lo que el catálogo le dio al agente; es el caso normal.
+    for p in prods:
+        if _nombre_norm(p.nombre) == objetivo:
+            return p
+
+    # 1b) EXACTO ignorando singular/plural: 'empanada' → 'Empanadas' (y NUNCA las Keto).
+    objetivo_sg = _singular(objetivo)
+    exactos_sg = [p for p in prods if _singular(_nombre_norm(p.nombre)) == objetivo_sg]
+    if len(exactos_sg) == 1:
+        return exactos_sg[0]
+
+    # 2) El pedido trae el nombre completo de un producto dentro → el MÁS específico.
+    contenidos = [p for p in prods if _nombre_norm(p.nombre) and _nombre_norm(p.nombre) in objetivo]
+    if contenidos:
+        return max(contenidos, key=lambda p: (len(_nombre_norm(p.nombre)), -p.id))
+
+    # 3) Prefijo de PALABRA (mismo filtro determinista que usa ver_catalogo).
+    #    Si calza UNO solo, ese es. Si calzan VARIOS ('pan' → Pan Keto / de Sándwich /
+    #    de Hamburguesa, con precios distintos) NO se adivina: se devuelve None y el que
+    #    llama le pasa al agente la lista para que le PREGUNTE al cliente cuál quiere.
+    palabras = _palabras_busqueda(objetivo)
     if palabras:
-        stmt = base()
-        for p in palabras:
-            stmt = stmt.where(Producto.nombre.ilike(f"%{p}%"))
-        prod = (await session.execute(stmt)).scalars().first()
-        if prod is not None:
-            return prod
-    # Último recurso: difuso con umbral ALTO (0.6). Solo acepta un parecido MUY claro,
-    # para que un typo se resuelva pero jamás se cobre un producto distinto.
+        calzan = [p for p in prods if _coincide_texto(p, palabras)]
+        if len(calzan) == 1:
+            return calzan[0]
+        if len(calzan) > 1:
+            return None  # ambiguo de verdad: preguntar, jamás cobrar a la suerte
+
+    # 4) Difuso con umbral ALTO. Solo un parecido MUY claro (typo); jamás otro producto.
     candidatos = await _buscar_productos_difuso(
         session, nombre, limite=1, umbral=0.6, solo_disponibles=solo_disponibles
     )
@@ -458,7 +505,24 @@ async def registrar_pedido(session, telefono, items, notas=None):
     for it in items:
         prod = await _buscar_producto(session, it["producto"], solo_disponibles=True)
         if prod is None:
-            return {"ok": False, "nota": f"no encontré el producto '{it['producto']}'"}
+            # NUNCA aproximar en el camino del dinero: se rechaza y se le devuelve la lista
+            # REAL para que el agente corrija con el nombre exacto (no inventa ni "se parece").
+            validos = (
+                await session.execute(
+                    select(Producto.nombre)
+                    .where(Producto.disponible.is_(True))
+                    .order_by(Producto.nombre)
+                )
+            ).scalars().all()
+            return {
+                "ok": False,
+                "nota": (
+                    f"No existe ningún producto llamado '{it['producto']}'. NO lo inventes ni "
+                    "uses uno parecido: elige el NOMBRE EXACTO de `productos_validos` y vuelve "
+                    "a registrar el pedido COMPLETO."
+                ),
+                "productos_validos": validos,
+            }
         cantidad = int(it.get("cantidad", 1))
         subtotal = (prod.precio or Decimal("0")) * cantidad
         total += subtotal

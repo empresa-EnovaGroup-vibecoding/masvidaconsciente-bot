@@ -17,7 +17,40 @@
 
 ---
 
-## 2026-07-11 — 🔴 REVERTIDO: recortar el prompt para "des-duplicar" ROMPE EL COBRO (Auto-Blindaje)
+## 2026-07-12 — 🔴🔴 EL BUG DE VERDAD: el CÓDIGO cobraba el producto equivocado (y el prompt era INOCENTE)
+
+**Resumen:** el bot **nunca se equivocó**. Mandaba el nombre EXACTO y CORRECTO (`"Empanadas"`). **El que elegía mal era el código**, en el camino del DINERO.
+
+**La causa (bug objetivo, presente desde siempre):** `app/agent/tools.py` → `_buscar_producto` (lo usan `registrar_pedido`, `info_producto`, `enviar_fotos_producto` y la **edición manual del panel**) buscaba con `ilike('%nombre%')` + **`.first()` SIN `ORDER BY`**. Con el catálogo real hay **3 productos que empiezan con "Empanadas"** (Empanadas $14/8u · Empanadas Keto $12/4u · Empanadas Horneadas $14/4u), así que pedir `"Empanadas"` **calzaba con los 3** y Postgres devolvía **uno arbitrario**. Verificado en vivo con la MISMA consulta: **viejo → "Empanadas Keto" ($12)** · **netcup → "Empanadas" ($14)**. Mismo código, distinto resultado. **Lotería** — y podía voltearse sola al editar un producto en el panel. Bonus: `'pan'` calzaba por substring con em-**pan**-adas.
+
+**⚠️ Y esto INVALIDA la conclusión de ayer (2026-07-11).** Aquel A/B ("recortar el prompt rompe el cobro") estaba **VICIADO**: se corrió el prompt limpio en el servidor VIEJO contra el original en NETCUP → lo que cambiaba era **el servidor**, no el prompt. **La limpieza del prompt era inocente.** La advertencia que se había escrito en `CLAUDE.md` quedó **corregida** (ver §8).
+
+**El arreglo (`_buscar_producto`, aditivo, sin tocar el prompt):**
+1. **Nombre EXACTO primero** (sin acentos/mayúsculas) → `"Empanadas"` jamás puede cobrar las Keto.
+2. **Singular/plural exacto** (`_singular`) → `'empanada'` → **Empanadas**, nunca las Keto.
+3. **El pedido contiene el nombre completo** → gana el MÁS específico ("quiero Empanadas Keto" → Keto).
+4. **Prefijo de PALABRA**, no substring (reusa `_coincide_texto` del catálogo) → `'pan'` ya NO calza con em-pan-adas; `'empanadas de plátano'` → Empanadas (el plátano está en SU descripción) y NO las Keto (almendra).
+5. **Ambiguo de verdad ⇒ NO adivinar**: `'pan'` calza con 3 panes de precios distintos → devuelve `None` y el agente **pregunta** (antes adivinaba **Pan Keto $25**, el más caro).
+6. **Si no existe ⇒ rechazar, jamás aproximar**: `registrar_pedido` devuelve `productos_validos` (la lista real) y obliga al agente a usar el nombre exacto.
+7. **`ORDER BY id`**: orden estable → **mismo resultado en cualquier servidor**.
+
+**Verificado (9/9 en AMBOS servidores, contra la BD real):** Empanadas→$14/8u · Keto→$12/4u · Horneadas→$14/4u · 'empanada'→Empanadas · 'empanadas de platano'→Empanadas · 'Pan de Sandwich'→Pan de Sándwich · 'galetas'→Galletas New York · **'pan'→pregunta** · 'Torta de unicornio'→rechaza.
+
+**Aprendizajes (Auto-Blindaje):**
+- **NUNCA comparar un A/B entre servidores distintos.** Misma máquina, una sola variable.
+- **Verificar el cobro en la BD** (`SELECT items, total FROM pedidos`), **no en la respuesta**: el bot *hablaba* de las de plátano y *cobraba* las Keto; el texto se veía perfecto.
+- **Antes de culpar al modelo o al prompt, sospechar del código.** Aquí el modelo era inocente — y por eso **cambiar a un modelo más caro NO habría arreglado nada**.
+- Probar sin tocar producción: `docker cp` del archivo + `docker exec -w /app python` (el proceso vivo sigue con el código viejo en memoria hasta reiniciar).
+
+**Pendiente (blindaje definitivo, el "código de barras"):** que `registrar_pedido` reciba un **`producto_id` de una lista CERRADA** (enum con los ids reales del catálogo) en vez de un nombre en texto libre. Los modelos aciertan mucho más **eligiendo** de una lista que **escribiendo** un nombre.
+
+**Nota de modelo (investigación aparte, 7 agentes):** el mejor costo-beneficio verificado hoy sería `openai/gpt-5.4-mini` (**más barato que Haiku 4.5** y mejor en tool use, caching automático). Ojo: **no acepta `temperature`** (OpenRouter la descarta en silencio) y **todos** los modelos baratos de 2026 son de razonamiento → hay que fijar `reasoning: minimal` o el costo/latencia se disparan. También falta mandar `provider.require_parameters: true` (si no, OpenRouter puede rutear a un proveedor que **ignore las herramientas** → el bot inventaría precios). **Nada de esto es urgente ahora**: el bug era del código.
+
+---
+
+## 2026-07-11 — ⚠️ CONCLUSIÓN ERRÓNEA (corregida el 2026-07-12): "recortar el prompt rompe el cobro" — NO era el prompt, era el CÓDIGO
+
+> 🔴 **LEER LA ENTRADA DE ARRIBA (2026-07-12).** El A/B de esta entrada estaba **VICIADO** (prompt limpio en el servidor VIEJO vs. original en NETCUP → lo que cambiaba era el SERVIDOR). El bot registraba "Empanadas Keto" por un **bug de `_buscar_producto`**, no por la limpieza del prompt. La limpieza era **inocente**. Se conserva lo de abajo como historial del error.
 
 **Qué se intentó (Paso 3 del plan):** la "versión senior" del prompt — quitar de la Personalidad las reglas que YA están blindadas en el código (`# PRECIO`, `# CATÁLOGO: cuándo mandarlo`, formato/viñetas, fotos, pasos del cobro, cliente-conocido), **manteniendo la voz de Whuilianny letra por letra**. Bajó de **11.648 → 9.338 chars**.
 
