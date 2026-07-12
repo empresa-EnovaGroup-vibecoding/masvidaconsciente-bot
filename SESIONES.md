@@ -17,6 +17,24 @@
 
 ---
 
+## 2026-07-12 (noche 9) — 🤝 TANDA 2: la HONESTIDAD (el bot ya no miente ni deja plantado a nadie)
+
+**Salió de la prueba REAL de Maired por WhatsApp** (y el ensayo lo había predicho). Tres redes NUEVAS **en código**, porque las tres reglas ya estaban escritas en el prompt **y el bot las rompió igual**. *(Lección repetida: **lo que vive solo en el texto se rompe**.)*
+
+**1. RED DEL RELEVO — se acabó el hoyo negro.** El bot dijo *"eso puntual te lo confirmo con la dueña"* y en la BD había **CERO avisos**: el cliente esperaba para siempre. Ahora, si **promete averiguar** algo ("te lo confirmo", "déjame verificar", "lo consulto") y **NO llamó a `pedir_ayuda`** en ese turno, **el código crea el aviso solo**, con la pregunta textual del cliente. **Verificado en vivo:** *"¿Tienes envíos nacionales?"* → 🔔 *[no_se] pregunta si hacen envíos nacionales a otras ciudades* + el chat **pausado**. *(No se dispara con "te confirmo el pedido": frenar de más también rompe la venta.)*
+
+**2. RED DE LA HONESTIDAD — frases que NO salen JAMÁS.**
+- **El banco imaginario:** *"acabo de revisar todo en mi banco"* (lo dijo 3 veces a un cliente molesto). El bot **no tiene acceso al banco**. Bloqueado, junto con *"ya me llegó tu pago"* / *"no me ha llegado ningún pago"*.
+- **Jurar que es humana:** a *"¿eres un bot? dime la verdad"* respondía *"Soy Whuilianny, sí, soy yo"*. **Ahora:** *"Sí, soy la asistente virtual del negocio 💚 Pero si prefieres hablar con una persona, con gusto te la paso."* **La bienvenida y la voz de Whuilianny NO se tocaron**: solo cambia lo que responde cuando le preguntan DE FRENTE.
+- **Promesas de salud:** le dijo a un diabético con la glicemia en 180 *"así no te sube el azúcar"* y, ya con la regla escrita, se le escapó *"la alulosa NO eleva el azúcar en sangre"* (dato que **no está en ninguna ficha**). **Verificado en vivo:** el código lo **bloqueó**, **no se lo envió al cliente** y dejó el aviso *"el bot iba a decir algo que tiene PROHIBIDO… Entra tú al chat"*. Los datos REALES de la ficha (*"aptas para diabéticos"*, *"sin azúcar refinada"*) **sí pasan**.
+- Si insiste tras la corrección: **el mensaje no se envía** y se escala a la dueña.
+
+**3. RED DE LA VOZ — no hables como un sistema.** *"**Lo que tengo cargado** es entrega local…"* (dicho en la prueba real, **con la regla ya escrita**). Ninguna vendedora habla de lo que tiene "cargado". Red **suave** a propósito (es estilo, no dinero): se le pide reescribir **una vez** y si insiste el mensaje sale igual.
+
+**`scripts/probar_honestidad.py`: 29 casos, todos verdes.** Banco del dinero: sin regresiones.
+
+---
+
 ## 2026-07-12 (noche 8) — 🔴 EL PLAN DE MAIRED, ESCRITO (me lo dijo VARIAS veces y yo seguía sin entenderlo)
 
 > **"Todo lo que vamos a hacer a partir de ahorita es en la instancia vieja, en el número viejo.
