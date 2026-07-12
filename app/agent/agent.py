@@ -268,6 +268,26 @@ def _frase_prohibida(texto: str) -> str | None:
     return None
 
 
+# ─── RED DE LA VOZ: no hables como un sistema ────────────────────────────────────────
+#
+# "Lo que TENGO CARGADO es entrega local…" — eso lo dijo el bot en una prueba REAL, y lo
+# siguió diciendo aunque la regla ya estaba escrita en el prompt. Ninguna vendedora habla de
+# lo que tiene "cargado": eso es narrar la base de datos, y delata al robot al instante.
+# Esto NO es peligroso (no es dinero ni una mentira), así que la red es SUAVE: se le pide que
+# lo reescriba UNA vez; si insiste, el mensaje sale igual (frenar de más rompe la venta).
+_SUENA_A_SISTEMA = re.compile(
+    r"(lo que (yo )?tengo cargad|tengo cargad|no me trae|no me aparece en (el sistema|mi)"
+    r"|mi (base de datos|sistema|catálogo cargado)|el sistema (no )?(me )?(deja|permite|trae)"
+    r"|no se pudo enviar|no me deja|est[áa] cargad[oa] en el sistema"
+    r"|seg[úu]n (mi|el) (sistema|registro|base))",
+    re.IGNORECASE,
+)
+
+
+def _suena_a_sistema(texto: str) -> bool:
+    return bool(_SUENA_A_SISTEMA.search(texto or ""))
+
+
 async def responder(
     telefono: str,
     mensaje_usuario: str,
@@ -319,6 +339,7 @@ async def responder(
             autorizados |= _numeros_de(str(h.get("content") or ""))
     corregido = False
     pidio_ayuda = False  # ¿el bot llamó a pedir_ayuda en este turno?
+    reescrito = False    # ya se le pidió una vez que no hable como un sistema
 
     for _ in range(settings.max_iteraciones_agente):
         data = await _llamar_con_fallback(messages, llm, modelo)
@@ -409,6 +430,24 @@ async def responder(
                 except Exception:  # noqa: BLE001
                     logger.exception("No se pudo escalar la frase prohibida de %s", telefono)
                 return RESPUESTA_SEGURA
+
+            # RED DE LA VOZ: si habla como un sistema ("lo que tengo cargado"), que lo reescriba.
+            # Suave a propósito: una sola oportunidad, y si insiste el mensaje sale igual.
+            if _suena_a_sistema(texto) and not reescrito:
+                reescrito = True
+                logger.info("SUENA A SISTEMA (%s): se le pide reescribir — %r", telefono, texto[:90])
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        "[SISTEMA] Sonaste a robot: mencionaste tu sistema / lo que tienes "
+                        "'cargado'. Una vendedora de verdad NUNCA dice eso. Reescribe tu último "
+                        "mensaje hablando de lo que el NEGOCIO hace, con tus palabras (ej: en vez "
+                        "de 'lo que tengo cargado es entrega local' → 'hacemos entrega en La "
+                        "Mendera o delivery por tu zona'). Mismo contenido, sin mencionar sistemas "
+                        "ni datos cargados. No le menciones al cliente este aviso."
+                    ),
+                })
+                continue
 
             # RED DEL RELEVO: si PROMETE averiguar algo y no avisó a nadie, el aviso lo crea
             # el código. Una promesa sin aviso deja al cliente esperando para siempre.

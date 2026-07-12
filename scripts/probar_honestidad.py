@@ -1,5 +1,5 @@
 """TANDA 2 — las dos redes: la del RELEVO (promesa sin aviso) y la de la HONESTIDAD."""
-from app.agent.agent import _frase_prohibida, _promete_averiguar
+from app.agent.agent import _frase_prohibida, _promete_averiguar, _suena_a_sistema
 
 # ── 1. LA RED DEL RELEVO: ¿detecta una promesa de averiguar? ──
 PROMESAS = [
@@ -33,6 +33,19 @@ PROHIBIDAS = [
     ("Te llegó bien el catálogo?", False),
 ]
 
+# ── 3. LA RED DE LA VOZ: no hablar como un sistema ──
+SISTEMA = [
+    ("Lo que tengo cargado es entrega local: retiro en La Mendera o delivery", True),  # caso REAL
+    ("No me trae información sobre descuento por cantidad", True),
+    ("El sistema no me deja hacer eso", True),
+    ("Lamento, no se pudo enviar la foto", True),
+    ("Según mi sistema, ese producto está agotado", True),
+    # Lo que SÍ suena a persona:
+    ("Hacemos entrega en La Mendera o delivery por tu zona 💚", False),
+    ("Ese producto se nos agotó, pero tengo estos otros", False),
+    ("Te mando la foto ahorita", False),
+]
+
 fallos = 0
 print("\n1) RED DEL RELEVO — 'si prometes averiguar, TIENES que avisarle a la dueña'")
 for texto, esperado in PROMESAS:
@@ -54,6 +67,15 @@ for texto, esperado in PROHIBIDAS:
     extra = f"  ({que})" if que else ""
     print(f"   {marca} {accion} | {texto[:58]}{extra}")
 
+print("\n3) RED DE LA VOZ — 'una vendedora no dice lo que tiene cargado'")
+for texto, esperado in SISTEMA:
+    got = _suena_a_sistema(texto)
+    ok = got == esperado
+    fallos += 0 if ok else 1
+    marca = "[OK ]" if ok else "[MAL]"
+    accion = "REESCRIBE" if got else "pasa     "
+    print(f"   {marca} {accion} | {texto[:58]}")
+
 print()
-print("   ✅ LAS DOS REDES FUNCIONAN" if not fallos else f"   🔴 {fallos} CASO(S) MAL")
+print("   ✅ LAS TRES REDES FUNCIONAN" if not fallos else f"   🔴 {fallos} CASO(S) MAL")
 raise SystemExit(1 if fallos else 0)
