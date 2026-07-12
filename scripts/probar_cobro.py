@@ -20,7 +20,7 @@ from decimal import Decimal
 
 from sqlalchemy import delete, select
 
-from app.agent.tools import _buscar_producto, registrar_pedido
+from app.agent.tools import _buscar_producto, _precio_efectivo, registrar_pedido
 from app.models import Pedido, Producto
 from app.services.db import get_session_factory
 
@@ -157,6 +157,34 @@ async def probar_rechazo(session) -> None:
           "le devuelve la lista REAL de productos para que corrija", "no devolvió productos_validos")
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 5) PRECIO DEL DÍA: los productos cuyo precio CAMBIA (Tortas keto, torta baja en
+#    carbohidratos, Premezclas) están sin precio A PROPÓSITO. Si la dueña no dio el
+#    de HOY, el bot NO puede cobrarlos: antes se colaban como $0 (pedido gratis).
+# ─────────────────────────────────────────────────────────────────────────────
+async def probar_precio_del_dia(session) -> None:
+    print("\n5) Productos de PRECIO DEL DÍA (su precio cambia; lo da la dueña)")
+    variables = (
+        await session.execute(
+            select(Producto).where(Producto.precio.is_(None)).order_by(Producto.id)
+        )
+    ).scalars().all()
+    if not variables:
+        check(True, "no hay productos de precio variable (nada que probar)")
+        return
+    for p in variables:
+        efectivo = await _precio_efectivo(session, p)
+        if efectivo is not None:
+            check(True, f"'{p.nombre}': la dueña ya dio el precio de HOY (${efectivo})")
+            continue
+        res = await registrar_pedido(session, TELEFONO, [{"producto": p.nombre, "cantidad": 1}])
+        check(
+            res.get("ok") is False,
+            f"'{p.nombre}' sin precio de hoy -> NO se puede cobrar (antes salía en $0)",
+            str(res)[:110],
+        )
+
+
 async def limpiar(session) -> None:
     """Borra TODO lo que dejó la prueba: el panel y los reportes quedan limpios."""
     from app.models import Cliente, Mensaje, Pago
@@ -185,6 +213,7 @@ async def main() -> int:
             await probar_casos_reales(session)
             await probar_dinero(session)
             await probar_rechazo(session)
+            await probar_precio_del_dia(session)
         finally:
             await limpiar(session)  # no deja basura en el panel
 

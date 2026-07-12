@@ -17,6 +17,30 @@
 
 ---
 
+## 2026-07-12 (tarde) — 🔔 "EL BOT TE NECESITA": handoff a la humana + PRECIO DEL DÍA
+
+**El descubrimiento que lo motivó (dicho por Maired):** las **Tortas keto**, la **torta baja en carbohidratos** y las **Premezclas** están en el catálogo **SIN PRECIO A PROPÓSITO**. No es un olvido: **en Venezuela el precio cambia de un día a otro** y la dueña responde ella esas consultas. ⚠️ **Yo asumí que era descuido y afirmé una causa inventada** ("el sistema no te dejaba"). Maired me lo reclamó con razón: *"eso es lo que me da rabia, que no me cuestionas"*. **Regla: si no sé algo, decir "no lo sé" — no rellenar el hueco con una explicación plausible.**
+
+**🔴 Bug de dinero que salió de ahí:** `registrar_pedido` hacía `subtotal = (prod.precio or Decimal("0")) * cantidad` → un producto SIN precio se registraba en **$0**. El bot podía cerrar un pedido de **tortas GRATIS**. **Tapado.**
+
+**🔴 Otro hallazgo:** `dueno_telefono` está **VACÍO** (config y env, en bot y worker, en los dos servidores) → el aviso que YA existía (`_avisar_duena`, "🔔 Nuevo pago reportado" al entrar un comprobante) **nunca le ha llegado a nadie**. Falta configurarlo.
+
+**Lo construido (aditivo):**
+- **Migración `015_intervenciones.sql`**: tabla `intervenciones` (la bandeja "el bot te necesita") + tabla `precio_dia`.
+- **Herramienta nueva `pedir_ayuda(motivo, detalle)`** (`tools.py`): **pausa** ese chat (`bot_pausado`), deja el aviso en la bandeja, y le manda un WhatsApp a la dueña (best-effort: si no hay número o Meta cierra la ventana de 24h, **el aviso igual queda en el panel**). Un solo aviso vivo por chat (no la inunda). Los 4 motivos: `precio_del_dia` · `no_se` · `pide_persona` · `reclamo`.
+- **Regla blindada** en `_REGLAS` (`system_prompt.py`): cuándo llamarla. Y el **catálogo inyectado** ahora marca esos productos como **"PRECIO DEL DÍA — TODAVÍA NO LO SABES"** (prohibido inventarlo, estimarlo o usar el de ayer).
+- **`_precio_efectivo()`**: precio fijo → ese; precio variable → el que la dueña dio **HOY**; si no lo dio → **None** y `registrar_pedido` **RECHAZA** (nunca $0, nunca el de ayer).
+- **API para el panel**: `GET /api/intervenciones` (bandeja) · `POST /api/intervenciones/{id}/resolver` (cierra el aviso y **reactiva el bot**) · `GET|PUT /api/precio-dia` (la dueña dice cuánto está hoy; vale **solo por hoy**).
+- **Banco de pruebas ampliado** (`scripts/probar_cobro.py`): guardián permanente de que ningún producto sin precio se pueda cobrar.
+
+**Verificado en vivo (servidor viejo, contra la BD real):** *"¿cuánto cuesta la torta keto de 1kg?"* → el bot **NO inventó**, respondió *"te confirmo ese precio enseguida 💚"* (su voz, sin plantilla), **se calló** en ese chat, y dejó el aviso `🔔 [precio_del_dia] Cliente pregunta el precio de la Torta Keto de 1kg`. Con precio del día puesto ($38) → registra **2 × $38 = $76** ✓. Sin precio → **rechaza** ✓. Banco de pruebas: **cero regresiones**.
+
+**Decisiones de Maired:** avisos → **al panel** (canal confiable) + ping de WhatsApp **a ella (Maired, 573005690062)** mientras se prueba, no a la clienta. El precio del día **se guarda por HOY** (mañana el bot vuelve a preguntar). La dueña responde **en el WhatsApp del negocio** (ya ve el chat por coexistencia) y reactiva el bot desde el panel.
+
+**Pendiente:** (a) configurar `dueno_telefono`; (b) la **bandeja en el panel** (repo del dashboard); (c) **PRODUCTO + VARIANTES** (la estructura correcta: Kombucha = 1 producto con 350ml $4 / 700ml $7 — hoy son 2 productos con el MISMO nombre y el bot cobra el de $4 siempre); (d) el "código de barras" (`producto_id` en vez de nombre libre).
+
+---
+
 ## 2026-07-12 — 🔴🔴 EL BUG DE VERDAD: el CÓDIGO cobraba el producto equivocado (y el prompt era INOCENTE)
 
 **Resumen:** el bot **nunca se equivocó**. Mandaba el nombre EXACTO y CORRECTO (`"Empanadas"`). **El que elegía mal era el código**, en el camino del DINERO.

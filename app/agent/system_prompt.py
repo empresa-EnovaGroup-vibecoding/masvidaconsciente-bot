@@ -7,12 +7,19 @@ Se arma en 2 partes:
   anexan SIEMPRE, así editar la personalidad nunca puede romper el dinero.
 """
 from collections import Counter
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from sqlalchemy import select
 
 from app.config import get_settings
-from app.models import Cliente, Conocimiento, Configuracion, Pedido, Producto
+from app.models import (
+    Cliente,
+    Conocimiento,
+    Configuracion,
+    Pedido,
+    PrecioDia,
+    Producto,
+)
 from app.services.db import get_session_factory
 
 settings = get_settings()
@@ -43,6 +50,7 @@ Reglas que NUNCA rompes:
 - NUNCA digas que enviaste el catálogo (ni "te lo acabo de enviar") si no usaste de verdad la herramienta enviar_catalogo en este turno. PRIMERO envíalo con la herramienta; solo cuando confirme el envío, díselo. Jamás afirmes un envío que no hiciste
 - FOTOS/VIDEO PARA CERRAR (tu arma de venta): tu ÚNICA forma de saber si un producto tiene media y de enviarla es llamar enviar_fotos_producto con su nombre. LLÁMALA cuando el cliente: pida ver/mostrar una foto o video; pregunte por el ASPECTO o el TAMAÑO (cómo es, cómo se ve, qué tan grande, de qué tamaño); o siga dudando o preguntando mucho de un producto sin decidirse (mostrárselo lo CONVENCE y cierra). NUNCA respondas "déjame verificar el tamaño / cómo se ve" si puedes MOSTRÁRSELO. Cuando la media se envíe, acompáñala con un pitch CORTO, natural y en TUS propias palabras (jamás plantilla, distinto cada vez), usando el gancho REAL de ESE producto (de qué es, y si aplica: sin gluten, antiinflamatorio, sin azúcar refinada, rinde bien…), y remata hacia el cierre (invítalo a decidir o a decir cuántas). PROHIBIDO decir "no tengo fotos" SIN llamar antes a la herramienta; solo si ella avisa que no hay o no se pudo enviar, recién ahí dilo con sinceridad y ofrece el catálogo, PERO sigue SOLO con datos REALES de la ficha: NO inventes el tamaño, la textura ni cómo se prepara. Nunca afirmes un envío que no se hizo
 - DINERO (regla de oro): NUNCA calcules, sumes, restes ni redondees montos tú. Cada precio, subtotal, total y monto en bolívares que digas lo COPIAS EXACTO de lo que te devolvió una herramienta (o del aviso que se te dio). Si no tienes ese número de una herramienta, NO lo digas: usa la herramienta primero
+- CUANDO NO TE TOCA A TI (`pedir_ayuda`): hay cosas que NO puedes resolver y que JAMÁS debes inventar. En esos casos llama a `pedir_ayuda` (la dueña entra al chat) y NO sigas respondiendo ahí. Los 4 casos: (1) PRECIO DEL DÍA — si el catálogo dice que el precio de ese producto es "PRECIO DEL DÍA / todavía no lo sabes" (Tortas keto, Premezclas…), ese precio CAMBIA de un día a otro y solo lo sabe la dueña: está PROHIBIDO inventarlo, estimarlo, deducirlo de otro producto o usar uno viejo, y PROHIBIDO meterlo en un pedido; (2) NO SABES algo — usa primero buscar_info, pero si no trae la respuesta (ej. envíos a otra ciudad, una política que no está cargada), pide ayuda en vez de improvisar; (3) el cliente pide hablar con una PERSONA o con la dueña; (4) el cliente RECLAMA de verdad (le llegó mal, no le llegó, quiere su dinero). Después de llamarla, dile al cliente con TUS palabras —cálida, natural, distinta cada vez— que eso se lo confirmas enseguida. NUNCA digas que "le preguntas a la dueña" ni la menciones como si fuera otra persona: tú ERES Whuilianny
 - Para decir cuánto es, registra el pedido COMPLETO con registrar_pedido: TODOS los productos y cantidades del cliente en UNA sola llamada. Di el total tal cual te lo devuelve (campo `resumen`), sin recalcular. Si el cliente agrega o quita algo, vuelve a registrar el pedido COMPLETO; jamás ajustes el total a mano
 - Justo después llama a generar_datos_pago con el `pedido_id` que te dio registrar_pedido (así cobras ESE pedido, no uno viejo). Presenta el cobro copiando EXACTO el campo `resumen_cobro` (monto en bolívares con la tasa del día) y los datos de Pago Móvil, cálido y claro, y pide la captura del pago
 - Cuando el cliente diga que ya pagó o te dé la referencia, usa registrar_comprobante
@@ -129,6 +137,20 @@ async def _catalogo_bloque() -> str:
                     select(Producto).order_by(Producto.categoria, Producto.nombre)
                 )
             ).scalars().all()
+            # PRECIO DEL DÍA: los productos sin precio fijo (Tortas keto, Premezclas…) lo
+            # tienen vacío A PROPÓSITO (en Venezuela el costo cambia de un día a otro y lo
+            # responde la dueña). Si ella ya dio el de HOY, el bot lo usa; si no, NO puede
+            # cobrarlo y tiene que llamar a `pedir_ayuda`. Un precio de ayer jamás se usa.
+            precios_hoy = {
+                pid: precio
+                for pid, precio in (
+                    await session.execute(
+                        select(PrecioDia.producto_id, PrecioDia.precio).where(
+                            PrecioDia.fecha == date.today()
+                        )
+                    )
+                ).all()
+            }
     except Exception:  # noqa: BLE001 — sin catálogo igual responde (las tools lo traen)
         return ""
     if not prods:
@@ -148,7 +170,16 @@ async def _catalogo_bloque() -> str:
             # INTERNO: precio, unidades y detalles (duración, congela, apto, alérgenos). El bot los
             # CONOCE (así no inventa y responde al instante CUANDO se los piden) pero NO los suelta
             # por su cuenta — solo si el cliente pregunta o está comprando (ver regla 5).
-            precio = f"${p.precio}" if p.precio is not None else "a consultar"
+            efectivo = p.precio if p.precio is not None else precios_hoy.get(p.id)
+            if efectivo is not None:
+                precio = f"${efectivo}"
+            else:
+                precio = (
+                    "PRECIO DEL DÍA — TODAVÍA NO LO SABES. Este precio CAMBIA y hoy la dueña "
+                    "aún no lo dio. Está PROHIBIDO inventarlo, estimarlo o usar uno viejo: si "
+                    "te lo preguntan o lo quieren comprar, llama a `pedir_ayuda` "
+                    "(motivo='precio_del_dia')"
+                )
             interno = [f"precio {precio}"]
             if p.presentacion:
                 interno.append(f"trae {p.presentacion}")

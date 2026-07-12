@@ -22,10 +22,12 @@ from app.models import (
     Cliente,
     Configuracion,
     Conocimiento,
+    Intervencion,
     Mensaje,
     MetodoPago,
     Pago,
     Pedido,
+    PrecioDia,
     Producto,
     ProductoMedia,
     now_utc,
@@ -1087,6 +1089,151 @@ async def borrar_cliente(telefono: str, _: str = Depends(usuario_actual)):
         await session.commit()
     await borrar_memoria(telefono)
     return {"ok": True}
+
+
+# ─── "EL BOT TE NECESITA": bandeja de intervenciones + precio del día ─
+
+class PrecioDiaIn(BaseModel):
+    producto_id: int
+    precio: float
+    nota: str | None = None
+
+
+_MOTIVO_TEXTO = {
+    "precio_del_dia": "Te piden un precio del día",
+    "no_se": "El bot no sabe algo",
+    "pide_persona": "El cliente pide hablar con una persona",
+    "reclamo": "El cliente está reclamando",
+}
+
+
+@router.get("/intervenciones")
+async def listar_intervenciones(estado: str = "pendiente", _: str = Depends(usuario_actual)):
+    """La bandeja 'EL BOT TE NECESITA': los chats donde el bot se calló y te espera.
+    El bot llama a `pedir_ayuda` cuando NO le toca resolver algo (un precio que cambia,
+    algo que no sabe, un cliente que pide una persona, un reclamo) — así jamás inventa."""
+    factory = get_session_factory()
+    async with factory() as session:
+        stmt = select(Intervencion).order_by(Intervencion.created_at.desc()).limit(100)
+        if estado in ("pendiente", "resuelta"):
+            stmt = stmt.where(Intervencion.estado == estado)
+        filas = (await session.execute(stmt)).scalars().all()
+        telefonos = {i.cliente_telefono for i in filas}
+        nombres: dict[str, str | None] = {}
+        if telefonos:
+            nombres = dict(
+                (
+                    await session.execute(
+                        select(Cliente.telefono, Cliente.nombre).where(
+                            Cliente.telefono.in_(telefonos)
+                        )
+                    )
+                ).all()
+            )
+    return [
+        {
+            "id": i.id,
+            "cliente": i.cliente_telefono,
+            "nombre": nombres.get(i.cliente_telefono),
+            "motivo": i.motivo,
+            "motivo_texto": _MOTIVO_TEXTO.get(i.motivo, i.motivo),
+            "detalle": i.detalle,
+            "mensaje_cliente": i.mensaje_cliente,
+            "estado": i.estado,
+            "fecha": i.created_at.isoformat(),
+        }
+        for i in filas
+    ]
+
+
+@router.post("/intervenciones/{intervencion_id}/resolver")
+async def resolver_intervencion(
+    intervencion_id: int, reactivar: bool = True, _: str = Depends(usuario_actual)
+):
+    """La dueña ya atendió ese chat: cierra el aviso y (por defecto) REACTIVA el bot,
+    para que vuelva a atender a ese cliente."""
+    factory = get_session_factory()
+    async with factory() as session:
+        inter = await session.get(Intervencion, intervencion_id)
+        if inter is None:
+            raise HTTPException(status_code=404, detail="Aviso no encontrado")
+        inter.estado = "resuelta"
+        inter.resuelta_at = now_utc()
+        if reactivar:
+            cliente = (
+                await session.execute(
+                    select(Cliente).where(Cliente.telefono == inter.cliente_telefono)
+                )
+            ).scalar_one_or_none()
+            if cliente is not None:
+                cliente.bot_pausado = False
+        await session.commit()
+    return {"ok": True, "bot_reactivado": reactivar}
+
+
+@router.get("/precio-dia")
+async def ver_precios_dia(_: str = Depends(usuario_actual)):
+    """Los productos de PRECIO VARIABLE (precio vacío a propósito: su costo cambia de un
+    día a otro) y el precio que la dueña les dio HOY (si ya lo dio)."""
+    factory = get_session_factory()
+    async with factory() as session:
+        prods = (
+            await session.execute(
+                select(Producto).where(Producto.precio.is_(None)).order_by(Producto.nombre)
+            )
+        ).scalars().all()
+        hoy = dict(
+            (
+                await session.execute(
+                    select(PrecioDia.producto_id, PrecioDia.precio).where(
+                        PrecioDia.fecha == date.today()
+                    )
+                )
+            ).all()
+        )
+    return [
+        {
+            "producto_id": p.id,
+            "nombre": p.nombre,
+            "presentacion": p.presentacion,
+            "precio_hoy": float(hoy[p.id]) if p.id in hoy else None,
+        }
+        for p in prods
+    ]
+
+
+@router.put("/precio-dia")
+async def poner_precio_dia(datos: PrecioDiaIn, _: str = Depends(usuario_actual)):
+    """La dueña dice cuánto está HOY ese producto. Vale SOLO por hoy: mañana el bot se lo
+    vuelve a preguntar (un precio viejo jamás se reutiliza). Si lo corrige, se sobreescribe."""
+    if datos.precio <= 0:
+        raise HTTPException(status_code=400, detail="El precio debe ser mayor que 0.")
+    factory = get_session_factory()
+    async with factory() as session:
+        prod = await session.get(Producto, datos.producto_id)
+        if prod is None:
+            raise HTTPException(status_code=404, detail="Producto no encontrado")
+        fila = (
+            await session.execute(
+                select(PrecioDia).where(
+                    PrecioDia.producto_id == datos.producto_id, PrecioDia.fecha == date.today()
+                )
+            )
+        ).scalar_one_or_none()
+        if fila is None:
+            session.add(
+                PrecioDia(
+                    producto_id=datos.producto_id,
+                    precio=Decimal(str(datos.precio)),
+                    nota=datos.nota,
+                    fecha=date.today(),
+                )
+            )
+        else:
+            fila.precio = Decimal(str(datos.precio))
+            fila.nota = datos.nota
+        await session.commit()
+    return {"ok": True, "producto": prod.nombre, "precio_hoy": datos.precio}
 
 
 # ─── Conocimiento del negocio (FAQ + info que usa el bot) ────────────

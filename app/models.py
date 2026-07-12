@@ -4,6 +4,7 @@ from decimal import Decimal
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
+    Date,
     DateTime,
     ForeignKey,
     LargeBinary,
@@ -65,6 +66,40 @@ class Cliente(Base):
     bot_pausado: Mapped[bool] = mapped_column(Boolean, default=False)
     primera_interaccion: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
     ultima_interaccion: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+class Intervencion(Base):
+    """'El bot te necesita': el bot se topó con algo que NO le toca resolver
+    (un precio que cambia, algo que no sabe, un cliente que pide una persona, un
+    reclamo). En vez de inventar, PAUSA ese chat, avisa a la dueña y la espera."""
+
+    __tablename__ = "intervenciones"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    cliente_telefono: Mapped[str] = mapped_column(Text)
+    motivo: Mapped[str] = mapped_column(Text)  # precio_del_dia|no_se|pide_persona|reclamo
+    detalle: Mapped[str | None] = mapped_column(Text, nullable=True)
+    mensaje_cliente: Mapped[str | None] = mapped_column(Text, nullable=True)
+    estado: Mapped[str] = mapped_column(Text, default="pendiente")  # pendiente|resuelta
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    resuelta_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+class PrecioDia(Base):
+    """El precio de HOY de un producto cuyo precio CAMBIA (Tortas keto, Premezclas…).
+    Lo pone la dueña cuando el bot se lo pregunta. Vale SOLO para su fecha: mañana el
+    bot vuelve a preguntárselo. Un precio viejo JAMÁS se reutiliza (regla del cobro)."""
+
+    __tablename__ = "precio_dia"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    producto_id: Mapped[int] = mapped_column(ForeignKey("productos.id", ondelete="CASCADE"))
+    precio: Mapped[Decimal] = mapped_column(Numeric(10, 2))
+    nota: Mapped[str | None] = mapped_column(Text, nullable=True)  # ej. "1kg"
+    fecha: Mapped[datetime] = mapped_column(Date)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 
 
 class Pedido(Base):

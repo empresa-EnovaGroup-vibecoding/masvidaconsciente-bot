@@ -7,6 +7,7 @@ import json
 import logging
 import math
 import unicodedata
+from datetime import date
 from decimal import Decimal
 
 from sqlalchemy import select, text
@@ -18,8 +19,11 @@ from app.models import (
     Cliente,
     Conocimiento,
     Configuracion,
+    Intervencion,
+    Mensaje,
     Pago,
     Pedido,
+    PrecioDia,
     Producto,
     ProductoMedia,
 )
@@ -197,6 +201,44 @@ TOOL_SCHEMAS = [
                     }
                 },
                 "required": ["nombre"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "pedir_ayuda",
+            "description": (
+                "Le pasa la conversación a la DUEÑA (una persona real) y deja de responder en "
+                "este chat. Es tu salida honesta cuando algo NO te toca resolver a ti. "
+                "LLÁMALA SIEMPRE que: (1) te pregunten el PRECIO de un producto cuyo precio dice "
+                "'PRECIO DEL DÍA' o 'a consultar' (ese precio cambia y solo lo sabe la dueña: "
+                "está PROHIBIDO inventarlo o usar uno viejo); (2) te pregunten algo que NO SABES "
+                "y las herramientas no te lo dan (ej. envíos a otra ciudad, una política que no "
+                "tienes cargada); (3) el cliente pida hablar con una PERSONA o con la dueña; "
+                "(4) el cliente RECLAME de verdad (algo llegó mal, no le llegó, quiere su dinero). "
+                "Después de llamarla, dile al cliente CON TUS PROPIAS PALABRAS, cálida y natural, "
+                "que le confirmas eso enseguida (nunca una plantilla, y NUNCA le digas que "
+                "'le preguntas a la dueña': tú ERES Whuilianny)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "motivo": {
+                        "type": "string",
+                        "enum": ["precio_del_dia", "no_se", "pide_persona", "reclamo"],
+                        "description": "Por qué necesitas a la dueña.",
+                    },
+                    "detalle": {
+                        "type": "string",
+                        "description": (
+                            "En una línea, QUÉ necesita la dueña para poder responder. "
+                            "Sé concreto: 'pregunta el precio de la Torta keto de 1kg' o "
+                            "'pregunta si hacen envíos a Caracas'."
+                        ),
+                    },
+                },
+                "required": ["motivo", "detalle"],
             },
         },
     },
@@ -386,6 +428,26 @@ def _nombre_norm(texto: str) -> str:
     return " ".join(_sin_acentos(texto or "").split())
 
 
+async def _precio_efectivo(session, prod):
+    """El precio que se puede COBRAR HOY por este producto.
+
+    - Producto con precio fijo -> ese precio.
+    - Producto de PRECIO DEL DÍA (precio vacío A PROPÓSITO: Tortas keto, Premezclas… cuyo
+      costo cambia de un día a otro en Venezuela) -> el precio que la dueña dio HOY.
+    - Si la dueña aún no lo dio hoy -> None. El bot NO puede cobrarlo ni inventarlo:
+      tiene que llamar a `pedir_ayuda`. Un precio de AYER jamás se reutiliza.
+    """
+    if prod.precio is not None:
+        return prod.precio
+    return (
+        await session.execute(
+            select(PrecioDia.precio).where(
+                PrecioDia.producto_id == prod.id, PrecioDia.fecha == date.today()
+            )
+        )
+    ).scalar_one_or_none()
+
+
 def _singular(texto: str) -> str:
     """Quita la 's' final de cada palabra larga: 'empanadas keto' → 'empanada keto'.
     Así 'empanada' (singular) calza con 'Empanadas' pero NUNCA con 'Empanadas Keto'."""
@@ -523,14 +585,28 @@ async def registrar_pedido(session, telefono, items, notas=None):
                 ),
                 "productos_validos": validos,
             }
+        # PRECIO DEL DÍA: si el producto no tiene precio fijo y la dueña no lo ha dado HOY,
+        # NO se cobra (antes se colaba como $0 y el pedido salía gratis). Se le devuelve al
+        # agente la orden de pedir ayuda: jamás inventar ni reutilizar el precio de ayer.
+        precio_hoy = await _precio_efectivo(session, prod)
+        if precio_hoy is None:
+            return {
+                "ok": False,
+                "nota": (
+                    f"El precio de '{prod.nombre}' CAMBIA y hoy la dueña todavía no lo ha dado. "
+                    "NO lo inventes, NO uses uno viejo y NO lo registres. Llama a `pedir_ayuda` "
+                    f"con motivo='precio_del_dia' y detalle='pregunta el precio de {prod.nombre}'."
+                ),
+                "necesita_ayuda": True,
+            }
         cantidad = int(it.get("cantidad", 1))
-        subtotal = (prod.precio or Decimal("0")) * cantidad
+        subtotal = precio_hoy * cantidad
         total += subtotal
         items_pedido.append(
             {
                 "producto": prod.nombre,
                 "cantidad": cantidad,
-                "precio_unitario": float(prod.precio) if prod.precio is not None else None,
+                "precio_unitario": float(precio_hoy),  # el de HOY (fijo o precio del día)
                 "presentacion": prod.presentacion,
             }
         )
@@ -825,6 +901,118 @@ async def generar_datos_pago(session, telefono, pedido_id=None):
     }
 
 
+_MOTIVO_TITULO = {
+    "precio_del_dia": "💰 Te piden un PRECIO del día",
+    "no_se": "❓ El bot no sabe algo",
+    "pide_persona": "🙋 El cliente pide hablar con una persona",
+    "reclamo": "⚠️ El cliente está RECLAMANDO",
+}
+
+
+async def pedir_ayuda(session, telefono, motivo: str, detalle: str = ""):
+    """RELEVO A LA HUMANA. El bot se topó con algo que NO le toca resolver (un precio que
+    cambia, algo que no sabe, un cliente que pide una persona, un reclamo). En vez de
+    inventar: PAUSA este chat, deja el aviso en la bandeja del panel, y le manda un
+    WhatsApp a la dueña. Ella entra al chat del negocio y responde.
+
+    Nunca falla el turno: si el aviso por WhatsApp no sale (número sin configurar, ventana
+    de 24h de Meta), el chat igual queda pausado y el aviso queda EN EL PANEL."""
+    motivo = (motivo or "no_se").strip()
+    if motivo not in _MOTIVO_TITULO:
+        motivo = "no_se"
+    detalle = (detalle or "").strip()
+
+    # 1) El bot se calla en ESTE chat (la dueña toma el control).
+    cliente = (
+        await session.execute(select(Cliente).where(Cliente.telefono == telefono))
+    ).scalar_one_or_none()
+    if cliente is None:
+        cliente = Cliente(telefono=telefono)
+        session.add(cliente)
+    cliente.bot_pausado = True
+
+    # 2) Lo último que dijo el cliente (para que la dueña entienda sin abrir nada).
+    ultimo = (
+        await session.execute(
+            select(Mensaje.contenido)
+            .where(Mensaje.cliente_telefono == telefono, Mensaje.rol == "user")
+            .order_by(Mensaje.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+    # 3) Un solo aviso vivo por chat: si ya hay uno PENDIENTE, no la inundamos.
+    ya_hay = (
+        await session.execute(
+            select(Intervencion.id).where(
+                Intervencion.cliente_telefono == telefono,
+                Intervencion.estado == "pendiente",
+            ).limit(1)
+        )
+    ).scalar_one_or_none()
+
+    if ya_hay is None:
+        session.add(
+            Intervencion(
+                cliente_telefono=telefono,
+                motivo=motivo,
+                detalle=detalle or None,
+                mensaje_cliente=ultimo,
+            )
+        )
+    await session.commit()
+
+    # 4) El ping a la dueña. Si no sale, NO rompe nada: el aviso ya está en el panel.
+    if ya_hay is None:
+        await _avisar_intervencion(session, telefono, motivo, detalle, ultimo)
+
+    return {
+        "ok": True,
+        "nota": (
+            "Listo: la dueña ya fue avisada y este chat quedó en sus manos. Ahora dile al "
+            "cliente, CON TUS PROPIAS PALABRAS (cálida, natural, distinta cada vez), que eso "
+            "se lo confirmas enseguida. NO inventes el dato, NO des un precio, y NUNCA digas "
+            "que 'le preguntas a la dueña' ni la menciones como si fuera otra persona: tú "
+            "ERES Whuilianny. Después de este mensaje NO sigas respondiendo en este chat."
+        ),
+    }
+
+
+async def _avisar_intervencion(session, telefono, motivo, detalle, mensaje_cliente) -> None:
+    """Le manda a la dueña el 'el bot te necesita' por WhatsApp. Best-effort: si no hay
+    número configurado o Meta rechaza (ventana de 24h), se loguea y ya — el aviso vive
+    en la bandeja del panel, que nunca falla."""
+    config = {
+        f.clave: f.valor
+        for f in (await session.execute(select(Configuracion))).scalars().all()
+    }
+    destino = config.get("dueno_telefono") or get_settings().dueno_telefono
+    if not destino:
+        logger.warning(
+            "pedir_ayuda: no hay dueno_telefono configurado; el aviso queda SOLO en el panel"
+        )
+        return
+
+    nombre = (
+        await session.execute(select(Cliente.nombre).where(Cliente.telefono == telefono))
+    ).scalar_one_or_none()
+    quien = f"{nombre} ({telefono})" if nombre else telefono
+    cuerpo = f"🔔 *EL BOT TE NECESITA*\n\n{_MOTIVO_TITULO[motivo]}\nCliente: {quien}"
+    if detalle:
+        cuerpo += f"\n\n👉 {detalle}"
+    if mensaje_cliente:
+        cuerpo += f'\n\nÉl escribió: "{mensaje_cliente[:180]}"'
+    cuerpo += (
+        "\n\nEl bot ya le dijo que le confirmas enseguida y *se quedó callado* en ese chat."
+        "\nEntra al WhatsApp del negocio y respóndele tú."
+        "\nCuando termines, reactiva el bot desde el panel."
+    )
+    try:
+        await enviar_texto(destino, cuerpo)
+    except Exception:  # noqa: BLE001 — un aviso que falla no puede tumbar el turno
+        logger.exception("pedir_ayuda: no se pudo avisar por WhatsApp; queda en el panel")
+
+
 async def _avisar_duena(session, pedido, pago) -> None:
     """Relevo a la humana: avisa por WhatsApp a la duena que entro un pago.
 
@@ -1058,6 +1246,7 @@ _DISPATCH = {
     "generar_datos_pago": generar_datos_pago,
     "registrar_comprobante": registrar_comprobante,
     "enviar_catalogo": enviar_catalogo,
+    "pedir_ayuda": pedir_ayuda,
 }
 
 
