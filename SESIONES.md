@@ -30,7 +30,14 @@
 
 **Ojo (cuentas de Coolify del viejo):** usuario 0 = `javierave234@gmail.com` (el socio) → equipos 0 y 1. Usuario 1 = `enovagroup0@gmail.com` (Maired) → equipos 2 y 1. Las apps de Nexora vivían en el equipo **0**, no en el de ella.
 
-**Respaldo automático — BLOQUEADO por un permiso:** las llaves R2 actuales están **limitadas al bucket `masvida-media`** (probado: `ListBuckets` y `CreateBucket` → *AccessDenied*). Hace falta que Maired cree en Cloudflare un **bucket privado** (`masvida-respaldos`) + un token con acceso a él. **NO meter los respaldos en el bucket de las fotos: es público** (`pub-….r2.dev`). Mientras tanto hay **copia manual verificada** de las dos BD en `C:\Mis_Proyectos_IA\respaldos-masvida`.
+**✅ RESPALDO AUTOMÁTICO: ACTIVADO Y RESTAURACIÓN PROBADA.** (Maired creó el bucket privado + el token; las llaves R2 viejas estaban limitadas al bucket de las fotos: `CreateBucket` → *AccessDenied*.)
+- Corre en el **servidor VIVO** (netcup) como contenedor propio **`masvida-backup`** (`--restart unless-stopped`). **NO en Coolify**: Coolify construye por Dockerfile e **ignora el `docker-compose`** — por eso el servicio de respaldo que ya existía en el repo **nunca se desplegó** y el negocio llevaba meses **sin ningún respaldo**.
+- Base de datos (`pg_dump`) + `/data/comprobantes`, **cifrado con restic** (AES-256), a R2 **privado** (`masvida-respaldos`), cada 24 h, con retención 14 diarios/8 semanales/12 mensuales. Costo: **$0**.
+- **Fix al script:** `restic backup … /data/catalogo` **fallaba entero** si esa carpeta no existe (y no existe: el catálogo PDF vive en la BD) → ahora solo respalda las carpetas que existen. Sin esto, el respaldo habría fallado **todos los días** en bucle.
+- **🧪 RESTAURACIÓN PROBADA (no "debería funcionar"):** se bajó de R2, se descifró, se restauró en un Postgres desechable y se contó: **40 clientes · 29 productos · 305 mensajes · 8 conocimiento · 3 métodos de pago · catálogo PDF · personalidad íntegra (11.648 letras)**. Ver `RESPALDO.md` (incluye el procedimiento de restauración).
+- **La clave de cifrado** está en `C:\Mis_Proyectos_IA\respaldos-masvida\CLAVE-DE-CIFRADO.txt`. **Si se pierde, los respaldos no se pueden abrir nunca más.**
+- ⚠️ **Si el bot se muda de servidor, hay que mover el respaldo.** Hoy solo respalda netcup (el viejo tiene una copia vieja y ociosa).
+- ⚠️ Las llaves nuevas de R2 quedaron visibles en una captura del chat → **sumar a la lista de rotación** del ROADMAP.
 
 ---
 

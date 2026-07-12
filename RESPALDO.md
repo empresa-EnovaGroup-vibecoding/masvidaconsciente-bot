@@ -1,14 +1,54 @@
-# 🛟 RESPALDO de los datos (cómo activarlo)
+# 🛟 RESPALDO de los datos
 
-> **Qué hace:** cada día respalda **los datos de la clienta** (base de datos: clientes, pedidos,
-> pagos, catálogo, personalidad + las imágenes de los comprobantes), los **cifra** con una clave
-> que SOLO tú controlas, y los sube **afuera del VPS** a Cloudflare R2. Si el servidor muere, esto
-> es lo único que recupera el negocio. El código del bot ya está en GitHub, no hace falta respaldarlo.
->
-> **Costo:** $0 (R2 da 10 GB gratis; la base pesa unos pocos MB).
->
-> El servicio ya está montado en el `docker-compose`. Mientras no pongas los secretos, **se queda
-> en pausa solito** y el bot funciona igual. Para activarlo, haz estos 2 pasos.
+## ✅ ACTIVADO Y PROBADO (2026-07-12)
+
+**Corriendo en el servidor VIVO (netcup `152.53.89.118`)** como contenedor propio `masvida-backup`
+(`--restart unless-stopped`: sobrevive reinicios del servidor). **NO vive en Coolify** — Coolify
+construye cada app por Dockerfile e ignora el `docker-compose`, por eso el servicio de respaldo
+que estaba ahí **nunca se desplegó** (durante meses no hubo NINGÚN respaldo).
+
+| | |
+|---|---|
+| **Qué respalda** | La base de datos completa (`pg_dump`) + `/data/comprobantes` |
+| **Cada cuánto** | Al arrancar, y luego cada 24 h (si falla, reintenta en 1 h) |
+| **Dónde** | Cloudflare R2, bucket **privado** `masvida-respaldos` (cuenta `51a5c371…`) |
+| **Cifrado** | restic (AES-256). La clave vive en `C:\Mis_Proyectos_IA\respaldos-masvida\CLAVE-DE-CIFRADO.txt` **y en la cabeza de Maired** |
+| **Retención** | 14 diarios · 8 semanales · 12 mensuales |
+| **Costo** | $0 (R2: 10 GB gratis y sin cargo por sacar los datos; la base pesa ~3 MB) |
+
+**🧪 Restauración PROBADA de verdad el 2026-07-12** (no "debería funcionar"): se bajó el respaldo
+cifrado de R2, se descifró, se restauró en un Postgres desechable y se contaron los datos →
+**40 clientes · 29 productos · 305 mensajes · 8 de conocimiento · 3 métodos de pago · el catálogo
+PDF · y la personalidad de Whuilianny íntegra (11.648 letras)**.
+
+### Cómo restaurar (si algún día hace falta)
+```sh
+# 1) Bajar el último respaldo (necesitas la CLAVE DE CIFRADO)
+docker run --rm --network coolify \
+  -e RESTIC_REPOSITORY="s3:https://51a5c371f8dc0f4458166ce8e387147d.r2.cloudflarestorage.com/masvida-respaldos" \
+  -e RESTIC_PASSWORD="<LA CLAVE>" \
+  -e AWS_ACCESS_KEY_ID="<llave R2>" -e AWS_SECRET_ACCESS_KEY="<secreto R2>" \
+  -e AWS_DEFAULT_REGION=auto -v /root/restauracion:/restore \
+  --entrypoint restic masvida-backup:1 restore latest --target /restore
+
+# 2) Ver qué respaldos hay:      … --entrypoint restic masvida-backup:1 snapshots
+# 3) Meterlo en la base de datos:
+gunzip -c /root/restauracion/backup/db_*.sql.gz | docker exec -i <contenedor-postgres> psql -U postgres -d postgres
+```
+
+### ⚠️ Ojo para el futuro
+- **Si el bot se muda de servidor, el respaldo hay que moverlo también.** Hoy corre SOLO en netcup
+  (el que atiende WhatsApp). El Hostinger viejo tiene una copia vieja y ociosa: no se respalda.
+- **Si se pierde la clave de cifrado, los respaldos NO se pueden abrir.** Ni yo, ni Cloudflare.
+- Las llaves de R2 quedaron visibles en un chat (captura de pantalla) → **rotarlas** antes de
+  lanzar con clientes reales (están en la lista del ROADMAP).
+
+---
+
+## (Histórico) Cómo se activa desde cero
+
+> El servicio también está definido en el `docker-compose`. Mientras no pongas los secretos, **se
+> queda en pausa solito** y el bot funciona igual.
 
 ## Paso 1 — Crear el destino en Cloudflare R2 (gratis, 5 min)
 1. Entra a **dash.cloudflare.com** → crea cuenta (gratis) → en el menú, **R2**.

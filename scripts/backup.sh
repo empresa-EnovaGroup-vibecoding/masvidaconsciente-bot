@@ -49,8 +49,15 @@ run_backup() {
       return 1
     fi
   fi
-  echo "[backup] restic backup (base + comprobantes + catalogo)"
-  if ! restic backup "$dump" /data/comprobantes /data/catalogo --tag masvida --host masvida; then
+  # Solo se respaldan las carpetas que EXISTEN en este montaje: si se le pasa una ruta
+  # inexistente, restic falla ENTERO y no sube nada (el respaldo del dia se pierde por una
+  # carpeta vacia). El catalogo PDF, por ejemplo, vive dentro de la base de datos, no en disco.
+  EXTRAS=""
+  for d in /data/comprobantes /data/catalogo; do
+    [ -d "$d" ] && EXTRAS="$EXTRAS $d"
+  done
+  echo "[backup] restic backup (base de datos +$EXTRAS)"
+  if ! restic backup "$dump" $EXTRAS --tag masvida --host masvida; then
     echo "[backup] ERROR: restic backup fallo."
     rm -f "$dump"
     return 1

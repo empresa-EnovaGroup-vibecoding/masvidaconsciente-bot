@@ -59,7 +59,7 @@ Decisión de Maired (2026-07-12): **NO al parche de renombrar la Kombucha.** Se 
 
 **7. ⚪ Modelo de IA** (investigado 2026-07-12, 7 agentes): el mejor costo-beneficio sería **`openai/gpt-5.4-mini`** — **más barato que Haiku 4.5** ($0.75/$4.50 vs $1/$5, caching automático) **y mejor en tool use**. ⚠️ **No acepta `temperature`** (OpenRouter la descarta en silencio) y **todos** los modelos baratos de 2026 son de razonamiento → hay que fijar `reasoning: minimal` o el costo/latencia se disparan. **Falta también** `provider: {require_parameters: true}` en el payload (`agent.py:75`) o OpenRouter puede rutear a un proveedor que **ignore las herramientas** → el bot inventaría precios. **NO es urgente:** el bug de "cobraba mal" era del CÓDIGO, no del modelo.
 
-**8. 🔴 Seguridad — ROTAR llaves** expuestas en el chat durante el setup de R2: META_ACCESS_TOKEN + META_APP_SECRET, OPENROUTER_API_KEY, JWT_SECRET, ADMIN_PASSWORD, llaves R2. **Antes de lanzar con clientes reales.**
+**8. 🔴 Seguridad — ROTAR llaves** expuestas en el chat: META_ACCESS_TOKEN + META_APP_SECRET, OPENROUTER_API_KEY, JWT_SECRET, ADMIN_PASSWORD, llaves R2 (las de las fotos **y** las nuevas del bucket de respaldos, 2026-07-12). **Antes de lanzar con clientes reales.**
 
 **⚪ Otros:** pasar el repo de GitHub a **privado** · afinar la voz (`BRIEF-closer-masvida.md`; ⚠️ **la voz y la bienvenida de Whuilianny son INTOCABLES** — ver SESIONES 2026-07-10/11).
 
@@ -108,7 +108,7 @@ Decisión de Maired (2026-07-12): **NO al parche de renombrar la Kombucha.** Se 
 - ⚪ **Hora pico de pedidos** — cuándo preparar más stock. *(bajo)*
 
 ### 5) 🛡️ Operación, Confianza y Tech Provider
-- 🟠 **Respaldo automático de los datos** — **YA ESTÁ EN CÓDIGO** (verificado 2026-06-20): `scripts/backup.sh` + servicio aislado en `docker-compose.yml` (pg_dump + comprobantes + catálogo, **cifrado con restic** y subido a Cloudflare **R2**, diario, con retención). FALTA **ACTIVARLO**: poner los secretos de R2 en Coolify (sin ellos el script se pausa y NO respalda). ⚠️ **Hasta activarlo, los datos NO tienen respaldo externo.** *(activación, no construcción)*
+- ✅ **Respaldo automático de los datos — ACTIVADO Y RESTAURACIÓN PROBADA (2026-07-12).** Corre en el servidor VIVO como contenedor `masvida-backup` (NO en Coolify: Coolify ignora el `docker-compose`, por eso nunca se había desplegado y el negocio llevaba meses **sin ningún respaldo**). Diario, cifrado con restic, a un bucket R2 **privado**. Probado restaurando de verdad: 40 clientes, 29 productos, 305 mensajes y la personalidad íntegra. Ver `RESPALDO.md`. ⚠️ Si el bot se muda de servidor, **hay que mover el respaldo**.
 - 🟢 **Roles: dueña y empleado** — el empleado atiende pero NO confirma pagos ni ve datos bancarios. *(medio)*
 - 🟡 **Sesiones seguras** (cierre por inactividad, cambiar contraseña). *(bajo)*
 - 🟡 **Salud del negocio (semáforo)** — verde/rojo si WhatsApp se cae o la tasa falla. *(medio)*
