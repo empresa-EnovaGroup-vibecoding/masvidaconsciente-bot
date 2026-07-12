@@ -134,7 +134,10 @@ class ClienteEditIn(BaseModel):
 
 class ItemEditIn(BaseModel):
     producto: str
-    cantidad: int
+    cantidad: int  # PAQUETES completos, nunca unidades sueltas
+    # Lo que el cliente eligió dentro del paquete (relleno, masa, sabor). No toca el precio,
+    # pero la dueña lo necesita para cocinar: si el panel no lo reenvía, se PERDÍA al editar.
+    opciones: str | None = None
 
 
 class PedidoItemsIn(BaseModel):
@@ -432,6 +435,7 @@ async def editar_items_pedido(
                     "cantidad": cantidad,
                     "precio_unitario": float(precio),
                     "presentacion": prod.presentacion,
+                    "opciones": (it.opciones or "").strip() or None,
                 }
             )
         pedido.items = items_pedido

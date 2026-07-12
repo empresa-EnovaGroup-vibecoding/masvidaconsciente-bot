@@ -87,7 +87,26 @@ TOOL_SCHEMAS = [
                             "type": "object",
                             "properties": {
                                 "producto": {"type": "string"},
-                                "cantidad": {"type": "integer", "minimum": 1},
+                                "cantidad": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "description": (
+                                        "CUÁNTOS PAQUETES COMPLETOS (NO unidades sueltas). "
+                                        "Las Empanadas se venden en paquete de 8: si el cliente "
+                                        "quiere 8 empanadas, cantidad=1. Si quiere 16, cantidad=2. "
+                                        "Si te pide unidades sueltas o una cantidad que no calza, "
+                                        "PREGÚNTALE cuántos paquetes quiere antes de registrar."
+                                    ),
+                                },
+                                "opciones": {
+                                    "type": "string",
+                                    "description": (
+                                        "Lo que el cliente eligió DENTRO del paquete y que la dueña "
+                                        "necesita para cocinar: relleno, masa, sabor o mezcla "
+                                        "(ej. '4 de pollo y 4 de carne mechada', 'masa de plátano'). "
+                                        "NO cambia el precio."
+                                    ),
+                                },
                             },
                             "required": ["producto", "cantidad"],
                         },
@@ -619,12 +638,17 @@ async def registrar_pedido(session, telefono, items, notas=None):
             }
         subtotal = precio_hoy * cantidad
         total += subtotal
+        # `opciones` = lo que el cliente eligió DENTRO del paquete (relleno, masa, sabor,
+        # mezcla). NO toca el precio, pero la dueña lo necesita para COCINAR: antes se perdía
+        # (en el panel quedaba solo "Empanadas" y había que leerse el chat entero).
+        opciones = str(it.get("opciones") or "").strip() or None
         items_pedido.append(
             {
                 "producto": prod.nombre,
-                "cantidad": cantidad,
+                "cantidad": cantidad,  # PAQUETES completos, nunca unidades sueltas
                 "precio_unitario": float(precio_hoy),  # el de HOY (fijo o precio del día)
                 "presentacion": prod.presentacion,
+                "opciones": opciones,
             }
         )
 
@@ -675,11 +699,21 @@ async def registrar_pedido(session, telefono, items, notas=None):
 
     # Recibo YA ARMADO (línea por línea + total) para que el bot lo copie tal cual.
     # El total lo calculó el código (arriba), NO el modelo: cero sumas de cabeza.
+    #
+    # El recibo DICE LA PRESENTACIÓN ("2 paquetes de 8 unidades") a propósito: si el bot se
+    # confundió y registró PAQUETES cuando el cliente quería unidades sueltas, el propio
+    # cliente lo ve en el recibo y lo canta antes de pagar. Es la red visible del "x4".
     lineas = []
     for it in items_pedido:
         pu = it["precio_unitario"]
         subtotal = Decimal(str(pu)) * it["cantidad"] if pu is not None else None
-        lineas.append(f"{it['producto']} x{it['cantidad']} = {_fmt_usd(subtotal)}")
+        linea = f"{it['producto']} x{it['cantidad']}"
+        if it.get("presentacion"):
+            linea += f" (paquete de {it['presentacion']})"
+        if it.get("opciones"):
+            linea += f" — {it['opciones']}"
+        linea += f" = {_fmt_usd(subtotal)}"
+        lineas.append(linea)
     resumen = "\n".join(lineas) + f"\nTotal: {_fmt_usd(total)}"
 
     return {
