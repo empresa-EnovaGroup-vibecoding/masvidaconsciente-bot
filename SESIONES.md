@@ -17,6 +17,27 @@
 
 ---
 
+## 2026-07-12 (noche) — 🖥️ La BANDEJA "El bot te necesita" YA SE VE EN EL PANEL (repo dashboard)
+
+**Qué se hizo:** la pantalla que faltaba del handoff (el motor y la API ya estaban desplegados desde la tarde). Repo **`masvidaconsciente-dashboard`**, todo **aditivo** (no se tocó ninguna pantalla existente):
+- **Pantalla nueva `/bandeja`** (`src/app/(app)/bandeja/page.tsx`): los avisos con **motivo** (color por motivo), **cliente**, **lo que preguntó** (citado), fecha/hora; botón **"Ya lo atendí (reactivar el bot)"** (→ `POST /api/intervenciones/{id}/resolver`), link **"Abrir el chat en WhatsApp"** (`wa.me`, oculto si no es un teléfono real, ej. el simulador), y filtro **Te esperan / Ya atendidos**.
+- **Bloque "El precio de hoy"** en la misma pantalla (`GET|PUT /api/precio-dia`): los 3 productos de precio variable (Tortas keto, Premezclas, torta baja) con su campo para escribir cuánto están HOY; muestra "Hoy: $X" o "Sin precio de hoy". Texto que explica que **vale solo por hoy**.
+- **Contador en el menú** (`layout.tsx`) que **se refresca solo cada 45 s**: era el punto ciego real — *el bot avisaba y nadie lo veía*. Ahora se ve sin recargar la página.
+- `lib/api.ts` (tipos + 4 endpoints) y `lib/estados.ts` (color por motivo, misma fuente única que pedidos/pagos).
+
+**Verificado de verdad (no "debería funcionar"):** `tsc` limpio + `npm run build` OK; panel local **contra la API real** (servidor viejo) con Playwright: login → la bandeja mostró el aviso REAL que dejó el bot (*"Cliente pregunta el precio de la Torta Keto de 1kg"*) → se escribió el precio de hoy ($38 → badge "Hoy: $38,00") → "Ya lo atendí" → el aviso pasó a **Ya atendidos** y el bot quedó reactivado. **Comprobado en la BD** (`intervenciones.estado='resuelta'` + `resuelta_at`; `precio_dia` con producto 11, $38, fecha de hoy), no en la respuesta de la pantalla.
+
+**Dónde se probó y por qué:** se usó el servidor **VIEJO** (2.25.139.106) a propósito, porque **hoy WhatsApp entra por NETCUP** (152.53.89.118: 254 mensajes en 7 días; el viejo no recibe nada desde el 06-jul). Escribir un precio de prueba en el servidor vivo habría hecho que el bot **le venda a un cliente real a un precio inventado por mí**. Al terminar se **borraron las filas de prueba** (`precio_dia` y el aviso del simulador) — el viejo quedó limpio.
+
+**Hallazgos (para no olvidar):**
+- ⚠️ **El servidor VIVO es netcup, no el viejo** (contradice notas viejas). El env del viejo **no tiene `NUMEROS_PERMITIDOS`**; el de netcup sí (`573005690062`, solo Maired).
+- ⚠️ **`DUENO_TELEFONO` sigue vacío en los dos** → el ping de WhatsApp del handoff no le llega a nadie todavía. Es el punto 3 del ROADMAP.
+- ⚠️ El **precio del día es por PRODUCTO, no por tamaño**: "Tortas keto" tiene los 3 tamaños (250g/500g/1kg) metidos en un solo producto, así que hoy solo se le puede poner **un** precio. Lo arregla el punto 5 (PRODUCTO + VARIANTES).
+
+**Pendiente inmediato:** desplegar el panel (push a master → GitHub Actions) y que Maired lo mire.
+
+---
+
 ## 2026-07-12 (tarde) — 🔔 "EL BOT TE NECESITA": handoff a la humana + PRECIO DEL DÍA
 
 **El descubrimiento que lo motivó (dicho por Maired):** las **Tortas keto**, la **torta baja en carbohidratos** y las **Premezclas** están en el catálogo **SIN PRECIO A PROPÓSITO**. No es un olvido: **en Venezuela el precio cambia de un día a otro** y la dueña responde ella esas consultas. ⚠️ **Yo asumí que era descuido y afirmé una causa inventada** ("el sistema no te dejaba"). Maired me lo reclamó con razón: *"eso es lo que me da rabia, que no me cuestionas"*. **Regla: si no sé algo, decir "no lo sé" — no rellenar el hueco con una explicación plausible.**

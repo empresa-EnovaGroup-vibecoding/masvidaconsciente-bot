@@ -32,12 +32,12 @@ Las **FASES 0 a 3 ya están hechas y desplegadas**:
 
 ### 🔨 LO QUE SIGUE — en orden (actualizado 2026-07-12)
 
-> **Estamos construyendo el HANDOFF** (traspaso a humano): que el bot, cuando llega a su límite, **deje de responder, avise a la dueña y le pase la conversación**. El motor YA ESTÁ HECHO Y DESPLEGADO. Falta la pantalla y el aviso que siempre llega.
+> **Estamos construyendo el HANDOFF** (traspaso a humano): que el bot, cuando llega a su límite, **deje de responder, avise a la dueña y le pase la conversación**. El motor y **la pantalla** ya están hechos. Falta que el aviso **le llegue al WhatsApp** de la dueña (puntos 3 y 4: `dueno_telefono` + plantillas HSM).
 >
 > ⚠️ **ANTES DE TOCAR EL COBRO, LEE ESTO:** existe un **banco de pruebas** — `scripts/probar_cobro.py`. **Córrelo siempre** después de cualquier cambio en el catálogo, las herramientas o el cobro (`docker exec -w /app -e PYTHONPATH=/app <bot> python scripts/probar_cobro.py`). Si algo sale MAL, **no se despliega**. Ver CLAUDE.md §8 y SESIONES 2026-07-12.
 
-**1. 🔴 La BANDEJA "El bot te necesita" en el PANEL** *(repo `masvidaconsciente-dashboard`)* — **ES LO SIGUIENTE.**
-El backend **ya está listo y desplegado**: `GET /api/intervenciones` · `POST /api/intervenciones/{id}/resolver` (cierra el aviso y **reactiva el bot**) · `GET|PUT /api/precio-dia`. **Falta solo la pantalla.** Hoy el bot avisa **y nadie lo ve**. Debe mostrar: motivo, cliente, lo que preguntó, y —si es un precio del día— un campo para escribir el precio de HOY + botón "Ya lo atendí (reactivar el bot)".
+**1. ✅ La BANDEJA "El bot te necesita" en el PANEL** *(repo `masvidaconsciente-dashboard`)* — **HECHA Y VERIFICADA (2026-07-12).**
+Pantalla `/bandeja`: los avisos (motivo, cliente, lo que preguntó), botón **"Ya lo atendí (reactivar el bot)"**, link para abrir el chat en WhatsApp, y el bloque **"El precio de hoy"** (escribir el precio del día de Tortas keto / Premezclas / torta baja). Con **contador en el menú** que se refresca solo cada 45s — el aviso ya no pasa desapercibido. Ver SESIONES 2026-07-12.
 
 **2. 🔴 Renombrar la KOMBUCHA (parche urgente, 2 min).** Hay **dos productos llamados igual** ("Kombucha", ids 21 y 22: $4/350ml y $7/700ml) → el bot **siempre cobra el de $4** y pierde $3 por venta. Renombrar a **"Kombucha 350ml"** / **"Kombucha 700ml"** **en LOS DOS servidores** (las BD **no se sincronizan solas**). Es un parche: lo correcto son las VARIANTES (punto 5).
 
