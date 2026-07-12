@@ -49,5 +49,33 @@ Antes de tocar datos reales, probar el cambio dentro de una transacción y hacer
 ## 7. Principios de código (de Praxis, lo que aplica)
 KISS · YAGNI · DRY · una responsabilidad por pieza · nombres claros · archivos cortos · nunca `any` en TypeScript.
 
+## 8. El cerebro del bot: qué vive en el CÓDIGO vs. en el PROMPT (NO duplicar)
+
+> El comportamiento del bot se arma en **3 capas** que el código junta en cada mensaje
+> (`app/agent/system_prompt.py` → `construir_partes_prompt`):
+> 1. **Personalidad** (editable en el panel / BD, clave `personalidad`) = **SOLO la voz/esencia de Whuilianny**.
+> 2. **`_REGLAS`** (blindadas en `system_prompt.py`, NO editables) = el cobro y las conductas duras.
+> 3. **Catálogo + notas de herramientas** (`_catalogo_bloque`) + **redes de seguridad** en `app/agent/agent.py`.
+>
+> **REGLA:** lo de abajo **YA está en el código**. **NO se escribe en la Personalidad** (se duplica, infla el
+> prompt y hace que Haiku copie frases / "suene a robot"). Si hay que **cambiar** una de estas conductas, se
+> edita el **CÓDIGO** (`system_prompt.py` / `agent.py`), **NUNCA** el prompt del panel.
+
+**Ya vive en el código (no ponerlo en el prompt):**
+- **Formato al escribir:** corto, varios mensajitos, sin viñetas ni negritas, espejear al cliente. → `_REGLAS` (BREVEDAD, "Planos sin formato", ESPEJEA).
+- **Saludo:** saludar según la hora de Venezuela y responder "muy bien, gracias a Dios" al "¿cómo estás?". → `_REGLAS` + `_saludo_hora_texto` (inyecta la hora) + red `_asegurar_saludo` (agent.py, lo garantiza aunque el modelo falle).
+- **Cliente conocido:** saludarlo por su nombre, no re-presentarse, recordar sus datos. → `_REGLAS` (MEMORIA DEL CLIENTE) + `_ficha_cliente_texto` (inyecta la ficha cada turno) + tool `recordar_cliente`.
+- **No inventar (regla #1):** nunca inventar productos, precios, ingredientes ni datos; nombres exactos; usar siempre las herramientas. → `_REGLAS` (ANTIINVENCIÓN).
+- **Precio:** no soltarlo de frente, darlo solo cuando lo piden, copiarlo EXACTO de la herramienta, nunca calcularlo. → `_catalogo_bloque` (línea `[SOLO PARA TI]`) + `_REGLAS` (DINERO).
+- **Catálogo:** cuándo mandar el PDF vs. nombrar productos, no agrupar por categoría, no decir que lo envió si no lo hizo. → `_REGLAS` + `_catalogo_bloque` + red `_asegurar_catalogo`.
+- **Fotos/video:** cuándo mandarlas y qué hacer si no hay. → `_REGLAS` (FOTOS/VIDEO, tool `enviar_fotos_producto`).
+- **Todo el cobro:** tomar el pedido (`registrar_pedido`), dar datos de pago (`generar_datos_pago`), registrar comprobante (`registrar_comprobante`), y **NUNCA decir que el banco confirmó** el pago. → `_REGLAS` (blindaje del cobro).
+- **Sigue el hilo:** si el cliente ya eligió variante, seguir solo con esa. → `_REGLAS`.
+- **Sin promesas médicas:** no decir que cura/sana ni dar consejo médico. → `_REGLAS`.
+- **Notas de voz y stickers:** responder con naturalidad. → `_REGLAS`.
+- **Dudas del negocio:** ubicación/pago/horarios (`info_negocio`), un producto (`info_producto`), generales (`buscar_info`; distingue envío nacional ≠ entrega local). → `_REGLAS`.
+
+**En la Personalidad (panel/BD) va SOLO:** quién es Whuilianny + su **voz/esencia** + su **bienvenida** + sus **ejemplos de cómo habla** (la dueña los definió: son intocables, no reescribir), los **hechos del producto** (sin gluten, azúcar de coco, alulosa…), **reglas del negocio** (horario, delivery, anticipación), **pagos** y los **datos bancarios**. Copia canónica de la voz: `BRIEF-personalidad-whuilianny.md`. ⚠️ El texto VIVO manda: vive en la BD del servidor (clave `personalidad`); antes de editar, leerlo del servidor.
+
 ---
 *Documento vivo. Si algo aquí ya no es cierto, corrígelo. Inspirado en el sistema del mentor (Erwin) y en Praxis, adaptado al stack real de másvida.*
