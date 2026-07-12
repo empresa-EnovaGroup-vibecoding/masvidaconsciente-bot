@@ -137,6 +137,10 @@ class Pedido(Base):
     items: Mapped[list] = mapped_column(JSONB)
     total: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
     notas: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # PARA CUÁNDO y CÓMO se entrega, con las palabras del cliente ("sábado en la tarde,
+    # delivery en Cabudare"). Antes NO se guardaba: el cliente decía "para el domingo" y a la
+    # dueña le llegaba un pedido de $42 sin saber para cuándo era. Ver migración 016.
+    entrega: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 

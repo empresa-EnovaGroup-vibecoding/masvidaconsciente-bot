@@ -119,6 +119,14 @@ async def main() -> None:
         await session.commit()
         logger.info("Migracion 015 (intervenciones + precio del dia) aplicada")
 
+        # 016: la ENTREGA del pedido (para cuándo y cómo). Aditiva.
+        # OJO: esta lista está escrita A MANO. Si una migración nueva no se agrega aquí,
+        # su archivo .sql NUNCA se ejecuta (y nadie se entera).
+        for stmt in _statements(MIGRATIONS / "016_pedido_entrega.sql"):
+            await session.execute(text(stmt))
+        await session.commit()
+        logger.info("Migracion 016 (entrega del pedido) aplicada")
+
         total = (await session.execute(text("SELECT COUNT(*) FROM productos"))).scalar()
         if total and total > 0:
             logger.info("Catálogo ya cargado (%s productos), no se vuelve a sembrar", total)

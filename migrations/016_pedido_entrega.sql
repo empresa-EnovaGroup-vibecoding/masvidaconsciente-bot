@@ -1,0 +1,13 @@
+-- 016 — LA ENTREGA DEL PEDIDO (aditiva e idempotente)
+--
+-- Por qué: el 2026-07-12, probando, un cliente pidió "20 empanadas para el domingo". El bot
+-- dijo "perfecto, para el domingo 💚", cobró $42 y pidió el comprobante... y la dueña NO
+-- entrega los domingos (su horario: lunes a sábado; "lo del domingo se entrega el lunes").
+-- Peor: el cliente dijo "domingo" DOS veces y en el pedido no quedó rastro. A la dueña le
+-- llegaba un pedido de $42 sin saber PARA CUÁNDO era. Un cliente que aparece el domingo y no
+-- encuentra a nadie es un reclamo garantizado.
+--
+-- `entrega` = texto libre, con las palabras del cliente ("sábado en la tarde, delivery en
+-- Cabudare"). NO se parsea a fecha a propósito: parsear "el sábado que viene" es una fuente
+-- de errores, y aquí lo que hace falta es que la DUEÑA lo lea, no que la máquina lo calcule.
+ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS entrega TEXT;

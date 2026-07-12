@@ -112,6 +112,15 @@ TOOL_SCHEMAS = [
                         },
                     },
                     "notas": {"type": "string", "description": "Notas del pedido (opcional)"},
+                    "entrega": {
+                        "type": "string",
+                        "description": (
+                            "PARA CUÁNDO y CÓMO lo quiere, con las palabras del cliente "
+                            "(ej. 'sábado en la tarde, delivery en Cabudare'; 'lo retiro el "
+                            "lunes en La Mendera'). La dueña lo NECESITA para producir y "
+                            "entregar. Antes de cobrar, PREGÚNTALO si el cliente no lo dijo."
+                        ),
+                    },
                 },
                 "required": ["items"],
             },
@@ -575,7 +584,7 @@ async def info_producto(session, telefono, nombre):
     }
 
 
-async def registrar_pedido(session, telefono, items, notas=None):
+async def registrar_pedido(session, telefono, items, notas=None, entrega=None):
     cliente = (
         await session.execute(select(Cliente).where(Cliente.telefono == telefono))
     ).scalar_one_or_none()
@@ -682,16 +691,22 @@ async def registrar_pedido(session, telefono, items, notas=None):
         if tiene_pago is not None:
             abierto = None
 
+    entrega_txt = str(entrega or "").strip() or None
     if abierto is not None:
         pedido = abierto
         pedido.items = items_pedido
         pedido.total = total
         if notas:
             pedido.notas = notas
+        if entrega_txt:
+            pedido.entrega = entrega_txt
         pedido.estado = "pendiente"  # vuelve a estar en armado; el cobro se genera de nuevo
         nuevo = False
     else:
-        pedido = Pedido(cliente_telefono=telefono, items=items_pedido, total=total, notas=notas)
+        pedido = Pedido(
+            cliente_telefono=telefono, items=items_pedido, total=total,
+            notas=notas, entrega=entrega_txt,
+        )
         session.add(pedido)
         nuevo = True
     await session.commit()
@@ -715,6 +730,10 @@ async def registrar_pedido(session, telefono, items, notas=None):
         linea += f" = {_fmt_usd(subtotal)}"
         lineas.append(linea)
     resumen = "\n".join(lineas) + f"\nTotal: {_fmt_usd(total)}"
+    if pedido.entrega:
+        # La entrega va en el RECIBO a propósito: el cliente confirma el día ANTES de pagar.
+        # Si el bot entendió mal (o prometió un domingo), el cliente lo canta ahí mismo.
+        resumen += f"\nEntrega: {pedido.entrega}"
 
     return {
         "ok": True,
