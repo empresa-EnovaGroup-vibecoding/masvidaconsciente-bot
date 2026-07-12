@@ -16,6 +16,7 @@ from app.models import (
     Cliente,
     Conocimiento,
     Configuracion,
+    Feriado,
     Pedido,
     PrecioDia,
     Producto,
@@ -56,7 +57,9 @@ Reglas que NUNCA rompes:
   · Si pide una cantidad de UNIDADES que no es exacta ("quiero 20 empanadas" y el paquete trae 8): dale las dos opciones REALES y deja que ÉL decida ("con 2 paquetes te llevas 16 y con 3 te llevas 24, ¿cuál prefieres?"). JAMÁS decidas tú por él ni redondees por tu cuenta.
   · Si la cantidad es AMBIGUA ("quiero 4", "dame 2"): PREGUNTA si son paquetes o unidades ANTES de registrar. Registrar 4 cuando quería 4 empanadas le cobra 4 PAQUETES. Ante la duda, pregunta.
   · Lo que el cliente elija DENTRO del paquete (relleno, masa, sabor, mezcla: "4 de pollo y 4 de carne") NO cambia el precio, pero la dueña lo necesita para cocinar: pásalo SIEMPRE en el campo `opciones` de ese producto al registrar el pedido, con las palabras del cliente.
-- LA ENTREGA (antes de cobrar, SIEMPRE): un pedido sin fecha de entrega es un reclamo esperando a pasar. Antes de dar los datos de pago, PREGUNTA para cuándo lo quiere y cómo (retiro o delivery, y dónde), y pásalo en el campo `entrega` de registrar_pedido con las palabras del cliente ("sábado en la tarde, delivery en Cabudare"). Y RESPETA EL HORARIO del negocio que tienes en tu personalidad: si te piden un día u hora en que NO se entrega, NO se lo prometas — díselo con cariño y ofrécele la alternativa real (lo del domingo se entrega el lunes). Prometer una entrega que el negocio no puede cumplir es peor que perder la venta.
+- LA ENTREGA (antes de cobrar, SIEMPRE): un pedido sin fecha de entrega es un reclamo esperando a pasar. Antes de dar los datos de pago PREGUNTA para cuándo lo quiere y cómo (retiro o delivery, y dónde). Pásale a registrar_pedido DOS cosas: `entrega_fecha` = la FECHA en formato AAAA-MM-DD (la calculas con la fecha de HOY que te doy en cada mensaje: "el sábado" → esa fecha concreta), y `entrega` = el cómo, con las palabras del cliente ("delivery en Cabudare"). La HORA no la cierres tú: la coordina la dueña después.
+  · El CÓDIGO valida esa fecha contra el calendario real del negocio (días de entrega, feriados y los días de ANTICIPACIÓN que necesita cada producto). Si no se puede, te devuelve el motivo y la PRIMERA FECHA que sí sirve: díselo al cliente con cariño y ofrécele ESA. NO calcules tú los días hábiles ni prometas fechas por tu cuenta.
+  · Sin fecha de entrega acordada NO PUEDES COBRAR (generar_datos_pago te lo va a rechazar). Prometer una entrega que el negocio no puede cumplir es peor que perder la venta.
 - CUANDO NO TE TOCA A TI (`pedir_ayuda`): hay cosas que NO puedes resolver y que JAMÁS debes inventar. En esos casos llama a `pedir_ayuda` (la dueña entra al chat) y NO sigas respondiendo ahí. Los 4 casos: (1) PRECIO DEL DÍA — si el catálogo dice que el precio de ese producto es "PRECIO DEL DÍA / todavía no lo sabes" (Tortas keto, Premezclas…), ese precio CAMBIA de un día a otro y solo lo sabe la dueña: está PROHIBIDO inventarlo, estimarlo, deducirlo de otro producto o usar uno viejo, y PROHIBIDO meterlo en un pedido; (2) NO SABES algo — usa primero buscar_info, pero si no trae la respuesta (ej. envíos a otra ciudad, una política que no está cargada), pide ayuda en vez de improvisar; (3) el cliente pide hablar con una PERSONA o con la dueña; (4) el cliente RECLAMA de verdad (le llegó mal, no le llegó, quiere su dinero). Después de llamarla, dile al cliente con TUS palabras —cálida, natural, distinta cada vez— que eso se lo confirmas enseguida. NUNCA digas que "le preguntas a la dueña" ni la menciones como si fuera otra persona: tú ERES Whuilianny
 - Para decir cuánto es, registra el pedido COMPLETO con registrar_pedido: TODOS los productos y cantidades del cliente en UNA sola llamada. Di el total tal cual te lo devuelve (campo `resumen`), sin recalcular. Si el cliente agrega o quita algo, vuelve a registrar el pedido COMPLETO; jamás ajustes el total a mano
 - Justo después llama a generar_datos_pago con el `pedido_id` que te dio registrar_pedido (así cobras ESE pedido, no uno viejo). Presenta el cobro copiando EXACTO el campo `resumen_cobro` (monto en bolívares con la tasa del día) y los datos de Pago Móvil, cálido y claro, y pide la captura del pago
@@ -197,6 +200,12 @@ async def _catalogo_bloque() -> str:
                 interno.append(
                     f"SE VENDE POR PAQUETE COMPLETO: 1 = {p.presentacion} "
                     f"(NO se vende suelto ni fraccionado)"
+                )
+            if p.dias_anticipacion:
+                # Los congelados salen el mismo día; una torta hay que hornearla.
+                interno.append(
+                    f"necesita {p.dias_anticipacion} día(s) de ANTICIPACIÓN (la dueña lo prepara "
+                    f"por encargo): no lo prometas para antes"
                 )
             if p.duracion:
                 interno.append(f"dura {p.duracion}")
@@ -346,6 +355,60 @@ def _saludo_hora_texto() -> str:
     return f"HORA EN VENEZUELA: son las {ahora:%H:%M} ({franja}). Si saludas, hazlo acorde a la hora."
 
 
+_DIAS_BONITO = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
+_MESES = [
+    "enero", "febrero", "marzo", "abril", "mayo", "junio",
+    "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre",
+]
+
+
+async def _calendario_texto() -> str:
+    """El CALENDARIO del negocio, inyectado en cada mensaje: qué día es hoy y qué días se
+    entrega. Va aquí (dinámico) y NO memorizado en la personalidad, para que haya UNA sola
+    verdad: si la dueña cambia el horario en el panel, el bot cambia en el siguiente mensaje.
+
+    El bot necesita saber la fecha de HOY para poder convertir "el sábado" en una fecha real
+    (AAAA-MM-DD), que es lo que el código valida contra el calendario."""
+    hoy = hoy_venezuela()
+    texto = (
+        f"HOY es {_DIAS_BONITO[hoy.weekday()]} {hoy.day} de {_MESES[hoy.month - 1]} de "
+        f"{hoy.year} (fecha para el sistema: {hoy.isoformat()})."
+    )
+    try:
+        factory = get_session_factory()
+        async with factory() as session:
+            dias = (
+                await session.execute(
+                    select(Configuracion.valor).where(Configuracion.clave == "dias_entrega")
+                )
+            ).scalars().first()
+            proximos = (
+                await session.execute(
+                    select(Feriado.fecha, Feriado.motivo)
+                    .where(Feriado.fecha >= hoy)
+                    .order_by(Feriado.fecha)
+                    .limit(5)
+                )
+            ).all()
+    except Exception:  # noqa: BLE001 — sin calendario el bot sigue conversando
+        return texto
+
+    if dias:
+        texto += f"\nDÍAS DE ENTREGA: {dias}. Los demás días NO se entrega."
+    if proximos:
+        lista = ", ".join(
+            f"{f.isoformat()}" + (f" ({m})" if m else "") for f, m in proximos
+        )
+        texto += f"\nDÍAS CERRADOS (no se entrega): {lista}."
+    texto += (
+        "\nCuando acuerdes la entrega, pásale a registrar_pedido la FECHA en formato AAAA-MM-DD "
+        "(`entrega_fecha`). El código la valida contra este calendario y la anticipación de cada "
+        "producto: si no se puede, te dice la primera fecha que SÍ. NO prometas fechas por tu "
+        "cuenta ni calcules tú los días hábiles."
+    )
+    return texto
+
+
 async def _ficha_cliente_texto(telefono: str) -> str:
     """Ficha del cliente (nombre + datos guardados: salud/preferencias) para que el bot
     reconozca al que vuelve y recuerde sus datos. Vacío si es nuevo o no tiene datos."""
@@ -396,7 +459,9 @@ async def construir_partes_prompt(
             "Temas disponibles:\n" + indice
         )
 
-    dinamico = _saludo_hora_texto()
+    # El CALENDARIO va en la parte dinámica (no cacheada) a propósito: cambia cada día, y si
+    # la dueña edita el horario o agrega un feriado, el bot lo sabe en el siguiente mensaje.
+    dinamico = _saludo_hora_texto() + "\n\n" + await _calendario_texto()
     if telefono:
         estado = await _estado_cliente_texto(telefono)
         if estado:

@@ -22,6 +22,7 @@ from app.models import (
     Cliente,
     Configuracion,
     Conocimiento,
+    Feriado,
     Intervencion,
     Mensaje,
     MetodoPago,
@@ -67,7 +68,14 @@ class ProductoIn(BaseModel):
     se_congela: str | None = None
     apto_diabeticos: str | None = None
     info: str | None = None
+    # Días de anticipación que necesita ESTE producto (0 = mismo día si hay stock).
+    dias_anticipacion: int = 0
     disponible: bool = True
+
+
+class FeriadoIn(BaseModel):
+    fecha: str  # AAAA-MM-DD
+    motivo: str | None = None
 
 
 class EstadoIn(BaseModel):
@@ -94,9 +102,9 @@ CLAVES_CONFIG = [
     "pago_movil_telefono",
     "pago_movil_titular",
     "dueno_telefono",
-    # Días en que el negocio NO entrega (separados por coma: "domingo"). Es un CANDADO:
-    # el bot no puede registrar un pedido prometiendo esos días. La dueña lo edita aquí.
-    "dias_sin_entrega",
+    # Días en que el negocio SÍ entrega (separados por coma). Es un CANDADO: el código valida
+    # la fecha de entrega contra esto y el bot no puede prometer un día cerrado.
+    "dias_entrega",
     # Modelo de IA conversacional, lo elige la PROVEEDORA (no la clienta). El bot
     # lo lee con leer_modelo_ia(). La voz (transcripción) va aparte y fija.
     "modelo_ia",
@@ -484,6 +492,7 @@ async def listar_productos(_: str = Depends(usuario_actual)):
             "se_congela": p.se_congela,
             "apto_diabeticos": p.apto_diabeticos,
             "info": p.info,
+            "dias_anticipacion": p.dias_anticipacion or 0,
             "disponible": p.disponible,
             "imagen": r2.url_publica(primera_img[p.id]) if p.id in primera_img else None,
         }
@@ -505,6 +514,7 @@ async def crear_producto(datos: ProductoIn, _: str = Depends(usuario_actual)):
             se_congela=datos.se_congela,
             apto_diabeticos=datos.apto_diabeticos,
             info=datos.info,
+            dias_anticipacion=max(0, int(datos.dias_anticipacion or 0)),
             disponible=datos.disponible,
         )
         session.add(prod)
@@ -529,6 +539,7 @@ async def editar_producto(producto_id: int, datos: ProductoIn, _: str = Depends(
         prod.se_congela = datos.se_congela
         prod.apto_diabeticos = datos.apto_diabeticos
         prod.info = datos.info
+        prod.dias_anticipacion = max(0, int(datos.dias_anticipacion or 0))
         prod.disponible = datos.disponible
         await session.commit()
     return {"ok": True}
@@ -1683,3 +1694,50 @@ async def ver_comprobante(pago_id: int, _: str = Depends(usuario_actual)):
     if not os.path.exists(pago.comprobante_url):
         raise HTTPException(status_code=404, detail="Archivo de comprobante no disponible")
     return FileResponse(pago.comprobante_url)
+
+
+# ─── Calendario: días cerrados (feriados, vacaciones, un viaje) ──────
+
+@router.get("/feriados")
+async def listar_feriados(_: str = Depends(usuario_actual)):
+    """Los días sueltos en que el negocio NO entrega. El bot no puede prometerlos."""
+    factory = get_session_factory()
+    async with factory() as session:
+        filas = (
+            await session.execute(
+                select(Feriado).where(Feriado.fecha >= hoy_venezuela()).order_by(Feriado.fecha)
+            )
+        ).scalars().all()
+    return [{"fecha": f.fecha.isoformat(), "motivo": f.motivo} for f in filas]
+
+
+@router.post("/feriados")
+async def crear_feriado(datos: FeriadoIn, _: str = Depends(usuario_actual)):
+    try:
+        fecha = date.fromisoformat(datos.fecha.strip()[:10])
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Fecha inválida (usa AAAA-MM-DD).")
+    factory = get_session_factory()
+    async with factory() as session:
+        existe = await session.get(Feriado, fecha)
+        if existe is not None:
+            existe.motivo = (datos.motivo or "").strip() or None
+        else:
+            session.add(Feriado(fecha=fecha, motivo=(datos.motivo or "").strip() or None))
+        await session.commit()
+    return {"ok": True, "fecha": fecha.isoformat()}
+
+
+@router.delete("/feriados/{fecha}")
+async def borrar_feriado(fecha: str, _: str = Depends(usuario_actual)):
+    try:
+        f = date.fromisoformat(fecha.strip()[:10])
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Fecha inválida (usa AAAA-MM-DD).")
+    factory = get_session_factory()
+    async with factory() as session:
+        fila = await session.get(Feriado, f)
+        if fila is not None:
+            await session.delete(fila)
+            await session.commit()
+    return {"ok": True}

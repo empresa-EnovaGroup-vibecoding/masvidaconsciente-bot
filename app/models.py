@@ -7,6 +7,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    Integer,
     LargeBinary,
     Numeric,
     Text,
@@ -57,6 +58,10 @@ class Producto(Base):
     se_congela: Mapped[str | None] = mapped_column(Text, nullable=True)
     apto_diabeticos: Mapped[str | None] = mapped_column(Text, nullable=True)
     info: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Cuántos días de ANTICIPACIÓN necesita ESTE producto (0 = puede ser el mismo día si hay
+    # stock; las tortas y lo horneado, 2). Lo decide la dueña, producto por producto: los
+    # congelados ya están hechos, pero una torta hay que hornearla.
+    dias_anticipacion: Mapped[int] = mapped_column(Integer, default=0)
     disponible: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
@@ -121,6 +126,17 @@ class PrecioDia(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 
 
+class Feriado(Base):
+    """Un día suelto en que el negocio NO entrega (viaje, 24 de diciembre, vacaciones).
+    Los pone la dueña desde el panel. El código NO deja que el bot prometa esas fechas."""
+
+    __tablename__ = "feriados"
+
+    fecha: Mapped[date] = mapped_column(Date, primary_key=True)
+    motivo: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
 class Pedido(Base):
     __tablename__ = "pedidos"
     __table_args__ = (
@@ -141,6 +157,9 @@ class Pedido(Base):
     # delivery en Cabudare"). Antes NO se guardaba: el cliente decía "para el domingo" y a la
     # dueña le llegaba un pedido de $42 sin saber para cuándo era. Ver migración 016.
     entrega: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # La FECHA real acordada (no un texto que haya que adivinar). El código la valida contra
+    # el calendario del negocio: día de entrega, feriados y anticipación de los productos.
+    entrega_fecha: Mapped[date | None] = mapped_column(Date, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 

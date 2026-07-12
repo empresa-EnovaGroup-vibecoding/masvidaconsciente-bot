@@ -20,11 +20,22 @@ from decimal import Decimal
 
 from sqlalchemy import delete, func, select
 
+from datetime import timedelta
+
 from app.agent.tools import _buscar_producto, _precio_efectivo, registrar_pedido
-from app.models import Pedido, Producto
+from app.models import Pedido, Producto, hoy_venezuela
 from app.services.db import get_session_factory
 
 TELEFONO = "__simulador__"  # el panel ya lo excluye de la lista de clientes
+
+
+def fecha_entrega_valida() -> str:
+    """Una fecha en que SÍ se entrega (mañana; si cae domingo, pasado mañana).
+    Desde el 2026-07-12 el bot NO puede cobrar un pedido sin fecha de entrega acordada."""
+    f = hoy_venezuela() + timedelta(days=1)
+    if f.weekday() == 6:  # domingo
+        f += timedelta(days=1)
+    return f.isoformat()
 
 _ok = 0
 _mal: list[str] = []
@@ -231,10 +242,15 @@ async def probar_pago_cuadra(session) -> None:
         return
 
     # 1º pedido (barato) y su cobro -> deja el monto viejo en la caché.
-    r1 = await registrar_pedido(session, TELEFONO, [{"producto": barato.nombre, "cantidad": 1}])
+    entrega = fecha_entrega_valida()
+    r1 = await registrar_pedido(
+        session, TELEFONO, [{"producto": barato.nombre, "cantidad": 1}], entrega_fecha=entrega
+    )
     await generar_datos_pago(session, TELEFONO, r1.get("pedido_id"))
     # 2º pedido (caro): el cliente se cambió. Se cobra ESTE.
-    r2 = await registrar_pedido(session, TELEFONO, [{"producto": caro.nombre, "cantidad": 1}])
+    r2 = await registrar_pedido(
+        session, TELEFONO, [{"producto": caro.nombre, "cantidad": 1}], entrega_fecha=entrega
+    )
     await generar_datos_pago(session, TELEFONO, r2.get("pedido_id"))
     await registrar_comprobante(session, TELEFONO, referencia="PRUEBA-CUADRE")
 
@@ -265,7 +281,10 @@ async def probar_no_recobro(session) -> None:
             select(Producto).where(Producto.precio.is_not(None)).order_by(Producto.id)
         )
     ).scalars().first()
-    r = await registrar_pedido(session, TELEFONO, [{"producto": prod.nombre, "cantidad": 1}])
+    r = await registrar_pedido(
+        session, TELEFONO, [{"producto": prod.nombre, "cantidad": 1}],
+        entrega_fecha=fecha_entrega_valida(),
+    )
     pedido = await session.get(Pedido, r.get("pedido_id"))
     pedido.estado = "pagado"
     await session.commit()
@@ -381,6 +400,13 @@ async def probar_un_pedido_por_venta(session) -> None:
           f"quedó en {pedido.total}")
 
     # Pero si ese pedido YA tiene un pago reportado, NO se toca: se abre uno nuevo.
+    pedido.entrega_fecha = None  # se re-registra abajo con fecha
+    await registrar_pedido(
+        session, TELEFONO,
+        [{"producto": a.nombre, "cantidad": 1}, {"producto": b.nombre, "cantidad": 2}],
+        entrega_fecha=fecha_entrega_valida(),
+    )
+    await session.refresh(pedido)
     await generar_datos_pago(session, TELEFONO, pedido.id)
     await registrar_comprobante(session, TELEFONO, referencia="PRUEBA-NO-TOCAR")
     r3 = await registrar_pedido(session, TELEFONO, [{"producto": b.nombre, "cantidad": 1}])
@@ -393,6 +419,54 @@ async def probar_un_pedido_por_venta(session) -> None:
         "y el pago viejo sigue cuadrando con SU pedido",
         f"pago={pago.monto_usd if pago else None} pedido={pedido.total}",
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 11) EL CALENDARIO: el bot NO puede prometer un día en que no se entrega, ni
+#     cobrar un pedido sin fecha. Y se valida por FECHA, no por palabras: si el
+#     cliente dice "el 19" y el 19 cae domingo, igual se rechaza.
+# ─────────────────────────────────────────────────────────────────────────────
+async def probar_calendario(session) -> None:
+    print("\n11) El calendario de entrega (el código valida la fecha, no el modelo)")
+    from app.agent.tools import generar_datos_pago
+
+    prod = (
+        await session.execute(
+            select(Producto).where(Producto.precio.is_not(None)).order_by(Producto.id)
+        )
+    ).scalars().first()
+    hoy = hoy_venezuela()
+
+    # el próximo domingo (aunque el cliente NUNCA escriba la palabra "domingo")
+    domingo = hoy + timedelta(days=((6 - hoy.weekday()) % 7) or 7)
+    r = await registrar_pedido(
+        session, TELEFONO, [{"producto": prod.nombre, "cantidad": 1}],
+        entrega_fecha=domingo.isoformat(),
+    )
+    check(r.get("ok") is False, f"un DOMINGO ({domingo}) -> lo RECHAZA", str(r)[:110])
+    check(bool(r.get("primera_fecha_valida")), "y le ofrece la primera fecha que SÍ sirve",
+          "no devolvió primera_fecha_valida")
+
+    r = await registrar_pedido(
+        session, TELEFONO, [{"producto": prod.nombre, "cantidad": 1}],
+        entrega_fecha=(hoy - timedelta(days=1)).isoformat(),
+    )
+    check(r.get("ok") is False, "una fecha que YA PASÓ -> la RECHAZA", str(r)[:110])
+
+    r = await registrar_pedido(
+        session, TELEFONO, [{"producto": prod.nombre, "cantidad": 1}],
+        entrega="delivery en Cabudare", entrega_fecha=fecha_entrega_valida(),
+    )
+    check(r.get("ok") is not False, "un día hábil -> lo acepta", str(r)[:110])
+    check("Entrega:" in (r.get("resumen") or ""), "y el RECIBO le dice la fecha al cliente",
+          f"el recibo no la dice: {r.get('resumen')}")
+
+    # sin fecha de entrega NO se cobra
+    await session.execute(delete(Pedido).where(Pedido.cliente_telefono == TELEFONO))
+    await session.commit()
+    r = await registrar_pedido(session, TELEFONO, [{"producto": prod.nombre, "cantidad": 1}])
+    pago = await generar_datos_pago(session, TELEFONO, r.get("pedido_id"))
+    check(pago.get("ok") is False, "cobrar SIN fecha de entrega -> lo RECHAZA", str(pago)[:110])
 
 
 async def limpiar(session) -> None:
@@ -429,6 +503,8 @@ async def main() -> int:
             await probar_no_recobro(session)
             await limpiar(session)  # el bloque 10 necesita arrancar sin pedidos previos
             await probar_un_pedido_por_venta(session)
+            await limpiar(session)
+            await probar_calendario(session)
         finally:
             await limpiar(session)  # no deja basura en el panel
 

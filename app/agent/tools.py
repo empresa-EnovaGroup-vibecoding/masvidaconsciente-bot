@@ -7,7 +7,7 @@ import json
 import logging
 import math
 import unicodedata
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 from sqlalchemy import select, text
@@ -19,6 +19,7 @@ from app.models import (
     Cliente,
     Conocimiento,
     Configuracion,
+    Feriado,
     Intervencion,
     Mensaje,
     Pago,
@@ -115,10 +116,21 @@ TOOL_SCHEMAS = [
                     "entrega": {
                         "type": "string",
                         "description": (
-                            "PARA CUÁNDO y CÓMO lo quiere, con las palabras del cliente "
-                            "(ej. 'sábado en la tarde, delivery en Cabudare'; 'lo retiro el "
-                            "lunes en La Mendera'). La dueña lo NECESITA para producir y "
-                            "entregar. Antes de cobrar, PREGÚNTALO si el cliente no lo dijo."
+                            "CÓMO lo quiere, con las palabras del cliente: retiro o delivery, "
+                            "y dónde (ej. 'delivery en Cabudare'; 'lo retiro en La Mendera'). "
+                            "La hora NO se cierra aquí: la coordina la dueña después."
+                        ),
+                    },
+                    "entrega_fecha": {
+                        "type": "string",
+                        "description": (
+                            "La FECHA de entrega acordada, en formato AAAA-MM-DD. Tú la calculas "
+                            "a partir de lo que dijo el cliente ('el sábado', 'pasado mañana') y "
+                            "de la fecha de HOY, que te doy en este mismo mensaje. El CÓDIGO la "
+                            "valida contra el calendario del negocio (días de entrega, feriados y "
+                            "los días de anticipación que necesita cada producto): si no se puede, "
+                            "te devuelve la primera fecha que SÍ y se la ofreces al cliente. "
+                            "PREGÚNTALA siempre antes de cobrar."
                         ),
                     },
                 },
@@ -584,7 +596,103 @@ async def info_producto(session, telefono, nombre):
     }
 
 
-async def registrar_pedido(session, telefono, items, notas=None, entrega=None):
+# ─── EL CALENDARIO DEL NEGOCIO (una sola fuente de verdad) ──────────────────────────
+#
+# El horario vivía SOLO en el texto de la personalidad y el bot lo ignoraba: probado en vivo,
+# aceptó un pedido "para el domingo", cobró y pidió el comprobante. Y buscar la palabra
+# "domingo" tampoco alcanza: si el cliente dice "para el 19" (que cae domingo), no se entera.
+# Por eso el bot pasa una FECHA REAL y el CÓDIGO la valida contra el calendario del negocio:
+#   · qué días se entrega   (configuración `dias_entrega`, la edita la dueña)
+#   · feriados / vacaciones (tabla `feriados`, los pone la dueña)
+#   · cuánta anticipación necesita CADA producto (`productos.dias_anticipacion`)
+# Y si la fecha no sirve, el código CALCULA la primera que sí — no lo adivina el modelo.
+
+_DIAS_SEMANA = ["lunes", "martes", "miercoles", "jueves", "viernes", "sabado", "domingo"]
+_DIAS_BONITO = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
+_MESES = [
+    "enero", "febrero", "marzo", "abril", "mayo", "junio",
+    "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre",
+]
+
+
+def _fecha_larga(f: date) -> str:
+    """La fecha como la diría una persona: "sábado 18 de julio"."""
+    return f"{_DIAS_BONITO[f.weekday()]} {f.day} de {_MESES[f.month - 1]}"
+
+
+async def _dias_de_entrega(session) -> set[str]:
+    """Los días en que el negocio entrega (normalizados, sin acentos)."""
+    valor = (
+        await session.execute(
+            select(Configuracion.valor).where(Configuracion.clave == "dias_entrega")
+        )
+    ).scalars().first()
+    dias = {_sin_acentos(d.strip().lower()) for d in (valor or "").split(",") if d.strip()}
+    # Sin configurar = se entrega todos los días (no bloquear un negocio por falta de dato).
+    return dias or set(_DIAS_SEMANA)
+
+
+async def _anticipacion_del_pedido(session, items_pedido) -> int:
+    """Los días de anticipación que necesita el pedido = el MÁS lento de sus productos.
+    (Si lleva empanadas congeladas —0 días— y una torta —2 días—, el pedido necesita 2.)"""
+    nombres = [it["producto"] for it in items_pedido]
+    if not nombres:
+        return 0
+    dias = (
+        await session.execute(
+            select(Producto.dias_anticipacion).where(Producto.nombre.in_(nombres))
+        )
+    ).scalars().all()
+    return max([int(d or 0) for d in dias] or [0])
+
+
+async def _primera_fecha_valida(session, desde: date, dias_ok: set[str], anticipacion: int) -> date:
+    """La primera fecha en que SÍ se puede entregar este pedido. La calcula el CÓDIGO."""
+    feriados = set(
+        (await session.execute(select(Feriado.fecha))).scalars().all()
+    )
+    f = desde + timedelta(days=anticipacion)
+    for _ in range(60):  # tope de seguridad: 2 meses
+        if _DIAS_SEMANA[f.weekday()] in dias_ok and f not in feriados:
+            return f
+        f += timedelta(days=1)
+    return f
+
+
+async def _validar_entrega(session, fecha: date, items_pedido) -> dict | None:
+    """Devuelve None si la fecha SIRVE; si no, el motivo + la primera fecha buena."""
+    hoy = hoy_venezuela()
+    dias_ok = await _dias_de_entrega(session)
+    anticipacion = await _anticipacion_del_pedido(session, items_pedido)
+    feriados = dict(
+        (await session.execute(select(Feriado.fecha, Feriado.motivo))).all()
+    )
+
+    motivo = None
+    if fecha < hoy:
+        motivo = "esa fecha ya pasó"
+    elif fecha < hoy + timedelta(days=anticipacion):
+        motivo = (
+            f"ese pedido necesita {anticipacion} día(s) de anticipación "
+            f"(hay productos que la dueña prepara por encargo)"
+        )
+    elif _DIAS_SEMANA[fecha.weekday()] not in dias_ok:
+        motivo = f"los {_DIAS_SEMANA[fecha.weekday()]} el negocio NO entrega"
+    elif fecha in feriados:
+        extra = f" ({feriados[fecha]})" if feriados.get(fecha) else ""
+        motivo = f"ese día el negocio está cerrado{extra}"
+
+    if motivo is None:
+        return None
+    return {
+        "motivo": motivo,
+        "primera_fecha_valida": await _primera_fecha_valida(session, hoy, dias_ok, anticipacion),
+    }
+
+
+async def registrar_pedido(
+    session, telefono, items, notas=None, entrega=None, entrega_fecha=None
+):
     cliente = (
         await session.execute(select(Cliente).where(Cliente.telefono == telefono))
     ).scalar_one_or_none()
@@ -693,30 +801,37 @@ async def registrar_pedido(session, telefono, items, notas=None, entrega=None):
 
     entrega_txt = str(entrega or "").strip() or None
 
-    # CANDADO DE LA ENTREGA: el negocio NO entrega ciertos días (másvida: domingo). Esto NO
-    # puede vivir solo en el prompt: se probó y el bot igual contestó "perfecto, anotado para
-    # el domingo", cobró y pidió el comprobante. Aquí el pedido se RECHAZA y el agente tiene
-    # que ofrecerle al cliente el día alternativo. Los días los pone la dueña en el panel
-    # (Configuración → `dias_sin_entrega`), así sirve para cualquier negocio.
-    if entrega_txt:
-        cfg = (
-            await session.execute(
-                select(Configuracion.valor).where(Configuracion.clave == "dias_sin_entrega")
+    # CANDADO DE LA ENTREGA (por FECHA REAL, no por palabras). El bot pasa la fecha que
+    # acordó con el cliente y el CÓDIGO la valida contra el calendario del negocio. Si no
+    # sirve, le devuelve el motivo y LA PRIMERA FECHA BUENA (calculada aquí, no por el modelo).
+    fecha_entrega = None
+    if entrega_fecha:
+        try:
+            fecha_entrega = (
+                entrega_fecha
+                if isinstance(entrega_fecha, date)
+                else date.fromisoformat(str(entrega_fecha).strip()[:10])
             )
-        ).scalars().first()
-        cerrados = [d.strip() for d in (cfg or "").split(",") if d.strip()]
-        entrega_norm = _sin_acentos(entrega_txt.lower())
-        for dia in cerrados:
-            if _sin_acentos(dia.lower()) in entrega_norm:
-                return {
-                    "ok": False,
-                    "nota": (
-                        f"El negocio NO entrega los {dia}. NO registres el pedido con ese día ni "
-                        f"se lo prometas al cliente: díselo con cariño, con tus palabras, y "
-                        f"ofrécele el día siguiente hábil. Cuando el cliente acepte otro día, "
-                        f"vuelve a registrar el pedido COMPLETO con esa nueva entrega."
-                    ),
-                }
+        except ValueError:
+            return {
+                "ok": False,
+                "nota": (
+                    f"la fecha '{entrega_fecha}' no es una fecha válida. Pásala como AAAA-MM-DD "
+                    "(hoy en Venezuela te lo digo en este mismo mensaje)."
+                ),
+            }
+        problema = await _validar_entrega(session, fecha_entrega, items_pedido)
+        if problema is not None:
+            return {
+                "ok": False,
+                "nota": (
+                    f"NO se puede entregar esa fecha: {problema['motivo']}. NO se lo prometas "
+                    f"al cliente. Díselo con cariño, con TUS palabras, y ofrécele la primera "
+                    f"fecha en que SÍ se puede: {problema['primera_fecha_valida'].isoformat()}. "
+                    f"Cuando el cliente acepte, vuelve a registrar el pedido COMPLETO con esa fecha."
+                ),
+                "primera_fecha_valida": problema["primera_fecha_valida"].isoformat(),
+            }
     if abierto is not None:
         pedido = abierto
         pedido.items = items_pedido
@@ -725,12 +840,14 @@ async def registrar_pedido(session, telefono, items, notas=None, entrega=None):
             pedido.notas = notas
         if entrega_txt:
             pedido.entrega = entrega_txt
+        if fecha_entrega:
+            pedido.entrega_fecha = fecha_entrega
         pedido.estado = "pendiente"  # vuelve a estar en armado; el cobro se genera de nuevo
         nuevo = False
     else:
         pedido = Pedido(
             cliente_telefono=telefono, items=items_pedido, total=total,
-            notas=notas, entrega=entrega_txt,
+            notas=notas, entrega=entrega_txt, entrega_fecha=fecha_entrega,
         )
         session.add(pedido)
         nuevo = True
@@ -755,10 +872,16 @@ async def registrar_pedido(session, telefono, items, notas=None, entrega=None):
         linea += f" = {_fmt_usd(subtotal)}"
         lineas.append(linea)
     resumen = "\n".join(lineas) + f"\nTotal: {_fmt_usd(total)}"
-    if pedido.entrega:
+    if pedido.entrega_fecha or pedido.entrega:
         # La entrega va en el RECIBO a propósito: el cliente confirma el día ANTES de pagar.
-        # Si el bot entendió mal (o prometió un domingo), el cliente lo canta ahí mismo.
-        resumen += f"\nEntrega: {pedido.entrega}"
+        # Si el bot entendió mal la fecha, el cliente lo canta ahí mismo (por eso la fecha va
+        # escrita como la diría una persona: "sábado 18 de julio", no "2026-07-18").
+        partes_entrega = []
+        if pedido.entrega_fecha:
+            partes_entrega.append(_fecha_larga(pedido.entrega_fecha))
+        if pedido.entrega:
+            partes_entrega.append(pedido.entrega)
+        resumen += "\nEntrega: " + ", ".join(partes_entrega)
 
     return {
         "ok": True,
@@ -1011,6 +1134,19 @@ async def generar_datos_pago(session, telefono, pedido_id=None):
 
     if pedido.total is None:
         return {"ok": False, "nota": "el pedido no tiene un total definido para cobrar"}
+
+    # NO SE COBRA UN PEDIDO QUE NO SE SABE SI SE PUEDE ENTREGAR. En el ensayo del 2026-07-12 el
+    # bot le pasó los datos del banco a una clienta de CARACAS después de ignorar tres veces su
+    # pregunta de si hacían envíos nacionales. Sin fecha de entrega acordada, no hay cobro.
+    if pedido.entrega_fecha is None:
+        return {
+            "ok": False,
+            "nota": (
+                "todavía NO le puedes cobrar: falta acordar PARA CUÁNDO es la entrega. "
+                "Pregúntale al cliente qué día la quiere (y si es retiro o delivery), registra "
+                "el pedido con esa fecha (`entrega_fecha`) y recién entonces cobra."
+            ),
+        }
 
     try:
         tasa = await obtener_tasa_bcv()
