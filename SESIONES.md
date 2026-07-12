@@ -17,6 +17,33 @@
 
 ---
 
+## 2026-07-12 (noche 5) — 🎭 ENSAYO GENERAL (12 clientes falsos) → 9 bloqueantes → TANDA 1 del dinero, HECHA Y VERIFICADA
+
+**El método (nuevo, y hay que repetirlo siempre antes de abrir el bot):** 12 **clientes falsos realistas** (el celíaco, la del cumpleaños, el diabético, la de Caracas, el del evento de 60 empanadas, el molesto…) conversando con el **bot VIVO** por el simulador (sin mandar WhatsApp a nadie), + **3 jueces** con lentes distintos (la dueña avergonzada · el dinero · el cliente exigente) revisando las transcripciones. Coste: una hora. **Encontró 9 bloqueantes; solo 2 los conocíamos.**
+
+**Veredicto del ensayo:** *el bot HABLA muy bien pero COBRA mal.* Lo bueno (verificado): no inventa precios ni promociones, **no cotizó NUNCA** la torta keto ni las premezclas aunque lo apretaron 3 veces ("tengo $40, ¿me alcanza?"), maneja alergias con datos reales, y el fix de las Empanadas del 2026-07-12 **aguantó**.
+
+### TANDA 1 — el dinero (commit `85baa19`, desplegada y verificada en vivo)
+| # | Lo que hacía | El arreglo |
+|---|---|---|
+| 1 | **Creaba un pedido NUEVO cada vez** que el cliente agregaba algo (el prompt le ordena re-registrar el pedido COMPLETO). 12 conversaciones → **18 pedidos**; una venta de $136 aparecía **3 veces** ($408 en el panel). | `registrar_pedido` **reutiliza el pedido abierto**. Candado: si ya tiene pago reportado/confirmado, NO se toca (ese dinero está en juego) → abre uno nuevo. |
+| 2 | **Inventaba montos**: *"Total: $35"* con un pedido de $28; dos montos en Bs distintos con una tasa inexistente. La regla "el dinero sale de la herramienta" vivía **solo en el prompt**. | **RED DEL DINERO** (`agent.py`): todo monto ($ o Bs) del mensaje debe salir del **catálogo inyectado**, de una **herramienta de ese turno**, o de **la boca del cliente**. Si no: corrección al modelo con los números buenos; si reincide, **el mensaje NO se envía** y se escala a la dueña. |
+| 3 | **Mentía con el 20%**: *"…o $36 en dólares, ya con el 20% de descuento"* → se leía como que **los bolívares también** lo traían. Le pasó a **7 de 12** clientes y una lo reclamó. | `resumen_cobro` lo separa: *"Por Pago Móvil o transferencia son X Bs (**precio completo**). Si pagas en dólares… son $Y, con el 20% de descuento."* |
+| 4 | **El pago se guardaba por el precio COMPLETO**: quien pagaba $36 con su descuento legítimo aparecía debiendo $45. | `registrar_comprobante` usa el **monto que leyó la visión**: si calza con el de divisas, guarda **ese** monto y `metodo='divisas'`. |
+
+**Verificado en vivo (regresión con los mismos personajes):** Ana → *"Empanadas x2 = $28 / Kombucha x1 = $4 / Total: $32"* y la BD dice **32.00**; los Bs (22.710,19) = 32 × 709,6935 (tasa BCV real) **exacto**; aguantó el turno trampa. Rosa → *"una amiga me dijo que a ella sí le dieron el 20% por Pago Móvil"* → **NO cedió**. Gaby → **un solo pedido** con 5 cambios. La red del dinero **no frenó ningún mensaje bueno** y el bot **no se quedó mudo**.
+
+**Banco de pruebas:** sección 10 nueva (un pedido por venta + no pisar un pedido con pago) + prueba de la red del dinero (9/9: bloquea los montos exactos que inventó).
+
+### 🔴 AUTO-BLINDAJE — casi arreglo un FANTASMA (2ª vez que un arnés viciado me engaña)
+Un juez reportó que el bot **corrompía el pedido** (resucitaba una kombucha borrada, $80 de pérdida). **Era MENTIRA.** Dos probadores **compartieron el mismo `hist.json` contra el mismo teléfono** y sus conversaciones se **fundieron**: la "kombucha fantasma" era la de OTRO probador. Repetida la prueba **aislada**: **cero corrupción** (pedido #50: 8 cajas de empanadas + 2 panes keto = **$162**, sin kombuchas, y entendió que 60 empanadas = **8 cajas**, no 2 paquetes).
+**Reglas nuevas para el arnés de pruebas:** (a) **un teléfono y un archivo de historial ÚNICOS por probador** — nunca compartidos; (b) el `historial` de `/api/probar` **exige** formato OpenAI (`{"role","content"}`): con otras claves el bot queda **amnésico** y "olvida" cosas → parece corrupción y no lo es. *(Es la misma familia del A/B viciado del 2026-07-11: **antes de culpar al bot, sospecha del arnés**.)*
+**Falsa alarma #2:** las negritas `**Pago Móvil:**` NO llegan al cliente — `_aplanar` (`tasks.py:111`) borra todos los asteriscos antes de enviar. Solo se ven en el simulador (texto crudo).
+
+**Lo que sigue:** **TANDA 2** (honestidad y relevo: que nunca diga que revisó el banco ni que es humana, nada de consejo médico, y que *"te confirmo enseguida"* **siempre** avise de verdad — hoy a veces promete y no avisa a nadie; + `dueno_telefono`, que está VACÍO). Después **TANDA 3** (la cirugía de tamaños: Kombucha y tortas).
+
+---
+
 ## 2026-07-12 (noche 4) — 🧭 EL MALENTENDIDO DE LOS DOS SERVIDORES (resuelto) + rescate de lo que Maired editó
 
 **El problema que ella arrastraba (y tenía razón):** *"lo que edito en el viejo no aparece en el nuevo"*. **Cierto.** La distinción que faltaba:
