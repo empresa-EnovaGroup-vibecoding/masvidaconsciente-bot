@@ -17,6 +17,32 @@
 
 ---
 
+## 2026-07-12 (noche 2) — 💸 5 FUGAS DE DINERO VIVAS, TAPADAS (las encontró una revisión adversarial del PLAN)
+
+**Cómo aparecieron:** al escribir el PRP de PRODUCTO+TAMAÑO+OPCIÓN, en vez de aprobarlo se mandó a **4 revisores a romperlo** (lentes: el dinero · la conversación · los datos · la dueña usando el panel) + una pasada de verificación escéptica agente por agente. **51 hallazgos crudos → 34 reales.** Cinco rompían el DINERO **y cuatro ya estaban vivos desde antes** (uno lo metí yo esa misma mañana). **Ninguno los había visto nadie, y el banco de pruebas salía verde.**
+
+| # | La fuga | Estaba |
+|---|---|---|
+| 1 | **El precio del día se perdía a las 8 pm.** Servidor en UTC, Venezuela UTC−4: a las 20:00 VET `date.today()` ya es mañana → el precio de la mañana **desaparecía**, y el que ella cargara esa noche se grababa **con fecha de mañana** y se cobraba todo el día siguiente sin volver a preguntarle = *reutilizar el precio de ayer*, lo único que el cobro tiene PROHIBIDO. | 🔴 **mía**, del backend de esa mañana |
+| 2 | **`cantidad: 0` → pedido GRATIS.** El prompt le ordena al modelo "si el cliente quita algo, vuelve a registrar el pedido COMPLETO": un modelo que "quita" mandando 0 dejaba el ítem en $0. El **panel sí** se protegía; el **bot no**. | 🔴 desde siempre |
+| 3 | **El comprobante se grababa con el monto de OTRO pedido.** La caché del cobro es por TELÉFONO (`cobro:{telefono}`) y **guarda** `pedido_id`, pero nadie lo comprobaba: cliente que cambia de la kombucha de $4 a la de $7 → **pago de $4 sobre venta de $7**. | 🔴 desde siempre |
+| 4 | **Un pedido PAGADO resucitaba.** Sin `pedido_id`, `generar_datos_pago` agarraba **el último pedido de cualquier estado** —incluso `pagado`— y lo devolvía a `esperando_pago`; el siguiente comprobante se le pegaba encima. | 🔴 desde siempre |
+| 5 | **El panel dejaba pedidos en $0.** `editar_items` hacía `(prod.precio or 0) * cantidad` → editar un pedido con una torta (precio del día) lo recalculaba **GRATIS**. Verificado contra la BD real: **2 tortas = $0.00**. | 🔴 desde siempre |
+
+**Lo aplicado (commit `74be896`, desplegado y verificado en AMBOS servidores):** `hoy_venezuela()` + `inicio_dia_venezuela()` en `models.py` y **cero `date.today()`** en el carril del precio (también arregla el "hoy" de métricas y reporte, que se reiniciaba a las 8 pm) · cantidad entera ≥ 1 o se rechaza (+ `minimum:1` en el schema) · la caché del cobro **solo vale si es del MISMO pedido** · `generar_datos_pago` solo toma pedidos **abiertos** y rechaza los que ya tienen pago confirmado · `editar_items` usa `_precio_efectivo` y sin precio de hoy devuelve **400, jamás $0**.
+
+**Banco de pruebas ampliado** (4 secciones nuevas: cantidad · el pago cuadra con el pedido (JOIN a `pagos`, que antes **ni se miraba**) · no re-cobro · día de Venezuela probado **con ROLLBACK**). Corrido **en el servidor VIVO**: **todo verde**, salvo la Kombucha duplicada (problema de catálogo que resuelve la cirugía de variantes). Cero basura en la BD.
+
+**RESPALDO (no había NINGUNO):** verificado que `/data/coolify/backups/` está vacío en los dos servidores y que el servicio de respaldo del repo **nunca se desplegó** (vive en `docker-compose.yml`, y Coolify construye por Dockerfile). Se sacó **copia real y verificada de las dos BD** a `C:\Mis_Proyectos_IA\respaldos-masvida` (netcup: 39 clientes, 295 mensajes, 29 productos, personalidad íntegra). **Falta el respaldo automático cifrado** (necesita un bucket R2 privado — las llaves ya existen, son las de las fotos).
+
+**Otros hallazgos verificados:**
+- **Las variables de entorno pueden NO llegar al contenedor sin que nadie se entere.** El bot vivo estuvo un tiempo **sin las llaves de Cloudflare** (⇒ **ninguna foto salía**) aunque Coolify las tenía cargadas. Hoy sí están (probado descargando la foto real de la Kombucha 700ml: HTTP 200). **Regla: verificar el env DESPUÉS de cada despliegue, no confiar.**
+- ⚠️ **Me equivoqué dos veces afirmando sin verificar** (dije "las fotos son iguales" sin abrir `producto_media`; dije "el vivo no tiene R2" leyendo un contenedor ya reemplazado). Maired lo cazó las dos veces. **Regla: si no lo abrí, no lo afirmo.**
+
+**Aprendizaje de método (Auto-Blindaje):** **un PLAN también se audita.** Escribir el PRP y aprobarlo habría metido el plan en producción con 5 huecos de dinero. Atacarlo con revisores adversariales ANTES de construir costó una hora y evitó desplegar pedidos gratis. **Desde ahora: todo PRP que toque el dinero pasa por revisión adversarial antes del Run.**
+
+---
+
 ## 2026-07-12 (noche) — 🖥️ La BANDEJA "El bot te necesita" YA SE VE EN EL PANEL (repo dashboard)
 
 **Qué se hizo:** la pantalla que faltaba del handoff (el motor y la API ya estaban desplegados desde la tarde). Repo **`masvidaconsciente-dashboard`**, todo **aditivo** (no se tocó ninguna pantalla existente):

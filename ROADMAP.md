@@ -39,7 +39,10 @@ Las **FASES 0 a 3 ya están hechas y desplegadas**:
 **1. ✅ La BANDEJA "El bot te necesita" en el PANEL** *(repo `masvidaconsciente-dashboard`)* — **HECHA Y VERIFICADA (2026-07-12).**
 Pantalla `/bandeja`: los avisos (motivo, cliente, lo que preguntó), botón **"Ya lo atendí (reactivar el bot)"**, link para abrir el chat en WhatsApp, y el bloque **"El precio de hoy"** (escribir el precio del día de Tortas keto / Premezclas / torta baja). Con **contador en el menú** que se refresca solo cada 45s — el aviso ya no pasa desapercibido. Ver SESIONES 2026-07-12.
 
-**2. 🔴 Renombrar la KOMBUCHA (parche urgente, 2 min).** Hay **dos productos llamados igual** ("Kombucha", ids 21 y 22: $4/350ml y $7/700ml) → el bot **siempre cobra el de $4** y pierde $3 por venta. Renombrar a **"Kombucha 350ml"** / **"Kombucha 700ml"** **en LOS DOS servidores** (las BD **no se sincronizan solas**). Es un parche: lo correcto son las VARIANTES (punto 5).
+**2. 🔴 PRODUCTO + TAMAÑO + OPCIÓN — la cirugía (PRP escrito y auditado, ESPERA EL OK DE MAIRED).**
+Decisión de Maired (2026-07-12): **NO al parche de renombrar la Kombucha.** Se hace la estructura correcta. Ver **`PRP-producto-variantes.md`** (local): un producto → sus **tamaños** (precio + foto + sabores + agotado propios) → sus **opciones** (no tocan el dinero), y `registrar_pedido` recibe un **`variante_id` de lista cerrada** ("código de barras") en vez de un nombre libre. Arregla de raíz la Kombucha ($3 por venta) y las tortas por tamaño.
+⚠️ **El PRP fue ATACADO por 4 revisores antes de aprobarlo** (51 hallazgos → 34 reales) y quedó en **v2**. Bloqueante antes de la FASE 1: **activar el respaldo automático** (hoy no hay ninguno; ya hay copia manual verificada).
+**Fotos:** etiquetado **por demanda**, cero tarea para la clienta (la migración se lleva sola la etiqueta de la Kombucha; lo que nadie sabe nace neutro y el bot **no afirma tamaños que no sabe**).
 
 **3. 🔴 Configurar `dueno_telefono`** — está **VACÍO** (config y env, bot y worker, en los dos servidores) → el aviso que YA existe ("🔔 Nuevo pago reportado" al entrar un comprobante) **nunca le ha llegado a nadie**.
 
