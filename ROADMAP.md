@@ -41,14 +41,14 @@ Pantalla `/bandeja`: los avisos (motivo, cliente, lo que preguntó), botón **"Y
 
 **2. 🔴 PRODUCTO + TAMAÑO + OPCIÓN — la cirugía (PRP escrito y auditado, ESPERA EL OK DE MAIRED).**
 Decisión de Maired (2026-07-12): **NO al parche de renombrar la Kombucha.** Se hace la estructura correcta. Ver **`PRP-producto-variantes.md`** (local): un producto → sus **tamaños** (precio + foto + sabores + agotado propios) → sus **opciones** (no tocan el dinero), y `registrar_pedido` recibe un **`variante_id` de lista cerrada** ("código de barras") en vez de un nombre libre. Arregla de raíz la Kombucha ($3 por venta) y las tortas por tamaño.
-⚠️ **El PRP fue ATACADO por 4 revisores antes de aprobarlo** (51 hallazgos → 34 reales) y quedó en **v2**. Bloqueante antes de la FASE 1: **activar el respaldo automático** (hoy no hay ninguno; ya hay copia manual verificada).
+⚠️ **El PRP fue ATACADO por 4 revisores antes de aprobarlo** (51 hallazgos → 34 reales) y quedó en **v2**. ✅ El bloqueante (respaldo automático) **ya está resuelto**: activado y con restauración probada.
 **Fotos:** etiquetado **por demanda**, cero tarea para la clienta (la migración se lleva sola la etiqueta de la Kombucha; lo que nadie sabe nace neutro y el bot **no afirma tamaños que no sabe**).
 
 **3. 🔴 Configurar `dueno_telefono`** — está **VACÍO** (config y env, bot y worker, en los dos servidores) → el aviso que YA existe ("🔔 Nuevo pago reportado" al entrar un comprobante) **nunca le ha llegado a nadie**.
 
 **4. 🟡 Motor de PLANTILLAS (HSM) — el aviso que SIEMPRE llega.** `meta_client.py` hoy **solo manda `type: "text"`** (free-form) → un aviso solo llega si la dueña le escribió al negocio hace <24h (ventana de Meta). Hace falta: (a) `enviar_plantilla()` en el código, con fallback a texto si la ventana está abierta; (b) que **Maired cree y apruebe** la plantilla `bot_necesita_ayuda` (categoría **Utilidad**) en el WhatsApp Manager. ⚠️ **Es el ladrillo de media hoja de ruta** (recordatorios de pago, recuperar pedidos, campañas, reactivar dormidos).
 
-**5. 🟡 PRODUCTO + VARIANTES + OPCIONES (la estructura correcta).** Hoy el precio vive pegado al producto, y por eso la dueña tuvo que crear **dos productos con el mismo nombre**. Lo correcto son **3 conceptos**:
+**5. 📎 PRODUCTO + VARIANTES + OPCIONES — *es el detalle del punto 2, no un pendiente aparte*.** Hoy el precio vive pegado al producto, y por eso la dueña tuvo que crear **dos productos con el mismo nombre**. Lo correcto son **3 conceptos**:
 - **PRODUCTO** = lo que ES (ficha, ingredientes, fotos). **Nombre ÚNICO.**
 - **PRESENTACIÓN/VARIANTE** = cómo se compra: tamaño **+ PRECIO** (Kombucha: 350ml $4 · 700ml $7).
 - **OPCIÓN** = lo que el cliente escoge: sabor/relleno/masa. **NO cambia el precio** (Empanadas: carne mechada · pollo · queso).
