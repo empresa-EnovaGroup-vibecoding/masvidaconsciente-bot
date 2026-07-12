@@ -628,8 +628,48 @@ async def registrar_pedido(session, telefono, items, notas=None):
             }
         )
 
-    pedido = Pedido(cliente_telefono=telefono, items=items_pedido, total=total, notas=notas)
-    session.add(pedido)
+    # UN pedido por venta. El agente vuelve a llamar a esta herramienta cada vez que el cliente
+    # agrega o quita algo (así lo ordena el prompt: "vuelve a registrar el pedido COMPLETO"), y
+    # antes se creaba un pedido NUEVO cada vez: en el ensayo, 12 conversaciones dejaron 18
+    # pedidos y una sola venta de $136 aparecía TRES veces en el panel (la dueña veía $408).
+    # Ahora se REUTILIZA el pedido abierto de ese cliente y se actualiza.
+    #
+    # Excepción (el dinero manda): si el pedido abierto YA tiene un pago reportado/confirmado,
+    # NO se toca —ese dinero ya está en juego— y se abre un pedido nuevo.
+    abierto = (
+        await session.execute(
+            select(Pedido)
+            .where(
+                Pedido.cliente_telefono == telefono,
+                Pedido.estado.in_(("pendiente", "esperando_pago")),
+            )
+            .order_by(Pedido.created_at.desc())
+        )
+    ).scalars().first()
+    if abierto is not None:
+        tiene_pago = (
+            await session.execute(
+                select(Pago.id).where(
+                    Pago.pedido_id == abierto.id,
+                    Pago.estado.in_(("reportado", "confirmado", "parcial")),
+                )
+            )
+        ).scalars().first()
+        if tiene_pago is not None:
+            abierto = None
+
+    if abierto is not None:
+        pedido = abierto
+        pedido.items = items_pedido
+        pedido.total = total
+        if notas:
+            pedido.notas = notas
+        pedido.estado = "pendiente"  # vuelve a estar en armado; el cobro se genera de nuevo
+        nuevo = False
+    else:
+        pedido = Pedido(cliente_telefono=telefono, items=items_pedido, total=total, notas=notas)
+        session.add(pedido)
+        nuevo = True
     await session.commit()
     await session.refresh(pedido)
 
@@ -649,7 +689,7 @@ async def registrar_pedido(session, telefono, items, notas=None):
         "total_usd": float(total),
         "resumen": resumen,
         "nota": (
-            f"pedido NUEVO #{pedido.id} con SOLO estos items (NO arrastres pedidos anteriores ya cerrados). "
+            f"pedido #{pedido.id} {'NUEVO' if nuevo else 'ACTUALIZADO'} con SOLO estos items. "
             "Dile al cliente EXACTAMENTE este `resumen` (cópialo, NO recalcules el total). "
             "Para cobrar, llama a generar_datos_pago con este mismo `pedido_id`."
         ),
@@ -930,10 +970,15 @@ async def generar_datos_pago(session, telefono, pedido_id=None):
         pass
 
     # Cobro YA ARMADO para copiar tal cual (USD y Bs los calculó el código, no el modelo).
+    #
+    # OJO — el "ya con el 20% de descuento" iba al FINAL de la frase y se leía como si aplicara
+    # también a los bolívares. En el ensayo del 2026-07-12 le pasó a 7 de 12 clientes: el bot
+    # prometía un descuento en Pago Móvil que NO existe (los Bs son el precio COMPLETO), y una
+    # clienta lo reclamó. El descuento del 20% es SOLO en divisas. Ahora la frase lo separa.
     resumen_cobro = (
-        f"Son {_fmt_bs(monto_bs)} Bs por Pago Móvil o transferencia, o "
-        f"{_fmt_usd(monto_usd_divisas)} en dólares (Zelle, Binance o efectivo), "
-        f"ya con el 20% de descuento"
+        f"Por Pago Móvil o transferencia son {_fmt_bs(monto_bs)} Bs (precio completo). "
+        f"Si pagas en dólares —Zelle, Binance o efectivo— son {_fmt_usd(monto_usd_divisas)}, "
+        f"con el 20% de descuento"
     )
 
     return {
@@ -1099,10 +1144,18 @@ async def _avisar_duena(session, pedido, pago) -> None:
 
 
 async def registrar_comprobante(
-    session, telefono, referencia=None, comprobante_media_id=None, comprobante_url=None, avisar=False
+    session, telefono, referencia=None, comprobante_media_id=None, comprobante_url=None,
+    avisar=False, monto_leido=None,
 ):
     """Registra el pago REPORTADO (estado 'reportado'). NO lo confirma: eso lo
-    hace la duena desde el dashboard. Amarra al pedido en 'esperando_pago'."""
+    hace la duena desde el dashboard. Amarra al pedido en 'esperando_pago'.
+
+    `monto_leido` = el monto que la VISION leyo en la imagen del comprobante. Sirve para
+    saber COMO pago el cliente: si calza con el monto en divisas (20% de descuento), el pago
+    se registra por ESE monto y como 'divisas'. Antes el pago se guardaba SIEMPRE por el
+    precio COMPLETO en Bs: quien pagaba $36 con su descuento legitimo aparecia en el panel
+    debiendo $45, y la duena podia rechazarle un pago bueno o perseguirla por una deuda
+    que no existe."""
     pedido = await get_pedido_esperando_pago(session, telefono)
     if pedido is None:
         return {"ok": False, "nota": "este cliente no tiene un pedido esperando pago"}
@@ -1172,9 +1225,32 @@ async def registrar_comprobante(
             tasa = None
             monto_bs = None
 
+    # ¿Pagó en DIVISAS (con el 20% de descuento) o en bolívares (precio completo)?
+    # Lo decide el MONTO que la visión leyó en el comprobante, no el modelo.
+    metodo = "pago_movil"
+    if monto_leido is not None and monto_usd is not None:
+        try:
+            leido = Decimal(str(monto_leido))
+            en_divisas = (monto_usd * Decimal("0.80")).quantize(Decimal("0.01"))
+            # Tolerancia del 2% (redondeos). Se compara contra el monto en DÓLARES: si el
+            # comprobante viene en Bs, el número es mil veces mayor y no calza con ninguno.
+            def _calza(a: Decimal, b: Decimal) -> bool:
+                return abs(a - b) <= max(Decimal("0.50"), b * Decimal("0.02"))
+
+            if _calza(leido, en_divisas) and not _calza(leido, monto_usd):
+                metodo = "divisas"
+                monto_usd = en_divisas  # lo que de verdad se acordó cobrar
+                monto_bs = None  # no hay Bs que comparar: pagó en dólares
+                logger.info(
+                    "registrar_comprobante: %s pagó en DIVISAS con el 20%% de descuento "
+                    "(leído %s ≈ %s)", telefono, leido, en_divisas,
+                )
+        except Exception:  # noqa: BLE001 — nunca tumbar el registro del pago por esto
+            logger.exception("registrar_comprobante: no se pudo interpretar el monto leído")
+
     pago = Pago(
         pedido_id=pedido.id,
-        metodo="pago_movil",
+        metodo=metodo,
         monto_usd=monto_usd,
         monto_bs=monto_bs,
         tasa_usada=tasa,

@@ -474,6 +474,9 @@ async def _procesar_comprobante(telefono, message_id, media_id, caption, nombre,
                 referencia=referencia,
                 comprobante_media_id=media_id,
                 comprobante_url=ruta,
+                # El monto que la visión leyó: sirve para saber si pagó en divisas (con el
+                # 20% de descuento) o en bolívares (precio completo).
+                monto_leido=_a_float(monto) if es_comprobante is True else None,
             )
     except Exception:  # noqa: BLE001 — error de BD: NO marcar, dejar reintentar a Meta
         logger.exception("No se pudo registrar el comprobante de %s", telefono)

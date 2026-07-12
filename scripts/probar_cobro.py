@@ -18,7 +18,7 @@ import asyncio
 import sys
 from decimal import Decimal
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 
 from app.agent.tools import _buscar_producto, _precio_efectivo, registrar_pedido
 from app.models import Pedido, Producto
@@ -343,6 +343,58 @@ async def probar_dia_venezuela(factory) -> None:
         await s.rollback()
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 10) UN PEDIDO POR VENTA. El agente re-registra el pedido COMPLETO cada vez que
+#     el cliente agrega o quita algo. Antes creaba un pedido NUEVO cada vez: en el
+#     ensayo del 2026-07-12, 12 conversaciones dejaron 18 pedidos y una venta de
+#     $136 aparecía TRES veces en el panel (la dueña veía $408).
+# ─────────────────────────────────────────────────────────────────────────────
+async def probar_un_pedido_por_venta(session) -> None:
+    print("\n10) Un pedido por venta (el bot re-registra, no duplica)")
+    from app.agent.tools import generar_datos_pago, registrar_comprobante
+    from app.models import Pago
+
+    prods = (
+        await session.execute(
+            select(Producto).where(Producto.precio.is_not(None)).order_by(Producto.id)
+        )
+    ).scalars().all()
+    a, b = prods[0], prods[1]
+
+    r1 = await registrar_pedido(session, TELEFONO, [{"producto": a.nombre, "cantidad": 1}])
+    r2 = await registrar_pedido(  # el cliente agrega algo -> el agente re-registra TODO
+        session, TELEFONO, [{"producto": a.nombre, "cantidad": 1}, {"producto": b.nombre, "cantidad": 2}]
+    )
+    check(r1.get("pedido_id") == r2.get("pedido_id"), "agregar un producto ACTUALIZA el mismo pedido",
+          f"creó dos pedidos: {r1.get('pedido_id')} y {r2.get('pedido_id')}")
+
+    cuantos = (
+        await session.execute(
+            select(func.count()).select_from(Pedido).where(Pedido.cliente_telefono == TELEFONO)
+        )
+    ).scalar()
+    check(cuantos == 1, f"la dueña ve UN solo pedido (hay {cuantos})", f"hay {cuantos} pedidos")
+
+    pedido = await session.get(Pedido, r2["pedido_id"])
+    esperado = a.precio * 1 + b.precio * 2
+    check(Decimal(str(pedido.total)) == esperado, f"y el total quedó en {esperado} (el correcto)",
+          f"quedó en {pedido.total}")
+
+    # Pero si ese pedido YA tiene un pago reportado, NO se toca: se abre uno nuevo.
+    await generar_datos_pago(session, TELEFONO, pedido.id)
+    await registrar_comprobante(session, TELEFONO, referencia="PRUEBA-NO-TOCAR")
+    r3 = await registrar_pedido(session, TELEFONO, [{"producto": b.nombre, "cantidad": 1}])
+    check(r3.get("pedido_id") != pedido.id, "con un pago YA reportado, abre un pedido NUEVO",
+          "pisó un pedido que ya tenía dinero en juego")
+    pago = (await session.execute(select(Pago).where(Pago.pedido_id == pedido.id))).scalars().first()
+    await session.refresh(pedido)
+    check(
+        pago is not None and Decimal(str(pago.monto_usd)) == Decimal(str(pedido.total)),
+        "y el pago viejo sigue cuadrando con SU pedido",
+        f"pago={pago.monto_usd if pago else None} pedido={pedido.total}",
+    )
+
+
 async def limpiar(session) -> None:
     """Borra TODO lo que dejó la prueba: el panel y los reportes quedan limpios."""
     from app.models import Cliente, Mensaje, Pago
@@ -375,6 +427,8 @@ async def main() -> int:
             await probar_cantidad(session)
             await probar_pago_cuadra(session)
             await probar_no_recobro(session)
+            await limpiar(session)  # el bloque 10 necesita arrancar sin pedidos previos
+            await probar_un_pedido_por_venta(session)
         finally:
             await limpiar(session)  # no deja basura en el panel
 

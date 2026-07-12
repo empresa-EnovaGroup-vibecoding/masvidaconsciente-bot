@@ -6,6 +6,7 @@ las ejecuta, y devuelve la respuesta final en la voz de Whuilianny.
 import base64
 import json
 import logging
+import re
 import unicodedata
 from datetime import datetime, timedelta, timezone
 
@@ -144,6 +145,71 @@ def _asegurar_saludo(texto: str, mensaje_usuario: str, nombre_cliente: str | Non
     return " ".join(partes) + " 💚\n\n" + texto
 
 
+# ─── RED DEL DINERO: el bot NO puede decir un monto que no salió del código ──────────
+#
+# En el ensayo del 2026-07-12 el bot le dijo a una clienta "Total: $35" cuando el pedido en la
+# base era de $28, y a otra le dio dos montos en bolívares distintos en dos mensajes seguidos,
+# con una tasa que no existe. La regla "el dinero sale SIEMPRE de la herramienta" vivía solo en
+# el prompt: nada en el CÓDIGO lo impedía. Esto lo impide.
+#
+# Qué es un monto AUTORIZADO: cualquier número que ya aparece en (a) el catálogo inyectado
+# (precios reales de la BD), (b) lo que devolvieron las herramientas en ESTE turno (totales,
+# subtotales, Bs, tasa), o (c) lo que el propio cliente escribió ("tengo $40"). Todo lo demás
+# es inventado.
+_MONTO_RE = re.compile(
+    r"(?:\$\s*([\d.,]+)|([\d.,]+)\s*(?:bs\b|bolívares|bolivares))",
+    re.IGNORECASE,
+)
+
+
+def _numeros_de(texto: str) -> set[float]:
+    """Todos los números que aparecen en un texto, en las dos lecturas posibles del formato
+    venezolano (1.234,56 y 1,234.56), para no dar por inventado algo que sí está."""
+    encontrados: set[float] = set()
+    for crudo in re.findall(r"\d[\d.,]*", texto or ""):
+        for variante in (
+            crudo.replace(".", "").replace(",", "."),  # 31.936,21 -> 31936.21
+            crudo.replace(",", ""),                    # 31,936.21 -> 31936.21
+            crudo.replace(",", "."),                   # 28,5      -> 28.5
+        ):
+            try:
+                encontrados.add(round(float(variante), 2))
+            except ValueError:
+                pass
+    return encontrados
+
+
+def _montos_del_mensaje(texto: str) -> list[tuple[str, set[float]]]:
+    """Los montos de DINERO ($ o Bs) que el bot escribió, cada uno con TODAS sus lecturas
+    posibles. "$22.40" puede leerse 22,40 (decimal) o 2.240 (miles): si CUALQUIERA de las dos
+    está autorizada, el monto es bueno. Preferimos dejar pasar algo dudoso antes que frenar
+    un mensaje correcto (frenar de más también rompe la venta)."""
+    montos: list[tuple[str, set[float]]] = []
+    for m in _MONTO_RE.finditer(texto or ""):
+        crudo = m.group(1) or m.group(2) or ""
+        lecturas = _numeros_de(crudo)
+        if lecturas:
+            montos.append((crudo, lecturas))
+    return montos
+
+
+def _dinero_inventado(texto: str, autorizados: set[float]) -> list[str]:
+    """Devuelve los montos que el bot dijo y que NO salieron del código (ni de una herramienta,
+    ni del catálogo, ni de la boca del cliente)."""
+    malos: list[str] = []
+    for crudo, lecturas in _montos_del_mensaje(texto):
+        # Tolerancia: redondeos del modelo (0,50 o 1%).
+        if any(
+            abs(l - a) <= max(0.5, a * 0.01)
+            for l in lecturas
+            for a in autorizados
+            if l != 0
+        ):
+            continue
+        malos.append(crudo)
+    return malos
+
+
 async def responder(
     telefono: str,
     mensaje_usuario: str,
@@ -186,6 +252,15 @@ async def responder(
         (mensaje_usuario or "")[:60],
     )
     catalogo_ok = False
+    # Montos AUTORIZADOS de este turno: los precios reales del catálogo (van inyectados en el
+    # prompt), lo que escribió el cliente, y lo que vayan devolviendo las herramientas.
+    autorizados: set[float] = _numeros_de(estable) | _numeros_de(dinamico)
+    autorizados |= _numeros_de(mensaje_usuario)
+    for h in historial or []:
+        if isinstance(h, dict) and h.get("role") == "user":
+            autorizados |= _numeros_de(str(h.get("content") or ""))
+    corregido = False
+
     for _ in range(settings.max_iteraciones_agente):
         data = await _llamar_con_fallback(messages, llm, modelo)
         msg = data["choices"][0]["message"]
@@ -194,6 +269,49 @@ async def responder(
         tool_calls = msg.get("tool_calls")
         if not tool_calls:
             texto = (msg.get("content") or "").strip() or RESPUESTA_SEGURA
+
+            # RED DEL DINERO: ningún monto puede salir de la cabeza del modelo.
+            inventados = _dinero_inventado(texto, autorizados)
+            if inventados:
+                logger.error(
+                    "DINERO INVENTADO por el modelo para %s: %s (autorizados=%s) — texto=%r",
+                    telefono, inventados, sorted(autorizados)[:12], texto[:160],
+                )
+                if not corregido:
+                    # Una oportunidad de corregirse, con los números buenos en la mano.
+                    corregido = True
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "[SISTEMA] Te saliste del guion del DINERO: escribiste "
+                            f"{inventados} y esos montos NO salieron de ninguna herramienta ni "
+                            "del catálogo. NUNCA calcules ni estimes dinero de cabeza. Reescribe "
+                            "tu último mensaje usando EXACTAMENTE los montos que te devolvieron "
+                            "las herramientas (`resumen` / `resumen_cobro`), copiados tal cual. "
+                            "Si te falta un monto, LLAMA a la herramienta que lo da. No le "
+                            "menciones al cliente este aviso."
+                        ),
+                    })
+                    continue
+                # Se le dio una oportunidad y volvió a inventar: NO se le manda al cliente un
+                # número falso. Se escala a la dueña y se responde sin cifras.
+                logger.error("DINERO INVENTADO 2 veces para %s: se escala a la dueña", telefono)
+                try:
+                    await ejecutar(
+                        "pedir_ayuda",
+                        {
+                            "motivo": "no_se",
+                            "detalle": (
+                                "el bot iba a decir un monto que no salió del sistema "
+                                f"({inventados}); NO se le envió al cliente"
+                            ),
+                        },
+                        telefono,
+                    )
+                except Exception:  # noqa: BLE001 — si el aviso falla, igual NO mandamos el monto
+                    logger.exception("No se pudo escalar el dinero inventado de %s", telefono)
+                return RESPUESTA_SEGURA
+
             texto = await _asegurar_catalogo(texto, catalogo_ok, telefono, ejecutar)
             if _es_inicio_conversacion(historial):
                 texto = _asegurar_saludo(texto, mensaje_usuario, nombre_cliente)
@@ -208,6 +326,9 @@ async def responder(
             resultado = await ejecutar(nombre_tool, args, telefono)
             if nombre_tool == "enviar_catalogo" and isinstance(resultado, dict) and resultado.get("ok"):
                 catalogo_ok = True
+            # Todo monto que devuelve una herramienta queda AUTORIZADO para este turno
+            # (totales, subtotales del `resumen`, bolívares, la tasa BCV…).
+            autorizados |= _numeros_de(json.dumps(resultado, ensure_ascii=False))
             messages.append(
                 {
                     "role": "tool",
