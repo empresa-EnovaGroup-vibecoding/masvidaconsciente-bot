@@ -47,7 +47,7 @@ SIMULADOR = "__simulador__"
 
 def _pedidos_simulador():
     """Subconsulta con los ids de los pedidos que nacieron del simulador."""
-    return select(Pedido.id).where(Pedido.cliente_telefono == SIMULADOR)
+    return select(Pedido.id).where(Pedido.cliente_telefono.like(SIMULADOR + "%"))
 
 
 # ─── Esquemas ────────────────────────────────────────────────────────
@@ -117,6 +117,10 @@ class PersonalidadIn(BaseModel):
 class ProbarIn(BaseModel):
     mensaje: str
     historial: list[dict] | None = None
+    # Telefono de prueba propio (ej. "__simulador__ana"), para correr varias conversaciones a la
+    # vez sin que se mezclen sus pedidos. DEBE empezar por "__simulador__": jamas puede escribirle
+    # ni leerle el historial a un cliente REAL.
+    telefono: str | None = None
 
 
 class NotasIn(BaseModel):
@@ -196,7 +200,8 @@ async def metricas(_: str = Depends(usuario_actual)):
         pedidos_hoy = (
             await session.execute(
                 select(func.count()).select_from(Pedido).where(
-                    Pedido.created_at >= hoy_inicio, Pedido.cliente_telefono != SIMULADOR
+                    Pedido.created_at >= hoy_inicio,
+                    Pedido.cliente_telefono.not_like(SIMULADOR + "%"),
                 )
             )
         ).scalar() or 0
@@ -205,19 +210,22 @@ async def metricas(_: str = Depends(usuario_actual)):
                 select(func.coalesce(func.sum(Pedido.total), 0)).where(
                     Pedido.created_at >= hoy_inicio,
                     Pedido.estado != "cancelado",
-                    Pedido.cliente_telefono != SIMULADOR,
+                    Pedido.cliente_telefono.not_like(SIMULADOR + "%"),
                 )
             )
         ).scalar() or Decimal("0")
         clientes_total = (
             await session.execute(
-                select(func.count()).select_from(Cliente).where(Cliente.telefono != SIMULADOR)
+                select(func.count()).select_from(Cliente).where(
+                    Cliente.telefono.not_like(SIMULADOR + "%")
+                )
             )
         ).scalar() or 0
         pendientes = (
             await session.execute(
                 select(func.count()).select_from(Pedido).where(
-                    Pedido.estado == "pendiente", Pedido.cliente_telefono != SIMULADOR
+                    Pedido.estado == "pendiente",
+                    Pedido.cliente_telefono.not_like(SIMULADOR + "%"),
                 )
             )
         ).scalar() or 0
@@ -263,7 +271,8 @@ async def reporte_ventas(_: str = Depends(usuario_actual)):
             pedidos = (
                 await session.execute(
                     select(func.count()).select_from(Pedido).where(
-                        Pedido.created_at >= desde, Pedido.cliente_telefono != SIMULADOR
+                        Pedido.created_at >= desde,
+                        Pedido.cliente_telefono.not_like(SIMULADOR + "%"),
                     )
                 )
             ).scalar() or 0
@@ -289,7 +298,7 @@ async def listar_pedidos(_: str = Depends(usuario_actual)):
         pedidos = (
             await session.execute(
                 select(Pedido)
-                .where(Pedido.cliente_telefono != SIMULADOR)
+                .where(Pedido.cliente_telefono.not_like(SIMULADOR + "%"))
                 .order_by(Pedido.created_at.desc())
                 .limit(100)
             )
@@ -799,11 +808,18 @@ async def guardar_personalidad(datos: PersonalidadIn, _: str = Depends(usuario_a
 @router.post("/probar")
 async def probar_bot(datos: ProbarIn, _: str = Depends(usuario_actual)):
     """Simulador: corre el agente con un mensaje de prueba y devuelve su respuesta,
-    SIN enviar nada por WhatsApp. Usa un teléfono de prueba ('__simulador__')."""
+    SIN enviar nada por WhatsApp. Usa un teléfono de prueba ('__simulador__…')."""
     from app.agent.agent import responder
 
+    telefono = (datos.telefono or SIMULADOR).strip()
+    if not telefono.startswith(SIMULADOR):
+        raise HTTPException(
+            status_code=400,
+            detail="El simulador solo puede usar teléfonos de prueba (empiezan por __simulador__).",
+        )
+
     respuesta = await responder(
-        telefono="__simulador__",
+        telefono=telefono,
         mensaje_usuario=datos.mensaje,
         historial=datos.historial or [],
         nombre_cliente="Prueba",
@@ -955,7 +971,7 @@ async def listar_clientes(_: str = Depends(usuario_actual)):
         clientes = (
             await session.execute(
                 select(Cliente)
-                .where(Cliente.telefono != "__simulador__")
+                .where(Cliente.telefono.not_like(SIMULADOR + "%"))
                 .order_by(Cliente.ultima_interaccion.desc())
                 .limit(500)
             )
