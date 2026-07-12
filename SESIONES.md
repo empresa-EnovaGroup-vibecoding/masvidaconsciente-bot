@@ -17,6 +17,33 @@
 
 ---
 
+## 2026-07-12 (noche 7) — 🗓️ EL CALENDARIO como ARQUITECTURA (una sola fuente de verdad)
+
+**La pregunta de Maired:** *"¿cuál es la mejor arquitectura para los horarios? ¿En el Conocimiento o en otro lado? Quiero saber si esto que hiciste es el mejor."* Respuesta honesta: **el parche de la mañana NO era la mejor.** Buscaba **la palabra "domingo"** en un texto libre → si el cliente decía *"para el 19"* (que cae domingo), **el candado no se enteraba**. Y el horario vivía en **DOS sitios** (el texto de la personalidad + el candado), que es pedir una divergencia.
+
+**LA DOCTRINA (vale para todo lo que venga):** *un dato, un solo lugar. El CÓDIGO valida; el MODELO conversa. Lo que la dueña cambia, se cambia en un sitio y se propaga solo.*
+
+**La arquitectura (migraciones 017 y 018, aditivas):**
+| Dato | Dónde vive | Quién lo edita |
+|---|---|---|
+| Qué días se entrega | `configuracion.dias_entrega` | la dueña (pantalla **Horario**) |
+| Días cerrados (feriados, viajes) | tabla **`feriados`** | la dueña (Horario) |
+| Horario de atención + **HORA DE CORTE** | `hora_apertura` / `hora_cierre` / `hora_corte` | la dueña (Horario) |
+| Anticipación **por producto** (congelados 0, tortas 2) | `productos.dias_anticipacion` | la dueña (Catálogo) |
+| La fecha REAL acordada | `pedidos.entrega_fecha` (DATE) | el bot, validado por el código |
+
+- **El bot pasa una FECHA (AAAA-MM-DD), no un texto.** Se le **inyecta en cada mensaje**: qué día es hoy, los días de entrega, el horario, si está **ABIERTO o CERRADO ahora**, y hasta qué hora se puede pedir para hoy. **Ya no vive memorizado en la personalidad** → si la dueña cambia el horario, el bot cambia en el siguiente mensaje.
+- **El CÓDIGO valida** la fecha (día cerrado · feriado · anticipación · **hora de corte**) y **CALCULA la primera fecha buena**. El modelo no cuenta días hábiles.
+- **CANDADO NUEVO DEL COBRO: sin fecha de entrega acordada, `generar_datos_pago` RECHAZA.** Cierra uno de los 9 bloqueantes del ensayo ("pide plata por pedidos que no sabe si puede entregar" — le pasó los datos del banco a una clienta de **Caracas** tras ignorar 3 veces su pregunta de envío nacional).
+- **La HORA DE CORTE** (nueva, la pidió ella al ver el horario "mocho"): sin ella, un cliente pedía *"para hoy"* a las 11 de la noche y el bot aceptaba. Reglas dadas por Maired: atención **8:00-18:00**; pedidos para hoy **hasta las 18:00**; y **fuera de hora el bot responde igual** (un mensaje sin contestar de noche es una venta que se va) pero **no promete entrega inmediata**.
+- **El RECIBO** dice la fecha como la diría una persona: *"Entrega: lunes 13 de julio, delivery en Cabudare"* → el cliente la confirma **antes de pagar**.
+
+**Verificado:** el **domingo 19 se rechaza aunque el cliente nunca escriba "domingo"** (se valida por FECHA) · fecha pasada → rechaza · día hábil → acepta y el recibo lo dice · **sin fecha no se puede cobrar**. Banco de pruebas: **sección 11 nueva**, todo verde (el único rojo sigue siendo la Kombucha = Tanda 3).
+
+**Panel:** pantalla **Horario** (días + las 3 horas + días cerrados) y campo **"días de anticipación"** en cada producto. ⚠️ El botón *"Agotado"* del catálogo **reconstruye el producto entero a mano**: se le agregó el campo nuevo o **un clic lo habría borrado** (lo había predicho la auditoría del PRP).
+
+---
+
 ## 2026-07-12 (noche 6) — 📦 "SE VENDE POR PAQUETE COMPLETO" + 📅 LA ENTREGA (los encontró MAIRED probando)
 
 **Los encontró ella, probando por WhatsApp.** Vale más que cualquier suite: el bot le dijo a un cliente *"Listo, 4 empanadas de pollo"* — y el negocio **NO vende sueltas**: el paquete trae **8 por $14**. Como `cantidad` = PAQUETES, iba a cobrar **4 × $14 = $56** por lo que la clienta creía que eran 4 empanadas. *(No llegó a registrarse: se cazó a tiempo.)*
