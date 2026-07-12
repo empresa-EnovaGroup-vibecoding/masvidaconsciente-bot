@@ -17,6 +17,23 @@
 
 ---
 
+## 2026-07-12 (noche 3) — 🧾 LOS COMPROBANTES SE PERDÍAN (bug latente, tapado) + 🧹 Hostinger limpio
+
+**🔴 Bug de datos que habría explotado con el PRIMER pago real.** Apareció al montar el respaldo (¿qué hay que respaldar?):
+- El **worker** guarda la imagen del comprobante en `/data/comprobantes` **DENTRO de su contenedor, sin volumen** → **cada despliegue la BORRA** (y hoy se despliega en cada push).
+- El **panel** le pide esa imagen al **bot**, que es **OTRO contenedor con OTRO disco** (`router.py:1627` → `os.path.exists(pago.comprobante_url)`) → **jamás la encontraría**: "Archivo de comprobante no disponible", siempre.
+- **Llegamos a tiempo: 0 pagos en ambas BD**, así que no se perdió ninguno. Pero el primero se perdía.
+- **Fix:** carpeta del SERVIDOR `/data/masvida/comprobantes` montada en `/data/comprobantes` **en bot Y worker** (Coolify: `local_persistent_volumes`, en los dos servidores) + redespliegue. **Probado de punta a punta:** el worker escribe → **el bot lo ve** → el archivo queda en el disco del servidor (sobrevive a los despliegues).
+- ⚠️ **Error mío en el camino:** el filtro `name like '%bot%'` me hizo agregarle el volumen también a `nexora-bot` (otro proyecto). Lo revertí antes de cualquier despliegue; nexora nunca se tocó.
+
+**🧹 Limpieza del Hostinger (a pedido de Maired).** El servidor viejo tenía **5 apps del equipo "Jhon ADS"** (su socio): Nexora, Nexora Bot, Sistema de Prospección ×2, Suscripciones. **Verificado antes de borrar** (regla: no destruir sin mirar): los 4 dominios `*.learndigit.com` ya apuntan al **servidor propio de él** (`152.53.194.89`), **ninguno** al Hostinger; **0 tráfico en 48h**; y **"Suscripciones" llevaba 15.388 reinicios** en bucle contra una BD de Supabase que ya no existe. Eran zombis. **Respaldo primero** (config + 87 variables → `respaldos-masvida/nexora-de-jhon/`), luego eliminadas por la API de Coolify (token temporal del equipo 0, borrado al terminar). **Verificado: 0 apps, 0 contenedores, y másvida ENTERA** (bot, worker, panel, BD, redis arriba).
+
+**Ojo (cuentas de Coolify del viejo):** usuario 0 = `javierave234@gmail.com` (el socio) → equipos 0 y 1. Usuario 1 = `enovagroup0@gmail.com` (Maired) → equipos 2 y 1. Las apps de Nexora vivían en el equipo **0**, no en el de ella.
+
+**Respaldo automático — BLOQUEADO por un permiso:** las llaves R2 actuales están **limitadas al bucket `masvida-media`** (probado: `ListBuckets` y `CreateBucket` → *AccessDenied*). Hace falta que Maired cree en Cloudflare un **bucket privado** (`masvida-respaldos`) + un token con acceso a él. **NO meter los respaldos en el bucket de las fotos: es público** (`pub-….r2.dev`). Mientras tanto hay **copia manual verificada** de las dos BD en `C:\Mis_Proyectos_IA\respaldos-masvida`.
+
+---
+
 ## 2026-07-12 (noche 2) — 💸 5 FUGAS DE DINERO VIVAS, TAPADAS (las encontró una revisión adversarial del PLAN)
 
 **Cómo aparecieron:** al escribir el PRP de PRODUCTO+TAMAÑO+OPCIÓN, en vez de aprobarlo se mandó a **4 revisores a romperlo** (lentes: el dinero · la conversación · los datos · la dueña usando el panel) + una pasada de verificación escéptica agente por agente. **51 hallazgos crudos → 34 reales.** Cinco rompían el DINERO **y cuatro ya estaban vivos desde antes** (uno lo metí yo esa misma mañana). **Ninguno los había visto nadie, y el banco de pruebas salía verde.**
