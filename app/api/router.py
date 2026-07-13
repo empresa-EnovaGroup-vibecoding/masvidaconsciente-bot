@@ -942,18 +942,43 @@ async def listar_conversaciones(_: str = Depends(usuario_actual)):
                     .limit(1)
                 )
             ).scalar_one_or_none()
-            if ultimo is None:
-                continue  # sin mensajes (p.ej. chat borrado) -> no aparece en Conversaciones
             resultado.append(
                 {
                     "telefono": c.telefono,
                     "nombre": c.nombre,
+                    # Un chat que la dueña ABRIÓ desde su celular todavía no tiene mensajes
+                    # nuestros: antes se descartaba (`continue`) y el chat NO APARECÍA en el
+                    # panel — ella no podía seguirlo desde aquí.
                     "ultimo_mensaje": ultimo.contenido if ultimo else None,
                     "ultima_interaccion": c.ultima_interaccion.isoformat(),
                     "bot_pausado": c.bot_pausado,
+                    "pausado_por": c.pausado_por,  # 'dueña' = lo tomaste tú
+                    "no_leidos": c.no_leidos,
                 }
             )
     return resultado
+
+
+@router.get("/conversaciones-resumen")
+async def resumen_conversaciones(_: str = Depends(usuario_actual)):
+    """Cuántos chats tiene TOMADOS la dueña (el bot está callado ahí). El panel lo muestra
+    arriba: sin este aviso, un "ya te escribo" desde el celular deja el bot mudo en ese chat
+    PARA SIEMPRE y nadie se entera (la pausa no caduca, por decisión de Maired)."""
+    factory = get_session_factory()
+    async with factory() as session:
+        n = (
+            await session.execute(
+                select(func.count())
+                .select_from(Cliente)
+                .where(Cliente.bot_pausado.is_(True), Cliente.pausado_por == "dueña")
+            )
+        ).scalar_one()
+        sin_leer = (
+            await session.execute(
+                select(func.count()).select_from(Cliente).where(Cliente.no_leidos > 0)
+            )
+        ).scalar_one()
+    return {"chats_tomados": int(n), "chats_sin_leer": int(sin_leer)}
 
 
 @router.get("/conversaciones/{telefono}")
@@ -975,11 +1000,48 @@ async def detalle_conversacion(telefono: str, _: str = Depends(usuario_actual)):
             "fecha": m.created_at.isoformat(),
             "tipo": m.tipo,
             "media_id": m.media_id,
+            # ¿hay un archivo que se pueda VER? (el comprobante del cliente). El panel lo
+            # descarga con su token desde /api/mensajes/{id}/media — nunca una URL pública:
+            # un comprobante trae datos bancarios.
+            "tiene_media": bool(m.media_url),
             "estado": m.estado,  # enviado|entregado|leido|fallido (None = no lo enviamos nosotros)
             "error": m.error,
         }
         for m in mensajes
     ]
+
+
+@router.get("/mensajes/{mensaje_id}/media")
+async def ver_media_mensaje(mensaje_id: int, _: str = Depends(usuario_actual)):
+    """Sirve el archivo de UN mensaje del hilo (el comprobante que mandó el cliente).
+
+    PROTEGIDO con login: un comprobante trae datos bancarios. Y se pide por el **id numérico
+    del mensaje**, nunca por el nombre del archivo: si la ruta viniera en la URL, un
+    `../../etc/passwd` dejaría leer cualquier archivo del servidor.
+    """
+    factory = get_session_factory()
+    async with factory() as session:
+        m = await session.get(Mensaje, mensaje_id)
+    if m is None or not m.media_url:
+        raise HTTPException(status_code=404, detail="Ese mensaje no tiene archivo")
+    if not os.path.exists(m.media_url):
+        raise HTTPException(status_code=404, detail="Archivo no disponible")
+    return FileResponse(m.media_url, media_type=m.media_mime or None)
+
+
+@router.post("/conversaciones/{telefono}/leido")
+async def marcar_leido(telefono: str, _: str = Depends(usuario_actual)):
+    """Abrir el chat en el panel lo marca como leído (pone el contador a cero)."""
+    factory = get_session_factory()
+    async with factory() as session:
+        cliente = (
+            await session.execute(select(Cliente).where(Cliente.telefono == telefono))
+        ).scalar_one_or_none()
+        if cliente is None:
+            raise HTTPException(status_code=404, detail="Cliente no encontrado")
+        cliente.no_leidos = 0
+        await session.commit()
+    return {"ok": True}
 
 
 # ─── LA BANDEJA: responder desde el panel ────────────────────────────
@@ -1015,7 +1077,9 @@ async def estado_conversacion(telefono: str, _: str = Depends(usuario_actual)):
         return {
             "telefono": cliente.telefono,
             "nombre": cliente.nombre,
-            "bot_pausado": cliente.bot_pausado,  # True = la estás atendiendo TÚ
+            "bot_pausado": cliente.bot_pausado,  # True = el bot NO responde en ese chat
+            # 'dueña' = lo tomaste TÚ · 'bot' = el bot se pausó solo al escalarte algo
+            "pausado_por": cliente.pausado_por,
             "no_leidos": cliente.no_leidos,
             "ventana": _ventana(cliente),
             "es_simulador": telefono.startswith(SIMULADOR),

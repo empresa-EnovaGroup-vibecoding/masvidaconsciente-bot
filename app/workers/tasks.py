@@ -38,13 +38,19 @@ def _run(coro):
 
 
 async def _guardar_en_panel(
-    telefono: str, nombre: str | None, texto_usuario: str, respuesta: str
+    telefono: str, nombre: str | None, texto_usuario: str, partes: list[dict]
 ) -> None:
     """Persiste la conversacion en Postgres para que aparezca en el panel.
 
     El historial en Redis es para el contexto del agente; el PANEL lee de Postgres
     (tablas clientes + mensajes). Sin esto, las charlas no se ven en el panel.
     No es critico: si falla, el bot ya respondio igual.
+
+    🔴 UNA FILA POR GLOBO. El bot responde en varios mensajitos (hasta 6), y Meta devuelve un
+    id por cada uno. Antes se guardaba UNA sola fila con todo el texto junto y se TIRABAN los
+    ids: cuando Meta avisaba de que un globo había FALLADO, ese aviso no casaba con ninguna
+    fila y se perdía. O sea: si fallaba justo el globo con LOS DATOS BANCARIOS, en el panel se
+    veía todo verde y nadie se enteraba de que el cliente nunca supo dónde pagar.
     """
     from sqlalchemy import select
 
@@ -63,8 +69,19 @@ async def _guardar_en_panel(
                 cliente.ultima_interaccion = now_utc()
                 if nombre and not cliente.nombre:
                     cliente.nombre = nombre
-            session.add(Mensaje(cliente_telefono=telefono, rol="user", contenido=texto_usuario))
-            session.add(Mensaje(cliente_telefono=telefono, rol="assistant", contenido=respuesta))
+            if texto_usuario:
+                session.add(
+                    Mensaje(cliente_telefono=telefono, rol="user", contenido=texto_usuario)
+                )
+            for p in partes:
+                session.add(Mensaje(
+                    cliente_telefono=telefono,
+                    rol="assistant",
+                    contenido=p["texto"],
+                    wa_message_id=p.get("wa_message_id"),
+                    estado=p.get("estado"),
+                    error=p.get("error"),
+                ))
             await session.commit()
     except Exception:  # noqa: BLE001 — no critico: la respuesta ya se envio
         logger.exception("No se pudo guardar la conversacion en el panel de %s", telefono)
@@ -121,17 +138,22 @@ def _aplanar(texto: str) -> str:
     return t
 
 
-async def _enviar_en_partes(telefono: str, texto: str) -> bool:
+async def _enviar_en_partes(telefono: str, texto: str) -> list[dict]:
     """Envía la respuesta PLANA y como VARIOS mensajes cortos (como una persona real
     en WhatsApp), no un mensajote. El agente separa cada globo con una línea en blanco;
     aquí aplanamos el formato, partimos por las líneas en blanco y enviamos cada parte
     por separado, con una pausa breve. Tope de globos para proteger la calidad del número.
 
-    Devuelve False si NO envió nada (para que el que llama no guarde en el historial una
-    respuesta que el cliente jamás vio: el bot creería haber dicho algo que no dijo).
+    Devuelve UNA ENTRADA POR GLOBO: {texto, wa_message_id, estado, error}. El `wa_message_id`
+    es el id que devuelve Meta, y es lo ÚNICO con lo que después se puede casar el aviso de
+    "entregado / leído / FALLÓ". Antes ese id se tiraba a la basura: si fallaba el globo con
+    los datos bancarios, el aviso de Meta no casaba con nada y en el panel se veía todo verde.
+
+    Lista VACÍA = no se envió nada (texto vacío, o la dueña tomó el chat) → el que llama NO
+    debe guardar nada en el historial: el bot no puede "recordar" algo que el cliente no vio.
     """
     if not texto or not texto.strip():
-        return False
+        return []
 
     # ÚLTIMA MIRADA AL FRENO, ya con la respuesta en la mano.
     # El bot tarda ~20s en contestar (15s de buffer + lo que piensa). En ese rato la dueña
@@ -147,7 +169,7 @@ async def _enviar_en_partes(telefono: str, texto: str) -> bool:
         logger.info(
             "No envío: la dueña tomó el chat de %s mientras el bot pensaba (relevo)", telefono
         )
-        return False
+        return []
 
     texto = _aplanar(texto)
     partes = [p.strip() for p in re.split(r"\n\s*\n", texto.strip()) if p.strip()]
@@ -155,11 +177,67 @@ async def _enviar_en_partes(telefono: str, texto: str) -> bool:
         partes = [texto.strip()]
     if len(partes) > 6:  # tope anti-spam: junta el exceso en el último globo
         partes = partes[:5] + ["\n\n".join(partes[5:])]
+
+    enviados: list[dict] = []
     for i, parte in enumerate(partes):
         if i:
             await asyncio.sleep(1.0)  # pausa breve entre globos, como una persona
-        await enviar_texto(telefono, parte)
-    return True
+        try:
+            resp = await enviar_texto(telefono, parte)
+            wa_id = ((resp.get("messages") or [{}])[0] or {}).get("id")
+            enviados.append(
+                {"texto": parte, "wa_message_id": wa_id, "estado": "enviado", "error": None}
+            )
+        except Exception as exc:  # noqa: BLE001 — Meta lo rechazó: queda ESCRITO, no perdido
+            logger.exception("Meta rechazó un globo para %s", telefono)
+            enviados.append(
+                {"texto": parte, "wa_message_id": None, "estado": "fallido",
+                 "error": str(exc)[:400]}
+            )
+            break  # si el primero no pasó, los siguientes tampoco: no se insiste
+    return enviados
+
+
+def _algo_llego(partes: list[dict]) -> bool:
+    """True si al menos un globo LLEGÓ. Un globo 'fallido' se guarda (se ve en rojo en el
+    panel) pero NO cuenta como dicho: el bot no puede recordar lo que el cliente no recibió."""
+    return any(p.get("estado") == "enviado" for p in partes)
+
+
+async def _guardar_media_en_hilo(
+    *, telefono: str, message_id: str | None, media_id: str, ruta: str,
+    mime: str, caption: str | None, es_imagen: bool,
+) -> None:
+    """Mete la FOTO DEL CLIENTE (el comprobante) en el hilo del panel.
+
+    Va en sesión PROPIA y con todo tragado: si esto falla, el pago se registra igual. Nunca
+    al revés. Y con `message_id` (que tiene UNIQUE desde la 001) como candado: un reintento de
+    Meta no puede duplicar la burbuja.
+    """
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+    from app.models import Mensaje
+    from app.services.db import get_session_factory
+
+    try:
+        factory = get_session_factory()
+        async with factory() as session:
+            ins = pg_insert(Mensaje).values(
+                message_id=message_id,
+                cliente_telefono=telefono,
+                rol="user",
+                # El tipo REAL: un PDF no es una imagen (si se guardara como 'image', el panel
+                # intentaría pintarlo con <img> y saldría roto).
+                tipo="image" if es_imagen else "document",
+                contenido=(caption or "").strip() or "(comprobante)",
+                media_id=media_id,
+                media_url=ruta,
+                media_mime=mime or None,
+            ).on_conflict_do_nothing(index_elements=[Mensaje.message_id])
+            await session.execute(ins)
+            await session.commit()
+    except Exception:  # noqa: BLE001 — la burbuja es cosmética; el DINERO no puede caerse
+        logger.exception("No se pudo meter el comprobante de %s en el hilo", telefono)
 
 
 # ─── Interruptor del bot (encender / apagar) ─────────────────────────
@@ -189,8 +267,12 @@ async def _bot_activo() -> bool:
 
 async def _cliente_pausado(telefono: str) -> bool:
     """True si el bot está pausado en ESE chat (lo pausara quien lo pausara).
-    Ante error de lectura, devuelve False (el bot sigue respondiendo: fail-safe)."""
-    return (await _estado_pausa(telefono))[0]
+    Si la BD falla, devuelve False: un error de lectura no puede dejar MUDO al bot entero."""
+    try:
+        return (await _estado_pausa(telefono))[0]
+    except Exception:  # noqa: BLE001
+        logger.exception("No se pudo leer la pausa de %s (sigue respondiendo)", telefono)
+        return False
 
 
 async def _lo_paso_una_persona(telefono: str) -> bool:
@@ -204,33 +286,42 @@ async def _lo_paso_una_persona(telefono: str) -> bool:
     Al confundirlos, el bot se tragaba su propio mensaje de despedida y el cliente se quedaba
     con SILENCIO TOTAL: escribía "Hola" y no recibía absolutamente nada.
 
-    Ante cualquier duda o error, devuelve True (el bot se calla): es el lado seguro —
-    hablarle encima a la dueña delante de un cliente es peor que quedarse callado de más.
+    Ante cualquier duda o error, devuelve True (el bot se CALLA): es el lado seguro. Callarse
+    de más cuesta un mensaje; hablarle encima a la dueña delante de un cliente, en medio de un
+    cobro, cuesta la venta y la confianza. OJO: esto es lo CONTRARIO de `_cliente_pausado`, que
+    ante un error deja hablar al bot — son dos preguntas distintas con dos lados seguros
+    distintos, y por eso NO comparten el except.
     """
-    pausado, por = await _estado_pausa(telefono)
+    try:
+        pausado, por = await _estado_pausa(telefono)
+    except Exception:  # noqa: BLE001
+        logger.exception("No sé quién pausó a %s → el bot se CALLA (lado seguro)", telefono)
+        return True
     if not pausado:
         return False
     return por != "bot"
 
 
 async def _estado_pausa(telefono: str) -> tuple[bool, str | None]:
-    """(¿pausado?, ¿quién lo pausó?) — 'dueña' | 'bot' | None."""
+    """(¿pausado?, ¿quién lo pausó?) — 'dueña' | 'bot' | None.
+
+    PROPAGA la excepción a propósito: cada quien tiene su lado seguro (el bot sigue hablando
+    si no sabemos si está pausado; el bot se CALLA si no sabemos QUIÉN lo pausó). Tragarse el
+    error aquí obligaba a los dos a compartir el mismo, y uno de los dos quedaba mal.
+    """
     from sqlalchemy import select
 
     from app.models import Cliente
     from app.services.db import get_session_factory
 
-    try:
-        factory = get_session_factory()
-        async with factory() as session:
-            cliente = (
-                await session.execute(select(Cliente).where(Cliente.telefono == telefono))
-            ).scalar_one_or_none()
-        if cliente is None or not cliente.bot_pausado:
-            return False, None
-        return True, cliente.pausado_por
-    except Exception:  # noqa: BLE001
+    factory = get_session_factory()
+    async with factory() as session:
+        cliente = (
+            await session.execute(select(Cliente).where(Cliente.telefono == telefono))
+        ).scalar_one_or_none()
+    if cliente is None or not cliente.bot_pausado:
         return False, None
+    return True, cliente.pausado_por
 
 
 async def _guardar_entrante(telefono: str, nombre: str | None, texto: str) -> None:
@@ -305,16 +396,19 @@ async def _procesar(telefono: str, nombre: str | None) -> None:
         respuesta = await responder(telefono, texto, historial, nombre)
         respuesta = _proteger_afirmacion_de_pago(respuesta)
 
-        enviado = await _enviar_en_partes(telefono, respuesta)
+        partes = await _enviar_en_partes(telefono, respuesta)
         await rc.guardar_historial(telefono, "user", texto)
-        if not enviado:
+        if not partes:
             # La dueña tomó el chat mientras el bot pensaba: su respuesta se DESCARTA
             # (no se envía ni se recuerda). Lo que sí se guarda es lo que dijo el cliente,
             # para que ella lo vea y le conteste.
             await _guardar_entrante(telefono, nombre, texto)
             return
-        await rc.guardar_historial(telefono, "assistant", respuesta)
-        await _guardar_en_panel(telefono, nombre, texto, respuesta)
+        # Los globos FALLIDOS también se guardan (se ven en ROJO en el panel), pero el bot no
+        # "recuerda" haber dicho algo que el cliente nunca recibió.
+        if _algo_llego(partes):
+            await rc.guardar_historial(telefono, "assistant", respuesta)
+        await _guardar_en_panel(telefono, nombre, texto, partes)
     except Exception:  # noqa: BLE001
         logger.exception("Error procesando el buffer de %s", telefono)
     finally:
@@ -378,7 +472,9 @@ async def _leer_comprobante_seguro(telefono, contenido, base_mime) -> dict:
         return {"es_comprobante": None, "leido": False}
 
 
-async def _responder_situacion(telefono: str, situacion: str, nombre: str | None) -> None:
+async def _responder_situacion(
+    telefono: str, situacion: str, nombre: str | None
+) -> list[dict]:
     """Whuilianny REDACTA un mensaje para el cliente según la situación (no plantilla),
     lo protege contra afirmaciones de pago, lo envía en partes y lo guarda en historial."""
     if not _numero_permitido(telefono):
@@ -390,11 +486,19 @@ async def _responder_situacion(telefono: str, situacion: str, nombre: str | None
         logger.exception("No se pudo redactar el mensaje al cliente %s", telefono)
         return
     mensaje = _proteger_afirmacion_de_pago(mensaje or "")
-    if mensaje.strip():
-        # Si no se envió (la dueña tomó el chat), NO se guarda en el historial: el bot no
-        # puede "recordar" haber dicho algo que el cliente nunca vio.
-        if await _enviar_en_partes(telefono, mensaje):
-            await rc.guardar_historial(telefono, "assistant", mensaje)
+    if not mensaje.strip():
+        return []
+    partes = await _enviar_en_partes(telefono, mensaje)
+    # Si no se envió (la dueña tomó el chat), NO se guarda en el historial: el bot no puede
+    # "recordar" haber dicho algo que el cliente nunca vio.
+    if _algo_llego(partes):
+        await rc.guardar_historial(telefono, "assistant", mensaje)
+    # Y AHORA SÍ se guarda en el panel: hasta hoy, TODO este carril (el del comprobante)
+    # NO escribía una sola línea en `mensajes` — en el hilo del panel ese tramo estaba EN
+    # BLANCO, y la dueña tenía que responder a ciegas justo en el momento del dinero.
+    if partes:
+        await _guardar_en_panel(telefono, nombre, "", partes)
+    return partes
 
 
 def _a_float(x):
@@ -451,6 +555,21 @@ async def _procesar_comprobante(telefono, message_id, media_id, caption, nombre,
 
     base_mime = (mime or mime_type or "").split(";")[0].strip().lower()
     es_imagen = base_mime.startswith("image/")
+
+    # LA FOTO ENTRA AL HILO **AQUÍ**, apenas se descarga y ANTES de que la visión la juzgue.
+    # Si se insertara junto al registro del pago, la imagen que la visión RECHAZA (la captura
+    # borrosa, el reflejo, el PDF) NUNCA aparecería en el chat — y es justo la que la dueña
+    # necesita ver con sus ojos para decidir. Va en SESIÓN PROPIA: jamás puede compartir
+    # transacción con el dinero (un fallo al guardar la burbuja no puede tumbar el Pago).
+    await _guardar_media_en_hilo(
+        telefono=telefono,
+        message_id=message_id,
+        media_id=media_id,
+        ruta=ruta,
+        mime=base_mime,
+        caption=caption,
+        es_imagen=es_imagen,
+    )
 
     # VISIÓN: extrae los datos y valida EN CÓDIGO que el pago sea A LA CUENTA de la
     # dueña. Solo para imágenes; un PDF no se analiza por visión.
@@ -565,7 +684,52 @@ async def _procesar_comprobante(telefono, message_id, media_id, caption, nombre,
             "el cliente te envió una imagen pero no hay un pedido esperando pago; "
             "pregúntale con calidez si es un comprobante y en qué lo puedes ayudar"
         )
-    await _responder_situacion(telefono, situacion, nombre)
+    partes = await _responder_situacion(telefono, situacion, nombre)
+
+    # 🔴 EL CARRIL DEL DINERO NUNCA ES SILENCIOSO.
+    # Si la dueña tiene ese chat tomado, el bot se calla (correcto) — pero el cliente ACABA DE
+    # PAGAR y no recibiría absolutamente nada, y ella no se enteraría porque el aviso del bot
+    # tampoco salió. Aquí se le avisa a ella, sí o sí.
+    if resultado.get("ok") and not partes:
+        await _avisar_pago_en_chat_pausado(telefono, nombre)
+
+
+async def _avisar_pago_en_chat_pausado(telefono: str, nombre: str | None) -> None:
+    """Entró un comprobante en un chat que la dueña tiene tomado: el bot no responde, así que
+    hay que avisarle a ELLA. Un pago no se puede quedar sin acuse."""
+    from sqlalchemy import select
+
+    from app.models import Configuracion, Intervencion
+    from app.services.meta_client import enviar_texto
+
+    quien = nombre or telefono
+    try:
+        factory = get_session_factory()
+        async with factory() as session:
+            session.add(Intervencion(
+                cliente_telefono=telefono,
+                motivo="reclamo",
+                detalle=(
+                    f"{quien} MANDÓ UN COMPROBANTE y tú tienes ese chat tomado, así que el bot "
+                    "no le respondió nada. Contéstale tú."
+                ),
+                mensaje_cliente="(comprobante de pago)",
+            ))
+            fila = (
+                await session.execute(
+                    select(Configuracion).where(Configuracion.clave == "dueno_telefono")
+                )
+            ).scalar_one_or_none()
+            await session.commit()
+        destino = (fila.valor if fila else None) or settings.dueno_telefono
+        if destino:
+            await enviar_texto(
+                destino,
+                f"💰 {quien} te mandó un comprobante, pero ese chat lo estás atendiendo tú: "
+                "el bot NO le respondió nada. Entra y contéstale.",
+            )
+    except Exception:  # noqa: BLE001 — el pago YA está registrado; esto es el aviso
+        logger.exception("No se pudo avisar del pago en chat pausado de %s", telefono)
 
 
 # ─── Notas de voz y otros eventos (respuesta humana) ─────────────────
@@ -583,16 +747,19 @@ async def _responder_y_enviar(telefono: str, texto: str, nombre: str | None) -> 
         historial = await rc.obtener_historial(telefono)
         respuesta = await responder(telefono, texto, historial, nombre)
         respuesta = _proteger_afirmacion_de_pago(respuesta)
-        enviado = await _enviar_en_partes(telefono, respuesta)
+        partes = await _enviar_en_partes(telefono, respuesta)
         await rc.guardar_historial(telefono, "user", texto)
-        if not enviado:
+        if not partes:
             # La dueña tomó el chat mientras el bot pensaba: su respuesta se DESCARTA
             # (no se envía ni se recuerda). Lo que sí se guarda es lo que dijo el cliente,
             # para que ella lo vea y le conteste.
             await _guardar_entrante(telefono, nombre, texto)
             return
-        await rc.guardar_historial(telefono, "assistant", respuesta)
-        await _guardar_en_panel(telefono, nombre, texto, respuesta)
+        # Los globos FALLIDOS también se guardan (se ven en ROJO en el panel), pero el bot no
+        # "recuerda" haber dicho algo que el cliente nunca recibió.
+        if _algo_llego(partes):
+            await rc.guardar_historial(telefono, "assistant", respuesta)
+        await _guardar_en_panel(telefono, nombre, texto, partes)
     except Exception:  # noqa: BLE001
         logger.exception("Error respondiendo a %s", telefono)
     finally:
@@ -642,7 +809,8 @@ async def _notificar_cliente_pago(telefono, situacion) -> None:
         logger.exception("No se pudo redactar el aviso de pago para %s", telefono)
         return
     if mensaje.strip():
-        # Si no se envió (la dueña tomó el chat), NO se guarda en el historial: el bot no
-        # puede "recordar" haber dicho algo que el cliente nunca vio.
-        if await _enviar_en_partes(telefono, mensaje):
+        partes = await _enviar_en_partes(telefono, mensaje)
+        if _algo_llego(partes):
             await rc.guardar_historial(telefono, "assistant", mensaje)
+        if partes:
+            await _guardar_en_panel(telefono, None, "", partes)

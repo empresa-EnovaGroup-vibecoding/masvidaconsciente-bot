@@ -151,6 +151,12 @@ async def main() -> None:
         await session.commit()
         logger.info("Migracion 020 (quien paso el chat) aplicada")
 
+        # 021: el hilo dice la verdad (media del cliente, tipos del eco, candado de estados).
+        for stmt in _statements(MIGRATIONS / "021_hilo_completo.sql"):
+            await session.execute(text(stmt))
+        await session.commit()
+        logger.info("Migracion 021 (hilo completo) aplicada")
+
         total = (await session.execute(text("SELECT COUNT(*) FROM productos"))).scalar()
         if total and total > 0:
             logger.info("Catálogo ya cargado (%s productos), no se vuelve a sembrar", total)

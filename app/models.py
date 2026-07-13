@@ -184,8 +184,12 @@ class Mensaje(Base):
         # Sin este rol su mensaje NO CABE en el hilo, y guardarlo como 'assistant' haría que el
         # bot creyera que lo dijo él (y arrastrara promesas que no hizo). Ver migración 019.
         CheckConstraint("rol IN ('user','assistant','owner')", name="ck_mensaje_rol"),
+        # El eco de la dueña (lo que escribe desde su celular) puede traer fotos, notas de
+        # voz, stickers, ubicaciones y hasta reacciones. Si el tipo no cabe, el INSERT revienta
+        # y la excepción se lleva por delante la PAUSA. Ver migración 021.
         CheckConstraint(
-            "tipo IN ('text','image','audio','document','sticker','video')",
+            "tipo IN ('text','image','audio','document','sticker','video',"
+            "'location','contacts','reaction','otro')",
             name="ck_mensaje_tipo",
         ),
     )
@@ -201,6 +205,11 @@ class Mensaje(Base):
     # tendría que responder a ciegas, sin ver la foto del pago).
     tipo: Mapped[str] = mapped_column(Text, default="text")
     media_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Dónde está el archivo DE VERDAD y con qué tipo servirlo. Sin esto, el endpoint del panel
+    # tendría que adivinar la extensión, y la imagen que la visión RECHAZA (la que la dueña más
+    # necesita ver) no se puede resolver por el Pago: esa nunca crea Pago. Ver migración 021.
+    media_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    media_mime: Mapped[str | None] = mapped_column(Text, nullable=True)
     # CÓMO llegó: nada de fallos en silencio. Meta devuelve un id al enviar y luego manda el
     # estado contra ESE id; sin guardarlo no hay con qué casarlo.
     wa_message_id: Mapped[str | None] = mapped_column(Text, nullable=True)

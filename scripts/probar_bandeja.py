@@ -91,9 +91,12 @@ async def main() -> None:
         cli.pausado_por = "dueña"  # lo pausó ELLA (respondió desde el panel)
         await s.commit()
 
-    enviado = await _enviar_en_partes(TEL, "Hola, soy el bot y no me enteré de nada")
-    check("con la dueña atendiendo, el bot NO envía", enviado is False)
-    check("y NO devuelve True (así el que llama no lo guarda en el historial)", enviado is not True)
+    # `_enviar_en_partes` devuelve UNA ENTRADA POR GLOBO (con el id que da Meta, para poder
+    # casar después el "entregado/leído/FALLÓ"). Lista VACÍA = no se envió nada.
+    partes = await _enviar_en_partes(TEL, "Hola, soy el bot y no me enteré de nada")
+    check("con la dueña atendiendo, el bot NO envía", partes == [])
+    check("y no devuelve ningún globo (así el que llama no lo guarda en el historial)",
+          not partes)
 
     print("\n4) 🔴 EL BOT SE PAUSA A SÍ MISMO (pedir_ayuda): su despedida SÍ tiene que salir")
     print("   (bug real del 2026-07-12: el cliente escribía 'Hola' y no recibía NADA)")
