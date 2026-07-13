@@ -38,6 +38,25 @@
 
 **Verificado en el taller:** `probar_bandeja.py` **9/9** (la ventana falla cerrada · el rol `owner` entra · el bot queda callado · el bot NO habla encima). El **dinero** y las **3 redes de honestidad** siguen verdes (el único rojo es la **Kombucha duplicada**, que espera la cirugía de variantes). Endpoints en vivo (401 sin login, no 404) y el panel reconstruido.
 
+**🔴 EL BUG QUE ME CACÉ A MÍ MISMO (esa misma noche, con el bot vivo).** La red anti-atropello sabía QUE el chat estaba pausado, pero no **QUIÉN lo pausó** — y son casos **opuestos**:
+- La **dueña** toma el chat → el bot **debe callarse**.
+- El **bot** se pausa **solo** (al escalar con `pedir_ayuda`) → su último mensaje al cliente (*"Dame un momentito y te confirmo"*, el `RESPUESTA_SEGURA` que usan **las TRES redes de honestidad**) **SÍ tiene que salir**.
+
+Al confundirlos, **el bot se tragaba su propio mensaje de despedida**: el cliente escribía *"Hola"*, el bot le avisaba a la dueña… y **al cliente no le llegaba NADA**. Silencio total. Visto en el log del worker: `00:41:23 pedir_ayuda → se pausa solo` · `00:41:25 "No envío: la dueña tomó el chat"` ← la red, equivocada.
+
+**Arreglo (migración 020):** `clientes.pausado_por` (`'dueña'` | `'bot'` | NULL) — **el freno queda FIRMADO**. La red pregunta `_lo_paso_una_persona()`, no `_cliente_pausado()` a secas. Ante duda o error → el bot se calla (lado seguro). Backfill conservador. **Banco de pruebas 12/12**, con el caso nuevo que lo habría cazado desde el principio.
+
+**Lección (vale para siempre):** *si dos actores pueden poner la misma bandera por razones contrarias, **la bandera lleva firma**.* Un booleano de estado no dice de dónde viene el estado. Y lo cazamos **probando con el bot vivo**, no porque compilara: compilaba, y el banco viejo pasaba en verde.
+
+**📡 META: los ECOS, verificados EN VIVO (no leídos en la documentación).** Se activó `smb_message_echoes` (la casilla se marcó **a mano** en el panel de Meta: hacerlo por API exigía reenviar la URL y el token de la app de **onboarding en Vercel** —que Meta no devuelve— y podía **romper el webhook de TODOS los clientes**; el webhook de la app apunta ahí, y el bot recibe por un *override* de la WABA). Resultado, con un **testigo** puesto en el webhook:
+
+| Quién envió | Cómo | ¿Eco? |
+|---|---|---|
+| La dueña, desde **su celular** | app WhatsApp Business | **SÍ** (`from`=negocio, `to`=cliente) |
+| **El bot** (3 mensajes seguidos) | Cloud API | **NO — cero ecos** (solo `statuses`) |
+
+Es decir: **el bot NO puede pausarse a sí mismo ni quedarse mudo.** Era el único riesgo que podía tumbar la Fase 2. **Desbloqueada.**
+
 **Lo que queda de la bandeja (fases 2 a 5):** que lo que ella escribe **desde su celular** entre al hilo y calle al bot (`smb_message_echoes` — **falta activar la casilla en Meta**) · el comprobante **dentro** del chat · entregado/leído/falló · cola con no leídos y aviso en vivo · plantillas para reabrir chats de más de 24h.
 
 ---
