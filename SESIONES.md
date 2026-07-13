@@ -17,6 +17,28 @@
 
 ---
 
+## 2026-07-13 — 🕵️ LA QUINTA RED: "no digas que lo agendaste si NO lo agendaste"
+
+**Salió de una pregunta de Maired** (*"¿por qué no respondió?"*). El bot no respondió **porque ella tomó el chat** — eso estaba bien. Pero al mirar la base para contestarle, apareció algo peor:
+
+> El bot había dicho: *"Listo 💚 Entonces te agendo para mañana lunes: 1 paquete de Empanadas (4 de carne mechada, 2 de queso de cabra y 2 de pollo) para retiro aquí en La Mendera."*
+>
+> **En la base de datos había CERO pedidos de ese cliente.**
+
+**El bot dijo que agendó y no agendó nada.** El cliente se fue creyendo que tenía su pedido; la dueña no tenía nada que cocinar. **Nadie se habría enterado.** Es la misma familia del bug de la Kombucha: **el texto se ve perfecto y la realidad es otra**.
+
+**Lo más incómodo:** el bot tenía **cuatro redes** y **ninguna lo vio**. No inventó un precio, no prometió averiguar, no dijo nada prohibido y no sonó a robot. Simplemente **mintió sobre un hecho**.
+
+**La red (la quinta):** si el bot **afirma** que el pedido quedó agendado y en ESE turno `registrar_pedido` **no devolvió ok**, el mensaje **NO SALE**. Primero se le ordena registrarlo de verdad (con el `variante_id`); si insiste, **no se le manda la confirmación falsa al cliente** y **se escala el chat a la dueña**.
+
+**El detalle que casi se cuela:** mi primer detector solo cazaba el **pasado** (*"te agendé"*) y el bot había dicho *"te agendo"*, en **presente**. **Se habría escapado justo el mensaje que provocó todo esto.** Lo cazó el banco de pruebas.
+
+**Y lo que NO frena** (frenar de más también rompe la venta): *"¿te agendo 2 paquetes?"* (pregunta) · *"cuando me confirmes, te lo agendo"* (condicional) · *"si me dices el relleno, te lo registro"*. **14/14** en `probar_honestidad.py` (6 que debe frenar + 8 que no).
+
+**Lección (van dos iguales):** *el bot puede decir la verdad en el tono y mentir en el hecho.* **Verificar siempre en la BD, nunca en la respuesta.**
+
+---
+
 ## 2026-07-13 — 🏷️ LA CIRUGÍA: PRODUCTO · TAMAÑO · OPCIÓN (el "código de barras" del cobro)
 
 **Cerrada la fuga de la Kombucha.** Había **dos productos llamados "Kombucha"** (350ml $4 · 700ml $7) porque el precio vivía **pegado al producto** y no había otra forma de tener dos precios. El buscador devolvía siempre el primero ⇒ **SIEMPRE COBRABA $4**. Fuga real: **$3 por venta**. Y si pedían la foto de la de 700ml, mandaba la de 350ml.
