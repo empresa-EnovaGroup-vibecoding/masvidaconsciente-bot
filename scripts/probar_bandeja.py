@@ -84,10 +84,35 @@ async def main() -> None:
         check("el bot quedó CALLADO en ese chat", cli.bot_pausado is True)
 
     print("\n3) EL BOT NO HABLA ENCIMA (el agujero de carrera)")
-    from app.workers.tasks import _enviar_en_partes
+    from app.workers.tasks import _cliente_pausado, _enviar_en_partes, _lo_paso_una_persona
+
+    async with factory() as s:
+        cli = (await s.execute(select(Cliente).where(Cliente.telefono == TEL))).scalar_one()
+        cli.pausado_por = "dueña"  # lo pausó ELLA (respondió desde el panel)
+        await s.commit()
+
     enviado = await _enviar_en_partes(TEL, "Hola, soy el bot y no me enteré de nada")
     check("con la dueña atendiendo, el bot NO envía", enviado is False)
     check("y NO devuelve True (así el que llama no lo guarda en el historial)", enviado is not True)
+
+    print("\n4) 🔴 EL BOT SE PAUSA A SÍ MISMO (pedir_ayuda): su despedida SÍ tiene que salir")
+    print("   (bug real del 2026-07-12: el cliente escribía 'Hola' y no recibía NADA)")
+    async with factory() as s:
+        cli = (await s.execute(select(Cliente).where(Cliente.telefono == TEL))).scalar_one()
+        cli.pausado_por = "bot"  # se pausó ÉL solo, al escalar
+        await s.commit()
+
+    check("el chat SIGUE pausado (el bot no atiende los siguientes mensajes)",
+          await _cliente_pausado(TEL) is True)
+    check("pero NO lo pausó una persona ⇒ su 'Dame un momentito y te confirmo' SÍ sale",
+          await _lo_paso_una_persona(TEL) is False)
+
+    async with factory() as s:
+        cli = (await s.execute(select(Cliente).where(Cliente.telefono == TEL))).scalar_one()
+        cli.bot_pausado, cli.pausado_por = False, None  # "Devolver al bot"
+        await s.commit()
+    check("al devolver el chat, la firma se borra y el bot vuelve a hablar",
+          await _cliente_pausado(TEL) is False and await _lo_paso_una_persona(TEL) is False)
 
     print("\n4) EL SIMULADOR no tiene WhatsApp del otro lado")
     from app.api.router import SIMULADOR

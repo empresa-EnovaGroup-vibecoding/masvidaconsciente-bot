@@ -145,6 +145,12 @@ async def main() -> None:
         await session.commit()
         logger.info("Migracion 019 (bandeja) aplicada")
 
+        # 020: QUIÉN pausó el chat (la dueña o el propio bot). Aditiva e idempotente.
+        for stmt in _statements(MIGRATIONS / "020_quien_paso.sql"):
+            await session.execute(text(stmt))
+        await session.commit()
+        logger.info("Migracion 020 (quien paso el chat) aplicada")
+
         total = (await session.execute(text("SELECT COUNT(*) FROM productos"))).scalar()
         if total and total > 0:
             logger.info("Catálogo ya cargado (%s productos), no se vuelve a sembrar", total)

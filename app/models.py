@@ -88,6 +88,11 @@ class Cliente(Base):
     nombre: Mapped[str | None] = mapped_column(Text, nullable=True)
     notas: Mapped[str | None] = mapped_column(Text, nullable=True)
     bot_pausado: Mapped[bool] = mapped_column(Boolean, default=False)
+    # QUIÉN apretó el freno: 'dueña' (una persona tomó el chat) | 'bot' (se pausó él solo al
+    # escalar con pedir_ayuda) | None (no está pausado). Son casos OPUESTOS: si fue la dueña,
+    # el bot se CALLA; si fue él mismo, su último mensaje ("dame un momentito, te confirmo")
+    # SÍ tiene que salir — si no, el cliente se queda con silencio total. Ver migración 020.
+    pausado_por: Mapped[str | None] = mapped_column(Text, nullable=True)
     primera_interaccion: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
     ultima_interaccion: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
     # EL RELOJ DE LAS 24 HORAS DE META: la hora del último mensaje que escribió EL CLIENTE.

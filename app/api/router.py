@@ -1097,8 +1097,10 @@ async def responder_como_dueña(
             tipo="text", wa_message_id=wa_id, estado="enviado",
         ))
 
-        # 4) El bot se calla: ella tomó el chat.
+        # 4) El bot se calla: ella tomó el chat. Firmado 'dueña' → el bot NO manda nada más
+        #    (a diferencia de cuando se pausa él solo para escalar: eso va firmado 'bot').
         cliente.bot_pausado = True
+        cliente.pausado_por = "dueña"
         cliente.no_leidos = 0
         cliente.ultima_interaccion = now_utc()
 
@@ -1274,6 +1276,9 @@ async def pausar_bot_cliente(telefono: str, datos: PausaIn, _: str = Depends(usu
         if cliente is None:
             raise HTTPException(status_code=404, detail="Cliente no encontrado")
         cliente.bot_pausado = datos.pausado
+        # Este botón lo aprieta UNA PERSONA: queda firmado como 'dueña' para que el bot se
+        # calle del todo. Al devolver el chat, la firma se borra. Ver migración 020.
+        cliente.pausado_por = "dueña" if datos.pausado else None
         await session.commit()
     return {"ok": True, "pausado": datos.pausado}
 
@@ -1406,6 +1411,7 @@ async def resolver_intervencion(
             ).scalar_one_or_none()
             if cliente is not None:
                 cliente.bot_pausado = False
+                cliente.pausado_por = None
         await session.commit()
     return {"ok": True, "bot_reactivado": reactivar}
 

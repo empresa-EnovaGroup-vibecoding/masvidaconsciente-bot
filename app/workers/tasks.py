@@ -138,7 +138,12 @@ async def _enviar_en_partes(telefono: str, texto: str) -> bool:
     # pudo haber tomado el chat desde el panel. Si solo se mirara la pausa AL EMPEZAR, el bot
     # soltaría su respuesta ENCIMA de la de ella y el cliente vería a dos personas hablándole
     # a la vez. Este es el único embudo por el que salen las 4 respuestas del bot.
-    if await _cliente_pausado(telefono):
+    #
+    # OJO: se pregunta si lo pausó UNA PERSONA, no si está pausado a secas. El propio bot se
+    # pausa al escalar (pedir_ayuda), y en ESE caso su mensaje de despedida al cliente ("dame
+    # un momentito, te confirmo") TIENE que salir. Confundir los dos casos dejaba al cliente
+    # con silencio total. Ver migración 020.
+    if await _lo_paso_una_persona(telefono):
         logger.info(
             "No envío: la dueña tomó el chat de %s mientras el bot pensaba (relevo)", telefono
         )
@@ -183,8 +188,33 @@ async def _bot_activo() -> bool:
 
 
 async def _cliente_pausado(telefono: str) -> bool:
-    """True si la dueña pausó el bot SOLO para este cliente (atiende ella ese chat).
+    """True si el bot está pausado en ESE chat (lo pausara quien lo pausara).
     Ante error de lectura, devuelve False (el bot sigue respondiendo: fail-safe)."""
+    return (await _estado_pausa(telefono))[0]
+
+
+async def _lo_paso_una_persona(telefono: str) -> bool:
+    """True SOLO si el freno lo apretó UNA PERSONA (la dueña tomó ese chat).
+
+    🔴 Por qué existe (bug cazado en vivo el 2026-07-12): la red anti-atropello miraba si el
+    chat estaba pausado, pero no QUIÉN lo pausó — y hay dos casos OPUESTOS:
+      · La DUEÑA tomó el chat → el bot debe CALLARSE (si no, le habla encima al cliente).
+      · El BOT se pausó SOLO (pedir_ayuda: está escalando) → su último mensaje al cliente
+        ("dame un momentito, te confirmo") SÍ tiene que salir.
+    Al confundirlos, el bot se tragaba su propio mensaje de despedida y el cliente se quedaba
+    con SILENCIO TOTAL: escribía "Hola" y no recibía absolutamente nada.
+
+    Ante cualquier duda o error, devuelve True (el bot se calla): es el lado seguro —
+    hablarle encima a la dueña delante de un cliente es peor que quedarse callado de más.
+    """
+    pausado, por = await _estado_pausa(telefono)
+    if not pausado:
+        return False
+    return por != "bot"
+
+
+async def _estado_pausa(telefono: str) -> tuple[bool, str | None]:
+    """(¿pausado?, ¿quién lo pausó?) — 'dueña' | 'bot' | None."""
     from sqlalchemy import select
 
     from app.models import Cliente
@@ -196,9 +226,11 @@ async def _cliente_pausado(telefono: str) -> bool:
             cliente = (
                 await session.execute(select(Cliente).where(Cliente.telefono == telefono))
             ).scalar_one_or_none()
-        return bool(cliente and cliente.bot_pausado)
+        if cliente is None or not cliente.bot_pausado:
+            return False, None
+        return True, cliente.pausado_por
     except Exception:  # noqa: BLE001
-        return False
+        return False, None
 
 
 async def _guardar_entrante(telefono: str, nombre: str | None, texto: str) -> None:

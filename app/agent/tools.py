@@ -1272,7 +1272,11 @@ async def pedir_ayuda(session, telefono, motivo: str, detalle: str = ""):
     if cliente is None:
         cliente = Cliente(telefono=telefono)
         session.add(cliente)
+    # Lo pausa EL BOT (está escalando a la humana), NO la dueña. La diferencia es crítica:
+    # con 'bot', su último mensaje al cliente ("dame un momentito, te confirmo") SÍ sale;
+    # con 'dueña', el bot se calla del todo. Ver migración 020.
     cliente.bot_pausado = True
+    cliente.pausado_por = "bot"
 
     # 2) Lo último que dijo el cliente (para que la dueña entienda sin abrir nada).
     ultimo = (
