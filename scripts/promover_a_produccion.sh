@@ -12,8 +12,13 @@
 #                    (lista blanca) hasta que se abra.
 #
 #  Este script copia SOLO EL CONTENIDO del taller a producción:
-#    productos · configuracion · conocimiento · metodos_pago · producto_media ·
-#    catalogo_pdf · feriados
+#    productos · producto_variantes (los TAMAÑOS y sus precios) · configuracion ·
+#    conocimiento · metodos_pago · producto_media · catalogo_pdf · feriados
+#
+#  ⚠️ El PRECIO DEL DÍA (precio_dia) se REINICIA a propósito: al recargar los productos se borra
+#     por cascada y NO se restaura (los valores del taller son de prueba). La dueña pone el precio
+#     del día FRESCO en producción, como cada día. Los productos de precio-del-día (tortas,
+#     premezclas) no se venden hasta que ella ponga el de HOY.
 #
 #  🔴 JAMÁS toca: clientes, pedidos, pagos, mensajes, intervenciones.
 #     Esos son los datos REALES de producción. Pisarlos sería borrar el negocio.
@@ -29,8 +34,11 @@ TALLER_HOST="2.25.139.106";   TALLER_PG="zedzrztx4bntf5227wedzvt7"
 PROD_HOST="152.53.89.118";    PROD_PG="l2z8ukslzip59w1nl3omhf1e"
 SSH="ssh -i $LLAVE -o StrictHostKeyChecking=no -o ConnectTimeout=20 root"
 
-# El contenido que se promueve. El ORDEN importa (las fotos dependen de los productos).
-TABLAS=(productos configuracion conocimiento metodos_pago producto_media catalogo_pdf feriados)
+# El contenido que se promueve. El ORDEN importa: los TAMAÑOS y las fotos cuelgan de los productos
+# (van después). 🔴 SIN `producto_variantes` la promoción dejaba producción con productos pero CERO
+# tamaños → el bot no podía vender NADA y la verificación reportaba verde (fuga B2). El pg_dump
+# ordena las COPY por dependencia, así que la restauración respeta las llaves foráneas.
+TABLAS=(productos producto_variantes configuracion conocimiento metodos_pago producto_media catalogo_pdf feriados)
 
 MODO="${1:---ensayo}"
 
@@ -89,11 +97,19 @@ COMMIT;
 SQL
 
 echo "→ Verificando…"
+FALLOS=0
 for T in "${TABLAS[@]}"; do
   A=$($SSH@$TALLER_HOST "docker exec -i $TALLER_PG psql -U postgres -d postgres -tAc 'select count(*) from $T'" 2>/dev/null | tr -d '[:space:]')
   B=$($SSH@$PROD_HOST   "docker exec -i $PROD_PG   psql -U postgres -d postgres -tAc 'select count(*) from $T'" 2>/dev/null | tr -d '[:space:]')
-  if [ "$A" = "$B" ]; then printf "   ✓ %-16s %s\n" "$T" "$B"; else printf "   🔴 %-16s taller=%s producción=%s\n" "$T" "$A" "$B"; fi
+  if [ "$A" = "$B" ]; then printf "   ✓ %-18s %s\n" "$T" "$B"; else printf "   🔴 %-18s taller=%s producción=%s\n" "$T" "$A" "$B"; FALLOS=$((FALLOS+1)); fi
 done
+# 🔴 B2: si algo NO cuadra, FALLAR EN VOZ ALTA (antes reportaba verde con el cobro decapitado).
+if [ "$FALLOS" -ne 0 ]; then
+  echo
+  echo "  🔴 $FALLOS tabla(s) NO cuadran: la promoción quedó A MEDIAS. NO abrir el bot."
+  echo "     Producción tiene su respaldo en $DESTINO/ANTES_de_promover_${STAMP}.sql.gz"
+  exit 1
+fi
 $SSH@$PROD_HOST "docker exec -i $PROD_PG psql -U postgres -d postgres -tAc \"
   select '   ✅ INTACTOS -> clientes: '||(select count(*) from clientes)
       || ' | pedidos: '||(select count(*) from pedidos)
