@@ -1,5 +1,10 @@
 """TANDA 2 — las dos redes: la del RELEVO (promesa sin aviso) y la de la HONESTIDAD."""
-from app.agent.agent import _frase_prohibida, _promete_averiguar, _suena_a_sistema
+from app.agent.agent import (
+    _afirma_pedido_registrado,
+    _frase_prohibida,
+    _promete_averiguar,
+    _suena_a_sistema,
+)
 
 # ── 1. LA RED DEL RELEVO: ¿detecta una promesa de averiguar? ──
 PROMESAS = [
@@ -57,6 +62,30 @@ SISTEMA = [
     ("Te mando la foto ahorita", False),
 ]
 
+# ── 4. LA RED DEL PEDIDO FANTASMA: "no digas que lo agendaste si NO lo agendaste" ──
+# Caso REAL (2026-07-12): el bot dijo "Listo 💚 Entonces te agendo para mañana lunes: 1 paquete
+# de Empanadas…" y en la base de datos había CERO pedidos de ese cliente. Se fue creyendo que
+# tenía su pedido; la dueña no tenía nada que cocinar. Ninguna de las otras cuatro redes lo
+# veía: no inventó un precio, no prometió averiguar, no dijo nada prohibido, no sonó a robot.
+PEDIDO_FANTASMA = [
+    # (texto del bot, ¿AFIRMA que el pedido quedó registrado?)
+    ("Listo 💚 Entonces te agendo para mañana lunes: 1 paquete de Empanadas para retiro en La Mendera.", True),
+    ("Listo, ya te lo agendé para el martes 💚", True),
+    ("Tu pedido ya quedó registrado", True),
+    ("Perfecto, te lo anoté: 2 paquetes de empanadas", True),
+    ("Pedido confirmado 💚 Te espero el lunes", True),
+    ("Ya quedó tu orden agendada", True),
+    # 🔴 LO QUE **NO** DEBE FRENAR — frenar de más también rompe la venta:
+    ("¿Te agendo entonces 2 paquetes de empanadas?", False),      # es una PREGUNTA
+    ("¿Quieres que te lo agende para mañana?", False),            # pregunta
+    ("Cuando me confirmes, te lo agendo enseguida 💚", False),    # futuro condicional
+    ("Si me dices el relleno, te lo registro ya mismo", False),   # condicional
+    ("Son $14 el paquete de 8 unidades", False),                  # ni menciona el pedido
+    ("Te mando la foto ahorita", False),
+    ("Tenemos empanadas de plátano, keto y horneadas 💚", False),
+    ("El total es $28. Te paso los datos de pago", False),
+]
+
 fallos = 0
 print("\n1) RED DEL RELEVO — 'si prometes averiguar, TIENES que avisarle a la dueña'")
 for texto, esperado in PROMESAS:
@@ -87,6 +116,15 @@ for texto, esperado in SISTEMA:
     accion = "REESCRIBE" if got else "pasa     "
     print(f"   {marca} {accion} | {texto[:58]}")
 
+print("\n4) RED DEL PEDIDO FANTASMA — 'no digas que lo agendaste si NO lo agendaste'")
+for texto, esperado in PEDIDO_FANTASMA:
+    got = _afirma_pedido_registrado(texto)
+    ok = got == esperado
+    fallos += 0 if ok else 1
+    marca = "[OK ]" if ok else "[MAL]"
+    accion = "FRENA (no salió)" if got else "pasa           "
+    print(f"   {marca} {accion} | {texto[:58]}")
+
 print()
-print("   ✅ LAS TRES REDES FUNCIONAN" if not fallos else f"   🔴 {fallos} CASO(S) MAL")
+print("   ✅ LAS CUATRO REDES FUNCIONAN" if not fallos else f"   🔴 {fallos} CASO(S) MAL")
 raise SystemExit(1 if fallos else 0)

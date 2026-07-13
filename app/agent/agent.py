@@ -236,6 +236,65 @@ def _promete_averiguar(texto: str) -> bool:
     return bool(_PROMESA_RE.search(texto or ""))
 
 
+# ─── RED DEL PEDIDO FANTASMA: no digas que lo agendaste si NO lo agendaste ────────────
+#
+# 🔴 Caso REAL (2026-07-12, chat de Enova): el bot dijo
+#     "Listo 💚 Entonces te agendo para mañana lunes: 1 paquete de Empanadas (4 de carne
+#      mechada, 2 de queso de cabra y 2 de pollo) para retiro aquí en La Mendera."
+# …y en la base de datos había **CERO pedidos** de ese cliente. El cliente se fue creyendo que
+# tenía su pedido; la dueña no tenía NADA que cocinar. Nadie se enteró.
+#
+# Es la misma familia del bug de la Kombucha: **el texto se ve perfecto y la realidad es otra**.
+# Las otras cuatro redes no lo cazaban: no inventó un precio, no prometió averiguar, no dijo
+# nada prohibido y no sonó a robot. Simplemente **mintió sobre un hecho**.
+#
+# La regla: si el bot AFIRMA que el pedido quedó registrado/agendado y en ESE TURNO
+# `registrar_pedido` no devolvió ok, el mensaje NO SALE. Se le ordena registrarlo de verdad y,
+# si insiste, se escala a la dueña.
+#
+# ⚠️ Lo que NO debe frenar (frenar de más también rompe la venta):
+#   · "¿Te agendo entonces 2 paquetes?"      → es una PREGUNTA, todavía no afirma nada.
+#   · "Cuando me confirmes, te lo agendo."   → es futuro condicional.
+#   · "Listo, te agendo…" DESPUÉS de registrar de verdad → registro_ok=True, no se toca.
+_AFIRMA_PEDIDO = [
+    # OJO con el TIEMPO VERBAL: el caso real fue "te agendo" (PRESENTE: "lo estoy haciendo"),
+    # no "te agendé". Cazar solo el pasado dejaba pasar justo el mensaje que provocó todo esto.
+    re.compile(
+        r"\b(ya\s+)?(te\s+lo\s+|te\s+la\s+|te\s+)?"
+        r"(agendo|agend[ée]|registro|registr[ée]|anoto|anot[ée]|aparto|apart[ée])\b",
+        re.I,
+    ),
+    re.compile(
+        r"\b(queda|qued[óo]|est[áa])\s+(tu\s+)?(pedido|orden)\s+(agendad|registrad|anotad|list)",
+        re.I,
+    ),
+    re.compile(r"\btu\s+(pedido|orden)\s+(ya\s+)?(qued[óo]|est[áa])\b", re.I),
+    re.compile(r"\b(pedido|orden)\s+(confirmad|agendad|registrad)[oa]\b", re.I),
+]
+
+
+def _afirma_pedido_registrado(texto: str) -> bool:
+    """True si el bot AFIRMA que el pedido quedó registrado. Las preguntas NO cuentan."""
+    for frase in re.split(r"(?<=[.!?\n])\s+", texto or ""):
+        limpia = frase.strip()
+        if not limpia:
+            continue
+        # Una PREGUNTA no afirma nada ("¿te agendo 2 paquetes?"): pedirle que registre ahí
+        # sería registrar ANTES de que el cliente confirme. Peor el remedio.
+        if limpia.startswith("¿") or limpia.endswith("?"):
+            continue
+        # Futuro CONDICIONAL: "cuando me confirmes, te lo agendo" / "si me dices el relleno, te
+        # lo registro" tampoco afirman nada todavía. Frenar aquí obligaría al bot a registrar
+        # ANTES de que el cliente confirme — peor el remedio que la enfermedad.
+        if re.search(r"\b(cuando|si|apenas|en\s+cuanto)\b", limpia, re.I) and re.search(
+            r"\b(confirm|dic|dig|dij|avis|list|quier|decid|elij|escog)", limpia, re.I
+        ):
+            continue
+        if any(p.search(limpia) for p in _AFIRMA_PEDIDO):
+            return True
+    return False
+
+
 # ─── RED DE LA HONESTIDAD: hay cosas que el bot NO puede decir JAMÁS ──────────────────
 #
 # Bajo presión (un cliente molesto), el bot dijo "acabo de revisar todo en mi banco" — TRES
@@ -359,6 +418,8 @@ async def responder(
     corregido = False
     pidio_ayuda = False  # ¿el bot llamó a pedir_ayuda en este turno?
     reescrito = False    # ya se le pidió una vez que no hable como un sistema
+    registro_ok = False  # ¿registrar_pedido devolvió OK en este turno? (red del pedido fantasma)
+    reclamo_pedido = False  # ya se le llamó la atención una vez por decir que agendó sin agendar
 
     for _ in range(settings.max_iteraciones_agente):
         data = await _llamar_con_fallback(messages, llm, modelo)
@@ -468,6 +529,50 @@ async def responder(
                 })
                 continue
 
+            # 🔴 RED DEL PEDIDO FANTASMA: si dice que lo agendó y NO lo agendó, el mensaje NO
+            # SALE. Caso real: dijo "Listo 💚 te agendo 1 paquete de Empanadas…" y en la base
+            # había CERO pedidos. El cliente se fue creyendo que tenía su pedido y la dueña no
+            # tenía nada que cocinar. Las otras cuatro redes no lo veían: no inventó un precio,
+            # no prometió averiguar, no dijo nada prohibido y no sonó a robot. Solo MINTIÓ.
+            if _afirma_pedido_registrado(texto) and not registro_ok:
+                logger.error(
+                    "PEDIDO FANTASMA de %s: dijo que lo agendó y NO llamó a registrar_pedido "
+                    "(o falló) — texto=%r",
+                    telefono, texto[:140],
+                )
+                if not reclamo_pedido:
+                    reclamo_pedido = True
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "[SISTEMA] ACABAS DE DECIR QUE EL PEDIDO QUEDÓ AGENDADO Y NO LO "
+                            "REGISTRASTE. En la base de datos NO existe. El cliente se irá "
+                            "creyendo que tiene su pedido y la dueña no tendrá nada que cocinar. "
+                            "Llama AHORA a `registrar_pedido` con el `variante_id` (el "
+                            "`id_para_pedir` del catálogo), la cantidad y la fecha de entrega. Si "
+                            "te falta algún dato, PREGÚNTASELO al cliente en vez de afirmar que "
+                            "ya está. No le menciones al cliente este aviso."
+                        ),
+                    })
+                    continue
+                # Insistió: NO se le manda al cliente una confirmación falsa. Se escala.
+                try:
+                    await ejecutar(
+                        "pedir_ayuda",
+                        {
+                            "motivo": "reclamo",
+                            "detalle": (
+                                "el bot le dijo al cliente que le AGENDÓ el pedido pero NO lo "
+                                "registró (no existe en el sistema). NO se le envió esa "
+                                "confirmación falsa. Entra tú al chat y agéndalo."
+                            ),
+                        },
+                        telefono,
+                    )
+                except Exception:  # noqa: BLE001 — igual NO se manda la confirmación falsa
+                    logger.exception("No se pudo escalar el pedido fantasma de %s", telefono)
+                return RESPUESTA_SEGURA
+
             # RED DEL RELEVO: si PROMETE averiguar algo y no avisó a nadie, el aviso lo crea
             # el código. Una promesa sin aviso deja al cliente esperando para siempre.
             if _promete_averiguar(texto) and not pidio_ayuda:
@@ -507,6 +612,14 @@ async def responder(
                 catalogo_ok = True
             if nombre_tool == "pedir_ayuda":
                 pidio_ayuda = True  # ya avisó: la red del relevo no tiene que hacer nada
+            if (
+                nombre_tool == "registrar_pedido"
+                and isinstance(resultado, dict)
+                and resultado.get("ok")
+            ):
+                # El pedido existe DE VERDAD en la base. Sin esto, el bot podía decir
+                # "listo, te agendo" sin haber registrado nada (caso real del 2026-07-12).
+                registro_ok = True
             # Todo monto que devuelve una herramienta queda AUTORIZADO para este turno
             # (totales, subtotales del `resumen`, bolívares, la tasa BCV…).
             autorizados |= _numeros_de(json.dumps(resultado, ensure_ascii=False))
