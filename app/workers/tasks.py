@@ -426,12 +426,30 @@ async def _procesar(telefono: str, nombre: str | None) -> None:
 # Esto es RESPUESTA, no envío proactivo: el cliente escribió y está esperando, y el botón que
 # aprieta la dueña ES la aprobación humana. Por eso es seguro con Meta.
 
+# 🔥 AUTO-BLINDAJE (ensayo general del 2026-07-13): la PRIMERA versión de esta instrucción decía
+# "la dueña te devolvió el chat, RESPÓNDELE TÚ" — y el modelo lo leyó como "ahora la dueña eres
+# tú". Al cliente que pidió *"quiero hablar con una persona de verdad, no con una máquina"* le
+# contestó: **"Soy Whuilianny, la dueña de masvidaconsciente"**. MINTIÓ SOBRE SER HUMANA — la falla
+# más grave que hay, y por el camino normal el bot NO la comete (ahí escala con `pedir_ayuda`).
+# Lección: al devolverle el turno al modelo hay que RE-ANCLAR quién es; una orden ambigua sobre el
+# relevo se lee como un cambio de identidad. La regla vive en `_REGLAS`, pero esta orden la pisaba.
+# 🔥 Y LA SEGUNDA VERSIÓN TAMBIÉN FALLÓ, POR OTRO LADO (mismo ensayo). Decía "lee LO ÚLTIMO que
+# escribió el cliente" — y el modelo se ancló en la ÚLTIMA LÍNEA, perdiendo lo que el cliente había
+# pedido antes. Al cliente que escribió "quiero hablar con una PERSONA de verdad" y luego "¿sigue
+# ahí alguien?", el bot le contestó "Sí, aquí estoy 💚 ¿En qué te puedo ayudar?": cero herramientas,
+# cero `pedir_ayuda`, cero aviso. Se comió la petición y NADIE se enteró. (Por el camino normal el
+# bot SÍ escala: la anteojera la puse yo.) Lo pendiente casi nunca es UN mensaje: es un BLOQUE.
 _INSTRUCCION_RETOMAR = (
-    "[SISTEMA] La dueña te devolvió el chat. Lee lo último que escribió el cliente (arriba, en "
-    "la conversación) y respóndele TÚ, retomando donde quedó. No repitas lo que ya se dijo, no "
-    "vuelvas a saludar ni a presentarte, y no menciones este aviso ni que estuviste ausente. Si "
-    "te falta un dato, pídeselo al cliente o llama a la herramienta que lo dé: jamás inventes un "
-    "precio ni un monto."
+    "[SISTEMA] Vuelves a atender este chat (la dueña te lo devolvió). Mira TODO lo que el cliente "
+    "escribió y quedó SIN RESPONDER —puede ser más de un mensaje— y contéstale lo que pidió, "
+    "retomando donde quedó. Incluye lo que pidió ANTES de que la dueña entrara si todavía está sin "
+    "resolver: el cliente sigue esperando eso. "
+    "SIGUES SIENDO LA MISMA DE SIEMPRE: la asistente virtual del negocio. NO eres la dueña ni una "
+    "persona; si el cliente pide hablar con una persona, llama a `pedir_ayuda` (motivo "
+    "'pide_persona') como siempre. "
+    "No repitas lo que ya se dijo, no vuelvas a saludar ni a presentarte, y no menciones este "
+    "aviso ni que estuviste ausente. Si te falta un dato, pídeselo al cliente o llama a la "
+    "herramienta que lo dé: jamás inventes un precio ni un monto."
 )
 
 
