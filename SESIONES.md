@@ -17,6 +17,32 @@
 
 ---
 
+## 2026-07-13 — 🏷️ LA CIRUGÍA: PRODUCTO · TAMAÑO · OPCIÓN (el "código de barras" del cobro)
+
+**Cerrada la fuga de la Kombucha.** Había **dos productos llamados "Kombucha"** (350ml $4 · 700ml $7) porque el precio vivía **pegado al producto** y no había otra forma de tener dos precios. El buscador devolvía siempre el primero ⇒ **SIEMPRE COBRABA $4**. Fuga real: **$3 por venta**. Y si pedían la foto de la de 700ml, mandaba la de 350ml.
+
+**La estructura (la línea que separa los niveles es EL DINERO):**
+- **PRODUCTO** = qué ES (nombre **único**, ficha, ingredientes).
+- **TAMAÑO** = lo que se **COBRA** (presentación + precio + sabores + foto + agotado **propios**).
+- **OPCIÓN** = lo que el cliente escoge y **no mueve el precio** (relleno, masa) → vive en el pedido.
+
+**El código de barras.** `registrar_pedido` deja de recibir un **nombre en texto libre** y pasa a recibir **`variante_id`**: un número de una **lista CERRADA** que el propio código le inyecta al modelo en el catálogo. **El modelo no puede escribir un id que no le dimos**, y el precio lo resuelve el **código** a partir de ese id. Rechaza: id inexistente · tamaño o producto **agotado** · **sin precio de hoy** · cantidad < 1. Y el **recibo dice el tamaño** (sin eso se despacha la de 250g habiendo pagado la de 1kg).
+
+**Lo que la cirugía tuvo que respetar (todo verificado, nada supuesto):**
+- **El orden de la fusión es obligatorio:** la ficha del que se va se copia al que se queda → se crean los 2 tamaños → **las fotos se mudan** (cada una con SU tamaño) → **y SOLO ENTONCES el borrado, por id**. Borrar antes se habría llevado la foto **por cascada, sin dar un solo error**; y borrar `WHERE nombre='Kombucha'` habría borrado **las dos**.
+- **Las tortas** tenían sus 3 tamaños metidos en un **texto** (`'250g / 500g / 1kg'`). Un backfill genérico habría creado **una variante basura** con ese nombre, con id válido, y **el bot se la habría ofrecido al cliente**.
+- **Los sabores bajan al tamaño y entran en la búsqueda:** sin eso, tras la fusión *"la kombucha de flor de jamaica"* **no encontraba nada** y la regla antiinvención obligaba al bot a decir *"de eso no tengo"* sobre algo que **sí se vende**.
+- **El backfill corre DESPUÉS del seed:** en una BD nueva (un cliente nuevo, o el negocio de 400 productos del esposo) las migraciones corren **antes** de sembrar el catálogo ⇒ vería la tabla vacía ⇒ **cero tamaños** ⇒ el bot **no podría vender nada, y sin un solo error en el log**.
+- **El precio del día, por tamaño** (lo pidió Maired). El índice viejo `(producto_id, fecha)` **impedía** cargar el de la torta de 500g y el de la de 1kg **el mismo día**.
+
+**Una sola fuente de verdad del precio (el hueco que encontró la revisión adversarial):** ella subía el Pan Keto a $28 **en el único campo que veía** (el del producto) y el bot **seguía cobrando $25** (el del tamaño). **Nada la avisaba.** Ahora: con varios tamaños, el panel **rechaza** editar el precio ahí y le dice **dónde** hacerlo. Y **no se pueden volver a crear dos productos con el mismo nombre**.
+
+**⚠️ Descubierto de paso:** el **respaldo automático solo estaba corriendo en producción (netcup)**, NO en el taller — y esta es la primera migración que **borra una fila con contenido real**. Se sacó un `pg_dump` del taller **antes** de tocar nada (3 MB, verificado por dentro), y la migración se ensayó con **BEGIN/ROLLBACK**.
+
+**Verificado en el taller:** `probar_cobro.py` **27/27** (reescrito para el código de barras) · `probar_panel_tamanos.py` **9/9** (*el panel y el bot ven lo mismo*) · Fase 2, relevo y las 3 redes de honestidad, **en verde**.
+
+---
+
 ## 2026-07-13 (madrugada) — 🧵 BANDEJA FASE 2: que el HILO diga la VERDAD
 
 **El plan se auditó ANTES de escribir una línea de código** (5 revisores adversariales, cada uno con una lente: el dinero · Meta/Tech Provider · la idempotencia · el panel · la memoria del agente; y un refutador por hallazgo, que intentó tumbarlo con el código delante). **28 hallazgos CONFIRMADOS**, 5 bloqueantes. **El plan que yo tenía habría roto cosas.**
