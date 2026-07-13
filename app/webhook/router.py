@@ -38,6 +38,7 @@ async def recibir(request: Request):
         return Response(status_code=401)
 
     payload = json.loads(raw)
+    _testigo(payload)
     mensaje = extraer_mensaje(payload)
 
     if mensaje is None:
@@ -83,6 +84,39 @@ async def recibir(request: Request):
     logger.info("Evento %s de %s", tipo, mensaje["telefono"])
     estado = await _encolar_evento(mensaje)
     return {"status": estado, "tipo": tipo}
+
+
+def _testigo(payload: dict) -> None:
+    """SOLO MIRA Y ANOTA. No cambia nada, no responde nada, no toca la BD.
+
+    Existe para poder responder CON PRUEBAS a la única pregunta peligrosa de la Fase 2:
+    cuando se active `smb_message_echoes` en Meta, ¿el eco se dispara TAMBIÉN con los
+    mensajes que manda el BOT? Si así fuera, el bot se pausaría a sí mismo después de cada
+    respuesta y se quedaría MUDO con todos los clientes.
+
+    Anota, de cada evento: qué campo llegó (`field`), qué claves trae (`messages`,
+    `message_echoes`, `statuses`…) y, si es un eco, de quién es y qué dice. Con eso se
+    decide si la Fase 2 se construye o no. Cualquier fallo aquí se traga: un testigo JAMÁS
+    puede tumbar el webhook.
+    """
+    try:
+        cambio = payload["entry"][0]["changes"][0]
+        campo = cambio.get("field")
+        value = cambio.get("value") or {}
+        claves = sorted(k for k in value if k not in ("messaging_product", "metadata"))
+        if "messages" in claves:
+            return  # el camino normal (un cliente escribiendo): ya se registra en otro lado
+        detalle = ""
+        ecos = value.get("message_echoes")
+        if ecos:
+            e = ecos[0] if isinstance(ecos, list) and ecos else {}
+            detalle = (
+                f" | eco: from={e.get('from')} to={e.get('to')} tipo={e.get('type')}"
+                f" id={e.get('id')}"
+            )
+        logger.info("TESTIGO webhook: field=%s claves=%s%s", campo, claves, detalle)
+    except Exception:  # noqa: BLE001 — un testigo nunca puede tumbar el webhook
+        pass
 
 
 async def _marcar_entrante(telefono: str, nombre: str | None) -> None:
