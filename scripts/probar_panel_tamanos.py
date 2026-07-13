@@ -72,6 +72,38 @@ async def main() -> None:
             if r.status_code == 400:
                 print(f"        el aviso dice: {r.json().get('detail','')[:80]}…")
 
+            print("\n2b) 🔴 FUGA B4: editar un producto de UN tamaño NO pisa su precio")
+            uni = next((p for p in prods if len(p.get("variantes") or []) == 1
+                        and p["variantes"][0].get("precio") is not None), None)
+            check(uni is not None, "hay un producto de un solo tamaño con precio para probar")
+            if uni:
+                precio_real = uni["variantes"][0]["precio"]
+                base = {
+                    "nombre": uni["nombre"], "categoria": uni["categoria"],
+                    "descripcion": uni["descripcion"], "presentacion": uni["presentacion"],
+                    "duracion": uni["duracion"], "dias_anticipacion": uni["dias_anticipacion"],
+                    "se_congela": uni["se_congela"], "apto_diabeticos": uni["apto_diabeticos"],
+                    "info": uni["info"], "disponible": uni["disponible"],
+                }
+                # (a) mandar un precio al editar el PRODUCTO → RECHAZA (antes pisaba en silencio)
+                r = await c.patch(f"/api/productos/{uni['id']}", json={**base, "precio": 999.0}, headers=h)
+                check(r.status_code == 400,
+                      "mandar un precio al editar un producto de UN tamaño → RECHAZA",
+                      f"HTTP {r.status_code}")
+                # (b) el precio del tamaño sigue INTACTO (no lo pisó el intento de $999)
+                uni2 = next((p for p in (await c.get("/api/productos", headers=h)).json()
+                             if p["id"] == uni["id"]), None)
+                check(uni2 and uni2["variantes"][0]["precio"] == precio_real,
+                      f"el precio del tamaño sigue en ${precio_real} (no lo pisó el $999)",
+                      f"quedó en {uni2['variantes'][0]['precio'] if uni2 else '?'}")
+                # (c) editar SIN precio (como hace el panel ahora) → OK, y el precio sigue intacto
+                r = await c.patch(f"/api/productos/{uni['id']}", json={**base, "precio": None}, headers=h)
+                uni3 = next((p for p in (await c.get("/api/productos", headers=h)).json()
+                             if p["id"] == uni["id"]), None)
+                check(r.status_code == 200 and uni3 and uni3["variantes"][0]["precio"] == precio_real,
+                      "editar SIN precio (como el panel ahora) → OK y el precio del tamaño intacto",
+                      f"HTTP {r.status_code}, precio {uni3['variantes'][0]['precio'] if uni3 else '?'}")
+
             print("\n3) NO SE PUEDEN VOLVER A CREAR DOS PRODUCTOS CON EL MISMO NOMBRE")
             r = await c.post("/api/productos", json={
                 "nombre": "Kombucha", "categoria": "bebidas", "descripcion": "otra",

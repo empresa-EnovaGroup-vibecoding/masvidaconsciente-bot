@@ -640,28 +640,28 @@ async def editar_producto(producto_id: int, datos: ProductoIn, _: str = Depends(
             )
         ).scalars().all()
 
-        # 🔴 UNA SOLA FUENTE DE VERDAD DEL PRECIO.
-        # Si el precio se pudiera editar aquí Y en el tamaño, la dueña subiría el Pan Keto a $28
-        # en el único campo que ve... y el bot seguiría cobrando $25 (el del tamaño). Nada la
-        # avisaría. Con UN tamaño el precio se PROPAGA; con VARIOS se RECHAZA y se le dice dónde.
+        # 🔴 UNA SOLA FUENTE DE VERDAD DEL PRECIO — cerrada la fuga B4.
+        # El precio del tamaño se edita SOLO en la sección Tamaños (editar_variante). Este endpoint
+        # (editar PRODUCTO) ya NO toca el precio del tamaño: si algo manda `precio` (un frontend
+        # viejo cacheado, o la API), se RECHAZA en voz alta, jamás lo pisa en silencio —que era la
+        # fuga: guardar el producto cobraba el precio VIEJO del campo legado. El precio inicial de
+        # un producto NUEVO lo pone `crear_producto` (siembra el primer tamaño).
         nuevo_precio = Decimal(str(datos.precio)) if datos.precio is not None else None
-        if datos.precio is not None and len(variantes) > 1:
+        if datos.precio is not None and variantes:
+            donde = "sus tamaños" if len(variantes) > 1 else "su tamaño"
             raise HTTPException(
                 status_code=400,
-                detail=(
-                    f"'{prod.nombre}' tiene varios tamaños y cada uno tiene SU precio. "
-                    "Edítalo en el tamaño, no aquí."
-                ),
+                detail=f"El precio de '{prod.nombre}' vive en {donde}. Edítalo abajo, en Tamaños.",
             )
         if len(variantes) == 1:
-            variantes[0].precio = nuevo_precio
             variantes[0].presentacion = (datos.presentacion or "").strip() or "única"
             variantes[0].disponible = datos.disponible
 
         prod.nombre = datos.nombre
         prod.categoria = datos.categoria
         prod.descripcion = datos.descripcion
-        prod.precio = nuevo_precio  # se mantiene por compatibilidad; el BOT ya no lo lee
+        if datos.precio is not None:
+            prod.precio = nuevo_precio  # espejo legado (el BOT ya no lo lee); solo si se mandó
         prod.presentacion = datos.presentacion
         prod.duracion = datos.duracion
         prod.se_congela = datos.se_congela
