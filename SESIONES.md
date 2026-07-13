@@ -17,6 +17,25 @@
 
 ---
 
+## 2026-07-13 (madrugada) — 🧵 BANDEJA FASE 2: que el HILO diga la VERDAD
+
+**El plan se auditó ANTES de escribir una línea de código** (5 revisores adversariales, cada uno con una lente: el dinero · Meta/Tech Provider · la idempotencia · el panel · la memoria del agente; y un refutador por hallazgo, que intentó tumbarlo con el código delante). **28 hallazgos CONFIRMADOS**, 5 bloqueantes. **El plan que yo tenía habría roto cosas.**
+
+**Los 5 bloqueantes (todos reales, todos tapados):**
+1. **Un eco NO-TEXTO reventaba el INSERT y se llevaba la PAUSA.** Una foto, una nota de voz, un sticker o un ❤️ desde el celular de la dueña: `contenido` es NOT NULL y el CHECK de `tipo` no los admitía ⇒ excepción ⇒ **el rollback borraba la pausa** ⇒ el bot volvía a hablarle encima. Y el 500 a Meta ⇒ **reintentos en bucle** ⇒ calidad del número. **Ahora: la PAUSA va PRIMERO, en transacción propia; la burbuja después, en otra. El webhook responde 200 SIEMPRE.**
+2. **Chat nuevo abierto por la dueña desde el móvil:** ese cliente **no existe** en la BD ⇒ el `UPDATE` no guardaba nada ⇒ **no había pausa**. Ahora va con **UPSERT**.
+3. **En el eco, `from` es el NÚMERO DEL NEGOCIO.** Tratarlo como cliente hacía que **el bot se respondiera a sí mismo**, en bucle. Ahora el parser devuelve **tipos distintos** (`EcoSaliente`) y el cliente es `to`. Y **un eco NO abre la ventana de 24h** (es un saliente).
+4. **Meta REENTREGA los eventos.** Sin candado: burbuja duplicada **y memoria del agente envenenada** (los duplicados empujan fuera lo que el cliente pidió de verdad). Ahora: `message_id` (que tenía UNIQUE desde la 001 y **nadie usaba**) + `on_conflict_do_nothing`.
+5. 🔴 **DINERO, y ya estaba roto:** `_enviar_en_partes` **tiraba los identificadores** que devuelve Meta y se guardaba **UNA fila para hasta 6 globos**. Si fallaba el globo con **los datos bancarios**, el aviso de fallo de Meta **no casaba con nada** y en el panel se veía **todo verde**. Ahora: **una fila por globo, con su `wa_message_id`**.
+
+**Lo demás que entró:** el **parser** ya no pierde mensajes (Meta agrupa: si venía un lote de estados y detrás el mensaje de un cliente, **el mensaje se perdía para siempre** — respondíamos 200 y Meta no reintentaba) · el **comprobante entra al hilo** apenas se descarga, **antes** de que la visión lo juzgue y en **sesión propia** (nunca puede tumbar el Pago; y así la foto **rechazada** —la que la dueña más necesita ver— también se ve) · **entregado/leído/FALLÓ** por mensaje, y el fallo **siempre gana** · los frenos, **cada uno con su lado seguro** (si la BD falla y no sé quién pausó ⇒ el bot **se calla**; pero un error leyendo la pausa **no deja mudo** al bot entero) · **el carril del dinero nunca es silencioso**: si entra un comprobante en un chat que ella tiene tomado, se crea el aviso **y se le manda un WhatsApp** · el archivo se sirve **por id numérico** (por nombre de archivo se podía leer **cualquier archivo del servidor**) y **con login** (un comprobante trae datos bancarios).
+
+**Decisión de Maired:** la pausa **NO caduca** — se queda hasta que ella dé *"Devolver al bot"*. A cambio, el panel avisa arriba: *"el bot está callado en N chats porque los estás atendiendo tú"*.
+
+**Verificado en el taller:** `probar_fase2.py` **19/19** · `probar_bandeja.py` **12/12** · las 3 redes de honestidad OK · el cobro **sin regresiones** (el único rojo sigue siendo la **Kombucha duplicada**, que espera su cirugía). Migración **021** aplicada.
+
+---
+
 ## 2026-07-12 (noche 10) — 📥 LA BANDEJA: la dueña ya ATIENDE DENTRO del sistema (el bot se calla solo)
 
 **Lo que dijo Maired:** *"Desde acá yo no puedo contestar. Si se apaga el bot, tengo que ir al WhatsApp de la clienta. La idea es que se pueda uno hasta responder al chat y retomarlo, pero en el sistema."* Tenía razón, y era peor de lo que parecía: **responder desde el panel no existía en NINGUNA capa** (58 rutas en la API y ni una era un POST de mensajes), y el botón de la bandeja decía *"Abrir el chat en WhatsApp"* — el producto **la expulsaba**.
