@@ -29,3 +29,7 @@ PRP-*.md
 
 # Archivo interno (documentos ya cumplidos, se quedan locales)
 archivo/
+
+# Capturas de pruebas del navegador: pueden contener la pantalla de Coolify
+# (con las LLAVES a la vista). NUNCA subir a GitHub.
+.playwright-mcp/
