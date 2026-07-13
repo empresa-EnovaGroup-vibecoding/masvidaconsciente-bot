@@ -73,7 +73,17 @@ async def _llamar_openrouter(messages: list, tools: list, model: str) -> dict:
             # campos y a veces omitía el monto) — y NO se rompe el cobro. La naturalidad/variación
             # se logra QUITANDO las frases-ejemplo del prompt (que el modelo copiaba), no subiendo
             # la temperatura. (redactar_mensaje sí usa 0.7 porque ahí no hay tools ni cobro.)
-            json={"model": model, "messages": messages, "tools": tools, "temperature": 0.15},
+            # provider.require_parameters: OpenRouter SOLO rutea a proveedores que soporten
+            # TODO lo que mandamos (en especial las `tools`). Sin esto podía caer en un proveedor
+            # que IGNORA las herramientas en silencio → el bot "dice" que agendó/cobró SIN llamar
+            # a la herramienta (el bug del "te agendo" por la puerta del proveedor). Blinda el cobro.
+            json={
+                "model": model,
+                "messages": messages,
+                "tools": tools,
+                "temperature": 0.15,
+                "provider": {"require_parameters": True},
+            },
         )
         resp.raise_for_status()
         return resp.json()
