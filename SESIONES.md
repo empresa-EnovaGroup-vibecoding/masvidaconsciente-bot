@@ -17,6 +17,31 @@
 
 ---
 
+## 2026-07-12 (noche 10) — 📥 LA BANDEJA: la dueña ya ATIENDE DENTRO del sistema (el bot se calla solo)
+
+**Lo que dijo Maired:** *"Desde acá yo no puedo contestar. Si se apaga el bot, tengo que ir al WhatsApp de la clienta. La idea es que se pueda uno hasta responder al chat y retomarlo, pero en el sistema."* Tenía razón, y era peor de lo que parecía: **responder desde el panel no existía en NINGUNA capa** (58 rutas en la API y ni una era un POST de mensajes), y el botón de la bandeja decía *"Abrir el chat en WhatsApp"* — el producto **la expulsaba**.
+
+**El principio (de aquí salió todo lo demás):** *el hilo dice la VERDAD.* Cada mensaje sabe **quién lo dijo** (cliente · bot · **ella**), **qué era** (texto · foto · comprobante) y **cómo llegó** (enviado · entregado · **falló**).
+
+**Lo construido (FASE 1, en el TALLER — el servidor viejo, su número):**
+- **Responde desde el panel.** Caja de texto dentro del hilo, burbujas de 3 colores (cliente / el bot / **Tú**), hora, y los envíos fallidos **en rojo** (no se pierden en un log).
+- **El relevo es AUTOMÁTICO.** En cuanto ella escribe, **el bot se calla en ese chat**. No depende de que se acuerde de apretar un botón. Cuando termina: **"Devolver al bot"**.
+- **El bot hereda lo que ella prometió.** Su mensaje entra en la memoria del bot (Redis) para que, al retomar, **no se contradiga ni repita**. En la base queda como `owner` (la verdad de quién habló), pero el cliente ve **una sola voz**.
+- **El reloj de las 24 horas de WhatsApp.** Meta solo deja responder texto libre dentro de las 24h del último mensaje **del cliente**. El panel lo **muestra** ("te quedan 4 h 12 min") y, si se cerró, **bloquea la caja ANTES** y lo explica. Un envío rechazado le baja la calidad al número y, siendo Tech Provider, eso **arriesga la cuenta de Meta de TODOS los clientes**: por eso **falla CERRADA** (sin dato ⇒ no se envía).
+- El botón de "El bot te necesita" ya no la echa a WhatsApp: dice **"Responderle"** y abre el chat **dentro** del panel.
+
+**🔴 Un bug que estaba VIVO y nadie había visto — el bot hablaba ENCIMA de ella.** El bot tarda ~20 segundos en contestar (15 de espera + lo que piensa). Si ella tomaba el chat en ese rato, **el bot igual soltaba su respuesta**: el cliente veía a dos personas hablándole a la vez. Ahora el código **vuelve a mirar el freno JUSTO ANTES de enviar** (el único embudo por donde salen las 4 respuestas del bot) y, si ella tomó el chat, **descarta la respuesta**: ni se envía ni se recuerda (si se recordara, el bot "creería" haber dicho algo que el cliente nunca vio).
+
+**El reloj arranca en el WEBHOOK, no en el worker** — a propósito: es el único embudo por el que pasan los **cuatro** caminos (texto, nota de voz, **comprobante**, sticker). Si viviera en el worker de texto, un cliente que solo manda **la captura del pago** aparecería con la ventana **cerrada**… justo en el momento del dinero. Y va con **upsert**: si el cliente es nuevo, sin eso estrenaría con la ventana cerrada y ella no podría contestarle a **quien le escribe por primera vez**.
+
+**🔥 AUTO-BLINDAJE — lo cazó el banco de pruebas, NO la lectura del código.** La migración decía *"019 aplicada"* y el rol `owner` **seguía prohibido** en la base. Motivo: la regla vieja nació **dentro del `CREATE TABLE`** de la migración 001, así que **Postgres la bautizó él**: `mensajes_rol_check`, no `ck_mensaje_rol`. Yo borré el nombre "bonito" — y no borré nada. **Regla nueva: al soltar una restricción vieja, soltar TAMBIÉN el nombre que le puso Postgres.**
+
+**Verificado en el taller:** `probar_bandeja.py` **9/9** (la ventana falla cerrada · el rol `owner` entra · el bot queda callado · el bot NO habla encima). El **dinero** y las **3 redes de honestidad** siguen verdes (el único rojo es la **Kombucha duplicada**, que espera la cirugía de variantes). Endpoints en vivo (401 sin login, no 404) y el panel reconstruido.
+
+**Lo que queda de la bandeja (fases 2 a 5):** que lo que ella escribe **desde su celular** entre al hilo y calle al bot (`smb_message_echoes` — **falta activar la casilla en Meta**) · el comprobante **dentro** del chat · entregado/leído/falló · cola con no leídos y aviso en vivo · plantillas para reabrir chats de más de 24h.
+
+---
+
 ## 2026-07-12 (noche 9) — 🤝 TANDA 2: la HONESTIDAD (el bot ya no miente ni deja plantado a nadie)
 
 **Salió de la prueba REAL de Maired por WhatsApp** (y el ensayo lo había predicho). Tres redes NUEVAS **en código**, porque las tres reglas ya estaban escritas en el prompt **y el bot las rompió igual**. *(Lección repetida: **lo que vive solo en el texto se rompe**.)*
