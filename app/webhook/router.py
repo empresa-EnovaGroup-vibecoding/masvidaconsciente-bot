@@ -43,6 +43,13 @@ async def recibir(request: Request):
     if mensaje is None:
         return {"status": "ignored"}  # status update u otro evento sin mensaje
 
+    # EL RELOJ DE LAS 24 HORAS arranca AQUÍ y no en el worker: este es el único embudo por
+    # el que pasan los CUATRO caminos (texto, voz, comprobante, sticker). El comprobante, por
+    # ejemplo, nunca pasa por el worker de texto: si el reloj viviera allá, un cliente que solo
+    # manda la captura del pago aparecería con la ventana CERRADA y la dueña no podría
+    # responderle justo en el momento del dinero.
+    await _marcar_entrante(mensaje["telefono"], mensaje.get("nombre"))
+
     # Mostrar "escribiendo…" de inmediato: el cliente ve que lo estamos atendiendo
     # (se siente humano, no robotico). Import perezoso; no critico si falla.
     from app.services.meta_client import marcar_leido_y_escribiendo
@@ -76,6 +83,50 @@ async def recibir(request: Request):
     logger.info("Evento %s de %s", tipo, mensaje["telefono"])
     estado = await _encolar_evento(mensaje)
     return {"status": estado, "tipo": tipo}
+
+
+async def _marcar_entrante(telefono: str, nombre: str | None) -> None:
+    """El cliente ESCRIBIÓ: se abre su ventana de 24h y sube su contador de no leídos.
+
+    Va con UPSERT a propósito: si el cliente es NUEVO, la fila todavía no existe (la crea el
+    worker, después). Con un UPDATE simple no se guardaría nada y el cliente estrenaría con la
+    ventana en NULL = CERRADA — o sea, la dueña no podría contestarle a quien le escribe por
+    primera vez, que es justo el que más importa.
+
+    Si esto falla, se loguea pero NO se rompe el webhook: perder el reloj es malo, pero
+    devolverle un error a Meta (y que reintente el mensaje) es peor.
+    """
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+    from app.models import Cliente, now_utc
+    from app.services.db import get_session_factory
+
+    ahora = now_utc()
+    try:
+        factory = get_session_factory()
+        async with factory() as session:
+            stmt = pg_insert(Cliente).values(
+                telefono=telefono,
+                nombre=nombre,
+                ultima_interaccion=ahora,
+                ultimo_entrante_at=ahora,
+                no_leidos=1,
+            )
+            await session.execute(
+                stmt.on_conflict_do_update(
+                    index_elements=[Cliente.telefono],
+                    set_={
+                        "ultima_interaccion": ahora,
+                        "ultimo_entrante_at": ahora,
+                        # El nombre NO se pisa: el que ya tenemos (o el que puso la dueña a mano)
+                        # vale más que el del perfil de WhatsApp.
+                        "no_leidos": Cliente.no_leidos + 1,
+                    },
+                )
+            )
+            await session.commit()
+    except Exception:  # noqa: BLE001
+        logger.exception("No se pudo marcar el mensaje entrante de %s", telefono)
 
 
 async def _encolar_mensaje(mensaje) -> str:

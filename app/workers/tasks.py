@@ -121,13 +121,29 @@ def _aplanar(texto: str) -> str:
     return t
 
 
-async def _enviar_en_partes(telefono: str, texto: str) -> None:
+async def _enviar_en_partes(telefono: str, texto: str) -> bool:
     """Envía la respuesta PLANA y como VARIOS mensajes cortos (como una persona real
     en WhatsApp), no un mensajote. El agente separa cada globo con una línea en blanco;
     aquí aplanamos el formato, partimos por las líneas en blanco y enviamos cada parte
-    por separado, con una pausa breve. Tope de globos para proteger la calidad del número."""
+    por separado, con una pausa breve. Tope de globos para proteger la calidad del número.
+
+    Devuelve False si NO envió nada (para que el que llama no guarde en el historial una
+    respuesta que el cliente jamás vio: el bot creería haber dicho algo que no dijo).
+    """
     if not texto or not texto.strip():
-        return
+        return False
+
+    # ÚLTIMA MIRADA AL FRENO, ya con la respuesta en la mano.
+    # El bot tarda ~20s en contestar (15s de buffer + lo que piensa). En ese rato la dueña
+    # pudo haber tomado el chat desde el panel. Si solo se mirara la pausa AL EMPEZAR, el bot
+    # soltaría su respuesta ENCIMA de la de ella y el cliente vería a dos personas hablándole
+    # a la vez. Este es el único embudo por el que salen las 4 respuestas del bot.
+    if await _cliente_pausado(telefono):
+        logger.info(
+            "No envío: la dueña tomó el chat de %s mientras el bot pensaba (relevo)", telefono
+        )
+        return False
+
     texto = _aplanar(texto)
     partes = [p.strip() for p in re.split(r"\n\s*\n", texto.strip()) if p.strip()]
     if not partes:
@@ -138,6 +154,7 @@ async def _enviar_en_partes(telefono: str, texto: str) -> None:
         if i:
             await asyncio.sleep(1.0)  # pausa breve entre globos, como una persona
         await enviar_texto(telefono, parte)
+    return True
 
 
 # ─── Interruptor del bot (encender / apagar) ─────────────────────────
@@ -256,8 +273,14 @@ async def _procesar(telefono: str, nombre: str | None) -> None:
         respuesta = await responder(telefono, texto, historial, nombre)
         respuesta = _proteger_afirmacion_de_pago(respuesta)
 
-        await _enviar_en_partes(telefono, respuesta)
+        enviado = await _enviar_en_partes(telefono, respuesta)
         await rc.guardar_historial(telefono, "user", texto)
+        if not enviado:
+            # La dueña tomó el chat mientras el bot pensaba: su respuesta se DESCARTA
+            # (no se envía ni se recuerda). Lo que sí se guarda es lo que dijo el cliente,
+            # para que ella lo vea y le conteste.
+            await _guardar_entrante(telefono, nombre, texto)
+            return
         await rc.guardar_historial(telefono, "assistant", respuesta)
         await _guardar_en_panel(telefono, nombre, texto, respuesta)
     except Exception:  # noqa: BLE001
@@ -336,8 +359,10 @@ async def _responder_situacion(telefono: str, situacion: str, nombre: str | None
         return
     mensaje = _proteger_afirmacion_de_pago(mensaje or "")
     if mensaje.strip():
-        await _enviar_en_partes(telefono, mensaje)
-        await rc.guardar_historial(telefono, "assistant", mensaje)
+        # Si no se envió (la dueña tomó el chat), NO se guarda en el historial: el bot no
+        # puede "recordar" haber dicho algo que el cliente nunca vio.
+        if await _enviar_en_partes(telefono, mensaje):
+            await rc.guardar_historial(telefono, "assistant", mensaje)
 
 
 def _a_float(x):
@@ -526,8 +551,14 @@ async def _responder_y_enviar(telefono: str, texto: str, nombre: str | None) -> 
         historial = await rc.obtener_historial(telefono)
         respuesta = await responder(telefono, texto, historial, nombre)
         respuesta = _proteger_afirmacion_de_pago(respuesta)
-        await _enviar_en_partes(telefono, respuesta)
+        enviado = await _enviar_en_partes(telefono, respuesta)
         await rc.guardar_historial(telefono, "user", texto)
+        if not enviado:
+            # La dueña tomó el chat mientras el bot pensaba: su respuesta se DESCARTA
+            # (no se envía ni se recuerda). Lo que sí se guarda es lo que dijo el cliente,
+            # para que ella lo vea y le conteste.
+            await _guardar_entrante(telefono, nombre, texto)
+            return
         await rc.guardar_historial(telefono, "assistant", respuesta)
         await _guardar_en_panel(telefono, nombre, texto, respuesta)
     except Exception:  # noqa: BLE001
@@ -579,5 +610,7 @@ async def _notificar_cliente_pago(telefono, situacion) -> None:
         logger.exception("No se pudo redactar el aviso de pago para %s", telefono)
         return
     if mensaje.strip():
-        await _enviar_en_partes(telefono, mensaje)
-        await rc.guardar_historial(telefono, "assistant", mensaje)
+        # Si no se envió (la dueña tomó el chat), NO se guarda en el historial: el bot no
+        # puede "recordar" haber dicho algo que el cliente nunca vio.
+        if await _enviar_en_partes(telefono, mensaje):
+            await rc.guardar_historial(telefono, "assistant", mensaje)

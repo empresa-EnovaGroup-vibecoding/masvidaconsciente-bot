@@ -1,5 +1,6 @@
 """API REST que alimenta el dashboard. Todo protegido con login (JWT),
 excepto el propio login."""
+import logging
 import os
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
@@ -43,6 +44,7 @@ router = APIRouter(prefix="/api", tags=["dashboard"])
 # El SIMULADOR del panel ("Mi Bot" -> probar) crea pedidos y pagos REALES en la base, con este
 # telefono. Antes solo la lista de CLIENTES lo excluia: los pedidos de prueba se colaban en el
 # panel y SUMABAN en el reporte de ventas. Ahora se excluyen de todo lo que la duena mira.
+logger = logging.getLogger(__name__)
 SIMULADOR = "__simulador__"
 
 
@@ -966,9 +968,162 @@ async def detalle_conversacion(telefono: str, _: str = Depends(usuario_actual)):
             )
         ).scalars().all()
     return [
-        {"rol": m.rol, "contenido": m.contenido, "fecha": m.created_at.isoformat()}
+        {
+            "id": m.id,
+            "rol": m.rol,  # user (cliente) | assistant (bot) | owner (la dueña)
+            "contenido": m.contenido,
+            "fecha": m.created_at.isoformat(),
+            "tipo": m.tipo,
+            "media_id": m.media_id,
+            "estado": m.estado,  # enviado|entregado|leido|fallido (None = no lo enviamos nosotros)
+            "error": m.error,
+        }
         for m in mensajes
     ]
+
+
+# ─── LA BANDEJA: responder desde el panel ────────────────────────────
+# La regla de Meta: solo se puede escribir texto libre dentro de las 24h desde el ÚLTIMO
+# mensaje DEL CLIENTE. Fuera de eso hay que usar una plantilla aprobada (eso es la Fase 5).
+VENTANA_HORAS = 24
+
+
+def _ventana(cliente: Cliente) -> dict:
+    """Cuánto le queda a la dueña para poder responder. NULL ⇒ CERRADA (fail-closed)."""
+    if cliente.ultimo_entrante_at is None:
+        return {"abierta": False, "minutos_restantes": 0, "cierra": None}
+    cierra = cliente.ultimo_entrante_at + timedelta(hours=VENTANA_HORAS)
+    restante = (cierra - now_utc()).total_seconds() / 60
+    return {
+        "abierta": restante > 0,
+        "minutos_restantes": max(0, int(restante)),
+        "cierra": cierra.isoformat(),
+    }
+
+
+@router.get("/conversaciones/{telefono}/estado")
+async def estado_conversacion(telefono: str, _: str = Depends(usuario_actual)):
+    """Si la dueña PUEDE responder ahora mismo, y quién está atendiendo el chat.
+    Endpoint aparte para no cambiarle la forma a `GET /conversaciones/{telefono}`."""
+    factory = get_session_factory()
+    async with factory() as session:
+        cliente = (
+            await session.execute(select(Cliente).where(Cliente.telefono == telefono))
+        ).scalar_one_or_none()
+        if cliente is None:
+            raise HTTPException(status_code=404, detail="Cliente no encontrado")
+        return {
+            "telefono": cliente.telefono,
+            "nombre": cliente.nombre,
+            "bot_pausado": cliente.bot_pausado,  # True = la estás atendiendo TÚ
+            "no_leidos": cliente.no_leidos,
+            "ventana": _ventana(cliente),
+            "es_simulador": telefono.startswith(SIMULADOR),
+        }
+
+
+class MensajeDueña(BaseModel):
+    texto: Annotated[str, StringConstraints(min_length=1, max_length=4000, strip_whitespace=True)]
+
+
+@router.post("/conversaciones/{telefono}/mensajes")
+async def responder_como_dueña(
+    telefono: str, datos: MensajeDueña, _: str = Depends(usuario_actual)
+):
+    """LA DUEÑA RESPONDE DESDE EL PANEL. Hace cinco cosas, en este orden:
+
+    1. Comprueba la VENTANA DE 24H. Cerrada ⇒ 409 y **no se intenta enviar**. Un envío fuera de
+       ventana lo rechaza Meta y le baja la calidad al número; siendo Enova Tech Provider, eso
+       arriesga la cuenta de TODOS los clientes. Se avisa antes, no se falla en silencio.
+    2. Envía por WhatsApp.
+    3. Lo guarda con rol='owner' + el id que devolvió Meta (para casar después el estado).
+    4. PAUSA EL BOT en ese chat. El relevo es automático al primer mensaje humano: si ella
+       habla, el bot se calla. Sin depender de que se acuerde de apretar un botón.
+    5. Se lo mete al bot en la memoria (Redis) como 'assistant', para que al devolverle el chat
+       NO se contradiga ni repita lo que ella ya dijo. En Postgres queda como 'owner' (la
+       verdad de quién habló); ante el cliente hay UNA sola voz.
+
+    El tope de gasto anti-abuso NO aplica aquí: eso frena al BOT, no a la humana.
+    """
+    from httpx import HTTPError
+
+    from app.services.meta_client import enviar_texto
+    from app.services.redis_client import guardar_historial
+
+    texto = datos.texto
+    factory = get_session_factory()
+    async with factory() as session:
+        cliente = (
+            await session.execute(select(Cliente).where(Cliente.telefono == telefono))
+        ).scalar_one_or_none()
+        if cliente is None:
+            raise HTTPException(status_code=404, detail="Cliente no encontrado")
+
+        if telefono.startswith(SIMULADOR):
+            raise HTTPException(
+                status_code=400,
+                detail="Este es el chat de prueba del simulador: no hay un WhatsApp real "
+                       "del otro lado.",
+            )
+
+        # 1) LA VENTANA (antes de tocar nada).
+        ventana = _ventana(cliente)
+        if not ventana["abierta"]:
+            raise HTTPException(
+                status_code=409,
+                detail="Pasaron más de 24 horas desde el último mensaje del cliente. "
+                       "WhatsApp no deja escribirle texto libre hasta que él vuelva a "
+                       "escribir. (Las plantillas para reabrir la conversación son el "
+                       "siguiente paso.)",
+            )
+
+        # 2) Enviar. Si Meta lo rechaza, queda ESCRITO en el hilo, en rojo: nada en silencio.
+        try:
+            resp = await enviar_texto(telefono, texto)
+            wa_id = (resp.get("messages") or [{}])[0].get("id")
+        except HTTPError as exc:
+            session.add(Mensaje(
+                cliente_telefono=telefono, rol="owner", contenido=texto,
+                tipo="text", estado="fallido", error=str(exc)[:400],
+            ))
+            await session.commit()
+            raise HTTPException(
+                status_code=502, detail=f"WhatsApp no aceptó el mensaje: {exc}"
+            ) from exc
+
+        # 3) Guardar quién habló de verdad.
+        session.add(Mensaje(
+            cliente_telefono=telefono, rol="owner", contenido=texto,
+            tipo="text", wa_message_id=wa_id, estado="enviado",
+        ))
+
+        # 4) El bot se calla: ella tomó el chat.
+        cliente.bot_pausado = True
+        cliente.no_leidos = 0
+        cliente.ultima_interaccion = now_utc()
+
+        # Si había un aviso de "el bot te necesita" abierto, ya lo atendió.
+        for aviso in (
+            await session.execute(
+                select(Intervencion).where(
+                    Intervencion.cliente_telefono == telefono,
+                    Intervencion.estado == "pendiente",
+                )
+            )
+        ).scalars().all():
+            aviso.estado = "resuelta"
+            aviso.resuelta_at = now_utc()
+
+        await session.commit()
+
+    # 5) El bot hereda lo que ella prometió (si falla Redis, el mensaje YA se envió: no se
+    #    revierte nada, solo se avisa en el log).
+    try:
+        await guardar_historial(telefono, "assistant", texto)
+    except Exception:  # noqa: BLE001
+        logger.exception("No se pudo meter en la memoria del bot el mensaje de la dueña")
+
+    return {"ok": True, "wa_message_id": wa_id, "bot_pausado": True}
 
 
 @router.delete("/conversaciones/{telefono}")

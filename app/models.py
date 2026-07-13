@@ -90,6 +90,14 @@ class Cliente(Base):
     bot_pausado: Mapped[bool] = mapped_column(Boolean, default=False)
     primera_interaccion: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
     ultima_interaccion: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    # EL RELOJ DE LAS 24 HORAS DE META: la hora del último mensaje que escribió EL CLIENTE.
+    # Meta solo deja responder con texto libre dentro de esa ventana. NULL ⇒ ventana CERRADA
+    # (fail-closed a propósito: enviar fuera de ventana quema la calidad del número y, siendo
+    # Tech Provider, eso arriesga la cuenta de TODOS los clientes). Ver migración 019.
+    ultimo_entrante_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    no_leidos: Mapped[int] = mapped_column(Integer, default=0)
 
 
 class Intervencion(Base):
@@ -167,14 +175,32 @@ class Pedido(Base):
 class Mensaje(Base):
     __tablename__ = "mensajes"
     __table_args__ = (
-        CheckConstraint("rol IN ('user','assistant')", name="ck_mensaje_rol"),
+        # 'owner' = lo escribió una PERSONA (la dueña), desde el panel o desde su celular.
+        # Sin este rol su mensaje NO CABE en el hilo, y guardarlo como 'assistant' haría que el
+        # bot creyera que lo dijo él (y arrastrara promesas que no hizo). Ver migración 019.
+        CheckConstraint("rol IN ('user','assistant','owner')", name="ck_mensaje_rol"),
+        CheckConstraint(
+            "tipo IN ('text','image','audio','document','sticker','video')",
+            name="ck_mensaje_tipo",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    # El id del mensaje ENTRANTE (idempotencia de los reintentos de Meta). NO confundir con
+    # `wa_message_id`, que es el id del mensaje que NOSOTROS enviamos.
     message_id: Mapped[str | None] = mapped_column(Text, unique=True, nullable=True)
     cliente_telefono: Mapped[str] = mapped_column(Text)
-    rol: Mapped[str] = mapped_column(Text)
+    rol: Mapped[str] = mapped_column(Text)  # user | assistant | owner (la dueña)
     contenido: Mapped[str] = mapped_column(Text)
+    # QUÉ era: para que el comprobante se VEA en el chat (hoy no entra al hilo y la dueña
+    # tendría que responder a ciegas, sin ver la foto del pago).
+    tipo: Mapped[str] = mapped_column(Text, default="text")
+    media_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # CÓMO llegó: nada de fallos en silencio. Meta devuelve un id al enviar y luego manda el
+    # estado contra ESE id; sin guardarlo no hay con qué casarlo.
+    wa_message_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    estado: Mapped[str | None] = mapped_column(Text, nullable=True)  # enviado|entregado|leido|fallido
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 
 

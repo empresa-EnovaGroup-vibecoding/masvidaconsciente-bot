@@ -139,6 +139,12 @@ async def main() -> None:
         await session.commit()
         logger.info("Migracion 018 (horas) aplicada")
 
+        # 019: LA BANDEJA (rol 'owner', tipo/media, estado del envío, reloj de 24h, no leídos).
+        for stmt in _statements(MIGRATIONS / "019_bandeja.sql"):
+            await session.execute(text(stmt))
+        await session.commit()
+        logger.info("Migracion 019 (bandeja) aplicada")
+
         total = (await session.execute(text("SELECT COUNT(*) FROM productos"))).scalar()
         if total and total > 0:
             logger.info("Catálogo ya cargado (%s productos), no se vuelve a sembrar", total)
