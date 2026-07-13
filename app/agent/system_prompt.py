@@ -19,6 +19,7 @@ from app.models import (
     Feriado,
     Pedido,
     PrecioDia,
+    ProductoVariante,
     Producto,
     hoy_venezuela,
 )
@@ -156,15 +157,28 @@ async def _catalogo_bloque() -> str:
             # responde la dueña). Si ella ya dio el de HOY, el bot lo usa; si no, NO puede
             # cobrarlo y tiene que llamar a `pedir_ayuda`. Un precio de ayer jamás se usa.
             precios_hoy = {
-                pid: precio
-                for pid, precio in (
+                vid: precio
+                for vid, precio in (
                     await session.execute(
-                        select(PrecioDia.producto_id, PrecioDia.precio).where(
-                            PrecioDia.fecha == hoy_venezuela()
+                        select(PrecioDia.variante_id, PrecioDia.precio).where(
+                            PrecioDia.fecha == hoy_venezuela(),
+                            PrecioDia.variante_id.is_not(None),
                         )
                     )
                 ).all()
             }
+            # LOS TAMAÑOS. El precio vive AQUÍ, no en el producto: la Kombucha de 350ml cuesta
+            # $4 y la de 700ml $7. Cada uno trae su `id_para_pedir`, que es lo ÚNICO con lo que
+            # el bot puede registrar un pedido (lista CERRADA: no puede inventarse un id).
+            tamanos: dict[int, list] = {}
+            for v in (
+                await session.execute(
+                    select(ProductoVariante).order_by(
+                        ProductoVariante.orden, ProductoVariante.id
+                    )
+                )
+            ).scalars().all():
+                tamanos.setdefault(v.producto_id, []).append(v)
     except Exception:  # noqa: BLE001 — sin catálogo igual responde (las tools lo traen)
         return ""
     if not prods:
@@ -184,25 +198,57 @@ async def _catalogo_bloque() -> str:
             # INTERNO: precio, unidades y detalles (duración, congela, apto, alérgenos). El bot los
             # CONOCE (así no inventa y responde al instante CUANDO se los piden) pero NO los suelta
             # por su cuenta — solo si el cliente pregunta o está comprando (ver regla 5).
-            efectivo = p.precio if p.precio is not None else precios_hoy.get(p.id)
-            if efectivo is not None:
-                precio = f"${efectivo}"
-            else:
-                precio = (
-                    "PRECIO DEL DÍA — TODAVÍA NO LO SABES. Este precio CAMBIA y hoy la dueña "
-                    "aún no lo dio. Está PROHIBIDO inventarlo, estimarlo o usar uno viejo: si "
-                    "te lo preguntan o lo quieren comprar, llama a `pedir_ayuda` "
-                    "(motivo='precio_del_dia')"
+            vs = tamanos.get(p.id) or []
+            _SIN_PRECIO = (
+                "PRECIO DEL DÍA — TODAVÍA NO LO SABES. Este precio CAMBIA y hoy la dueña "
+                "aún no lo dio. Está PROHIBIDO inventarlo, estimarlo o usar uno viejo: si "
+                "te lo preguntan o lo quieren comprar, llama a `pedir_ayuda` "
+                "(motivo='precio_del_dia')"
+            )
+
+            def _pre(v):
+                e = v.precio if v.precio is not None else precios_hoy.get(v.id)
+                return f"${e}" if e is not None else _SIN_PRECIO
+
+            interno = []
+            if len(vs) > 1:
+                # MÁS DE UN TAMAÑO: cada uno con SU precio y SU id. El bot TIENE que preguntar
+                # cuál quiere antes de registrar: si adivina, cobra mal (era la fuga de $3 de
+                # la Kombucha).
+                partes = []
+                for v in vs:
+                    trozo = f"{v.presentacion} = {_pre(v)} (id_para_pedir={v.id})"
+                    if v.sabores:
+                        trozo += f" [sabores: {v.sabores}]"
+                    if not v.disponible:
+                        trozo += " [AGOTADO]"
+                    partes.append(trozo)
+                interno.append(
+                    "TIENE VARIOS TAMAÑOS, cada uno con SU PRECIO — PREGÚNTALE al cliente cuál "
+                    "quiere ANTES de registrar, y NUNCA lo adivines: " + " · ".join(partes)
                 )
-            interno = [f"precio {precio}"]
-            if p.presentacion:
+            elif vs:
+                v = vs[0]
+                interno.append(f"precio {_pre(v)} (id_para_pedir={v.id})")
+                if v.sabores:
+                    interno.append(f"sabores: {v.sabores}")
+                if not v.disponible:
+                    interno.append("AGOTADO")
+            else:
+                # Un producto SIN tamaños no se puede vender (no hay id ni precio). No debería
+                # pasar (la migración le da uno a cada uno), pero si pasa el bot NO improvisa.
+                interno.append(
+                    "NO SE PUEDE VENDER (sin precio cargado): no lo ofrezcas ni lo registres"
+                )
+            _pres_unica = vs[0].presentacion if len(vs) == 1 else None
+            if _pres_unica and _pres_unica != "única":
                 # LA UNIDAD DE VENTA ES EL PAQUETE COMPLETO. El negocio NO vende sueltas: si
                 # el paquete trae 8 empanadas por $14, no existe "4 empanadas". El 2026-07-12,
                 # a "necesito cuatro" el bot contestó "listo, 4 empanadas de pollo" — y como
                 # `cantidad` son PAQUETES, iba a cobrar 4 × $14 = $56 por lo que la clienta
                 # creía que eran 4 empanadas.
                 interno.append(
-                    f"SE VENDE POR PAQUETE COMPLETO: 1 = {p.presentacion} "
+                    f"SE VENDE POR PAQUETE COMPLETO: 1 = {_pres_unica} "
                     f"(NO se vende suelto ni fraccionado)"
                 )
             if p.dias_anticipacion:

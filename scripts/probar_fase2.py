@@ -8,6 +8,7 @@ Si algo sale MAL, NO SE DESPLIEGA.
 """
 import asyncio
 import sys
+import time
 
 from sqlalchemy import delete, select
 
@@ -17,6 +18,12 @@ from app.webhook.parser import contenido_seguro, extraer_eventos, tipo_valido
 
 TEL = "__prueba_fase2__"
 NEGOCIO = "573132933806"
+
+# ⚠️ Ids ÚNICOS por corrida. El candado anti-duplicados (el que impide que un reintento de Meta
+# duplique la burbuja) recuerda cada id en Redis durante 24 HORAS. Con ids fijos, la segunda
+# corrida del día se saltaba TODO —y con razón: el código estaba haciendo justo su trabajo—.
+# Reutilizarlos daba un rojo falso.
+RUN = str(int(time.time()))
 fallos: list[str] = []
 
 
@@ -31,7 +38,7 @@ def _payload(field: str, value: dict) -> dict:
 
 
 def _eco(id_: str, tipo: str = "text", **extra) -> dict:
-    e = {"id": id_, "from": NEGOCIO, "to": TEL, "type": tipo, "timestamp": "1783900000"}
+    e = {"id": f"{id_}.{RUN}", "from": NEGOCIO, "to": TEL, "type": tipo, "timestamp": "1783900000"}
     e.update(extra)
     return _payload("smb_message_echoes", {"message_echoes": [e]})
 
@@ -125,7 +132,7 @@ async def main() -> None:
     async with factory() as s:
         c = (await s.execute(select(Cliente).where(Cliente.telefono == TEL))).scalar_one()
         foto = (await s.execute(
-            select(Mensaje).where(Mensaje.wa_message_id == "wamid.E2")
+            select(Mensaje).where(Mensaje.wa_message_id == f"wamid.E2.{RUN}")
         )).scalar_one_or_none()
     check("🔴 una FOTO desde el celular NO revienta y la PAUSA queda puesta", c.bot_pausado is True)
     check("la foto entra al hilo con su placeholder", bool(foto and foto.contenido == "[foto]"))
@@ -135,7 +142,7 @@ async def main() -> None:
     await _procesar_eco(ev)
     async with factory() as s:
         r = (await s.execute(
-            select(Mensaje).where(Mensaje.wa_message_id == "wamid.E3")
+            select(Mensaje).where(Mensaje.wa_message_id == f"wamid.E3.{RUN}")
         )).scalar_one_or_none()
     check("🔴 una REACCIÓN tampoco revienta (el CHECK de la 021 la admite)", r is not None)
 
@@ -143,7 +150,7 @@ async def main() -> None:
     print("\n3) EL ANTI-SUICIDIO: un eco de un mensaje NUESTRO no puede pausar al bot")
     async with factory() as s:
         s.add(Mensaje(cliente_telefono=TEL, rol="assistant", contenido="soy el bot",
-                      wa_message_id="wamid.MIO", estado="enviado"))
+                      wa_message_id=f"wamid.MIO.{RUN}", estado="enviado"))
         c = (await s.execute(select(Cliente).where(Cliente.telefono == TEL))).scalar_one()
         c.bot_pausado, c.pausado_por = False, None
         await s.commit()
@@ -157,21 +164,22 @@ async def main() -> None:
 
     # ───────────────────────────────────────────────────────────────────────────
     print("\n4) LOS ESTADOS: entregado / leído / FALLÓ (el dinero)")
-    await _aplicar_estado({"clase": "estado", "wa_message_id": "wamid.MIO",
+    _MIO = f"wamid.MIO.{RUN}"
+    await _aplicar_estado({"clase": "estado", "wa_message_id": _MIO,
                            "estado": "leido", "error": None})
-    await _aplicar_estado({"clase": "estado", "wa_message_id": "wamid.MIO",
+    await _aplicar_estado({"clase": "estado", "wa_message_id": _MIO,
                            "estado": "entregado", "error": None})  # llega TARDE
     async with factory() as s:
         m = (await s.execute(
-            select(Mensaje).where(Mensaje.wa_message_id == "wamid.MIO")
+            select(Mensaje).where(Mensaje.wa_message_id == _MIO)
         )).scalar_one()
     check("un 'entregado' que llega tarde NO pisa un 'leído'", m.estado == "leido", m.estado)
 
-    await _aplicar_estado({"clase": "estado", "wa_message_id": "wamid.MIO",
+    await _aplicar_estado({"clase": "estado", "wa_message_id": _MIO,
                            "estado": "fallido", "error": "131047: fuera de la ventana"})
     async with factory() as s:
         m = (await s.execute(
-            select(Mensaje).where(Mensaje.wa_message_id == "wamid.MIO")
+            select(Mensaje).where(Mensaje.wa_message_id == _MIO)
         )).scalar_one()
     check("🔴 un FALLO SIEMPRE gana (es lo que la dueña tiene que ver sí o sí)",
           m.estado == "fallido" and bool(m.error), (m.estado, m.error))

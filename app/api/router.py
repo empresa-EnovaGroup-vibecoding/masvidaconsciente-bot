@@ -32,6 +32,7 @@ from app.models import (
     PrecioDia,
     Producto,
     ProductoMedia,
+    ProductoVariante,
     hoy_venezuela,
     inicio_dia_venezuela,
     now_utc,
@@ -153,6 +154,10 @@ class ClienteEditIn(BaseModel):
 
 class ItemEditIn(BaseModel):
     producto: str
+    # El CÓDIGO DE BARRAS del tamaño: es lo que se cobra. El panel lo reenvía tal cual; si no
+    # viene (pedido viejo), se busca por nombre — y solo vale si el producto tiene UN tamaño:
+    # con varios NO se adivina (adivinar era exactamente la fuga de la Kombucha).
+    variante_id: int | None = None
     cantidad: int  # PAQUETES completos, nunca unidades sueltas
     # Lo que el cliente eligió dentro del paquete (relleno, masa, sabor). No toca el precio,
     # pero la dueña lo necesita para cocinar: si el panel no lo reenvía, se PERDÍA al editar.
@@ -428,32 +433,57 @@ async def editar_items_pedido(
         total = Decimal("0")
         for it in datos.items:
             cantidad = max(1, int(it.cantidad))
-            prod = await _buscar_producto(session, it.producto, solo_disponibles=False)
-            if prod is None:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"No encontré el producto «{it.producto}» en el catálogo.",
-                )
-            # El precio EFECTIVO (fijo, o el precio del día si su precio cambia), igual que
-            # el bot. Antes hacía `(prod.precio or 0) * cantidad`: al editar un pedido con un
-            # producto de PRECIO DEL DÍA, el total se recalculaba en $0 y el pedido quedaba
-            # GRATIS. Sin precio de hoy NO se recalcula: se avisa, nunca se cobra $0.
-            precio = await _precio_efectivo(session, prod)
+            # El TAMAÑO es lo que se cobra. Si el ítem trae su `variante_id` (los pedidos nuevos
+            # lo traen), se usa ESE. Si es un pedido viejo sin id, se busca por nombre y solo
+            # vale si el producto tiene UN tamaño: con varios NO se adivina (era la fuga).
+            variante = None
+            if getattr(it, "variante_id", None):
+                variante = await session.get(ProductoVariante, int(it.variante_id))
+            if variante is None:
+                prod = await _buscar_producto(session, it.producto, solo_disponibles=False)
+                if prod is None:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"No encontré el producto «{it.producto}» en el catálogo.",
+                    )
+                vs = (
+                    await session.execute(
+                        select(ProductoVariante)
+                        .where(ProductoVariante.producto_id == prod.id)
+                        .order_by(ProductoVariante.orden, ProductoVariante.id)
+                    )
+                ).scalars().all()
+                if len(vs) != 1:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            f"«{prod.nombre}» tiene varios tamaños y cada uno cuesta distinto. "
+                            "Elige el tamaño en el pedido antes de guardar."
+                        ),
+                    )
+                variante = vs[0]
+            prod = await session.get(Producto, variante.producto_id)
+            # El precio EFECTIVO del TAMAÑO (fijo, o el del día). Antes hacía
+            # `(prod.precio or 0) * cantidad`: al editar un pedido con un producto de PRECIO DEL
+            # DÍA el total se recalculaba en $0 y el pedido quedaba GRATIS. Sin precio de hoy NO
+            # se recalcula: se avisa, nunca se cobra $0.
+            precio = await _precio_efectivo(session, variante)
             if precio is None:
                 raise HTTPException(
                     status_code=400,
                     detail=(
-                        f"«{prod.nombre}» todavía no tiene precio de hoy. Ponle el precio del día "
-                        f"en «El bot te necesita» y vuelve a guardar el pedido."
+                        f"«{prod.nombre}» ({variante.presentacion}) todavía no tiene precio de "
+                        "hoy. Ponlo en «El bot te necesita» y vuelve a guardar el pedido."
                     ),
                 )
             total += precio * cantidad
             items_pedido.append(
                 {
                     "producto": prod.nombre,
+                    "variante_id": variante.id,
                     "cantidad": cantidad,
                     "precio_unitario": float(precio),
-                    "presentacion": prod.presentacion,
+                    "presentacion": variante.presentacion,
                     "opciones": (it.opciones or "").strip() or None,
                 }
             )
@@ -488,6 +518,20 @@ async def listar_productos(_: str = Depends(usuario_actual)):
             ).scalars().all()
             for m in filas:
                 primera_img.setdefault(m.producto_id, m.clave)  # la primera por orden
+
+        # LOS TAMAÑOS. El precio vive AQUÍ desde la migración 022 (la Kombucha de 350ml cuesta
+        # $4 y la de 700ml $7). El campo `precio` del producto se sigue devolviendo para no
+        # romper nada, pero YA NO manda: el bot cobra el del tamaño.
+        tamanos: dict[int, list] = {}
+        if ids:
+            for v in (
+                await session.execute(
+                    select(ProductoVariante)
+                    .where(ProductoVariante.producto_id.in_(ids))
+                    .order_by(ProductoVariante.orden, ProductoVariante.id)
+                )
+            ).scalars().all():
+                tamanos.setdefault(v.producto_id, []).append(v)
     return [
         {
             "id": p.id,
@@ -503,6 +547,17 @@ async def listar_productos(_: str = Depends(usuario_actual)):
             "dias_anticipacion": p.dias_anticipacion or 0,
             "disponible": p.disponible,
             "imagen": r2.url_publica(primera_img[p.id]) if p.id in primera_img else None,
+            "variantes": [
+                {
+                    "id": v.id,
+                    "presentacion": v.presentacion,
+                    "precio": float(v.precio) if v.precio is not None else None,
+                    "sabores": v.sabores,
+                    "disponible": v.disponible,
+                    "orden": v.orden,
+                }
+                for v in (tamanos.get(p.id) or [])
+            ],
         }
         for p in productos
     ]
@@ -525,7 +580,32 @@ async def crear_producto(datos: ProductoIn, _: str = Depends(usuario_actual)):
             dias_anticipacion=max(0, int(datos.dias_anticipacion or 0)),
             disponible=datos.disponible,
         )
+        # NOMBRE ÚNICO: dos productos con el mismo nombre fue exactamente la causa de la fuga
+        # de la Kombucha (el bot cobraba siempre el primero). Si quiere otro precio, es un
+        # TAMAÑO del mismo producto, no un producto nuevo.
+        repe = (
+            await session.execute(select(Producto.id).where(Producto.nombre.ilike(datos.nombre)))
+        ).scalar_one_or_none()
+        if repe is not None:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Ya tienes un producto llamado '{datos.nombre}'. Si es el mismo producto en "
+                    "otro tamaño (u otro precio), agrégalo como TAMAÑO dentro de ese producto, "
+                    "no como un producto nuevo."
+                ),
+            )
         session.add(prod)
+        await session.flush()
+        # Y NACE CON SU PRIMER TAMAÑO, en la misma transacción: un producto sin tamaño no tiene
+        # precio ni id_para_pedir ⇒ el bot NO PODRÍA VENDERLO, y sin un solo error en el log.
+        session.add(ProductoVariante(
+            producto_id=prod.id,
+            presentacion=(datos.presentacion or "").strip() or "única",
+            precio=Decimal(str(datos.precio)) if datos.precio is not None else None,
+            disponible=datos.disponible,
+            orden=0,
+        ))
         await session.commit()
         await session.refresh(prod)
     return {"id": prod.id}
@@ -538,10 +618,50 @@ async def editar_producto(producto_id: int, datos: ProductoIn, _: str = Depends(
         prod = await session.get(Producto, producto_id)
         if prod is None:
             raise HTTPException(status_code=404, detail="Producto no encontrado")
+
+        repe = (
+            await session.execute(
+                select(Producto.id).where(
+                    Producto.nombre.ilike(datos.nombre), Producto.id != producto_id
+                )
+            )
+        ).scalar_one_or_none()
+        if repe is not None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Ya tienes otro producto llamado '{datos.nombre}'. Los nombres no se repiten.",
+            )
+
+        variantes = (
+            await session.execute(
+                select(ProductoVariante)
+                .where(ProductoVariante.producto_id == producto_id)
+                .order_by(ProductoVariante.orden, ProductoVariante.id)
+            )
+        ).scalars().all()
+
+        # 🔴 UNA SOLA FUENTE DE VERDAD DEL PRECIO.
+        # Si el precio se pudiera editar aquí Y en el tamaño, la dueña subiría el Pan Keto a $28
+        # en el único campo que ve... y el bot seguiría cobrando $25 (el del tamaño). Nada la
+        # avisaría. Con UN tamaño el precio se PROPAGA; con VARIOS se RECHAZA y se le dice dónde.
+        nuevo_precio = Decimal(str(datos.precio)) if datos.precio is not None else None
+        if datos.precio is not None and len(variantes) > 1:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"'{prod.nombre}' tiene varios tamaños y cada uno tiene SU precio. "
+                    "Edítalo en el tamaño, no aquí."
+                ),
+            )
+        if len(variantes) == 1:
+            variantes[0].precio = nuevo_precio
+            variantes[0].presentacion = (datos.presentacion or "").strip() or "única"
+            variantes[0].disponible = datos.disponible
+
         prod.nombre = datos.nombre
         prod.categoria = datos.categoria
         prod.descripcion = datos.descripcion
-        prod.precio = Decimal(str(datos.precio)) if datos.precio is not None else None
+        prod.precio = nuevo_precio  # se mantiene por compatibilidad; el BOT ya no lo lee
         prod.presentacion = datos.presentacion
         prod.duracion = datos.duracion
         prod.se_congela = datos.se_congela
@@ -549,6 +669,123 @@ async def editar_producto(producto_id: int, datos: ProductoIn, _: str = Depends(
         prod.info = datos.info
         prod.dias_anticipacion = max(0, int(datos.dias_anticipacion or 0))
         prod.disponible = datos.disponible
+        await session.commit()
+    return {"ok": True}
+
+
+class DisponibleIn(BaseModel):
+    disponible: bool
+
+
+@router.patch("/productos/{producto_id}/disponible")
+async def marcar_agotado(producto_id: int, datos: DisponibleIn, _: str = Depends(usuario_actual)):
+    """El botón "Agotado" del catálogo. Endpoint PROPIO a propósito.
+
+    Antes el panel reconstruía el producto ENTERO a mano y lo mandaba por PATCH: con un producto
+    de VARIOS tamaños eso incluía un `precio` que el PATCH ahora rechaza (el precio vive en el
+    tamaño) ⇒ marcar agotada la Kombucha habría FALLADO. Aquí solo se toca lo que se pidió.
+
+    El agotado del PRODUCTO manda sobre todos sus tamaños (así lo lee el bot). Al re-activarlo,
+    los tamaños que ella dejó agotados a mano SIGUEN agotados: no se resucita nada.
+    """
+    factory = get_session_factory()
+    async with factory() as session:
+        prod = await session.get(Producto, producto_id)
+        if prod is None:
+            raise HTTPException(status_code=404, detail="Producto no encontrado")
+        prod.disponible = datos.disponible
+        await session.commit()
+    return {"ok": True, "disponible": datos.disponible}
+
+
+# ─── LOS TAMAÑOS (lo que se COBRA) ───────────────────────────────────
+
+class VarianteIn(BaseModel):
+    presentacion: Annotated[
+        str, StringConstraints(min_length=1, max_length=60, strip_whitespace=True)
+    ]
+    precio: float | None = None     # None = PRECIO DEL DÍA (lo pone la dueña cada día)
+    sabores: str | None = None
+    disponible: bool = True
+    orden: int = 0
+
+
+@router.post("/productos/{producto_id}/variantes")
+async def crear_variante(producto_id: int, datos: VarianteIn, _: str = Depends(usuario_actual)):
+    """Agrega un TAMAÑO a un producto (la Kombucha de 700ml, la torta de 1kg…)."""
+    factory = get_session_factory()
+    async with factory() as session:
+        prod = await session.get(Producto, producto_id)
+        if prod is None:
+            raise HTTPException(status_code=404, detail="Producto no encontrado")
+        repe = (
+            await session.execute(
+                select(ProductoVariante.id).where(
+                    ProductoVariante.producto_id == producto_id,
+                    ProductoVariante.presentacion.ilike(datos.presentacion),
+                )
+            )
+        ).scalar_one_or_none()
+        if repe is not None:
+            raise HTTPException(
+                status_code=400, detail=f"Ese producto ya tiene el tamaño '{datos.presentacion}'."
+            )
+        v = ProductoVariante(
+            producto_id=producto_id,
+            presentacion=datos.presentacion,
+            precio=Decimal(str(datos.precio)) if datos.precio is not None else None,
+            sabores=datos.sabores,
+            disponible=datos.disponible,
+            orden=datos.orden,
+        )
+        session.add(v)
+        await session.commit()
+        await session.refresh(v)
+    return {"id": v.id}
+
+
+@router.patch("/variantes/{variante_id}")
+async def editar_variante(variante_id: int, datos: VarianteIn, _: str = Depends(usuario_actual)):
+    factory = get_session_factory()
+    async with factory() as session:
+        v = await session.get(ProductoVariante, variante_id)
+        if v is None:
+            raise HTTPException(status_code=404, detail="Ese tamaño no existe")
+        v.presentacion = datos.presentacion
+        v.precio = Decimal(str(datos.precio)) if datos.precio is not None else None
+        v.sabores = datos.sabores
+        v.disponible = datos.disponible
+        v.orden = datos.orden
+        v.updated_at = now_utc()
+        await session.commit()
+    return {"ok": True}
+
+
+@router.delete("/variantes/{variante_id}")
+async def borrar_variante(variante_id: int, _: str = Depends(usuario_actual)):
+    """Quita un tamaño. NO se puede quitar el ÚLTIMO: sin tamaño, el producto queda sin precio
+    ni id con el que el bot pueda registrarlo ⇒ INVENDIBLE, y sin un solo error."""
+    factory = get_session_factory()
+    async with factory() as session:
+        v = await session.get(ProductoVariante, variante_id)
+        if v is None:
+            raise HTTPException(status_code=404, detail="Ese tamaño no existe")
+        cuantos = (
+            await session.execute(
+                select(func.count())
+                .select_from(ProductoVariante)
+                .where(ProductoVariante.producto_id == v.producto_id)
+            )
+        ).scalar_one()
+        if cuantos <= 1:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "No puedes quitar el único tamaño: el producto quedaría sin precio y el bot "
+                    "no podría venderlo. Si ya no lo vendes, márcalo como agotado o bórralo."
+                ),
+            )
+        await session.delete(v)
         await session.commit()
     return {"ok": True}
 
@@ -1402,7 +1639,10 @@ async def borrar_cliente(telefono: str, _: str = Depends(usuario_actual)):
 # ─── "EL BOT TE NECESITA": bandeja de intervenciones + precio del día ─
 
 class PrecioDiaIn(BaseModel):
-    producto_id: int
+    # El precio del día es POR TAMAÑO (la torta de 250g y la de 1kg cuestan distinto).
+    # `producto_id` se mantiene por compatibilidad, pero manda `variante_id`.
+    producto_id: int | None = None
+    variante_id: int | None = None
     precio: float
     nota: str | None = None
 
@@ -1482,20 +1722,27 @@ async def resolver_intervencion(
 
 @router.get("/precio-dia")
 async def ver_precios_dia(_: str = Depends(usuario_actual)):
-    """Los productos de PRECIO VARIABLE (precio vacío a propósito: su costo cambia de un
-    día a otro) y el precio que la dueña les dio HOY (si ya lo dio)."""
+    """Los TAMAÑOS de precio VARIABLE (precio vacío a propósito: su costo cambia de un día a
+    otro) y el precio que la dueña les dio HOY.
+
+    Va POR TAMAÑO, no por producto: la torta de 250g y la de 1kg tienen precios distintos, y
+    hasta hoy el índice de la tabla IMPEDÍA guardar los dos el mismo día."""
     factory = get_session_factory()
     async with factory() as session:
-        prods = (
+        filas = (
             await session.execute(
-                select(Producto).where(Producto.precio.is_(None)).order_by(Producto.nombre)
+                select(Producto, ProductoVariante)
+                .join(ProductoVariante, ProductoVariante.producto_id == Producto.id)
+                .where(ProductoVariante.precio.is_(None))
+                .order_by(Producto.nombre, ProductoVariante.orden)
             )
-        ).scalars().all()
+        ).all()
         hoy = dict(
             (
                 await session.execute(
-                    select(PrecioDia.producto_id, PrecioDia.precio).where(
-                        PrecioDia.fecha == hoy_venezuela()
+                    select(PrecioDia.variante_id, PrecioDia.precio).where(
+                        PrecioDia.fecha == hoy_venezuela(),
+                        PrecioDia.variante_id.is_not(None),
                     )
                 )
             ).all()
@@ -1503,36 +1750,57 @@ async def ver_precios_dia(_: str = Depends(usuario_actual)):
     return [
         {
             "producto_id": p.id,
+            "variante_id": v.id,
             "nombre": p.nombre,
-            "presentacion": p.presentacion,
-            "precio_hoy": float(hoy[p.id]) if p.id in hoy else None,
+            "presentacion": None if v.presentacion == "única" else v.presentacion,
+            "precio_hoy": float(hoy[v.id]) if v.id in hoy else None,
         }
-        for p in prods
+        for p, v in filas
     ]
 
 
 @router.put("/precio-dia")
 async def poner_precio_dia(datos: PrecioDiaIn, _: str = Depends(usuario_actual)):
-    """La dueña dice cuánto está HOY ese producto. Vale SOLO por hoy: mañana el bot se lo
-    vuelve a preguntar (un precio viejo jamás se reutiliza). Si lo corrige, se sobreescribe."""
+    """La dueña dice cuánto está HOY ese TAMAÑO. Vale SOLO por hoy: mañana el bot se lo vuelve
+    a preguntar (un precio viejo jamás se reutiliza). Si lo corrige, se sobreescribe.
+
+    Va por TAMAÑO: la torta de 250g y la de 1kg tienen precios distintos, y hasta hoy el índice
+    de la tabla IMPEDÍA guardar los dos el mismo día."""
     if datos.precio <= 0:
         raise HTTPException(status_code=400, detail="El precio debe ser mayor que 0.")
     factory = get_session_factory()
     async with factory() as session:
-        prod = await session.get(Producto, datos.producto_id)
-        if prod is None:
-            raise HTTPException(status_code=404, detail="Producto no encontrado")
+        variante = None
+        if datos.variante_id:
+            variante = await session.get(ProductoVariante, datos.variante_id)
+        elif datos.producto_id:
+            # Compatibilidad: si solo mandan el producto, vale SOLO si tiene un tamaño.
+            vs = (
+                await session.execute(
+                    select(ProductoVariante).where(
+                        ProductoVariante.producto_id == datos.producto_id
+                    )
+                )
+            ).scalars().all()
+            if len(vs) == 1:
+                variante = vs[0]
+        if variante is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Dime de qué TAMAÑO es este precio (cada tamaño tiene el suyo).",
+            )
         fila = (
             await session.execute(
                 select(PrecioDia).where(
-                    PrecioDia.producto_id == datos.producto_id, PrecioDia.fecha == hoy_venezuela()
+                    PrecioDia.variante_id == variante.id, PrecioDia.fecha == hoy_venezuela()
                 )
             )
         ).scalar_one_or_none()
         if fila is None:
             session.add(
                 PrecioDia(
-                    producto_id=datos.producto_id,
+                    producto_id=variante.producto_id,
+                    variante_id=variante.id,
                     precio=Decimal(str(datos.precio)),
                     nota=datos.nota,
                     fecha=hoy_venezuela(),

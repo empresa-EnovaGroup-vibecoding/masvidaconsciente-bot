@@ -157,6 +157,12 @@ async def main() -> None:
         await session.commit()
         logger.info("Migracion 021 (hilo completo) aplicada")
 
+        # 022: PRODUCTO · TAMAÑO · OPCIÓN — solo la ESTRUCTURA (tablas e índices).
+        for stmt in _statements(MIGRATIONS / "022_variantes.sql"):
+            await session.execute(text(stmt))
+        await session.commit()
+        logger.info("Migracion 022 (tamaños: estructura) aplicada")
+
         total = (await session.execute(text("SELECT COUNT(*) FROM productos"))).scalar()
         if total and total > 0:
             logger.info("Catálogo ya cargado (%s productos), no se vuelve a sembrar", total)
@@ -165,6 +171,15 @@ async def main() -> None:
                 await session.execute(text(stmt))
             await session.commit()
             logger.info("Catálogo sembrado")
+
+        # 022b: los DATOS de los tamaños. Va DESPUÉS del seed a propósito: en una BD NUEVA (un
+        # cliente nuevo) las migraciones corren ANTES de sembrar el catálogo, así que un
+        # backfill ahí vería `productos` VACÍA ⇒ CERO tamaños ⇒ el bot no podría vender NADA,
+        # y sin un solo error en el log. Es idempotente en DATOS (se re-ejecuta en cada arranque).
+        for stmt in _statements(MIGRATIONS / "022b_variantes_datos.sql"):
+            await session.execute(text(stmt))
+        await session.commit()
+        logger.info("Migracion 022b (tamaños: datos) aplicada")
 
         # El admin se crea/verifica siempre, exista o no el catálogo
         await _crear_admin(session)

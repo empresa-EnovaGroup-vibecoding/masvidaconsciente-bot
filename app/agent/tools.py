@@ -27,6 +27,7 @@ from app.models import (
     PrecioDia,
     Producto,
     ProductoMedia,
+    ProductoVariante,
     hoy_venezuela,
 )
 from app.services.db import get_session_factory
@@ -87,7 +88,24 @@ TOOL_SCHEMAS = [
                         "items": {
                             "type": "object",
                             "properties": {
-                                "producto": {"type": "string"},
+                                "variante_id": {
+                                    "type": "integer",
+                                    "description": (
+                                        "El NÚMERO del producto/tamaño, copiado EXACTAMENTE de "
+                                        "`id_para_pedir` del catálogo. Es un código de barras: "
+                                        "NO te lo inventes, NO lo deduzcas y NO uses uno que no "
+                                        "hayas visto en el catálogo. Si el producto tiene varios "
+                                        "tamaños, PREGÚNTALE al cliente cuál quiere antes de "
+                                        "registrar: cada tamaño tiene SU precio."
+                                    ),
+                                },
+                                "producto": {
+                                    "type": "string",
+                                    "description": (
+                                        "El nombre del producto, solo para que quede legible. "
+                                        "El precio SIEMPRE sale del `variante_id`, nunca de aquí."
+                                    ),
+                                },
                                 "cantidad": {
                                     "type": "integer",
                                     "minimum": 1,
@@ -109,7 +127,7 @@ TOOL_SCHEMAS = [
                                     ),
                                 },
                             },
-                            "required": ["producto", "cantidad"],
+                            "required": ["variante_id", "cantidad"],
                         },
                     },
                     "notas": {"type": "string", "description": "Notas del pedido (opcional)"},
@@ -239,7 +257,15 @@ TOOL_SCHEMAS = [
                     "nombre": {
                         "type": "string",
                         "description": "Nombre del producto del que el cliente quiere ver fotos/videos.",
-                    }
+                    },
+                    "variante_id": {
+                        "type": "integer",
+                        "description": (
+                            "OPCIONAL. Si el cliente pidió un TAMAÑO concreto, pon aquí su "
+                            "`id_para_pedir` y se le mandan las fotos DE ESE tamaño. Si no dijo "
+                            "tamaño, no lo pongas."
+                        ),
+                    },
                 },
                 "required": ["nombre"],
             },
@@ -336,12 +362,19 @@ def _palabras_busqueda(consulta: str) -> list[str]:
     return [w for w in limpio.split() if len(w) > 2 and w not in _STOP_BUSQUEDA]
 
 
-def _tokens_producto(prod) -> list[str]:
-    """Todas las palabras (sin acentos) de nombre + descripción/ingredientes.
+def _tokens_producto(prod, extra: str = "") -> list[str]:
+    """Todas las palabras (sin acentos) de nombre + descripción/ingredientes (+ los SABORES de
+    sus tamaños, que llegan en `extra`).
     Ese es el 'texto real' del producto contra el que se filtra por ingrediente.
     La CATEGORÍA NO se incluye a propósito: 'pan' no debe calzar con la categoría
-    'panadería' (haría que 'pan de almendra' trajera empanadas de panadería)."""
-    texto = f"{prod.nombre} {prod.descripcion or ''}"
+    'panadería' (haría que 'pan de almendra' trajera empanadas de panadería).
+
+    ⚠️ `extra` NO es opcional en la práctica: al fusionar las dos Kombuchas, los sabores del
+    tamaño de 700ml (cúrcuma, flor de jamaica) dejaron de vivir en `descripcion` y pasaron al
+    TAMAÑO. Sin pasarlos aquí, "quiero la kombucha de flor de jamaica" NO ENCONTRARÍA NADA y la
+    regla antiinvención obligaría al bot a decir "de eso no tengo" sobre algo que SÍ se vende.
+    """
+    texto = f"{prod.nombre} {prod.descripcion or ''} {extra}"
     limpio = (
         _sin_acentos(texto)
         .replace(",", " ").replace(".", " ").replace(":", " ")
@@ -350,13 +383,13 @@ def _tokens_producto(prod) -> list[str]:
     return limpio.split()
 
 
-def _coincide_texto(prod, palabras: list[str]) -> bool:
+def _coincide_texto(prod, palabras: list[str], extra: str = "") -> bool:
     """True si CADA palabra buscada es el INICIO de alguna palabra del producto
-    (nombre + ingredientes). Determinista: 'plátano' calza con la
+    (nombre + ingredientes + los SABORES de sus tamaños). Determinista: 'plátano' calza con la
     descripción 'masa de plátano', pero 'empanada plátano' NO calza con las
     Empanadas Horneadas (yuca/garbanzo). Prefijo de PALABRA (no substring): 'pan'
     calza con 'Pan de Sándwich' pero NO con em-PAN-adas."""
-    tokens = _tokens_producto(prod)
+    tokens = _tokens_producto(prod, extra)
     return all(any(t.startswith(w) for t in tokens) for w in palabras)
 
 
@@ -408,8 +441,17 @@ async def ver_catalogo(session, telefono, categoria=None, busqueda=None):
         # las que de verdad son de plátano (no las Horneadas de yuca). El CÓDIGO decide
         # el match (mira la descripción), no el modelo. 'pan' = panes, NO em-PAN-adas.
         palabras = _palabras_busqueda(busqueda)
+        # Los SABORES viven en el TAMAÑO desde la migración 022 (la kombucha de 700ml tiene
+        # cúrcuma y flor de jamaica; la de 350ml, no). Se los damos al filtro o "flor de
+        # jamaica" no encontraría nada.
+        _sab = await _tamanos_de(session, [p.id for p in productos])
+        _extra = {
+            pid: " ".join(v.sabores or "" for v in vs) for pid, vs in _sab.items()
+        }
         exactos = (
-            [p for p in productos if _coincide_texto(p, palabras)] if palabras else productos
+            [p for p in productos if _coincide_texto(p, palabras, _extra.get(p.id, ""))]
+            if palabras
+            else productos
         )
         if exactos:
             productos = exactos
@@ -449,19 +491,40 @@ async def ver_catalogo(session, telefono, categoria=None, busqueda=None):
             "el cliente ya dijo una masa/variante (ej. plátano), quédate SOLO en esa y ofrécele "
             "lo que aún no eligió (ej. el relleno). NO agregues otros productos. " + _nota_interno
         )
-    return {
-        "productos": [
-            {
-                "nombre": p.nombre,
-                "categoria": p.categoria,
-                "de_que_es": p.descripcion,
-                "precio_usd": float(p.precio) if p.precio is not None else "a consultar",
-                "trae": p.presentacion,
-            }
-            for p in productos
-        ],
-        "nota": nota,
-    }
+    # LOS TAMAÑOS, con su precio de HOY y su `id_para_pedir` (la lista CERRADA con la que el
+    # bot registra: sin esto no puede vender, y con esto no puede cobrar mal).
+    por_prod = await _tamanos_de(session, [p.id for p in productos])
+    salida = []
+    for p in productos:
+        vs = por_prod.get(p.id) or []
+        tamanos = []
+        for v in vs:
+            precio = await _precio_efectivo(session, v)
+            tamanos.append({
+                "id_para_pedir": v.id,
+                "tamano": v.presentacion,
+                "precio_usd": float(precio) if precio is not None else "el precio de hoy no lo sabes: pide_ayuda",
+                "sabores": v.sabores,
+                "agotado": (not v.disponible) or (not p.disponible),
+            })
+        ficha = {
+            "nombre": p.nombre,
+            "categoria": p.categoria,
+            "de_que_es": p.descripcion,
+            "tamanos": tamanos,
+        }
+        if len(tamanos) == 1:
+            # Un solo tamaño: se ve IGUAL que siempre (la palabra "tamaño" ni aparece).
+            ficha["precio_usd"] = tamanos[0]["precio_usd"]
+            ficha["trae"] = None if vs[0].presentacion == "única" else vs[0].presentacion
+            ficha["id_para_pedir"] = tamanos[0]["id_para_pedir"]
+        salida.append(ficha)
+    if any(len(f["tamanos"]) > 1 for f in salida):
+        nota += (
+            " OJO: alguno tiene VARIOS TAMAÑOS con precios distintos — PREGÚNTALE al cliente "
+            "cuál quiere antes de registrar, y usa el `id_para_pedir` de ESE tamaño."
+        )
+    return {"productos": salida, "nota": nota}
 
 
 def _nombre_norm(texto: str) -> str:
@@ -469,24 +532,72 @@ def _nombre_norm(texto: str) -> str:
     return " ".join(_sin_acentos(texto or "").split())
 
 
-async def _precio_efectivo(session, prod):
-    """El precio que se puede COBRAR HOY por este producto.
+async def _precio_efectivo(session, variante):
+    """El precio que se puede COBRAR HOY por ESTE TAMAÑO.
 
-    - Producto con precio fijo -> ese precio.
-    - Producto de PRECIO DEL DÍA (precio vacío A PROPÓSITO: Tortas keto, Premezclas… cuyo
-      costo cambia de un día a otro en Venezuela) -> el precio que la dueña dio HOY.
-    - Si la dueña aún no lo dio hoy -> None. El bot NO puede cobrarlo ni inventarlo:
-      tiene que llamar a `pedir_ayuda`. Un precio de AYER jamás se reutiliza.
+    El precio vive en el TAMAÑO, no en el producto: la Kombucha de 350ml cuesta $4 y la de
+    700ml $7. Antes el precio colgaba del producto y la dueña tuvo que crear DOS productos con
+    el mismo nombre; el buscador devolvía siempre el primero y el bot SIEMPRE COBRABA $4.
+
+    - Tamaño con precio fijo -> ese precio.
+    - Tamaño de PRECIO DEL DÍA (precio vacío A PROPÓSITO: tortas, premezclas… cuyo costo cambia
+      de un día a otro en Venezuela) -> el que la dueña dio HOY **para ese tamaño**.
+    - Si aún no lo dio hoy -> None. El bot NO puede cobrarlo ni inventarlo: llama a
+      `pedir_ayuda`. Un precio de AYER jamás se reutiliza (por eso `hoy_venezuela()`: con el
+      reloj del servidor, a las 8 de la noche de Cabudare el precio del día DESAPARECÍA).
     """
-    if prod.precio is not None:
-        return prod.precio
+    if variante.precio is not None:
+        return variante.precio
     return (
         await session.execute(
             select(PrecioDia.precio).where(
-                PrecioDia.producto_id == prod.id, PrecioDia.fecha == hoy_venezuela()
+                PrecioDia.variante_id == variante.id, PrecioDia.fecha == hoy_venezuela()
             )
         )
     ).scalar_one_or_none()
+
+
+def _tiene_varios(prod, variante) -> bool:
+    """¿Hace falta nombrar el tamaño? Solo si el producto tiene más de uno."""
+    return (variante.presentacion or "") not in ("", "única")
+
+
+async def _lista_para_pedir(session) -> list[dict]:
+    """La LISTA CERRADA de lo que se puede pedir, con su id. Es lo que se le devuelve al
+    modelo cuando manda un id que no existe o está agotado: para que corrija con uno REAL,
+    nunca con uno "parecido"."""
+    filas = (
+        await session.execute(
+            select(Producto, ProductoVariante)
+            .join(ProductoVariante, ProductoVariante.producto_id == Producto.id)
+            .where(Producto.disponible.is_(True), ProductoVariante.disponible.is_(True))
+            .order_by(Producto.nombre, ProductoVariante.orden)
+        )
+    ).all()
+    out = []
+    for prod, v in filas:
+        nombre = prod.nombre
+        if _tiene_varios(prod, v):
+            nombre += f" ({v.presentacion})"
+        out.append({"id_para_pedir": v.id, "producto": nombre})
+    return out
+
+
+async def _tamanos_de(session, producto_ids: list[int]) -> dict[int, list]:
+    """Los tamaños de cada producto, en orden. {producto_id: [ProductoVariante, ...]}"""
+    if not producto_ids:
+        return {}
+    filas = (
+        await session.execute(
+            select(ProductoVariante)
+            .where(ProductoVariante.producto_id.in_(producto_ids))
+            .order_by(ProductoVariante.orden, ProductoVariante.id)
+        )
+    ).scalars().all()
+    out: dict[int, list] = {}
+    for v in filas:
+        out.setdefault(v.producto_id, []).append(v)
+    return out
 
 
 def _singular(texto: str) -> str:
@@ -576,13 +687,27 @@ async def info_producto(session, telefono, nombre):
             "nota": f"no hay un producto que calce exacto con '{nombre}'; ofrece el mas parecido de la lista",
             "productos_disponibles": disponibles,
         }
+    vs = (await _tamanos_de(session, [prod.id])).get(prod.id) or []
+    tamanos = []
+    for v in vs:
+        precio = await _precio_efectivo(session, v)
+        tamanos.append({
+            "id_para_pedir": v.id,
+            "tamano": v.presentacion,
+            "precio_usd": float(precio) if precio is not None else "el precio de hoy no lo sabes: pide_ayuda",
+            "sabores": v.sabores,
+            "agotado": (not v.disponible) or (not prod.disponible),
+        })
     return {
         "encontrado": True,
         "nombre": prod.nombre,
         "categoria": prod.categoria,
         "descripcion": prod.descripcion,
-        "precio_usd": float(prod.precio) if prod.precio is not None else "a consultar",
-        "presentacion": prod.presentacion,
+        # El precio vive en el TAMAÑO. Con uno solo se ve igual que siempre; con varios, el bot
+        # TIENE que preguntar cuál quiere (cada uno cuesta distinto).
+        "tamanos": tamanos,
+        "precio_usd": tamanos[0]["precio_usd"] if len(tamanos) == 1 else "depende del tamaño: pregúntale cuál quiere",
+        "presentacion": (vs[0].presentacion if len(vs) == 1 and vs[0].presentacion != "única" else None),
         "duracion": prod.duracion,
         "se_congela": prod.se_congela,
         "apto_diabeticos": prod.apto_diabeticos,
@@ -735,37 +860,54 @@ async def registrar_pedido(
     items_pedido = []
     total = Decimal("0")
     for it in items:
-        prod = await _buscar_producto(session, it["producto"], solo_disponibles=True)
-        if prod is None:
-            # NUNCA aproximar en el camino del dinero: se rechaza y se le devuelve la lista
-            # REAL para que el agente corrija con el nombre exacto (no inventa ni "se parece").
-            validos = (
-                await session.execute(
-                    select(Producto.nombre)
-                    .where(Producto.disponible.is_(True))
-                    .order_by(Producto.nombre)
-                )
-            ).scalars().all()
+        # ══ EL CÓDIGO DE BARRAS ══
+        # El pedido ya NO se empareja por un nombre en texto libre: se pide por `variante_id`,
+        # un número de una lista CERRADA que el propio código le inyectó al modelo en el
+        # catálogo. El modelo NO PUEDE escribir un id que no le dimos, y el precio lo resuelve
+        # el código a partir de ese id. Antes bastaba con que el buscador devolviera el
+        # producto equivocado (dos "Kombucha") para cobrar $4 en vez de $7.
+        try:
+            variante_id = int(it.get("variante_id"))
+        except (TypeError, ValueError):
+            variante_id = 0
+        variante = await session.get(ProductoVariante, variante_id) if variante_id else None
+        prod = await session.get(Producto, variante.producto_id) if variante else None
+
+        if variante is None or prod is None:
             return {
                 "ok": False,
                 "nota": (
-                    f"No existe ningún producto llamado '{it['producto']}'. NO lo inventes ni "
-                    "uses uno parecido: elige el NOMBRE EXACTO de `productos_validos` y vuelve "
-                    "a registrar el pedido COMPLETO."
+                    f"El id {it.get('variante_id')!r} no existe. NO lo inventes: usa el "
+                    "`id_para_pedir` EXACTO que ves en el catálogo y vuelve a registrar el "
+                    "pedido COMPLETO."
                 ),
-                "productos_validos": validos,
+                "opciones_validas": await _lista_para_pedir(session),
             }
-        # PRECIO DEL DÍA: si el producto no tiene precio fijo y la dueña no lo ha dado HOY,
-        # NO se cobra (antes se colaba como $0 y el pedido salía gratis). Se le devuelve al
-        # agente la orden de pedir ayuda: jamás inventar ni reutilizar el precio de ayer.
-        precio_hoy = await _precio_efectivo(session, prod)
-        if precio_hoy is None:
+
+        # AGOTADO: manda el del producto (apaga todos sus tamaños) y el del tamaño.
+        if not prod.disponible or not variante.disponible:
+            que = prod.nombre if not prod.disponible else f"{prod.nombre} ({variante.presentacion})"
             return {
                 "ok": False,
                 "nota": (
-                    f"El precio de '{prod.nombre}' CAMBIA y hoy la dueña todavía no lo ha dado. "
+                    f"'{que}' está AGOTADO: no se puede vender. Díselo al cliente con cariño y "
+                    "ofrécele otra cosa. NO lo registres."
+                ),
+                "opciones_validas": await _lista_para_pedir(session),
+            }
+
+        # PRECIO DEL DÍA: si ese TAMAÑO no tiene precio fijo y la dueña no lo ha dado HOY, NO
+        # se cobra (antes se colaba como $0 y el pedido salía gratis). Jamás inventar ni
+        # reutilizar el de ayer.
+        precio_hoy = await _precio_efectivo(session, variante)
+        if precio_hoy is None:
+            cual = f"{prod.nombre} ({variante.presentacion})" if _tiene_varios(prod, variante) else prod.nombre
+            return {
+                "ok": False,
+                "nota": (
+                    f"El precio de '{cual}' CAMBIA y hoy la dueña todavía no lo ha dado. "
                     "NO lo inventes, NO uses uno viejo y NO lo registres. Llama a `pedir_ayuda` "
-                    f"con motivo='precio_del_dia' y detalle='pregunta el precio de {prod.nombre}'."
+                    f"con motivo='precio_del_dia' y detalle='pregunta el precio de {cual}'."
                 ),
                 "necesita_ayuda": True,
             }
@@ -795,9 +937,13 @@ async def registrar_pedido(
         items_pedido.append(
             {
                 "producto": prod.nombre,
+                # El "código de barras" queda GRABADO en el pedido: así el panel y el recibo
+                # saben EXACTAMENTE qué tamaño se vendió (y no se despacha la de 250g habiendo
+                # pagado la de 1kg).
+                "variante_id": variante.id,
                 "cantidad": cantidad,  # PAQUETES completos, nunca unidades sueltas
                 "precio_unitario": float(precio_hoy),  # el de HOY (fijo o precio del día)
-                "presentacion": prod.presentacion,
+                "presentacion": variante.presentacion,
                 "opciones": opciones,
             }
         )
@@ -1560,24 +1706,48 @@ async def enviar_catalogo(session, telefono):
         return {"ok": False, "nota": "no se pudo enviar el catalogo PDF; usa ver_catalogo (texto)"}
 
 
-async def enviar_fotos_producto(session, telefono, nombre):
+async def enviar_fotos_producto(session, telefono, nombre, variante_id=None):
     """Envía al cliente las fotos/videos de UN producto por WhatsApp (cuando las pide).
-    Usa el link público de R2 que Meta descarga. Si el producto no tiene media cargada,
-    lo dice con sinceridad (NUNCA afirmar que se envió algo que no se envió)."""
+
+    Con `variante_id` manda PRIMERO las de ESE tamaño (si piden la kombucha de 700ml, la de
+    700ml — antes mandaba siempre la de 350ml porque eran dos productos y el buscador devolvía
+    el primero) y completa con las NEUTRAS (las que no tienen tamaño asignado).
+
+    Usa el link público de R2 que Meta descarga. Si el producto no tiene media cargada, lo dice
+    con sinceridad (NUNCA afirmar que se envió algo que no se envió)."""
     from app.services import r2
 
-    logger.info("enviar_fotos_producto LLAMADA: nombre=%r", nombre)
-    prod = await _buscar_producto(session, nombre)
+    logger.info("enviar_fotos_producto LLAMADA: nombre=%r variante_id=%r", nombre, variante_id)
+    prod = None
+    variante = None
+    if variante_id:
+        try:
+            variante = await session.get(ProductoVariante, int(variante_id))
+        except (TypeError, ValueError):
+            variante = None
+        if variante is not None:
+            prod = await session.get(Producto, variante.producto_id)
+    if prod is None:
+        prod = await _buscar_producto(session, nombre)
     if prod is None:
         logger.info("enviar_fotos_producto: producto %r NO encontrado", nombre)
         return {"enviadas": 0, "nota": f"no encontré el producto '{nombre}'; ofrece los que sí hay"}
-    medios = (
+    todos = (
         await session.execute(
             select(ProductoMedia)
             .where(ProductoMedia.producto_id == prod.id)
             .order_by(ProductoMedia.orden, ProductoMedia.id)
         )
     ).scalars().all()
+    if variante is not None and variante.producto_id == prod.id:
+        # Primero las de ESE tamaño; luego las neutras (las que no tienen tamaño asignado).
+        # Las de OTRO tamaño NO se mandan: enviar la de 350ml cuando piden la de 700ml es
+        # exactamente el error que estamos arreglando.
+        del_tamano = [m for m in todos if m.variante_id == variante.id]
+        neutras = [m for m in todos if m.variante_id is None]
+        medios = del_tamano + neutras
+    else:
+        medios = todos
     logger.info(
         "enviar_fotos_producto: producto=%s id=%s media=%d r2_config=%s",
         prod.nombre, prod.id, len(medios), r2.configurado(),
@@ -1592,7 +1762,9 @@ async def enviar_fotos_producto(session, telefono, nombre):
             ),
         }
     enviadas = 0
-    for m in medios[:8]:  # tope de seguridad
+    # Tope de 3 (antes 8): ocho archivos de golpe es una descarga de spam y le baja la calidad
+    # al número. LOS VIDEOS CUENTAN dentro del tope.
+    for m in medios[:3]:
         url = r2.url_publica(m.clave)
         if not url:
             logger.warning(

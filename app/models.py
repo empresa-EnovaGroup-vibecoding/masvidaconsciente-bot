@@ -67,6 +67,35 @@ class Producto(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 
 
+class ProductoVariante(Base):
+    """Un TAMAÑO de un producto: lo que se COBRA.
+
+    La línea que separa PRODUCTO de TAMAÑO es EL DINERO: solo es un tamaño distinto lo que
+    cambia el precio (Kombucha 350ml $4 · 700ml $7). Lo que el cliente escoge sin mover el
+    precio (relleno, masa, sabor) es una OPCIÓN y vive dentro del ítem del pedido.
+
+    Antes el precio vivía pegado al producto, y por eso la dueña tuvo que crear DOS productos
+    llamados "Kombucha": el buscador devolvía siempre el primero y **siempre cobraba $4**.
+    Fuga real de $3 por venta. Ver migración 022 y PRP-producto-variantes.md.
+    """
+
+    __tablename__ = "producto_variantes"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    producto_id: Mapped[int] = mapped_column(ForeignKey("productos.id", ondelete="CASCADE"))
+    presentacion: Mapped[str] = mapped_column(Text, default="única")
+    # NULL = PRECIO DEL DÍA: lo pone la dueña cada día (tortas, premezclas). No es un olvido:
+    # en Venezuela cambia de un día para otro.
+    precio: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
+    # Los sabores son DEL TAMAÑO: la kombucha de 700ml tiene cúrcuma y flor de jamaica; la de
+    # 350ml, no. Sin esto, "quiero la de flor de jamaica" no encontraría nada.
+    sabores: Mapped[str | None] = mapped_column(Text, nullable=True)
+    disponible: Mapped[bool] = mapped_column(Boolean, default=True)
+    orden: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
 class ProductoMedia(Base):
     """Una foto o video de un producto, guardado en R2. En la BD va solo la 'clave'
     (ruta del archivo en R2); la URL pública se arma con R2_PUBLIC_URL al mostrar/enviar."""
@@ -74,6 +103,13 @@ class ProductoMedia(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     producto_id: Mapped[int] = mapped_column(ForeignKey("productos.id", ondelete="CASCADE"))
+    # De qué TAMAÑO es esta foto. NULL = del producto, sin tamaño (neutra): el bot la muestra
+    # sin afirmar de cuál es. ON DELETE SET NULL, JAMÁS CASCADE: borrar_media es el único sitio
+    # que borra el archivo en R2; si la fila desapareciera, el archivo quedaría huérfano allá,
+    # ocupando espacio para siempre.
+    variante_id: Mapped[int | None] = mapped_column(
+        ForeignKey("producto_variantes.id", ondelete="SET NULL"), nullable=True
+    )
     tipo: Mapped[str] = mapped_column(Text, default="imagen")  # 'imagen' | 'video'
     clave: Mapped[str] = mapped_column(Text)  # ruta del objeto en R2
     orden: Mapped[int] = mapped_column(default=0)
@@ -133,6 +169,12 @@ class PrecioDia(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     producto_id: Mapped[int] = mapped_column(ForeignKey("productos.id", ondelete="CASCADE"))
+    # El precio del día es POR TAMAÑO (lo pidió Maired). El índice viejo (producto_id, fecha)
+    # lo IMPEDÍA: al cargar el precio de la torta de 500g rechazaba el de la de 1kg del mismo
+    # día. Ver migración 022.
+    variante_id: Mapped[int | None] = mapped_column(
+        ForeignKey("producto_variantes.id", ondelete="CASCADE"), nullable=True
+    )
     precio: Mapped[Decimal] = mapped_column(Numeric(10, 2))
     nota: Mapped[str | None] = mapped_column(Text, nullable=True)  # ej. "1kg"
     fecha: Mapped[datetime] = mapped_column(Date)

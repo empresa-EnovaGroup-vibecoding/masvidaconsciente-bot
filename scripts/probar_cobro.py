@@ -1,42 +1,30 @@
-"""BANCO DE PRUEBAS DEL COBRO — la red que faltaba.
+"""BANCO DE PRUEBAS DEL COBRO — el camino del DINERO, contra el catálogo REAL.
 
-Prueba el camino del DINERO contra el catálogo REAL de la base de datos.
-Este banco existe porque el 2026-07-12 se descubrió que `_buscar_producto` cobraba
-el producto EQUIVOCADO ("Empanadas" devolvía "Empanadas Keto": $12 en vez de $14) y
-el bug llevaba MESES vivo sin que nadie lo viera: el bot HABLABA del producto correcto
-y COBRABA otro. La respuesta se veía perfecta; la mentira estaba en la base de datos.
+Existe porque el 2026-07-12 se descubrió que el bot **hablaba de un producto y cobraba otro**:
+la respuesta se veía perfecta y la mentira estaba en la base de datos. Desde entonces,
+**el cobro se verifica en la BD (`SELECT items, total FROM pedidos`), nunca en lo que dice el bot.**
 
-REGLA: correr esto DESPUÉS de cualquier cambio que toque el catálogo, las herramientas
-o el cobro. Si algo sale MAL, no se despliega.
+v2 (2026-07-13) — reescrito para el "CÓDIGO DE BARRAS": el pedido ya no se empareja por un
+nombre en texto libre, sino por `variante_id`, un número de una lista CERRADA que el propio
+código le inyecta al modelo. El modelo NO PUEDE escribir un id que no le dimos.
 
-Cómo correrlo (dentro del contenedor del bot):
+REGLA: correr esto DESPUÉS de cualquier cambio que toque el catálogo, las herramientas o el
+cobro. **Si algo sale MAL, no se despliega.**
+
     docker exec -w /app -e PYTHONPATH=/app <contenedor-bot> python scripts/probar_cobro.py
-
-Sale con código 1 si alguna prueba falla (para poder engancharlo a un despliegue).
 """
 import asyncio
 import sys
+from datetime import timedelta
 from decimal import Decimal
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, select, text
 
-from datetime import timedelta
-
-from app.agent.tools import _buscar_producto, _precio_efectivo, registrar_pedido
-from app.models import Pedido, Producto, hoy_venezuela
+from app.agent.tools import registrar_pedido
+from app.models import Pedido, PrecioDia, Producto, ProductoVariante, hoy_venezuela
 from app.services.db import get_session_factory
 
 TELEFONO = "__simulador__"  # el panel ya lo excluye de la lista de clientes
-
-
-def fecha_entrega_valida() -> str:
-    """Una fecha en que SÍ se entrega (mañana; si cae domingo, pasado mañana).
-    Desde el 2026-07-12 el bot NO puede cobrar un pedido sin fecha de entrega acordada."""
-    f = hoy_venezuela() + timedelta(days=1)
-    if f.weekday() == 6:  # domingo
-        f += timedelta(days=1)
-    return f.isoformat()
-
 _ok = 0
 _mal: list[str] = []
 
@@ -48,479 +36,242 @@ def check(bien: bool, titulo: str, detalle: str = "") -> None:
         print(f"  [OK ] {titulo}")
     else:
         _mal.append(titulo)
-        print(f"  [MAL] {titulo}   -> {detalle}")
+        print(f"  [MAL] {titulo}" + (f"  → {detalle}" if detalle else ""))
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 0) EL CATÁLOGO ES SANO: no puede haber DOS productos con el mismo nombre.
-#    Si los hay, es IMPOSIBLE cobrar bien: el bot no tiene forma de distinguirlos
-#    y ni siquiera puede preguntar ("¿Kombucha o Kombucha?"). Se arregla en el
-#    panel, renombrando (ej. "Kombucha 350ml" y "Kombucha 700ml").
-# ─────────────────────────────────────────────────────────────────────────────
-async def probar_catalogo_sano(session) -> None:
-    print("\n0) El catálogo es sano (sin nombres repetidos)")
-    prods = (await session.execute(select(Producto).order_by(Producto.id))).scalars().all()
-    check(bool(prods), "hay productos en el catálogo", "el catálogo está VACÍO")
-    vistos: dict[str, int] = {}
-    for p in prods:
-        clave = " ".join((p.nombre or "").lower().split())
-        if clave in vistos:
-            check(
-                False,
-                f"'{p.nombre}' no está repetido",
-                f"los ids {vistos[clave]} y {p.id} se llaman IGUAL (${p.precio}) "
-                f"-> RENÓMBRALOS EN EL PANEL o el bot no puede cobrar bien",
-            )
-        else:
-            vistos[clave] = p.id
-    if len(vistos) == len(prods):
-        check(True, f"los {len(prods)} productos tienen nombres únicos")
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 1) INVARIANTE UNIVERSAL: pedir un producto por su NOMBRE EXACTO devuelve ESE
-#    producto. Recorre TODO el catálogo, así que se adapta solo cuando la dueña
-#    agrega productos. Esta sola prueba habría cazado el bug de las Empanadas.
-# ─────────────────────────────────────────────────────────────────────────────
-async def probar_nombre_exacto(session) -> None:
-    print("\n1) Cada producto del catálogo, pedido por su NOMBRE EXACTO")
-    prods = (await session.execute(select(Producto).order_by(Producto.id))).scalars().all()
-    nombres = [" ".join((p.nombre or "").lower().split()) for p in prods]
-    for p in prods:
-        clave = " ".join((p.nombre or "").lower().split())
-        if nombres.count(clave) > 1:
-            continue  # nombre repetido: ya lo reportó la prueba 0, no se puede exigir aquí
-        hallado = await _buscar_producto(session, p.nombre, solo_disponibles=False)
-        bien = hallado is not None and hallado.id == p.id
-        check(
-            bien,
-            f"'{p.nombre}' -> {p.nombre}",
-            f"devolvió '{hallado.nombre}' (${hallado.precio})" if hallado else "no encontró nada",
-        )
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 2) Casos REALES que fallaron (o que casi hacen cobrar mal)
-# ─────────────────────────────────────────────────────────────────────────────
-async def probar_casos_reales(session) -> None:
-    print("\n2) Los casos que de verdad pasaron con clientes")
-    casos = [
-        # (lo que pide el bot, nombre esperado o None, por qué importa)
-        ("empanada", "Empanadas", "singular: NUNCA puede caer en las Keto"),
-        ("empanadas de platano", "Empanadas", "por ingrediente: las Keto son de almendra"),
-        ("galetas", "Galletas New York", "con error de tipeo"),
-        ("pan", None, "AMBIGUO (varios panes): debe PREGUNTAR, no adivinar el más caro"),
-        ("Torta de unicornio", None, "no existe: debe RECHAZAR, no aproximar"),
-    ]
-    for pedido, esperado, por_que in casos:
-        p = await _buscar_producto(session, pedido, solo_disponibles=True)
-        got = p.nombre if p else None
-        check(got == esperado, f"'{pedido}' -> {esperado or 'pregunta/rechaza'}  ({por_que})", f"devolvió '{got}'")
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 3) EL DINERO de punta a punta: registrar un pedido y verificar EN LA BASE DE
-#    DATOS que el producto y el total son los correctos. Los precios se LEEN del
-#    catálogo (nunca se escriben a mano) para que la prueba siga valiendo cuando
-#    la dueña cambie un precio.
-# ─────────────────────────────────────────────────────────────────────────────
-async def probar_dinero(session) -> None:
-    print("\n3) El DINERO: se registra un pedido y se verifica en la base de datos")
-    prod = (
-        await session.execute(
-            select(Producto).where(Producto.disponible.is_(True)).order_by(Producto.id).limit(1)
-        )
-    ).scalar_one_or_none()
-    if prod is None or prod.precio is None:
-        check(False, "hay un producto con precio para probar el cobro", "no hay ninguno")
-        return
-
-    cantidad = 2
-    esperado = Decimal(str(prod.precio)) * cantidad
-    res = await registrar_pedido(session, TELEFONO, [{"producto": prod.nombre, "cantidad": cantidad}])
-    check(res.get("ok") is not False,
-          f"registrar_pedido acepta '{prod.nombre}' x{cantidad}", str(res)[:120])
-
-    guardado = (
-        await session.execute(
-            select(Pedido).where(Pedido.cliente_telefono == TELEFONO).order_by(Pedido.id.desc()).limit(1)
-        )
-    ).scalar_one_or_none()
-    if guardado is None:
-        check(False, "el pedido quedó guardado en la base de datos", "no se guardó nada")
-        return
-
-    item = (guardado.items or [{}])[0]
-    check(item.get("producto") == prod.nombre,
-          f"grabó el producto CORRECTO ('{prod.nombre}')", f"grabó '{item.get('producto')}'")
-    check(Decimal(str(guardado.total)) == esperado,
-          f"el total es {cantidad} x ${prod.precio} = ${esperado}", f"grabó ${guardado.total}")
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 4) Producto inventado: el código RECHAZA y le devuelve la lista real al agente
-# ─────────────────────────────────────────────────────────────────────────────
-async def probar_rechazo(session) -> None:
-    print("\n4) Si el bot pide un producto que NO existe")
-    res = await registrar_pedido(session, TELEFONO, [{"producto": "Pizza de unicornio", "cantidad": 1}])
-    check(res.get("ok") is False, "lo RECHAZA (no aproxima ni inventa)", str(res)[:120])
-    check(bool(res.get("productos_validos")),
-          "le devuelve la lista REAL de productos para que corrija", "no devolvió productos_validos")
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 5) PRECIO DEL DÍA: los productos cuyo precio CAMBIA (Tortas keto, torta baja en
-#    carbohidratos, Premezclas) están sin precio A PROPÓSITO. Si la dueña no dio el
-#    de HOY, el bot NO puede cobrarlos: antes se colaban como $0 (pedido gratis).
-# ─────────────────────────────────────────────────────────────────────────────
-async def probar_precio_del_dia(session) -> None:
-    print("\n5) Productos de PRECIO DEL DÍA (su precio cambia; lo da la dueña)")
-    variables = (
-        await session.execute(
-            select(Producto).where(Producto.precio.is_(None)).order_by(Producto.id)
-        )
-    ).scalars().all()
-    if not variables:
-        check(True, "no hay productos de precio variable (nada que probar)")
-        return
-    for p in variables:
-        efectivo = await _precio_efectivo(session, p)
-        if efectivo is not None:
-            check(True, f"'{p.nombre}': la dueña ya dio el precio de HOY (${efectivo})")
-            continue
-        res = await registrar_pedido(session, TELEFONO, [{"producto": p.nombre, "cantidad": 1}])
-        check(
-            res.get("ok") is False,
-            f"'{p.nombre}' sin precio de hoy -> NO se puede cobrar (antes salía en $0)",
-            str(res)[:110],
-        )
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 6) LA CANTIDAD ES DINERO (precio × CANTIDAD). Con cantidad 0 el ítem entraba
-#    en $0 y el pedido podía cerrarse GRATIS. El schema pide entero >= 1, pero
-#    el modelo puede mandar cualquier cosa: el código tiene que rechazarla.
-# ─────────────────────────────────────────────────────────────────────────────
-async def probar_cantidad(session) -> None:
-    print("\n6) La CANTIDAD también es dinero (nada de pedidos en $0)")
-    prod = (
-        await session.execute(
-            select(Producto).where(Producto.precio.is_not(None)).order_by(Producto.id)
-        )
-    ).scalars().first()
-    if prod is None:
-        check(False, "hay un producto con precio para probar", "no hay ninguno")
-        return
-    for mala in (0, -3, "dos", None):
-        res = await registrar_pedido(session, TELEFONO, [{"producto": prod.nombre, "cantidad": mala}])
-        check(res.get("ok") is False, f"cantidad {mala!r} -> la RECHAZA", str(res)[:110])
-    res = await registrar_pedido(session, TELEFONO, [{"producto": prod.nombre, "cantidad": 2}])
-    check(res.get("ok") is not False, "cantidad 2 -> sigue funcionando normal", str(res)[:110])
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 7) EL PAGO CUADRA CON EL PEDIDO. El monto del cobro se guardaba en una caché
-#    por TELÉFONO: si el cliente cambiaba de pedido (Kombucha de $4 -> la de $7),
-#    el comprobante se grababa con el monto VIEJO. Un pago de $4 sobre $7.
-# ─────────────────────────────────────────────────────────────────────────────
-async def probar_pago_cuadra(session) -> None:
-    print("\n7) El PAGO registrado cuadra con el pedido (no con uno viejo)")
-    from app.agent.tools import generar_datos_pago, registrar_comprobante
-    from app.models import Pago
-
-    prods = (
-        await session.execute(
-            select(Producto).where(Producto.precio.is_not(None)).order_by(Producto.precio)
-        )
-    ).scalars().all()
-    if len(prods) < 2:
-        check(True, "no hay dos productos de precios distintos (nada que probar)")
-        return
-    barato, caro = prods[0], prods[-1]
-    if barato.precio == caro.precio:
-        check(True, "todos valen igual (nada que probar)")
-        return
-
-    # 1º pedido (barato) y su cobro -> deja el monto viejo en la caché.
-    entrega = fecha_entrega_valida()
-    r1 = await registrar_pedido(
-        session, TELEFONO, [{"producto": barato.nombre, "cantidad": 1}], entrega_fecha=entrega
-    )
-    await generar_datos_pago(session, TELEFONO, r1.get("pedido_id"))
-    # 2º pedido (caro): el cliente se cambió. Se cobra ESTE.
-    r2 = await registrar_pedido(
-        session, TELEFONO, [{"producto": caro.nombre, "cantidad": 1}], entrega_fecha=entrega
-    )
-    await generar_datos_pago(session, TELEFONO, r2.get("pedido_id"))
-    await registrar_comprobante(session, TELEFONO, referencia="PRUEBA-CUADRE")
-
-    pedido2 = await session.get(Pedido, r2.get("pedido_id"))
-    pago = (
-        await session.execute(select(Pago).where(Pago.pedido_id == pedido2.id))
-    ).scalars().first()
-    check(pago is not None, "el comprobante quedó registrado", "no se creó el pago")
-    if pago is not None:
-        check(
-            Decimal(str(pago.monto_usd)) == Decimal(str(pedido2.total)),
-            f"el pago dice ${pago.monto_usd} y el pedido ${pedido2.total} -> CUADRAN",
-            f"el pago quedó en ${pago.monto_usd} sobre una venta de ${pedido2.total} "
-            f"(se coló el monto del pedido anterior, ${barato.precio})",
-        )
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 8) UN PEDIDO YA PAGADO NO SE RE-COBRA (antes 'resucitaba' a esperando_pago y
-#    se le podía pegar un segundo comprobante encima).
-# ─────────────────────────────────────────────────────────────────────────────
-async def probar_no_recobro(session) -> None:
-    print("\n8) Un pedido ya PAGADO no se cobra otra vez")
-    from app.agent.tools import generar_datos_pago
-
-    prod = (
-        await session.execute(
-            select(Producto).where(Producto.precio.is_not(None)).order_by(Producto.id)
-        )
-    ).scalars().first()
-    r = await registrar_pedido(
-        session, TELEFONO, [{"producto": prod.nombre, "cantidad": 1}],
-        entrega_fecha=fecha_entrega_valida(),
-    )
-    pedido = await session.get(Pedido, r.get("pedido_id"))
-    pedido.estado = "pagado"
-    await session.commit()
-
-    res = await generar_datos_pago(session, TELEFONO, pedido.id)
-    check(res.get("ok") is False, "pidiéndolo por su id -> lo RECHAZA", str(res)[:110])
-    await session.refresh(pedido)
-    check(pedido.estado == "pagado", "el pedido SIGUE 'pagado' (no resucitó)", f"quedó en '{pedido.estado}'")
-
-    # Sin decir el id ("dame los datos otra vez"): puede agarrar OTRO pedido abierto
-    # (eso está bien), pero JAMÁS el que ya está pagado.
-    res2 = await generar_datos_pago(session, TELEFONO, None)
-    check(
-        res2.get("pedido_id") != pedido.id,
-        "sin decir el id -> NUNCA agarra el pedido pagado",
-        f"agarró el pedido pagado ({pedido.id}) y lo revivió",
-    )
-    await session.refresh(pedido)
-    check(pedido.estado == "pagado", "y el pagado sigue intacto", f"quedó en '{pedido.estado}'")
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 9) EL PRECIO DEL DÍA VIVE EN EL DÍA DE VENEZUELA (no en el del servidor, que
-#    corre en UTC). A las 8 pm de Cabudare el reloj UTC ya es mañana: el precio
-#    cargado en la mañana desaparecía. Y el de AYER no se reutiliza JAMÁS.
-#    Se prueba dentro de una transacción que se DESHACE (no toca datos reales).
-# ─────────────────────────────────────────────────────────────────────────────
-async def probar_dia_venezuela(factory) -> None:
-    print("\n9) El precio del día usa el día de VENEZUELA (y el de ayer nunca se reutiliza)")
-    from datetime import datetime, timedelta, timezone
-
-    from app.models import PrecioDia, hoy_venezuela
-
-    esperado = (datetime.now(timezone.utc) - timedelta(hours=4)).date()
-    check(hoy_venezuela() == esperado, f"hoy en Venezuela = {esperado} (el servidor va en UTC)")
-
-    async with factory() as s:
-        prod = (
-            await s.execute(select(Producto).where(Producto.precio.is_(None)).order_by(Producto.id))
-        ).scalars().first()
-        if prod is None:
-            check(True, "no hay productos de precio del día (nada que probar)")
-            return
-        ya = (
-            await s.execute(
-                select(PrecioDia).where(
-                    PrecioDia.producto_id == prod.id, PrecioDia.fecha == hoy_venezuela()
-                )
-            )
-        ).scalars().first()
-        if ya is not None:
-            check(True, f"'{prod.nombre}' ya tiene precio de hoy (${ya.precio}); no se toca")
-            return
-        # Ensayo con red: se escribe y se DESHACE (nunca se confirma).
-        s.add(PrecioDia(producto_id=prod.id, precio=Decimal("42.00"), fecha=hoy_venezuela()))
-        await s.flush()
-        p_hoy = await _precio_efectivo(s, prod)
-        check(p_hoy == Decimal("42.00"), f"con precio de HOY -> lo usa (${p_hoy})", f"dio {p_hoy}")
-        await s.rollback()
-
-    async with factory() as s:
-        prod = (
-            await s.execute(select(Producto).where(Producto.precio.is_(None)).order_by(Producto.id))
-        ).scalars().first()
-        s.add(
-            PrecioDia(
-                producto_id=prod.id,
-                precio=Decimal("99.00"),
-                fecha=hoy_venezuela() - timedelta(days=1),  # el de AYER
-            )
-        )
-        await s.flush()
-        p_ayer = await _precio_efectivo(s, prod)
-        check(p_ayer is None, "con el precio de AYER -> NO lo usa (no cobra)", f"usó ${p_ayer}")
-        await s.rollback()
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 10) UN PEDIDO POR VENTA. El agente re-registra el pedido COMPLETO cada vez que
-#     el cliente agrega o quita algo. Antes creaba un pedido NUEVO cada vez: en el
-#     ensayo del 2026-07-12, 12 conversaciones dejaron 18 pedidos y una venta de
-#     $136 aparecía TRES veces en el panel (la dueña veía $408).
-# ─────────────────────────────────────────────────────────────────────────────
-async def probar_un_pedido_por_venta(session) -> None:
-    print("\n10) Un pedido por venta (el bot re-registra, no duplica)")
-    from app.agent.tools import generar_datos_pago, registrar_comprobante
-    from app.models import Pago
-
-    prods = (
-        await session.execute(
-            select(Producto).where(Producto.precio.is_not(None)).order_by(Producto.id)
-        )
-    ).scalars().all()
-    a, b = prods[0], prods[1]
-
-    r1 = await registrar_pedido(session, TELEFONO, [{"producto": a.nombre, "cantidad": 1}])
-    r2 = await registrar_pedido(  # el cliente agrega algo -> el agente re-registra TODO
-        session, TELEFONO, [{"producto": a.nombre, "cantidad": 1}, {"producto": b.nombre, "cantidad": 2}]
-    )
-    check(r1.get("pedido_id") == r2.get("pedido_id"), "agregar un producto ACTUALIZA el mismo pedido",
-          f"creó dos pedidos: {r1.get('pedido_id')} y {r2.get('pedido_id')}")
-
-    cuantos = (
-        await session.execute(
-            select(func.count()).select_from(Pedido).where(Pedido.cliente_telefono == TELEFONO)
-        )
-    ).scalar()
-    check(cuantos == 1, f"la dueña ve UN solo pedido (hay {cuantos})", f"hay {cuantos} pedidos")
-
-    pedido = await session.get(Pedido, r2["pedido_id"])
-    esperado = a.precio * 1 + b.precio * 2
-    check(Decimal(str(pedido.total)) == esperado, f"y el total quedó en {esperado} (el correcto)",
-          f"quedó en {pedido.total}")
-
-    # Pero si ese pedido YA tiene un pago reportado, NO se toca: se abre uno nuevo.
-    pedido.entrega_fecha = None  # se re-registra abajo con fecha
-    await registrar_pedido(
-        session, TELEFONO,
-        [{"producto": a.nombre, "cantidad": 1}, {"producto": b.nombre, "cantidad": 2}],
-        entrega_fecha=fecha_entrega_valida(),
-    )
-    await session.refresh(pedido)
-    await generar_datos_pago(session, TELEFONO, pedido.id)
-    await registrar_comprobante(session, TELEFONO, referencia="PRUEBA-NO-TOCAR")
-    r3 = await registrar_pedido(session, TELEFONO, [{"producto": b.nombre, "cantidad": 1}])
-    check(r3.get("pedido_id") != pedido.id, "con un pago YA reportado, abre un pedido NUEVO",
-          "pisó un pedido que ya tenía dinero en juego")
-    pago = (await session.execute(select(Pago).where(Pago.pedido_id == pedido.id))).scalars().first()
-    await session.refresh(pedido)
-    check(
-        pago is not None and Decimal(str(pago.monto_usd)) == Decimal(str(pedido.total)),
-        "y el pago viejo sigue cuadrando con SU pedido",
-        f"pago={pago.monto_usd if pago else None} pedido={pedido.total}",
-    )
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 11) EL CALENDARIO: el bot NO puede prometer un día en que no se entrega, ni
-#     cobrar un pedido sin fecha. Y se valida por FECHA, no por palabras: si el
-#     cliente dice "el 19" y el 19 cae domingo, igual se rechaza.
-# ─────────────────────────────────────────────────────────────────────────────
-async def probar_calendario(session) -> None:
-    print("\n11) El calendario de entrega (el código valida la fecha, no el modelo)")
-    from app.agent.tools import generar_datos_pago
-
-    prod = (
-        await session.execute(
-            select(Producto).where(Producto.precio.is_not(None)).order_by(Producto.id)
-        )
-    ).scalars().first()
-    hoy = hoy_venezuela()
-
-    # el próximo domingo (aunque el cliente NUNCA escriba la palabra "domingo")
-    domingo = hoy + timedelta(days=((6 - hoy.weekday()) % 7) or 7)
-    r = await registrar_pedido(
-        session, TELEFONO, [{"producto": prod.nombre, "cantidad": 1}],
-        entrega_fecha=domingo.isoformat(),
-    )
-    check(r.get("ok") is False, f"un DOMINGO ({domingo}) -> lo RECHAZA", str(r)[:110])
-    check(bool(r.get("primera_fecha_valida")), "y le ofrece la primera fecha que SÍ sirve",
-          "no devolvió primera_fecha_valida")
-
-    r = await registrar_pedido(
-        session, TELEFONO, [{"producto": prod.nombre, "cantidad": 1}],
-        entrega_fecha=(hoy - timedelta(days=1)).isoformat(),
-    )
-    check(r.get("ok") is False, "una fecha que YA PASÓ -> la RECHAZA", str(r)[:110])
-
-    r = await registrar_pedido(
-        session, TELEFONO, [{"producto": prod.nombre, "cantidad": 1}],
-        entrega="delivery en Cabudare", entrega_fecha=fecha_entrega_valida(),
-    )
-    check(r.get("ok") is not False, "un día hábil -> lo acepta", str(r)[:110])
-    check("Entrega:" in (r.get("resumen") or ""), "y el RECIBO le dice la fecha al cliente",
-          f"el recibo no la dice: {r.get('resumen')}")
-
-    # sin fecha de entrega NO se cobra
-    await session.execute(delete(Pedido).where(Pedido.cliente_telefono == TELEFONO))
-    await session.commit()
-    r = await registrar_pedido(session, TELEFONO, [{"producto": prod.nombre, "cantidad": 1}])
-    pago = await generar_datos_pago(session, TELEFONO, r.get("pedido_id"))
-    check(pago.get("ok") is False, "cobrar SIN fecha de entrega -> lo RECHAZA", str(pago)[:110])
+def fecha_entrega_valida() -> str:
+    """Una fecha en que SÍ se entrega (mañana; si cae domingo, pasado)."""
+    f = hoy_venezuela() + timedelta(days=1)
+    if f.weekday() == 6:
+        f += timedelta(days=1)
+    return f.isoformat()
 
 
 async def limpiar(session) -> None:
-    """Borra TODO lo que dejó la prueba: el panel y los reportes quedan limpios."""
-    from app.models import Cliente, Mensaje, Pago
-
-    ids = (
-        await session.execute(select(Pedido.id).where(Pedido.cliente_telefono == TELEFONO))
-    ).scalars().all()
-    if ids:
-        await session.execute(delete(Pago).where(Pago.pedido_id.in_(ids)))
     await session.execute(delete(Pedido).where(Pedido.cliente_telefono == TELEFONO))
-    await session.execute(delete(Mensaje).where(Mensaje.cliente_telefono == TELEFONO))
-    await session.execute(delete(Cliente).where(Cliente.telefono == TELEFONO))
     await session.commit()
 
 
-async def main() -> int:
-    print("=" * 68)
-    print("  BANCO DE PRUEBAS DEL COBRO — másvida")
-    print("=" * 68)
+async def pedir(session, variante_id, cantidad=1, nombre="x"):
+    """Registra un pedido y devuelve (respuesta, el pedido TAL COMO QUEDÓ EN LA BD)."""
+    await limpiar(session)
+    r = await registrar_pedido(
+        session,
+        TELEFONO,
+        items=[{"variante_id": variante_id, "producto": nombre, "cantidad": cantidad}],
+        entrega=f"{fecha_entrega_valida()} delivery",
+    )
+    ped = (
+        await session.execute(
+            select(Pedido)
+            .where(Pedido.cliente_telefono == TELEFONO)
+            .order_by(Pedido.created_at.desc())
+        )
+    ).scalars().first()
+    return r, ped
+
+
+async def variantes_de(session, nombre_like):
+    prod = (
+        await session.execute(select(Producto).where(Producto.nombre.ilike(f"%{nombre_like}%")))
+    ).scalars().first()
+    if prod is None:
+        return None, []
+    vs = (
+        await session.execute(
+            select(ProductoVariante)
+            .where(ProductoVariante.producto_id == prod.id)
+            .order_by(ProductoVariante.orden)
+        )
+    ).scalars().all()
+    return prod, vs
+
+
+async def main() -> None:
     factory = get_session_factory()
     async with factory() as session:
-        try:
-            await limpiar(session)  # arranca de cero
-            await probar_catalogo_sano(session)
-            await probar_nombre_exacto(session)
-            await probar_casos_reales(session)
-            await probar_dinero(session)
-            await probar_rechazo(session)
-            await probar_precio_del_dia(session)
-            await probar_cantidad(session)
-            await probar_pago_cuadra(session)
-            await probar_no_recobro(session)
-            await limpiar(session)  # el bloque 10 necesita arrancar sin pedidos previos
-            await probar_un_pedido_por_venta(session)
-            await limpiar(session)
-            await probar_calendario(session)
-        finally:
-            await limpiar(session)  # no deja basura en el panel
 
-    await probar_dia_venezuela(factory)  # usa sus propias transacciones (con ROLLBACK)
+        # ═══════════════════════════════════════════════════════════════════════
+        print("\n1) EL CATÁLOGO ESTÁ SANO (si esto falla, todo lo demás miente)")
 
-    print("\n" + "=" * 68)
+        repetidos = (
+            await session.execute(text(
+                "SELECT count(*) FROM (SELECT nombre FROM productos "
+                "GROUP BY nombre HAVING count(*) > 1) x"
+            ))
+        ).scalar()
+        check(repetidos == 0,
+              "NINGÚN nombre de producto repetido (era la fuga de $3 de la Kombucha)",
+              f"hay {repetidos} nombre(s) repetido(s)")
+
+        sin_tamano = (
+            await session.execute(text(
+                "SELECT count(*) FROM productos p WHERE NOT EXISTS "
+                "(SELECT 1 FROM producto_variantes v WHERE v.producto_id = p.id)"
+            ))
+        ).scalar()
+        check(sin_tamano == 0,
+              "TODOS los productos tienen al menos un tamaño (si no, son invendibles)",
+              f"{sin_tamano} producto(s) sin tamaño")
+
+        # ═══════════════════════════════════════════════════════════════════════
+        print("\n2) 🔴 EL CÓDIGO DE BARRAS: cada tamaño cobra SU precio (verificado en la BD)")
+
+        prod, vs = await variantes_de(session, "kombucha")
+        check(prod is not None and len(vs) == 2,
+              "la Kombucha es UN producto con DOS tamaños",
+              f"{len(vs)} tamaño(s)")
+
+        if len(vs) == 2:
+            chica, grande = vs[0], vs[1]
+            for v in (chica, grande):
+                r, ped = await pedir(session, v.id, 1, "Kombucha")
+                esperado = float(v.precio)
+                cobrado = float(ped.total) if ped and ped.total is not None else None
+                item = (ped.items or [{}])[0] if ped else {}
+                check(r.get("ok") and cobrado == esperado,
+                      f"Kombucha {v.presentacion} → cobra ${esperado} (en la BD, no en la charla)",
+                      f"cobró {cobrado}")
+                check(item.get("variante_id") == v.id,
+                      f"el pedido guarda el código de barras del tamaño {v.presentacion}",
+                      f"guardó {item.get('variante_id')}")
+                check(item.get("presentacion") == v.presentacion,
+                      f"el recibo dice el tamaño ({v.presentacion}) — sin eso se despacha el que no es",
+                      f"dice {item.get('presentacion')!r}")
+
+            # El caso REAL: dos tamaños, dos precios. Antes SIEMPRE cobraba el del primero.
+            _, ped_chica = await pedir(session, chica.id, 1)
+            _, ped_grande = await pedir(session, grande.id, 1)
+            check(float(ped_chica.total) != float(ped_grande.total),
+                  "🔴 los dos tamaños NO se confunden (antes los dos cobraban $4)",
+                  f"{ped_chica.total} vs {ped_grande.total}")
+
+            _, ped2 = await pedir(session, grande.id, 2)
+            check(float(ped2.total) == float(grande.precio) * 2,
+                  f"Kombucha {grande.presentacion} x2 = ${float(grande.precio) * 2}",
+                  f"cobró {ped2.total}")
+
+        # ═══════════════════════════════════════════════════════════════════════
+        print("\n3) LO QUE SE RECHAZA (jamás cobrar a la suerte)")
+
+        r, ped = await pedir(session, 999999, 1)
+        check(not r.get("ok") and ped is None,
+              "un id que NO existe → RECHAZA (y no crea pedido)")
+        check(bool(r.get("opciones_validas")),
+              "y le devuelve la LISTA REAL para que corrija (no aproxima)")
+
+        if len(vs) == 2:
+            for mala in (0, -1, "dos", None):
+                r, ped = await pedir(session, vs[0].id, mala)
+                check(not r.get("ok") and ped is None,
+                      f"cantidad {mala!r} → RECHAZA (con 0 el pedido salía GRATIS)")
+
+            grande.disponible = False
+            await session.commit()
+            r, ped = await pedir(session, grande.id, 1)
+            check(not r.get("ok") and ped is None,
+                  "un TAMAÑO agotado → RECHAZA (no se vende lo que no hay)")
+            grande.disponible = True
+            await session.commit()
+
+            prod.disponible = False
+            await session.commit()
+            r, ped = await pedir(session, grande.id, 1)
+            check(not r.get("ok") and ped is None,
+                  "el PRODUCTO agotado apaga TODOS sus tamaños → RECHAZA")
+            prod.disponible = True
+            await session.commit()
+
+        # ═══════════════════════════════════════════════════════════════════════
+        print("\n4) 🔴 EL PRECIO DEL DÍA, POR TAMAÑO (lo pidió Maired)")
+
+        torta, tvs = await variantes_de(session, "Tortas keto")
+        check(torta is not None and len(tvs) >= 2,
+              "las Tortas keto tienen sus tamaños separados (antes: '250g / 500g / 1kg' en un texto)",
+              f"{len(tvs)} tamaño(s)")
+
+        if len(tvs) >= 2:
+            await session.execute(
+                delete(PrecioDia).where(PrecioDia.variante_id.in_([v.id for v in tvs]))
+            )
+            await session.commit()
+
+            r, ped = await pedir(session, tvs[0].id, 1, "Tortas keto")
+            check(not r.get("ok") and r.get("necesita_ayuda") and ped is None,
+                  "sin precio de HOY → RECHAZA y pide ayuda (jamás inventa ni usa el de ayer)")
+
+            session.add(PrecioDia(producto_id=torta.id, variante_id=tvs[0].id,
+                                  precio=Decimal("25.00"), fecha=hoy_venezuela()))
+            await session.commit()
+
+            r, ped = await pedir(session, tvs[0].id, 1, "Tortas keto")
+            check(r.get("ok") and ped and float(ped.total) == 25.0,
+                  f"con el precio de hoy del {tvs[0].presentacion} → cobra $25",
+                  f"cobró {ped.total if ped else None}")
+
+            r, ped = await pedir(session, tvs[1].id, 1, "Tortas keto")
+            check(not r.get("ok") and ped is None,
+                  f"🔴 pero el {tvs[1].presentacion} SIGUE sin precio → RECHAZA "
+                  "(el precio de un tamaño NO vale para otro)")
+
+            session.add(PrecioDia(producto_id=torta.id, variante_id=tvs[1].id,
+                                  precio=Decimal("45.00"), fecha=hoy_venezuela()))
+            await session.commit()
+            r, ped = await pedir(session, tvs[1].id, 1, "Tortas keto")
+            check(r.get("ok") and ped and float(ped.total) == 45.0,
+                  "🔴 DOS precios del día distintos el MISMO día (el índice viejo lo IMPEDÍA)",
+                  f"cobró {ped.total if ped else None}")
+
+            await session.execute(
+                delete(PrecioDia).where(PrecioDia.variante_id.in_([v.id for v in tvs]))
+            )
+            session.add(PrecioDia(producto_id=torta.id, variante_id=tvs[0].id,
+                                  precio=Decimal("25.00"),
+                                  fecha=hoy_venezuela() - timedelta(days=1)))
+            await session.commit()
+            r, ped = await pedir(session, tvs[0].id, 1, "Tortas keto")
+            check(not r.get("ok") and ped is None,
+                  "el precio de AYER NO se reutiliza → RECHAZA")
+
+            await session.execute(
+                delete(PrecioDia).where(PrecioDia.variante_id.in_([v.id for v in tvs]))
+            )
+            await session.commit()
+
+        # ═══════════════════════════════════════════════════════════════════════
+        print("\n5) 🔴 UNA SOLA FUENTE DE VERDAD DEL PRECIO")
+
+        if len(vs) == 2:
+            antes = prod.precio
+            prod.precio = Decimal("999.00")   # el campo viejo, el del PRODUCTO
+            await session.commit()
+            _, ped = await pedir(session, vs[0].id, 1)
+            check(ped and float(ped.total) == float(vs[0].precio),
+                  "el precio del PRODUCTO ya NO manda: se cobra el del TAMAÑO (si no, ella lo "
+                  "subiría en un sitio y el bot cobraría el otro)",
+                  f"cobró {ped.total if ped else None}, debía cobrar {vs[0].precio}")
+            prod.precio = antes
+            await session.commit()
+
+        # ═══════════════════════════════════════════════════════════════════════
+        print("\n6) EL RELOJ DE VENEZUELA (el precio del día no se pierde a las 8 pm)")
+        from datetime import datetime, timezone
+        esperado = (datetime.now(timezone.utc) - timedelta(hours=4)).date()
+        check(hoy_venezuela() == esperado,
+              "el precio del día usa el reloj de Venezuela (UTC-4), no el del servidor")
+
+        await limpiar(session)
+
+    print()
+    print("=" * 68)
     if _mal:
         print(f"  🔴 {len(_mal)} PRUEBA(S) MAL — NO DESPLEGAR:")
         for t in _mal:
             print(f"     - {t}")
         print("=" * 68)
-        return 1
-    print(f"  ✅ TODO BIEN — {_ok} pruebas pasaron. El cobro está sano.")
+        sys.exit(1)
+    print(f"  ✅ {_ok} PRUEBAS EN VERDE — el cobro está blindado por el CÓDIGO DE BARRAS")
     print("=" * 68)
-    return 0
 
 
-if __name__ == "__main__":
-    sys.exit(asyncio.run(main()))
+asyncio.run(main())
