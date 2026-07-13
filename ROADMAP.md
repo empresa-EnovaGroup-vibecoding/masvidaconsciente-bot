@@ -22,6 +22,32 @@ Las **FASES 0 a 3 ya están hechas y desplegadas**:
 
 > 📍 **Pestaña NUEVA de Claude: empieza leyendo este bloque + la última entrada de SESIONES.** Ahí está el estado REAL (no asumir de memoria vieja).
 
+### 🎯 EL ORDEN RECOMENDADO (decidido con Maired, 2026-07-13)
+
+1. **La DEUDA TÉCNICA** (D1–D5, aquí abajo). No es lo más vistoso, pero **es lo que puede romper lo que YA funciona** — hoy, si alguien despliega sin correr los bancos a mano, rompe el cobro y nadie se entera.
+2. **Las PLANTILLAS de Meta** (punto 4). Van pronto porque **Meta tarda hasta 24h en aprobar cada una**: cuanto antes empiece el trámite, mejor. Y **desbloquean media hoja de ruta** (recordatorios de pago, recuperar pedidos, reactivar dormidos).
+3. **Las fases 3 y 4 de la bandeja** — las que hacen que la dueña **deje el celular**.
+4. **El contenido** (trabajo de ella) y lo demás.
+
+---
+
+### 🧱 DEUDA TÉCNICA — LOS CIMIENTOS (lo PRIMERO, antes que cualquier feature nueva)
+
+> **Por qué va primero:** esto no rompe el bot *hoy*; rompe **lo que ya funciona**, mañana, sin
+> que nadie se entere. Verificado en el código el 2026-07-13 (no supuesto).
+
+| # | El agujero | Qué pasa si no se toca |
+|---|---|---|
+| **D1** | 🔴 **No hay tabla de migraciones aplicadas.** `init_db.py` re-ejecuta **los 23 `.sql` ENTEROS en cada arranque** del contenedor. La idempotencia la sostiene el que escribe cada archivo, a mano (`WHERE NOT EXISTS`, `IF NOT EXISTS`). | Un `.sql` mal escrito **duplica datos o borra algo en el próximo reinicio**. Es la bomba de relojería más grande que queda. Y `main.py` **se traga la excepción**: si una migración revienta, el contenedor **arranca verde** con la tabla sin crear. |
+| **D2** | 🔴 **Los bancos de pruebas NO corren solos.** `.github/workflows/deploy.yml` despliega, pero **no ejecuta** `probar_cobro.py` / `probar_honestidad.py` / `probar_bandeja.py` / `probar_fase2.py`. Hoy se corren **a mano por SSH**. | Alguien hace `git push`, se despliega, **se rompe el cobro y nadie se entera**. La regla "si sale rojo, no se despliega" **hoy no la hace cumplir nadie**: depende de que un humano se acuerde. |
+| **D3** | 🟠 **Campos LEGADOS que duplican la verdad.** `productos.precio` y `productos.presentacion` siguen vivos "por compatibilidad" (`router.py:664`); los **"Sabores:"** siguen escritos dentro de las descripciones. | **Es exactamente la enfermedad que causó la fuga de la Kombucha**: el mismo dato en dos sitios. Hoy están desactivados (el bot lee el tamaño), pero **siguen ahí para volver a morder**. |
+| **D4** | 🔴 **El respaldo automático NO corre en el TALLER** (solo en producción/netcup). Y el taller es donde se construye y donde corren las migraciones **destructivas**. | La cirugía del 2026-07-13 fue **la primera migración que borra una fila con contenido real**. Se salvó con un `pg_dump` a mano. **La próxima puede que no.** |
+| **D5** | 🔴 **Llaves expuestas sin rotar** (ver punto 8, abajo). | Antes de abrir con clientes reales. |
+
+**Cómo se ataca (recomendado):** una **auditoría de arquitectura adversarial** del sistema COMPLETO (no de una feature), con revisores de lentes distintas —el dinero, Meta/Tech Provider, los datos y las migraciones, el panel, la operación— y **cada hallazgo verificado contra el código** antes de reportarlo. Primero el diagnóstico; **el código, después**.
+
+---
+
 **✅ Terminado y verificado en vivo (junio 2026):**
 - Comprobantes multi-método (Pago Móvil/Transferencia/Zelle/Binance) + validación de monto (Bs/USD/USD con descuento).
 - Descuento 20% en divisas (cotiza Y reconoce el monto con descuento).
@@ -43,7 +69,14 @@ Las **FASES 0 a 3 ya están hechas y desplegadas**:
 **1. ✅ La BANDEJA "El bot te necesita" en el PANEL** *(repo `masvidaconsciente-dashboard`)* — **HECHA Y VERIFICADA (2026-07-12).**
 Pantalla `/bandeja`: los avisos (motivo, cliente, lo que preguntó), botón **"Ya lo atendí (reactivar el bot)"**, link para abrir el chat en WhatsApp, y el bloque **"El precio de hoy"** (escribir el precio del día de Tortas keto / Premezclas / torta baja). Con **contador en el menú** que se refresca solo cada 45s — el aviso ya no pasa desapercibido. Ver SESIONES 2026-07-12.
 
-**2. 🔴 PRODUCTO + TAMAÑO + OPCIÓN — la cirugía (PRP escrito y auditado, ESPERA EL OK DE MAIRED).**
+**2. ✅ PRODUCTO · TAMAÑO · OPCIÓN — LA CIRUGÍA: HECHA (2026-07-13).** La fuga de la Kombucha ($3 por venta) está **cerrada**. El pedido va por **`variante_id`** de una lista CERRADA (el "código de barras"): el modelo **no puede escribir un id que no le dimos** y el precio lo resuelve el código. Precio del día **por tamaño**. El panel **bloquea nombres repetidos** y **rechaza** editar el precio en el producto si tiene varios tamaños. Migraciones 022 + 022b. `probar_cobro.py` **27/27** · `probar_panel_tamanos.py` **9/9**. Ver SESIONES 2026-07-13.
+*(Lo que sigue abajo, el punto 5, es el detalle de esta misma cirugía — ya no es un pendiente.)*
+
+**2.b ✅ LA BANDEJA — Fases 1 y 2 HECHAS (2026-07-12/13).** La dueña **atiende desde el panel** (el bot se calla solo en ese chat, con firma de **quién** apretó el freno) y **el hilo dice la verdad**: lo que ella escribe **desde su celular** entra al chat y calla al bot · el **comprobante se ve DENTRO del chat** · **entregado/leído/FALLÓ** por mensaje. Migraciones 019, 020 y 021. Ver `PRP-bandeja.md`.
+**Faltan sus fases 3, 4 y 5:**
+- **Fase 3 — que sea una COLA, no una lista:** orden por quien lleva más esperando · *"esperando hace 12 min"* · filtros (Sin responder · Me necesitan · Pago por verificar) · **aviso en tiempo real con sonido**. ⚠️ *Sin esto, la dueña **va a seguir viviendo en el celular**: el celular sí vibra.*
+- **Fase 4 — que se sienta un producto:** el menú agrupado (hoy son **14 ítems planos** y *Conversaciones* está en el puesto #10) · la **Bandeja como pantalla de inicio** · la **ficha del cliente al lado del chat** (el mayor impacto visual por menos código de todo el plan).
+- **Fase 5 — las PLANTILLAS** *(es el punto 4 de abajo: el mismo trabajo)*.
 Decisión de Maired (2026-07-12): **NO al parche de renombrar la Kombucha.** Se hace la estructura correcta. Ver **`PRP-producto-variantes.md`** (local): un producto → sus **tamaños** (precio + foto + sabores + agotado propios) → sus **opciones** (no tocan el dinero), y `registrar_pedido` recibe un **`variante_id` de lista cerrada** ("código de barras") en vez de un nombre libre. Arregla de raíz la Kombucha ($3 por venta) y las tortas por tamaño.
 ⚠️ **El PRP fue ATACADO por 4 revisores antes de aprobarlo** (51 hallazgos → 34 reales) y quedó en **v2**. ✅ El bloqueante (respaldo automático) **ya está resuelto**: activado y con restauración probada.
 **Fotos:** etiquetado **por demanda**, cero tarea para la clienta (la migración se lleva sola la etiqueta de la Kombucha; lo que nadie sabe nace neutro y el bot **no afirma tamaños que no sabe**).
