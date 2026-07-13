@@ -1566,6 +1566,29 @@ async def guardar_notas_cliente(telefono: str, datos: NotasIn, _: str = Depends(
     return {"ok": True}
 
 
+def _disparar_retomar(telefono: str, nombre: str | None) -> None:
+    """LA DUEÑA DEVOLVIÓ EL CHAT: que el bot CONTESTE lo que quedó pendiente.
+
+    Hasta hoy, devolver el chat solo apagaba la bandera de pausa. Pero el bot únicamente habla
+    cuando ENTRA un mensaje nuevo por el webhook, y los mensajes que el cliente escribió durante
+    la pausa YA entraron ⇒ nadie disparaba nada ⇒ el bot se quedaba MUDO y la venta se moría.
+
+    El botón no cambia: el que decide si hay algo que contestar es el sistema (la tarea mira si el
+    último turno es del cliente). Y ese click ES la aprobación humana que exige Meta.
+
+    Se llama SIEMPRE DESPUÉS del commit: la tarea vuelve a leer al cliente de la BD y tiene que
+    verlo ya despausado, o se callaría creyendo que la dueña sigue atendiendo.
+    """
+    if telefono.startswith(SIMULADOR):
+        return  # el chat de prueba no tiene un WhatsApp del otro lado
+    try:
+        from app.workers.tasks import retomar_chat
+
+        retomar_chat.apply_async((telefono, nombre))
+    except Exception:  # noqa: BLE001 — el chat YA quedó devuelto; esto es solo el disparador
+        logger.exception("No se pudo encolar el retomar del chat de %s", telefono)
+
+
 @router.put("/clientes/{telefono}/pausa")
 async def pausar_bot_cliente(telefono: str, datos: PausaIn, _: str = Depends(usuario_actual)):
     """Pausa/reactiva el bot SOLO para este cliente (la dueña atiende ese chat)."""
@@ -1580,7 +1603,10 @@ async def pausar_bot_cliente(telefono: str, datos: PausaIn, _: str = Depends(usu
         # Este botón lo aprieta UNA PERSONA: queda firmado como 'dueña' para que el bot se
         # calle del todo. Al devolver el chat, la firma se borra. Ver migración 020.
         cliente.pausado_por = "dueña" if datos.pausado else None
+        nombre = cliente.nombre
         await session.commit()
+    if not datos.pausado:
+        _disparar_retomar(telefono, nombre)
     return {"ok": True, "pausado": datos.pausado}
 
 
@@ -1652,6 +1678,9 @@ _MOTIVO_TEXTO = {
     "no_se": "El bot no sabe algo",
     "pide_persona": "El cliente pide hablar con una persona",
     "reclamo": "El cliente está reclamando",
+    # Le devolviste el chat al bot, pero pasaron +24h desde el último mensaje del cliente:
+    # WhatsApp no deja escribirle. El bot NO le escribió (lado seguro) y te lo avisa a ti.
+    "ventana_cerrada": "Pasaron 24h: el bot no puede escribirle",
 }
 
 
@@ -1699,8 +1728,9 @@ async def resolver_intervencion(
     intervencion_id: int, reactivar: bool = True, _: str = Depends(usuario_actual)
 ):
     """La dueña ya atendió ese chat: cierra el aviso y (por defecto) REACTIVA el bot,
-    para que vuelva a atender a ese cliente."""
+    para que vuelva a atender a ese cliente — y le CONTESTE lo que quedó pendiente."""
     factory = get_session_factory()
+    devolver: tuple[str, str | None] | None = None
     async with factory() as session:
         inter = await session.get(Intervencion, intervencion_id)
         if inter is None:
@@ -1716,7 +1746,10 @@ async def resolver_intervencion(
             if cliente is not None:
                 cliente.bot_pausado = False
                 cliente.pausado_por = None
+                devolver = (cliente.telefono, cliente.nombre)
         await session.commit()
+    if devolver:
+        _disparar_retomar(*devolver)
     return {"ok": True, "bot_reactivado": reactivar}
 
 

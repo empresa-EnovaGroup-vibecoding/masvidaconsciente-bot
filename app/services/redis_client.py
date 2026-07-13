@@ -116,6 +116,18 @@ async def marcar_comprobante(message_id: str) -> None:
     await _client().set(f"comprob:{message_id}", "1", ex=86400)
 
 
+# ─── Candado del RETOMAR (la duena devolvio el chat al bot) ──────────
+# Dos clicks seguidos en "Devolver al bot" —o los dos caminos de resume a la vez (el boton de
+# la pausa y el de la bandeja)— dispararian DOS respuestas del bot al mismo cliente, encimadas.
+# Este candado deja pasar la primera y descarta las demas durante 30s. Mismo patron que
+# `ya_procesado`, con clave propia (no comparte prefijo con msg:/comprob:).
+
+async def candado_retomar(telefono: str, ttl: int = 30) -> bool:
+    """True si ESTE disparo es el que contesta. False = ya hay uno en curso (doble click)."""
+    creado = await _client().set(f"retomar:{telefono}", "1", nx=True, ex=ttl)
+    return creado is not None
+
+
 # ─── Anti-abuso / tope de gasto ──────────────────────────────────────
 # Cuenta los mensajes de un cliente por dia (UTC). Frena bucles o trolls que
 # dispararian costo de IA sin control. Los comprobantes NO cuentan (es dinero).

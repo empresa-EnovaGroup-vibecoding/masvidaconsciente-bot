@@ -17,6 +17,32 @@
 
 ---
 
+## 2026-07-13 (noche) — 🔁 EL BOT YA CONTESTA AL RETOMAR EL CHAT (Bandeja Fase 3 · FASE A)
+
+**El hueco que reportó Maired con una captura:** ella toma el chat, el cliente sigue escribiendo (*"¿cuánto sería en Bs?"*, *"quedo pendiente del monto"*), ella le devuelve el chat al bot… **y el bot se queda MUDO**. La conversación —y la venta— se moría ahí.
+
+**La causa (verificada en el código, no supuesta):** *"Devolver al bot"* solo **apagaba la bandera de pausa**. Pero el bot únicamente habla cuando **ENTRA** un mensaje nuevo por el webhook, y esos mensajes **ya habían entrado** durante la pausa ⇒ **nadie disparaba nada**. No faltaba inteligencia: **faltaba el DISPARADOR**.
+
+**Lo construido (todo ADITIVO, cero cambios en el panel):**
+- **Tarea nueva `retomar_chat`** (Celery): lee el **historial** (no el buffer, que se vació en la pausa), le pasa al agente una orden **efímera** `[SISTEMA]` (*"la dueña te devolvió el chat, responde lo último que escribió el cliente"*) y llama a `responder()` **con todas las herramientas** — porque *"¿cuánto en Bs?"* necesita el cobro y la tasa, no solo redactar bonito.
+- **El MISMO botón se volvió inteligente** (sin botón nuevo, sin que ella aprenda nada): los dos caminos de devolver el chat (`/clientes/{tel}/pausa` y *"Ya lo atendí"* de la bandeja) ahora **encolan la respuesta** tras el commit. **El sistema decide solo** si hay algo que contestar.
+- **El texto del cliente NO se reinyecta:** ya está en el historial. Se le manda una orden de sistema, no un mensaje duplicado — y esa orden **no se guarda en ninguna parte** (verificado: no queda en la memoria del bot).
+
+**Las 5 reglas de seguridad, cada una probada:**
+1. 🔒 **Ventana de 24h, FAIL-CLOSED.** El flujo normal nunca la mira (el cliente *acaba* de escribir); aquí pueden haber pasado días. Cerrada ⇒ el bot **NO escribe** y **te avisa a ti** (aviso nuevo en la bandeja, motivo `ventana_cerrada`). Un envío fuera de ventana lo rechaza Meta y **baja la calidad del número**: siendo Tech Provider, eso arriesga la cuenta de **todos** los clientes.
+2. 🤐 **No hablar sin nada pendiente.** Si el último turno es de ELLA (ya contestó todo, por el panel o **desde su celular**), el bot **se calla**: hablar ahí sería un **envío proactivo**, prohibido sin aprobación humana. *El click en el botón ES la aprobación.*
+3. 🔁 **Idempotencia.** Candado de 30s: doble click ⇒ **un solo mensaje** (no dos respuestas encimadas al mismo cliente).
+4. ⏸️ **No hablar encima de la dueña.** Hereda las redes de la Fase 2: si ella vuelve a tomar el chat mientras el bot piensa (~20s), la respuesta **se descarta** (ni se envía ni se recuerda).
+5. 💰 **No inventar precio.** Si falta el precio del día, el bot **re-escala honestamente** en vez de cobrar. *(Puede parecer "no hizo nada": es lo correcto.)*
+
+**Verificado EN LA BASE, no en el chat** (banco nuevo `probar_retomar.py`, **12/12**): la respuesta del bot queda **DESPUÉS** de los pendientes · no duplica los mensajes del cliente · ningún pedido en $0 · la orden `[SISTEMA]` no queda en la memoria. Y el **end-to-end REAL**, apretando el botón por HTTP: `200` → el worker recibió `retomar_chat` **en 1 segundo** → el bot redactó y salió a enviar. **Sin regresiones:** cobro **27/27** · honestidad · bandeja · Fase 2 · tamaños **9/9**, todo en verde.
+
+**Lo que dice el bot al retomar** (caso real de la captura, leído globo por globo — *no basta con que haya una fila en la tabla*): *"Claro, déjame generarte los datos de pago para que veas el monto exacto en bolívares 💚 / Primero necesito confirmar: ¿de qué sabor la quieres? / ¿retiro en La Mendera o delivery?"*. **Retoma donde quedó, no inventa el monto y pide lo que le falta.**
+
+**Estado: SOLO EN EL TALLER.** Producción (netcup, clientes reales) **NO se ha tocado** — espera el OK de Maired. Falta la **Fase B** (reconstruir el historial desde Postgres para pausas largas; hoy si el comprobante entró **durante** la pausa, el bot podría re-pedirlo — feo, pero **el pago sí quedó registrado**: no se pierde dinero).
+
+---
+
 ## 2026-07-13 (tarde/noche) — 🏛️ AUDITORÍA DE ARQUITECTURA + 5 BLOQUEANTES CERRADOS + Fase 3 diseñada
 
 Sesión larga y de mucho valor. De una **auditoría del sistema COMPLETO** salieron 6 bloqueantes; se cerraron todos los que muerden hoy, **cada uno probado y en producción, con el cobro 27/27 en cada paso**.

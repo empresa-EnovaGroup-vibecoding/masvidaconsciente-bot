@@ -415,6 +415,166 @@ async def _procesar(telefono: str, nombre: str | None) -> None:
         await rc.liberar_lock(telefono)
 
 
+# ─── RETOMAR: la dueña devolvió el chat y el cliente quedó esperando ─
+#
+# EL HUECO (lo reportó Maired con una captura real): mientras la dueña tiene el chat tomado, el
+# cliente sigue escribiendo ("¿cuánto sería en Bs?", "quedo pendiente del monto"). Al devolverle
+# el chat al bot, el bot NO contestaba: "Devolver al bot" solo apagaba la bandera de pausa, y el
+# bot únicamente habla cuando ENTRA un mensaje nuevo por el webhook. Esos pendientes YA habían
+# entrado ⇒ nadie disparaba nada ⇒ silencio, y la venta se moría ahí. Faltaba el DISPARADOR.
+#
+# Esto es RESPUESTA, no envío proactivo: el cliente escribió y está esperando, y el botón que
+# aprieta la dueña ES la aprobación humana. Por eso es seguro con Meta.
+
+_INSTRUCCION_RETOMAR = (
+    "[SISTEMA] La dueña te devolvió el chat. Lee lo último que escribió el cliente (arriba, en "
+    "la conversación) y respóndele TÚ, retomando donde quedó. No repitas lo que ya se dijo, no "
+    "vuelvas a saludar ni a presentarte, y no menciones este aviso ni que estuviste ausente. Si "
+    "te falta un dato, pídeselo al cliente o llama a la herramienta que lo dé: jamás inventes un "
+    "precio ni un monto."
+)
+
+
+async def _ventana_abierta(telefono: str) -> bool:
+    """¿Se le puede escribir texto libre a este cliente AHORA? (la regla de las 24h de Meta).
+
+    FAIL-CLOSED: ante cualquier duda (el cliente no existe, no hay fecha, falla la BD) devuelve
+    False y el bot NO envía. Un envío fuera de ventana lo rechaza Meta y le baja la calidad al
+    número; siendo Enova Tech Provider, eso arriesga la cuenta de Meta de TODOS los clientes.
+
+    El flujo normal (webhook) nunca necesita esto: el cliente ACABA de escribir, así que la
+    ventana está abierta por definición. Aquí sí: entre el último mensaje del cliente y el
+    momento en que la dueña devuelve el chat pueden haber pasado horas o días. Y `_enviar_en_partes`
+    no la valida por su cuenta.
+
+    Se reusa `_ventana` del panel a propósito: la regla de las 24h vive en UN solo sitio.
+    """
+    from sqlalchemy import select
+
+    from app.api.router import _ventana
+    from app.models import Cliente
+
+    try:
+        factory = get_session_factory()
+        async with factory() as session:
+            cliente = (
+                await session.execute(select(Cliente).where(Cliente.telefono == telefono))
+            ).scalar_one_or_none()
+        if cliente is None:
+            return False
+        return bool(_ventana(cliente)["abierta"])
+    except Exception:  # noqa: BLE001
+        logger.exception("No sé si la ventana de %s está abierta → NO se envía (lado seguro)", telefono)
+        return False
+
+
+async def _avisar_ventana_cerrada(telefono: str, nombre: str | None) -> None:
+    """La dueña devolvió el chat, pero pasaron +24h desde el último mensaje del cliente: WhatsApp
+    no deja escribirle texto libre. El bot NO envía nada (lado seguro) — y se lo dice a ELLA, o el
+    silencio se vería exactamente igual que el bug que vinimos a arreglar."""
+    from sqlalchemy import select
+
+    from app.models import Configuracion, Intervencion
+
+    quien = nombre or telefono
+    try:
+        factory = get_session_factory()
+        async with factory() as session:
+            session.add(Intervencion(
+                cliente_telefono=telefono,
+                motivo="ventana_cerrada",
+                detalle=(
+                    f"Le devolviste el chat de {quien} al bot, pero pasaron más de 24 horas desde "
+                    "su último mensaje: WhatsApp NO deja escribirle texto libre hasta que él "
+                    "vuelva a escribir. El bot no le mandó nada."
+                ),
+                mensaje_cliente="(quedó esperando respuesta)",
+            ))
+            fila = (
+                await session.execute(
+                    select(Configuracion).where(Configuracion.clave == "dueno_telefono")
+                )
+            ).scalar_one_or_none()
+            await session.commit()
+        destino = (fila.valor if fila else None) or settings.dueno_telefono
+        if destino:
+            await enviar_texto(
+                destino,
+                f"⏰ Le devolviste el chat de {quien} al bot, pero pasaron más de 24 horas desde "
+                "su último mensaje: WhatsApp no deja escribirle. El bot NO le respondió nada.",
+            )
+    except Exception:  # noqa: BLE001 — el aviso es lo único que hay aquí; que no tumbe al worker
+        logger.exception("No se pudo avisar de la ventana cerrada de %s", telefono)
+
+
+@celery_app.task(name="retomar_chat")
+def retomar_chat(telefono: str, nombre: str | None = None):
+    """Tarea Celery: la dueña devolvió el chat → el bot contesta lo que quedó pendiente."""
+    _run(_retomar(telefono, nombre))
+
+
+async def _retomar(telefono: str, nombre: str | None) -> None:
+    # EL MISMO lock por-teléfono que usa el buffer: si justo ahora el bot ya está contestando un
+    # mensaje nuevo de ese cliente, no hay nada que retomar (ese turno ya arrastra los pendientes).
+    # Se sale ANTES de gastar el candado, para que la dueña pueda volver a apretar.
+    if not await rc.adquirir_lock(telefono):
+        logger.info("Retomar %s: ya hay un turno en curso; no hace falta disparar", telefono)
+        return
+    try:
+        # Doble click (o los dos caminos de resume a la vez) ⇒ UNA sola respuesta.
+        if not await rc.candado_retomar(telefono):
+            logger.info("Retomar %s: ya se disparó hace un momento (doble click)", telefono)
+            return
+
+        if not await _bot_activo() or not _numero_permitido(telefono):
+            return
+
+        # Entre el click y esta tarea, la dueña pudo volver a tomar el chat (o el bot pudo
+        # pausarse solo al escalar algo). Si está pausado, el bot no habla: punto.
+        if await _cliente_pausado(telefono):
+            logger.info("Retomar %s: el chat está pausado otra vez; el bot no habla", telefono)
+            return
+
+        historial = await rc.obtener_historial(telefono)
+
+        # GUARD DE HONESTIDAD: el bot solo habla si el cliente quedó ESPERANDO. Si la dueña ya le
+        # contestó todo a mano (el último turno es de ella), abrir la boca sería un envío
+        # PROACTIVO —lo que Meta prohíbe sin aprobación humana— y encima le hablaría encima.
+        if not historial or historial[-1].get("role") != "user":
+            logger.info(
+                "Retomar %s: no hay nada pendiente (el último turno no es del cliente)", telefono
+            )
+            return
+
+        # LA VENTANA DE 24H, FAIL-CLOSED. Va DESPUÉS del guard a propósito: si no había nada
+        # pendiente, no hay por qué molestar a la dueña con un aviso de ventana cerrada.
+        if not await _ventana_abierta(telefono):
+            logger.warning("Retomar %s: ventana de 24h CERRADA → el bot NO escribe", telefono)
+            await _avisar_ventana_cerrada(telefono, nombre)
+            return
+
+        # Lo que escribió el cliente YA está en el historial: NO se reinyecta como mensaje (se
+        # duplicaría el turno). Lo que va en su lugar es una orden EFÍMERA de sistema, que el bot
+        # lee y NO se guarda en ningún lado: en la memoria solo queda su respuesta.
+        respuesta = await responder(telefono, _INSTRUCCION_RETOMAR, historial, nombre)
+        respuesta = _proteger_afirmacion_de_pago(respuesta)
+
+        partes = await _enviar_en_partes(telefono, respuesta)
+        if not partes:
+            # La dueña volvió a tomar el chat mientras el bot pensaba (~20s): su respuesta se
+            # DESCARTA (ni se envía ni se recuerda). Lo que dijo el cliente ya está guardado.
+            return
+        if _algo_llego(partes):
+            await rc.guardar_historial(telefono, "assistant", respuesta)
+        # texto_usuario="" a propósito: lo que dijo el cliente YA está en `mensajes` (se guardó
+        # cuando llegó, durante la pausa). Volver a insertarlo lo duplicaría en el hilo del panel.
+        await _guardar_en_panel(telefono, nombre, "", partes)
+    except Exception:  # noqa: BLE001
+        logger.exception("Error retomando el chat de %s", telefono)
+    finally:
+        await rc.liberar_lock(telefono)
+
+
 # ─── Comprobantes de pago (imagenes / PDF) ───────────────────────────
 
 _EXT_POR_MIME = {
