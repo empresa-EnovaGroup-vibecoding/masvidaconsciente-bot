@@ -1810,7 +1810,10 @@ async def poner_precio_dia(datos: PrecioDiaIn, _: str = Depends(usuario_actual))
             fila.precio = Decimal(str(datos.precio))
             fila.nota = datos.nota
         await session.commit()
-    return {"ok": True, "producto": prod.nombre, "precio_hoy": datos.precio}
+    # OJO: NO devolver `prod.nombre` — `prod` no existe aquí y la sesión ya cerró. Devolverlo
+    # lanzaba NameError → 500: el precio SÍ se guardaba (el commit ya pasó) pero el panel decía
+    # "no se pudo guardar", y la dueña reintentaba con otro número. (Fuga B3.)
+    return {"ok": True, "precio_hoy": datos.precio}
 
 
 # ─── Conocimiento del negocio (FAQ + info que usa el bot) ────────────

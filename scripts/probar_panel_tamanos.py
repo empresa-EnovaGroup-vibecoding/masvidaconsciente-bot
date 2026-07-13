@@ -132,8 +132,25 @@ async def main() -> None:
             check(all(f.get("variante_id") for f in filas),
                   "cada fila trae su tamaño (sin eso, el precio se guardaría en el sitio que no es)")
 
+            print("\n5b) 🔴 FUGA B3: GUARDAR el precio del día responde OK (no error 500)")
+            # Un tamaño SIN precio hoy, para no pisar datos reales; se limpia en la sección 6.
+            libre = next((f for f in filas if f.get("precio_hoy") is None and f.get("variante_id")), None)
+            if libre:
+                r = await c.put("/api/precio-dia", headers=h,
+                                json={"variante_id": libre["variante_id"], "precio": 33.0, "nota": "PRUEBA-B3"})
+                check(r.status_code == 200,
+                      "guardar el precio del día (PUT) → OK (antes: 500 por usar prod.nombre sin definir)",
+                      f"HTTP {r.status_code}")
+            else:
+                print("        (sin tamaño libre para probar el PUT — se omite)")
+
     print("\n6) LA VERDAD FINAL: lo que el BOT cobraría")
     async with factory() as s:
+        # limpia el precio del día de prueba que dejó 5b (B3), si lo hubo
+        from sqlalchemy import delete as _del
+        from app.models import PrecioDia as _PD
+        await s.execute(_del(_PD).where(_PD.nota == "PRUEBA-B3"))
+        await s.commit()
         prod = (
             await s.execute(select(Producto).where(Producto.nombre.ilike("kombucha")))
         ).scalar_one_or_none()
