@@ -32,7 +32,11 @@ Las **FASES 0 a 3 ya están hechas y desplegadas**:
 
 ### 🔨 LO QUE SIGUE — en orden (actualizado 2026-07-12)
 
-> **Estamos construyendo el HANDOFF** (traspaso a humano): que el bot, cuando llega a su límite, **deje de responder, avise a la dueña y le pase la conversación**. El motor y **la pantalla** ya están hechos. Falta que el aviso **le llegue al WhatsApp** de la dueña (puntos 3 y 4: `dueno_telefono` + plantillas HSM).
+> **Estamos construyendo LA BANDEJA**: que la dueña **atienda DENTRO del sistema** en vez de irse a WhatsApp.
+> **Fase 1 HECHA (2026-07-12):** ya responde desde el panel, el bot **se calla solo** en ese chat, y al devolvérselo **el bot sabe lo que ella prometió**. Con el **reloj de las 24h de Meta** a la vista (y la caja bloqueada si se cerró).
+> **Fase 2 (EN CURSO):** que lo que ella escribe **desde su celular** entre al hilo y calle al bot (hoy le habla encima) · **el comprobante DENTRO del chat** (hoy no entra: el panel muestra al bot respondiéndole a un mensaje fantasma) · **entregado/leído/FALLÓ** en cada mensaje.
+> ✅ **Desbloqueada:** `smb_message_echoes` activado y **verificado en vivo** — el bot **NO** recibe eco de sus propios mensajes, así que **no se puede quedar mudo**. Ver SESIONES 2026-07-12 (noche 10).
+> Faltan las fases 3 (cola con no leídos + aviso en vivo), 4 (menú agrupado) y 5 (plantillas para reabrir chats de +24h). Ver `PRP-bandeja.md`.
 >
 > ⚠️ **ANTES DE TOCAR EL COBRO, LEE ESTO:** existe un **banco de pruebas** — `scripts/probar_cobro.py`. **Córrelo siempre** después de cualquier cambio en el catálogo, las herramientas o el cobro (`docker exec -w /app -e PYTHONPATH=/app <bot> python scripts/probar_cobro.py`). Si algo sale MAL, **no se despliega**. Ver CLAUDE.md §8 y SESIONES 2026-07-12.
 
@@ -44,7 +48,7 @@ Decisión de Maired (2026-07-12): **NO al parche de renombrar la Kombucha.** Se 
 ⚠️ **El PRP fue ATACADO por 4 revisores antes de aprobarlo** (51 hallazgos → 34 reales) y quedó en **v2**. ✅ El bloqueante (respaldo automático) **ya está resuelto**: activado y con restauración probada.
 **Fotos:** etiquetado **por demanda**, cero tarea para la clienta (la migración se lleva sola la etiqueta de la Kombucha; lo que nadie sabe nace neutro y el bot **no afirma tamaños que no sabe**).
 
-**3. 🔴 Configurar `dueno_telefono`** — está **VACÍO** (config y env, bot y worker, en los dos servidores) → el aviso que YA existe ("🔔 Nuevo pago reportado" al entrar un comprobante) **nunca le ha llegado a nadie**.
+**3. ✅ `dueno_telefono` configurado (2026-07-12)** — `573005690062`, en las DOS bases. **Verificado con un WhatsApp real enviado.** Los avisos del bot ("🔔 Nuevo pago reportado", "el bot te necesita") ya le llegan al teléfono.
 
 **4. 🟡 Motor de PLANTILLAS (HSM) — el aviso que SIEMPRE llega.** `meta_client.py` hoy **solo manda `type: "text"`** (free-form) → un aviso solo llega si la dueña le escribió al negocio hace <24h (ventana de Meta). Hace falta: (a) `enviar_plantilla()` en el código, con fallback a texto si la ventana está abierta; (b) que **Maired cree y apruebe** la plantilla `bot_necesita_ayuda` (categoría **Utilidad**) en el WhatsApp Manager. ⚠️ **Es el ladrillo de media hoja de ruta** (recordatorios de pago, recuperar pedidos, campañas, reactivar dormidos).
 
