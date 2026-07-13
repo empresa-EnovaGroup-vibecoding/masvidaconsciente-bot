@@ -46,6 +46,18 @@ Las **FASES 0 a 3 ya están hechas y desplegadas**:
 
 **Cómo se ataca (recomendado):** una **auditoría de arquitectura adversarial** del sistema COMPLETO (no de una feature), con revisores de lentes distintas —el dinero, Meta/Tech Provider, los datos y las migraciones, el panel, la operación— y **cada hallazgo verificado contra el código** antes de reportarlo. Primero el diagnóstico; **el código, después**.
 
+> ## ✅ HECHO (2026-07-13) — la auditoría se corrió (283 agentes, 9 lentes + triple refutación) y se
+> cerraron **TODOS los bloqueantes**. Detalle en SESIONES. Resumen:
+> - 🔒 **Candado del cobro** (`require_parameters`, era el punto 7/8 de abajo) · 🛠️ **Despliegue taller-primero**
+>   (bot **y** panel: push→solo taller, prod a mano — cierra D2/A1) · 💰 **B4** fuga del precio del panel ·
+>   🩹 **B3** el precio del día daba 500 · 🧨 **B2** el script de promoción decapitaba el cobro · ⚡ **panel**
+>   (scroll del chat + refresco 3s). Todo probado y en producción.
+> - **Sigue abierto (cimientos, no bloqueantes):** **D1** (tabla de migraciones), **D4** (respaldo en el
+>   taller), **D3/D5** (menores). **B5** (cuenta sembrada) solo muerde con el 2º cliente.
+> - **Decidido:** modelo → **quedarse en Haiku** (Gemini Pro no vale; `gpt-5.4-mini` ahorra ~$3/mes, no urge).
+>   **Multi-agente → NO** (el catálogo es 17% del prompt; el fix es *retrieval*, YA construido: conmuta solo
+>   pasados 60 productos → escala a 400 sin tocar código).
+
 ---
 
 **✅ Terminado y verificado en vivo (junio 2026):**
@@ -73,6 +85,9 @@ Pantalla `/bandeja`: los avisos (motivo, cliente, lo que preguntó), botón **"Y
 *(Lo que sigue abajo, el punto 5, es el detalle de esta misma cirugía — ya no es un pendiente.)*
 
 **2.b ✅ LA BANDEJA — Fases 1 y 2 HECHAS (2026-07-12/13).** La dueña **atiende desde el panel** (el bot se calla solo en ese chat, con firma de **quién** apretó el freno) y **el hilo dice la verdad**: lo que ella escribe **desde su celular** entra al chat y calla al bot · el **comprobante se ve DENTRO del chat** · **entregado/leído/FALLÓ** por mensaje. Migraciones 019, 020 y 021. Ver `PRP-bandeja.md`.
+**🆕 EL REMATE DEL HANDOFF (diseñado 2026-07-13, listo para construir — empezar por aquí):**
+- **Que el bot CONTESTE al RETOMAR el chat.** Lo pidió Maired con una captura: el cliente escribió *"¿cuánto en Bs?"* durante la pausa y el bot **no contestó** al devolverle el chat. Hoy "Devolver al bot" solo apaga la pausa; **falta el disparador**. **DISEÑADO y verificado contra el código** en `PRP-bandeja-fase3-retomar.md` (local): el **mismo botón se vuelve inteligente** (sin botón nuevo) + una tarea Celery `retomar_chat` que lee el historial y llama a `responder()`, con **ventana-24h fail-closed**, idempotencia y las redes heredadas. Es RESPUESTA, no proactivo (seguro con Meta).
+
 **Faltan sus fases 3, 4 y 5:**
 - **Fase 3 — que sea una COLA, no una lista:** orden por quien lleva más esperando · *"esperando hace 12 min"* · filtros (Sin responder · Me necesitan · Pago por verificar) · **aviso en tiempo real con sonido**. ⚠️ *Sin esto, la dueña **va a seguir viviendo en el celular**: el celular sí vibra.*
 - **Fase 4 — que se sienta un producto:** el menú agrupado (hoy son **14 ítems planos** y *Conversaciones* está en el puesto #10) · la **Bandeja como pantalla de inicio** · la **ficha del cliente al lado del chat** (el mayor impacto visual por menos código de todo el plan).

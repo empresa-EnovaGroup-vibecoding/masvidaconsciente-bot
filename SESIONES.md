@@ -17,6 +17,32 @@
 
 ---
 
+## 2026-07-13 (tarde/noche) — 🏛️ AUDITORÍA DE ARQUITECTURA + 5 BLOQUEANTES CERRADOS + Fase 3 diseñada
+
+Sesión larga y de mucho valor. De una **auditoría del sistema COMPLETO** salieron 6 bloqueantes; se cerraron todos los que muerden hoy, **cada uno probado y en producción, con el cobro 27/27 en cada paso**.
+
+**La auditoría (adversarial, 283 agentes, 9 lentes + triple refutación por hallazgo).** Verificó la DEUDA TÉCNICA del ROADMAP (D1–D5) contra el código —no supuesta— y encontró más (B1–B6). Confirmado EN VIVO por SSH: D1 (no hay tabla de migraciones; se re-corren las 23 en cada arranque), y que el CI desplegaba **producción en cada push** (hasta con un `.md`).
+
+**ARREGLADO y desplegado (taller + producción, probado):**
+- 🔒 **Candado del cobro** (`provider.require_parameters` en `agent.py:_llamar_openrouter`): sin él, OpenRouter podía rutear a un proveedor que **ignora las herramientas** → el bot "dice" que agendó/cobró sin llamar a la tool (el fantasma del "te agendo" por la puerta del proveedor). Era el roadmap #7/#8. Probado: Haiku sigue ruteando y usando tools con el candado.
+- 🛠️ **Despliegue taller-primero (deuda A1):** el `deploy.yml` del **bot Y del panel** ahora hace push→SOLO taller; producción a mano (`gh workflow run deploy.yml -f produccion=true`). Antes desplegaba los dos a la vez.
+- 💰 **B4 — fuga del precio del panel:** editar un producto pisaba el precio del **tamaño** con el viejo del campo legado, en silencio → el bot cobraba el viejo. El backend ahora **RECHAZA** el precio al editar (una sola fuente: Tamaños); el modal solo lo manda al CREAR. Prueba nueva `probar_panel_tamanos.py` (2b: el intento de $999 NO pisa el $12).
+- 🩹 **B3 — el precio del día daba error 500:** `poner_precio_dia` (router.py) devolvía `prod.nombre` con `prod` sin definir y la sesión cerrada → NameError → **guardaba pero el panel decía "no se pudo guardar"**. Se quitó ese campo (el panel no lo usa). Prueba nueva (5b: el PUT responde 200).
+- 🧨 **B2 — `promover_a_produccion.sh` decapitaba el cobro:** faltaba `producto_variantes` en la lista → el `TRUNCATE productos CASCADE` la vaciaba y no la restauraba → producción quedaba con productos y **CERO tamaños**, y la verificación reportaba **verde**. Ahora está en la lista (volcado FK-safe verificado: productos→variantes→media), `precio_dia` se **reinicia a propósito** (los del taller son de prueba; la dueña pone el de hoy fresco), y la verificación **FALLA en voz alta** si algo no cuadra. Validado con `--ensayo` (con `--aplicar` no: es destructivo a producción).
+- ⚡ **Panel:** el chat volvió a **deslizarse dentro de la caja** (altura fija `max-h`; se había roto en el rediseño de la Bandeja, la página entera crecía) + **refresco cada 3s** (antes 7s, se sentía lento; verificado que NO era caché).
+
+**Consultoría — decisiones tomadas (con números, no opinión):**
+- **Modelo → quedarse en Haiku.** A/B medido (Haiku vs Sonnet vs `gpt-5.4-mini` vs Gemini 2.5 Pro) + presupuesto real (prompt de ~11.3k tokens, ~$10/mes hoy). Gemini Pro **no vale** (caro, sin ganancia y rozó una promesa de salud); `gpt-5.4-mini` ahorra **~$3/mes** (nada) y necesita prep. El costo grande NO es el modelo, es el prompt.
+- **Multi-agente (idea de un amigo) → NO.** El catálogo es solo el **17%** del prompt; las reglas (41%) + la voz (29%) son FIJAS y multi-agente las **DUPLICA** + añade latencia y riesgo al cobro. El fix real es **retrieval** — y YA está construido: el código conmuta solo pasados 60 productos (`_CATALOGO_INLINE_MAX=60`), así escala a los 400 del negocio del esposo **sin tocar código** (el trabajo ahí es de datos).
+
+**⚠️ Un error mío y su corrección (honestidad):** puse los repos en PRIVADO sin verificar que Coolify los clonaba **como públicos** → **rompí el despliegue del panel** (`could not read Username`). Los volví a PÚBLICO para desbloquear. La carpeta con las llaves (`.playwright-mcp`, nunca llegó a GitHub) sí quedó borrada + gitignored. "Privado bien hecho" (con deploy key para Coolify) quedó en `PRP-seguridad.md`. **Lección: nunca privatizar sin darle la llave a Coolify primero.** Además: el push del bot **se queda a medias** a veces → verificar SIEMPRE con `grep` DENTRO del contenedor, no por el tag de la imagen.
+
+**Fase 3 de la bandeja — DISEÑADA (pendiente de construir):** *"que el bot conteste al RETOMAR el chat"* (lo pidió Maired con una captura: el cliente escribió "¿cuánto en Bs?" durante la pausa y el bot no contestó al retomar). Hoy "Devolver al bot" solo apaga la pausa; **falta el disparador**. Diseño verificado contra el código (4 lentes) en **`PRP-bandeja-fase3-retomar.md`** (local): el **mismo botón se vuelve inteligente** (sin botón nuevo; el sistema decide por el último turno del historial), una tarea Celery `retomar_chat` que lee el historial y llama a `responder()` con una instrucción `[SISTEMA]` (sin duplicar el turno), **ventana-24h fail-closed**, candado de idempotencia y las redes heredadas. Es RESPUESTA, no proactivo (seguro con Meta).
+
+**Sigue abierto (cimientos, no bloqueantes):** D1 (tabla de migraciones), D4 (respaldo en el taller), y detalles menores (D3 campos legados, D5 rotar llaves, B5 cuenta sembrada). **Todos los BLOQUEANTES están cerrados.**
+
+---
+
 ## 2026-07-13 — 🕵️ LA QUINTA RED: "no digas que lo agendaste si NO lo agendaste"
 
 **Salió de una pregunta de Maired** (*"¿por qué no respondió?"*). El bot no respondió **porque ella tomó el chat** — eso estaba bien. Pero al mirar la base para contestarle, apareció algo peor:
