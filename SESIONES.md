@@ -17,6 +17,34 @@
 
 ---
 
+## 2026-07-14 — 💵 LA PARED DEL DINERO (el bot le inventó un precio a una CLIENTA REAL)
+
+**No fue una prueba. Fue una clienta de verdad**, a las 21:26. Quería un producto de **$20** con delivery. El bot escribió:
+
+> *"El total en bolívares es de **$23 USD** a la tasa BCV del día."*
+
+**Tres desastres a la vez:**
+1. **SUMÓ de cabeza:** $20 (producto) + $3 (delivery) = $23.
+2. **Llamó BOLÍVARES a unos DÓLARES** (con la tasa a 721,35, $23 son ~Bs 16.591).
+3. **CERO pedidos en la base.** Habló de "el total" sin registrar nada. Y **antes ya le había dado los DATOS BANCARIOS completos** (cédula, cuenta, Zelle, Binance), **sin pedido**.
+
+**Y el prompt YA se lo prohibía. DOS VECES**, escrito por Maired: *"No sumes el envío al total"* · *"no calcules delivery"*. **Lo leyó y lo hizo igual.** → **Regla para siempre: el dinero va en el CÓDIGO (una pared), nunca en el prompt (una sugerencia).**
+
+**🔴 Y MI RED NO LO FRENÓ.** Verificado **ejecutando** el código: el `23` estaba en la lista de montos permitidos **porque el prompt inyecta `id_para_pedir=23`**. La red **autorizaba los IDs del catálogo como si fueran precios**.
+
+**TRES REDES NUEVAS, cada una tapa un agujero que se demostró ROMPIÉNDOLO:**
+1. **Solo es dinero lo que lleva marca de dinero** (`$` / `Bs` / dólares / USD). Se acabó tragarse los ids, la hora, la fecha y las cédulas.
+2. **Por MONEDA.** Un dólar solo calza contra dólares. Y si un párrafo habla de un **total en bolívares**, tiene que haber un bolívar **de verdad**. *(La primera versión cazaba solo ESA frase; los atacantes la rompieron al instante dándole la vuelta: "el total es $23 en bolívares", con salto de línea, con un punto en medio…)*
+3. **🔑 EL TOTAL SOLO LO PONE UNA HERRAMIENTA.** El catálogo autoriza **precios sueltos**, no **sumas**. Sin esto, `$20 + $5 = $25` **se colaba** porque **$25 es el precio del Pan Keto**. *(Esta fuga la encontró el atacante del diseño, con el código delante.)*
+
+**El diseño del DELIVERY se auditó ANTES de construirlo** (6 lentes + un atacante por propuesta): **19 propuestas, las 19 ROTAS.** Fugas reales encontradas y anotadas para la construcción: el **20% de descuento en divisas se comería el flete** (ella pagaría el delivery de su bolsillo en cada venta en dólares) · el panel **pisa el envío** al editar un pedido · `promover_a_produccion.sh` con la FK nueva **se llevaría pedidos y pagos de producción por CASCADE**.
+
+**Los 8 bancos VERDES**, en taller y producción. **Bot APAGADO en el taller** mientras tanto (le estaba contestando a una clienta real).
+
+**Lo que falta:** construir el delivery (tabla de zonas + `zona_id` de lista cerrada + el CÓDIGO suma) y el candado de los datos bancarios (hoy viven en el TEXTO de la personalidad y el modelo los copia y pega sin pedido).
+
+---
+
 ## 2026-07-14 — 💣 LA BOMBA DE D1 EXPLOTÓ: PRODUCCIÓN LLEVABA DÍAS ARRANCANDO EN VERDE CON EL ESQUEMA A MEDIAS
 
 **Encontrado POR ACCIDENTE al desplegar.** No lo buscaba nadie. Es el mayor hallazgo de la sesión.
