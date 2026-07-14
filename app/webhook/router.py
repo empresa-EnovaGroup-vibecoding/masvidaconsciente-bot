@@ -1,5 +1,6 @@
 import json
 import logging
+from datetime import UTC
 
 from fastapi import APIRouter, Query, Request, Response
 
@@ -219,7 +220,7 @@ _RANGO = {"enviado": 1, "entregado": 2, "leido": 3}
 
 async def _aplicar_estado(ev) -> str:
     """Meta dice qué pasó con un mensaje NUESTRO. El FALLO se ve en rojo, no se pierde."""
-    from sqlalchemy import or_, select, update
+    from sqlalchemy import or_, update
 
     from app.models import Mensaje
     from app.services.db import get_session_factory
@@ -248,10 +249,10 @@ async def _aplicar_estado(ev) -> str:
 
 def _fecha_meta(ts: str | None):
     """El timestamp de Meta (segundos epoch) → datetime UTC. None si no se puede."""
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     try:
-        return datetime.fromtimestamp(int(ts), tz=timezone.utc)  # type: ignore[arg-type]
+        return datetime.fromtimestamp(int(ts), tz=UTC)  # type: ignore[arg-type]
     except (TypeError, ValueError):
         return None
 

@@ -7,7 +7,7 @@ import json
 import logging
 import math
 import unicodedata
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 from sqlalchemy import select, text
@@ -17,8 +17,8 @@ from app.config import get_settings
 from app.models import (
     CatalogoPdf,
     Cliente,
-    Conocimiento,
     Configuracion,
+    Conocimiento,
     Feriado,
     Intervencion,
     Mensaje,
@@ -807,7 +807,7 @@ async def _config_hora(session, clave: str, por_defecto: str) -> str:
 
 
 def _ahora_venezuela():
-    return datetime.now(timezone.utc) - timedelta(hours=4)
+    return datetime.now(UTC) - timedelta(hours=4)
 
 
 async def _paso_la_hora_de_corte(session) -> bool:
@@ -1184,7 +1184,7 @@ def _coseno(a, b) -> float:
     """Similitud coseno entre dos vectores (1 = igual significado, 0 = nada que ver)."""
     if not a or not b or len(a) != len(b):
         return 0.0
-    punto = sum(x * y for x, y in zip(a, b))
+    punto = sum(x * y for x, y in zip(a, b, strict=False))
     na = math.sqrt(sum(x * x for x in a))
     nb = math.sqrt(sum(y * y for y in b))
     if na == 0.0 or nb == 0.0:

@@ -2,7 +2,7 @@
 excepto el propio login."""
 import logging
 import os
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Annotated
 from uuid import uuid4
@@ -12,7 +12,6 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, StringConstraints
 from sqlalchemy import delete, func, select
 
-from app.config import get_settings
 from app.api.security import (
     crear_token,
     usuario_actual,
@@ -2406,7 +2405,9 @@ async def crear_feriado(datos: FeriadoIn, _: str = Depends(usuario_actual)):
     try:
         fecha = date.fromisoformat(datos.fecha.strip()[:10])
     except ValueError:
-        raise HTTPException(status_code=400, detail="Fecha inválida (usa AAAA-MM-DD).")
+        raise HTTPException(
+            status_code=400, detail="Fecha inválida (usa AAAA-MM-DD)."
+        ) from None
     factory = get_session_factory()
     async with factory() as session:
         existe = await session.get(Feriado, fecha)
@@ -2423,7 +2424,9 @@ async def borrar_feriado(fecha: str, _: str = Depends(usuario_actual)):
     try:
         f = date.fromisoformat(fecha.strip()[:10])
     except ValueError:
-        raise HTTPException(status_code=400, detail="Fecha inválida (usa AAAA-MM-DD).")
+        raise HTTPException(
+            status_code=400, detail="Fecha inválida (usa AAAA-MM-DD)."
+        ) from None
     factory = get_session_factory()
     async with factory() as session:
         fila = await session.get(Feriado, f)

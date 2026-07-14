@@ -1,5 +1,5 @@
 """Autenticación del dashboard: hash de contraseñas y tokens JWT."""
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import bcrypt
 from fastapi import Depends, HTTPException, status
@@ -31,7 +31,7 @@ def verify_password(plain: str, hashed: str) -> bool:
 
 
 def crear_token(email: str) -> str:
-    expira = datetime.now(timezone.utc) + timedelta(hours=TOKEN_HORAS)
+    expira = datetime.now(UTC) + timedelta(hours=TOKEN_HORAS)
     return jwt.encode({"sub": email, "exp": expira}, settings.jwt_secret, algorithm=ALGORITHM)
 
 
@@ -48,4 +48,6 @@ def usuario_actual(token: str = Depends(oauth2_scheme)) -> str:
             raise cred_error
         return email
     except JWTError:
-        raise cred_error
+        # `from None`: el 401 ES la respuesta prevista, no un fallo secundario. Encadenar
+        # el JWTError solo mete las tripas de la librería en el traceback de un login malo.
+        raise cred_error from None

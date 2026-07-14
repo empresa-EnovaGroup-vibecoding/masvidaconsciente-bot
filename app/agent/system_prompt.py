@@ -7,20 +7,20 @@ Se arma en 2 partes:
   anexan SIEMPRE, así editar la personalidad nunca puede romper el dinero.
 """
 from collections import Counter
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 
 from app.config import get_settings
 from app.models import (
     Cliente,
-    Conocimiento,
     Configuracion,
+    Conocimiento,
     Feriado,
     Pedido,
     PrecioDia,
-    ProductoVariante,
     Producto,
+    ProductoVariante,
     hoy_venezuela,
 )
 from app.services.db import get_session_factory
@@ -136,6 +136,17 @@ async def leer_modelo_ia() -> str:
 # Por debajo, va la lista completa como ancla anti-invención (negocio chico, como másvida).
 _CATALOGO_INLINE_MAX = 60
 
+# PRECIO DEL DÍA: los productos sin precio fijo (Tortas keto, Premezclas…) lo tienen vacío
+# A PROPÓSITO (en Venezuela el costo cambia de un día a otro y lo responde la dueña).
+# Es una CONSTANTE: vive aquí y no dentro del bucle de productos (antes se reconstruía en
+# cada vuelta y la closure `_pre` la capturaba como variable de bucle).
+_SIN_PRECIO = (
+    "PRECIO DEL DÍA — TODAVÍA NO LO SABES. Este precio CAMBIA y hoy la dueña "
+    "aún no lo dio. Está PROHIBIDO inventarlo, estimarlo o usar uno viejo: si "
+    "te lo preguntan o lo quieren comprar, llama a `pedir_ayuda` "
+    "(motivo='precio_del_dia')"
+)
+
 
 async def _catalogo_bloque() -> str:
     """Sección de catálogo para el prompt. AUTO-ESCALA según el tamaño del catálogo:
@@ -200,12 +211,6 @@ async def _catalogo_bloque() -> str:
             # CONOCE (así no inventa y responde al instante CUANDO se los piden) pero NO los suelta
             # por su cuenta — solo si el cliente pregunta o está comprando (ver regla 5).
             vs = tamanos.get(p.id) or []
-            _SIN_PRECIO = (
-                "PRECIO DEL DÍA — TODAVÍA NO LO SABES. Este precio CAMBIA y hoy la dueña "
-                "aún no lo dio. Está PROHIBIDO inventarlo, estimarlo o usar uno viejo: si "
-                "te lo preguntan o lo quieren comprar, llama a `pedir_ayuda` "
-                "(motivo='precio_del_dia')"
-            )
 
             def _pre(v):
                 e = v.precio if v.precio is not None else precios_hoy.get(v.id)
@@ -395,7 +400,7 @@ async def _estado_cliente_texto(telefono: str) -> str:
 def _saludo_hora_texto() -> str:
     """Le dice al bot la hora de Venezuela (UTC-4) para que salude acorde (buenos
     días/tardes/noches). Sin esto, el modelo NO sabe qué hora es y puede equivocarse."""
-    ahora = datetime.now(timezone.utc) - timedelta(hours=4)  # Venezuela = UTC-4
+    ahora = datetime.now(UTC) - timedelta(hours=4)  # Venezuela = UTC-4
     h = ahora.hour
     if h < 12:
         franja = "buenos días"
@@ -474,7 +479,7 @@ async def _calendario_texto() -> str:
         texto += f"\nDÍAS DE ENTREGA: {dias}. Los demás días NO se entrega."
     if horas:
         apertura, cierre, corte = horas
-        ahora = datetime.now(timezone.utc) - timedelta(hours=4)  # Venezuela
+        ahora = datetime.now(UTC) - timedelta(hours=4)  # Venezuela
         abierto = _entre_horas(ahora, apertura, cierre)
         texto += (
             f"\nHORARIO DE ATENCIÓN: de {apertura} a {cierre}. Ahora mismo el negocio está "

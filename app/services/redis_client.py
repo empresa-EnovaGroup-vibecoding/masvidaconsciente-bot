@@ -7,7 +7,7 @@ Patrón tomado del sistema de referencia (clínica), simplificado:
 - lock: que solo un worker procese el buffer de un cliente a la vez
 """
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from functools import lru_cache
 
 import redis.asyncio as redis
@@ -133,7 +133,7 @@ async def candado_retomar(telefono: str, ttl: int = 30) -> bool:
 # dispararian costo de IA sin control. Los comprobantes NO cuentan (es dinero).
 
 def _hoy() -> str:
-    return datetime.now(timezone.utc).strftime("%Y%m%d")
+    return datetime.now(UTC).strftime("%Y%m%d")
 
 
 async def contar_mensaje_dia(telefono: str) -> int:

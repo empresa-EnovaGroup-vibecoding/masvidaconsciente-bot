@@ -17,6 +17,42 @@
 
 ---
 
+## 2026-07-14 — 🧱 FASE 0: LOS CIMIENTOS (ruff · pytest · CI que valida ANTES · **D1 CERRADA**)
+
+**Por qué:** una auditoría encontró tres bugs (el buscador del catálogo niega productos que sí existen; la multimedia que el bot envía no se guarda en `mensajes`; el prompt está saturado) y el plan es arreglarlos **por fases validadas**. Pero no había con qué validar: **cero ruff, cero pytest, y el CI ni siquiera hacía `checkout`** — mandaba el `curl` a Coolify y probaba DESPUÉS, dentro del contenedor ya desplegado.
+
+**Lo hecho:**
+
+1. **ruff** (`pyproject.toml` nuevo — el bot ni era un paquete declarado). 38 avisos → **0**. Los `# noqa: BLE001` que ya había en el código estaban escritos **para un linter que nunca se instaló**. Arreglos a mano que sí importaban: una `l` minúscula dentro de `_calza()` (la RED DEL DINERO — una `l` se lee como un `1`), y `_SIN_PRECIO` que se reconstruía en cada vuelta del bucle del catálogo. Los `File()` de FastAPI en los defaults son la firma del framework, no un bug: van a config, no a parche. Dev-deps en `requirements-dev.txt` **aparte**, porque `Dockerfile.worker` instala el mismo `requirements.txt` y habría engordado las dos imágenes.
+
+2. **pytest**: `tests/` con **77 tests** (0,17 s) sobre las cinco redes de seguridad. **UNA SOLA FUENTE DE VERDAD:** `tests/test_redes.py` **importa** las tablas de casos de `scripts/probar_honestidad.py` (al que se le envolvió la ejecución en un guard de `__main__`). Duplicarlas era garantizar que un día divergen y el CI diga "verde" sobre una red que ya no se prueba.
+
+3. **CI que valida ANTES de desplegar**: job nuevo `verificar` (checkout + python 3.12 + `ruff check` + `compileall` + `pytest`) y `desplegar` ahora lleva **`needs: verificar`**. Si sale rojo, el `curl` a Coolify **no llega a ejecutarse**. El paso "LOS BANCOS" (post-deploy) se queda igual: son complementarios — esta puerta caza lo que se ve leyendo el código; aquel vigilante, lo que solo se ve corriéndolo.
+
+4. **🔴 D1 CERRADA.** `init_db.py` (267 → 224 líneas) ya no es una lista escrita a mano: **descubre `migrations/*.sql` solas**, las aplica **UNA VEZ** y las anota en `schema_migrations`. Y **`main.py` ya NO se traga la excepción**: si una migración falla, **el contenedor no arranca**. Un contenedor rojo se ve en el acto; uno verde con la base a medias cobra mal durante días (ya pasó — ver la entrada de la 019/021 más abajo).
+
+5. **`scripts/probar_drift.py`** (banco #11, registrado en `correr_bancos.py` justo tras `probar_migraciones`): compara **`models.py` ENTERO** contra el esquema real de Postgres. Su hermano comprueba una lista escrita a mano — protege contra los bugs de ayer; este, contra los de mañana.
+
+**⚠️ LO QUE CASI SALE MUY MAL (y por qué el ensayo no era opcional):**
+**`002_seed_catalogo.sql` NO es idempotente** — su `INSERT INTO productos` **no tiene `ON CONFLICT`**. Un `schema_migrations` ingenuo, al estrenarse contra una base que ya lleva meses viva, habría pensado que el seed nunca corrió y **habría duplicado el catálogo entero**. Lleva un candado (si `productos` no está vacía, se **anota sin sembrar**).
+
+**Verificado, no supuesto** (regla de la casa: *el cobro se verifica en la BD, no en la respuesta*). Se hizo `pg_dump` de la BD **REAL del taller**, se restauró en un Postgres local y se arrancó el `init_db` nuevo **contra los datos de verdad**:
+
+| Escenario | Resultado |
+|---|---|
+| Base nueva | 24 migraciones aplicadas, catálogo sembrado, orden correcto |
+| **BD real del taller** (32 productos, 130 mensajes) | ✅ **arranca sin fallar · 32→32 · 37→37 · 130→130 · nada corrompido** |
+| Segundo arranque | idempotente: "nada que migrar" |
+| **Migración rota** | ✅ **aborta el arranque** y NO la anota |
+| Drift (columna borrada / migración sin aplicar) | ✅ se pone ROJO en los dos casos |
+| **Los 11 bancos contra la BD real** | **10 verdes** (el 11º, `probar_retomar`, necesita clave real de OpenRouter) |
+
+**Decisión tomada:** **NO se corrió `ruff format`** sobre el código legado. Generaba **3.757 líneas de diff en 37 archivos**, encima del carril del dinero, para cero ganancia funcional: habría hecho la fase irrevisable, chocado con el diff de todas las fases siguientes y destrozado el `git blame` — y viola la regla **ADITIVA** (`CLAUDE.md` §3). El CI exige `ruff check` (que caza bugs). El formateo masivo, si se quiere, será su propio commit aislado.
+
+**Pendiente (siguiente fase):** el **buscador del catálogo** — `ver_catalogo` filtra con un AND de prefijos que devuelve CERO en 6 de 19 consultas reales (`pan sin gluten`, `bebidas`, `postres`, `algo para diabéticos`…) y, cuando devuelve cero, **el código le ORDENA al bot decir "de eso no tengo"**. El bot no desobedece: obedece un bug.
+
+---
+
 ## 2026-07-14 — 🎬 CUALQUIER FORMATO SIRVE + 🛡️ EL VIGILANTE (los bancos corren SOLOS — D2 CERRADA)
 
 **Las dos peticiones de Maired:** (1) *"que la clienta suba cualquier formato y funcione"* y (2) *"no quiero estar diciendo a cada rato 'se arregló o se dañó' — algo definitivo"*.

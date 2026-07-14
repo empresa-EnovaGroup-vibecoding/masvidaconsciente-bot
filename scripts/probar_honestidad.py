@@ -130,54 +130,66 @@ FOTOS_FANTASMA = [
     ("La torta keto es sin gluten y sin azúcar refinada 💚", True, False),
 ]
 
-fallos = 0
-print("\n1) RED DEL RELEVO — 'si prometes averiguar, TIENES que avisarle a la dueña'")
-for texto, esperado in PROMESAS:
-    got = _promete_averiguar(texto)
-    ok = got == esperado
-    fallos += 0 if ok else 1
-    marca = "[OK ]" if ok else "[MAL]"
-    accion = "AVISA a la dueña" if got else "no avisa       "
-    print(f"   {marca} {accion} | {texto[:62]}")
+def main() -> int:
+    """Corre los 5 bancos e imprime el informe. Devuelve el nº de fallos.
 
-print("\n2) RED DE LA HONESTIDAD — 'hay frases que NO salen jamás'")
-for texto, esperado in PROHIBIDAS:
-    que = _frase_prohibida(texto)
-    got = que is not None
-    ok = got == esperado
-    fallos += 0 if ok else 1
-    marca = "[OK ]" if ok else "[MAL]"
-    accion = "BLOQUEA" if got else "pasa   "
-    extra = f"  ({que})" if que else ""
-    print(f"   {marca} {accion} | {texto[:58]}{extra}")
+    Vive dentro de una función (y no suelto en el módulo) para que las TABLAS DE CASOS de
+    arriba se puedan IMPORTAR sin ejecutar nada. `tests/test_redes.py` las importa y las
+    corre con pytest, caso por caso: así el banco (post-deploy) y los tests (en el CI, antes
+    de desplegar) comparten UNA SOLA fuente de verdad y no pueden divergir.
+    """
+    fallos = 0
+    print("\n1) RED DEL RELEVO — 'si prometes averiguar, TIENES que avisarle a la dueña'")
+    for texto, esperado in PROMESAS:
+        got = _promete_averiguar(texto)
+        ok = got == esperado
+        fallos += 0 if ok else 1
+        marca = "[OK ]" if ok else "[MAL]"
+        accion = "AVISA a la dueña" if got else "no avisa       "
+        print(f"   {marca} {accion} | {texto[:62]}")
 
-print("\n3) RED DE LA VOZ — 'una vendedora no dice lo que tiene cargado'")
-for texto, esperado in SISTEMA:
-    got = _suena_a_sistema(texto)
-    ok = got == esperado
-    fallos += 0 if ok else 1
-    marca = "[OK ]" if ok else "[MAL]"
-    accion = "REESCRIBE" if got else "pasa     "
-    print(f"   {marca} {accion} | {texto[:58]}")
+    print("\n2) RED DE LA HONESTIDAD — 'hay frases que NO salen jamás'")
+    for texto, esperado in PROHIBIDAS:
+        que = _frase_prohibida(texto)
+        got = que is not None
+        ok = got == esperado
+        fallos += 0 if ok else 1
+        marca = "[OK ]" if ok else "[MAL]"
+        accion = "BLOQUEA" if got else "pasa   "
+        extra = f"  ({que})" if que else ""
+        print(f"   {marca} {accion} | {texto[:58]}{extra}")
 
-print("\n4) RED DEL PEDIDO FANTASMA — 'no digas que lo agendaste si NO lo agendaste'")
-for texto, esperado in PEDIDO_FANTASMA:
-    got = _afirma_pedido_registrado(texto)
-    ok = got == esperado
-    fallos += 0 if ok else 1
-    marca = "[OK ]" if ok else "[MAL]"
-    accion = "FRENA (no salió)" if got else "pasa           "
-    print(f"   {marca} {accion} | {texto[:58]}")
+    print("\n3) RED DE LA VOZ — 'una vendedora no dice lo que tiene cargado'")
+    for texto, esperado in SISTEMA:
+        got = _suena_a_sistema(texto)
+        ok = got == esperado
+        fallos += 0 if ok else 1
+        marca = "[OK ]" if ok else "[MAL]"
+        accion = "REESCRIBE" if got else "pasa     "
+        print(f"   {marca} {accion} | {texto[:58]}")
 
-print("\n5) RED DEL ENVÍO FANTASMA DE FOTOS — 'no digas que las mandaste si NO las mandaste'")
-for texto, pidio, esperado in FOTOS_FANTASMA:
-    got = _afirma_envio_fotos(texto, pidio)
-    ok = got == esperado
-    fallos += 0 if ok else 1
-    marca = "[OK ]" if ok else "[MAL]"
-    accion = "FRENA (no salió)" if got else "pasa           "
-    print(f"   {marca} {accion} | pidió_fotos={'sí' if pidio else 'no'} | {texto[:52]}")
+    print("\n4) RED DEL PEDIDO FANTASMA — 'no digas que lo agendaste si NO lo agendaste'")
+    for texto, esperado in PEDIDO_FANTASMA:
+        got = _afirma_pedido_registrado(texto)
+        ok = got == esperado
+        fallos += 0 if ok else 1
+        marca = "[OK ]" if ok else "[MAL]"
+        accion = "FRENA (no salió)" if got else "pasa           "
+        print(f"   {marca} {accion} | {texto[:58]}")
 
-print()
-print("   ✅ LAS CINCO REDES FUNCIONAN" if not fallos else f"   🔴 {fallos} CASO(S) MAL")
-raise SystemExit(1 if fallos else 0)
+    print("\n5) RED DEL ENVÍO FANTASMA DE FOTOS — 'no digas que las mandaste si NO las mandaste'")
+    for texto, pidio, esperado in FOTOS_FANTASMA:
+        got = _afirma_envio_fotos(texto, pidio)
+        ok = got == esperado
+        fallos += 0 if ok else 1
+        marca = "[OK ]" if ok else "[MAL]"
+        accion = "FRENA (no salió)" if got else "pasa           "
+        print(f"   {marca} {accion} | pidió_fotos={'sí' if pidio else 'no'} | {texto[:52]}")
+
+    print()
+    print("   ✅ LAS CINCO REDES FUNCIONAN" if not fallos else f"   🔴 {fallos} CASO(S) MAL")
+    return fallos
+
+
+if __name__ == "__main__":
+    raise SystemExit(1 if main() else 0)

@@ -1,8 +1,10 @@
 """El TESTIGO del webhook: mira y anota, nunca estorba."""
-import logging, sys
+import logging
+import sys
+
 import app.webhook.router as R
-from app.webhook.router import _testigo
 from app.webhook.parser import extraer_mensaje
+from app.webhook.router import _testigo
 
 # El log de la app ya esta configurado: le engancho una salida propia para VER lo que anota.
 h = logging.StreamHandler(sys.stdout)

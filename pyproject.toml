@@ -1,0 +1,61 @@
+[project]
+name = "masvidaconsciente-bot"
+version = "0.1.0"
+description = "Bot de ventas y cobro por WhatsApp (FastAPI + Celery + PostgreSQL)"
+requires-python = ">=3.12"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+# El codigo de produccion vive en app/; scripts/ son los BANCOS de prueba.
+src = ["."]
+exclude = [".venv", "migrations", "__pycache__"]
+
+[tool.ruff.lint]
+# ARRANQUE CONSERVADOR (fase 0). Este codigo nunca fue linteado: encender de golpe
+# todo el catalogo de ruff daria miles de avisos y el equipo apagaria el linter.
+# Se empieza con lo que caza BUGS DE VERDAD y con lo que el codigo YA anticipa:
+#   E,F  -> pyflakes + errores de pycodestyle (el set por defecto)
+#   I    -> orden de imports (auto-arreglable, cero riesgo)
+#   UP   -> modernizar sintaxis a py312 (auto-arreglable)
+#   B    -> flake8-bugbear: fallos reales (mutable default, loop variable capturada...)
+#   BLE  -> except Exception a pelo. El codigo YA trae "# noqa: BLE001" en 4 sitios,
+#           escritos para un linter que nunca se instalo. Encenderlo los honra.
+select = ["E", "F", "I", "UP", "B", "BLE"]
+
+# E501 (linea larga) queda FUERA a proposito: el prompt del agente son strings largos
+# y a proposito. La longitud la gobierna `ruff format`, no un error de lint.
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+# Los BANCOS de prueba: imprimen, salen con sys.exit y usan one-liners compactos
+# (`a = f(); b = g()`) a proposito. No son libreria; no se les pide el mismo rigor.
+"scripts/*" = ["BLE", "E702"]
+
+[tool.ruff.lint.flake8-bugbear]
+# B008 prohibe llamar una funcion en el valor por defecto de un argumento... que es
+# EXACTAMENTE como se declaran las dependencias en FastAPI. `Depends()` ya viene en la
+# lista blanca de ruff; `File()` y compania no. No son un bug: son la firma del framework.
+extend-immutable-calls = [
+    "fastapi.Depends",
+    "fastapi.File",
+    "fastapi.Form",
+    "fastapi.Body",
+    "fastapi.Query",
+    "fastapi.Header",
+    "fastapi.Path",
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Los tests del agente son async (el bucle de `responder` lo es).
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+# Las funciones puras (las redes) no tocan ni BD, ni Redis, ni OpenRouter: corren en el CI
+# ANTES de desplegar. Los bancos que SÍ tocan la BD siguen corriendo post-deploy
+# (scripts/correr_bancos.py) — eso no cambia en esta fase.
+addopts = "-q"

@@ -18,6 +18,11 @@ import sys
 # El orden importa: primero el esquema (si la base está a medias, lo demás miente).
 BANCOS = [
     "probar_migraciones",
+    # DRIFT (fase 0): el hermano GENÉRICO del de arriba. `probar_migraciones` comprueba una lista
+    # de columnas escrita a mano (los incidentes de ayer); este compara `models.py` ENTERO contra
+    # el esquema real y detecta cualquier migración que no llegó a aplicarse (los de mañana).
+    # Va aquí, pegado a él: si la base no es la que el código cree, TODO lo de abajo miente.
+    "probar_drift",
     "probar_cobro",
     "probar_datos_bancarios",
     "probar_delivery",

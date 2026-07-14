@@ -15,7 +15,7 @@ cobro. **Si algo sale MAL, no se despliega.**
 """
 import asyncio
 import sys
-from datetime import timedelta
+from datetime import UTC, timedelta
 from decimal import Decimal
 
 from sqlalchemy import delete, select, text
@@ -300,8 +300,8 @@ async def _correr() -> None:
 
         # ═══════════════════════════════════════════════════════════════════════
         print("\n6) EL RELOJ DE VENEZUELA (el precio del día no se pierde a las 8 pm)")
-        from datetime import datetime, timezone
-        esperado = (datetime.now(timezone.utc) - timedelta(hours=4)).date()
+        from datetime import datetime
+        esperado = (datetime.now(UTC) - timedelta(hours=4)).date()
         check(hoy_venezuela() == esperado,
               "el precio del día usa el reloj de Venezuela (UTC-4), no el del servidor")
 

@@ -23,7 +23,45 @@ on:
         default: false
 
 jobs:
+  # ✅ EL PORTERO (fase 0). ANTES este flujo no hacía ni `checkout`: mandaba el `curl` a Coolify
+  # y probaba DESPUÉS, dentro del contenedor ya desplegado. O sea: el código roto SÍ llegaba al
+  # taller, y el único freno era acordarse de no promoverlo.
+  #
+  # Ahora hay una puerta ANTES del despliegue. Si esto sale rojo, el `curl` no llega a correr.
+  # Corre en segundos y no toca ni la BD, ni Redis, ni OpenRouter, ni WhatsApp.
+  #
+  # Lo que NO hace: los 10 BANCOS que tocan la base siguen corriendo DESPUÉS del despliegue
+  # (paso "LOS BANCOS"), porque necesitan un Postgres vivo. Esta puerta y aquel vigilante son
+  # complementarios: esta caza lo que se ve leyendo el código; aquel, lo que solo se ve corriéndolo.
+  verificar:
+    name: Verificar (ruff · compileall · pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"   # la misma que el Dockerfile (python:3.12-slim)
+          cache: pip
+
+      - name: Instalar dependencias de desarrollo
+        # requirements-dev.txt incluye a requirements.txt: los tests importan `app.*`,
+        # que necesita fastapi/sqlalchemy/httpx aunque no los llame.
+        run: pip install -r requirements-dev.txt
+
+      - name: ruff — el linter
+        run: ruff check .
+
+      - name: compileall — que todo parsee (la regla de CLAUDE.md §3)
+        run: python -m compileall -q app
+
+      - name: pytest — LAS REDES DE SEGURIDAD, caso por caso
+        # Cada red nació de un incidente real con un cliente. Hasta hoy solo se comprobaban
+        # DESPUÉS de desplegar. Ahora un cambio que rompa una red no llega ni al taller.
+        run: pytest
+
   desplegar:
+    needs: verificar   # 🔒 sin la puerta en verde, no se despliega nada
     runs-on: ubuntu-latest
     steps:
       - name: TALLER (siempre — bot + worker, Hostinger viejo, tu número de pruebas)

@@ -14,19 +14,24 @@ settings = get_settings()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Al arrancar el bot: prepara la BD (tablas idempotentes + siembra catalogo
-    si esta vacio) y SINCRONIZA el usuario admin con ADMIN_PASSWORD.
+    """Al arrancar el bot: aplica las migraciones pendientes y sincroniza el admin.
 
-    Sin esto, init_db no corria en el arranque, asi que cambiar ADMIN_PASSWORD
-    no actualizaba el login. Es idempotente y seguro de correr en cada arranque.
-    Si falla (BD caida un instante), no tumba la app: la responde igual.
+    🔴 FALLA RUIDOSAMENTE, A PROPÓSITO (deuda D1, cerrada en la fase 0).
+
+    Antes esto vivía dentro de un `try/except` que se TRAGABA la excepción "para no tumbar
+    la app". Sonaba prudente y era justo lo contrario: si una migración reventaba, el
+    contenedor arrancaba **VERDE** y servía tráfico con la base A MEDIAS. Ya pasó — la 019
+    empezó a fallar por un dato que no cabía en su CHECK, y las migraciones 020-023 dejaron
+    de aplicarse **durante días** sin que nadie se enterara. El síntoma no fue un error: fue
+    que la dueña no podía cargar el precio del día.
+
+    Un contenedor ROJO se ve en el acto y Coolify no promueve el despliegue.
+    Un contenedor VERDE con la base rota cobra mal y nadie mira. Preferimos el rojo.
     """
-    try:
-        from app.init_db import main as preparar_bd
-        await preparar_bd()
-        logger.info("init_db ejecutado en el arranque")
-    except Exception:
-        logger.exception("init_db fallo en el arranque (la app sigue funcionando)")
+    from app.init_db import main as preparar_bd
+
+    await preparar_bd()  # si falla, LANZA: el arranque se aborta y el contenedor no sirve
+    logger.info("init_db ejecutado en el arranque")
     yield
 
 

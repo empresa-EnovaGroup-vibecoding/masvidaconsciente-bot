@@ -8,7 +8,7 @@ import json
 import logging
 import re
 import unicodedata
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import httpx
 
@@ -158,7 +158,7 @@ def _asegurar_saludo(texto: str, mensaje_usuario: str, nombre_cliente: str | Non
         return texto
     partes = []
     if quiere_saludo:
-        ahora = datetime.now(timezone.utc) - timedelta(hours=4)  # Venezuela = UTC-4
+        ahora = datetime.now(UTC) - timedelta(hours=4)  # Venezuela = UTC-4
         h = ahora.hour
         franja = "buenos días" if h < 12 else ("buenas tardes" if h < 19 else "buenas noches")
         nombre = f", {nombre_cliente}" if nombre_cliente else ""
@@ -301,10 +301,10 @@ def autorizados_por_moneda(*textos: str) -> tuple[set[float], set[float]]:
 def _calza(lecturas: set[float], permitidos: set[float]) -> bool:
     """Tolerancia: los redondeos del modelo (0,50 o 1%)."""
     return any(
-        abs(l - a) <= max(0.5, a * 0.01)
-        for l in lecturas
-        for a in permitidos
-        if l != 0
+        abs(lectura - autorizado) <= max(0.5, autorizado * 0.01)
+        for lectura in lecturas
+        for autorizado in permitidos
+        if lectura != 0
     )
 
 

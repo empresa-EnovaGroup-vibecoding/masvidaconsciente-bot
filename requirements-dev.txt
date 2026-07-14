@@ -1,0 +1,11 @@
+# Herramientas de DESARROLLO y CI. NO se instalan en la imagen de produccion.
+#
+# OJO: Dockerfile y Dockerfile.worker instalan `requirements.txt`. Si estas
+# dependencias se metieran ahi, engordarian LAS DOS imagenes sin motivo.
+# Por eso van aparte: el job `verificar` del CI instala este fichero, los
+# contenedores no.
+-r requirements.txt
+
+ruff==0.9.6
+pytest==8.3.4
+pytest-asyncio==0.25.2
