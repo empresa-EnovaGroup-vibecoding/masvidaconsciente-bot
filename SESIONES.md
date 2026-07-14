@@ -17,6 +17,31 @@
 
 ---
 
+## 2026-07-14 — 📸 FASE 2: LA MULTIMEDIA LLEGA AL PANEL (lo que el bot manda, la dueña lo ve)
+
+**El bug:** el bot **SÍ enviaba** la multimedia por WhatsApp —las fotos de producto y el catálogo PDF llegaban al cliente— pero **NO la guardaba**. `enviar_fotos_producto` y `enviar_catalogo` hacían el POST a Meta y se acababa ahí: **cero filas** en `mensajes`.
+
+Verificado contra la BD REAL: las **130 filas eran TODAS `tipo='text'`** y **NINGUNA** tenía `media_url` — aunque el esquema admite `image`/`video`/`document` **desde la migración 021** y las columnas existen desde entonces. **El esquema estaba listo; nadie lo escribía.** La dueña abría el chat interno y veía una conversación donde el bot *"nunca"* mandó una foto.
+
+**El arreglo tenía DOS mitades, y con una sola no se ve nada:**
+
+1. **Que el bot GUARDE la fila.** Nuevo `_guardar_media_saliente()` — el gemelo **saliente** de `_guardar_media_en_hilo` (que ya hacía esto bien para el **entrante**). Sesión propia y excepción tragada **a propósito**: la foto YA salió hacia el cliente, y si escribir la burbuja fallara, `ejecutar_tool` lo convertiría en `{"error": …}` y el LLM le diría al cliente que no pudo mandarle la foto **que sí recibió**.
+2. **Que el endpoint SEPA SERVIRLA.** `/api/mensajes/{id}/media` solo hacía `os.path.exists()` sobre disco local — y las fotos viven en **Cloudflare R2** (`https://…`), así que `os.path.exists("https://…")` daba **False ⇒ 404 ⇒ "No se pudo cargar el archivo"**. Guardar el dato sin esto habría sido guardar un dato **invisible**. Ahora el endpoint conoce **tres orígenes**: disco local (el comprobante), URL remota (proxy en streaming — un vídeo pesa) y solo-`media_id` (se baja de Meta al vuelo).
+
+**También:**
+- Se deja de **TIRAR el `wa_message_id`** que Meta devuelve en cada envío. Sin él no había forma de casar los acuses (entregado / leído / **FALLÓ**) con la foto: una foto que Meta rechazara **se perdía en silencio**.
+- **MED-5:** la foto que la dueña manda desde SU celular solo trae `media_id` (el eco no descarga el archivo). `tiene_media` era `bool(media_url)` ⇒ False ⇒ **burbuja vacía**.
+- **MED-8** (panel): solo distinguía imagen/no-imagen, así que un **vídeo** de producto salía como un enlace gris de *"Abrir el comprobante"*. Ahora se reproduce.
+- **MED-7:** si falta `R2_PUBLIC_URL`, las fotos se saltaban **en silencio** y el bot decía que el producto *"no tiene fotos"* — mentira. Ahora grita en el log.
+
+**🔴 UNA LECCIÓN SOBRE EL PROPIO TEST (que casi me la cuela):** la primera versión de `probar_media.py` salía **VERDE contra el código roto**. Los checks usaban `all()` sobre la lista de filas… **que estaba vacía**, y `all([])` es `True`. Y el check de MED-5 comprobaba `bool(media_url or media_id)` — o sea, **se probaba a sí mismo**: una tautología. Corregido: ahora exige lista **no vacía** y llama al endpoint **de verdad** (`detalle_conversacion`). *Un test que pasa cuando no hay datos no prueba nada.*
+
+**Banco nuevo:** `scripts/probar_media.py` (nº 13). **9 fallos** contra el código viejo, **14/14 verde** contra el nuevo.
+
+**Verificado end-to-end contra el bucket REAL de R2:** `os.path.exists()` no encuentra la URL (la prueba viva del 404) y el endpoint devuelve **bytes de imagen reales** (`content-type: image/png`), con el hilo mostrando `tipo=image · tiene_media=True · estado=enviado`. **13 bancos verdes** en el contenedor desplegado · ruff + 77 tests · `tsc` del panel limpio.
+
+---
+
 ## 2026-07-14 — 🔍 FASE 1: EL BUSCADOR (el bot dejó de NEGAR lo que sí vende)
 
 **El bug, en una frase:** `ver_catalogo` devolvía CERO en **6 de 19 consultas normales** de cliente, y con la lista vacía mandaba esta nota: *"no tienes ningún producto que calce con 'X'; **dile con sinceridad que de eso no tienes**"*. Combinado con la regla ANTIINVENCIÓN del prompt, **el código le ORDENABA al bot negar productos que el negocio SÍ vende.** El bot no desobedecía: **obedecía un bug.**
