@@ -35,6 +35,11 @@ BANCOS = [
     # fuera. Hace peticiones HTTP REALES contra la app ASGI: llamar a las funciones de los
     # endpoints a pelo NO evalúa los `Depends`, así que el guardia ni siquiera correría.
     "probar_roles",
+    # LAS HERRAMIENTAS (fase 4): se apagan desde el panel sin romper el cobro ni las redes.
+    # Vigila los 3 riesgos: que el filtro NO toque `_DISPATCH` (o apagar una tool le arranca
+    # el brazo a una red), que la red del DINERO no se quede ciega (el bug invisible), y que
+    # apagar las fotos no convierta al bot en una máquina de respuestas enlatadas.
+    "probar_herramientas",
     "probar_cobro",
     "probar_datos_bancarios",
     "probar_delivery",

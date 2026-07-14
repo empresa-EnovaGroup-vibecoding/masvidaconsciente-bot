@@ -1042,6 +1042,75 @@ async def guardar_configuracion(datos: ConfiguracionIn, email: str = Depends(usu
     return {"ok": True}
 
 
+# ─── Las HERRAMIENTAS del agente (fase 4) — solo la proveedora ────────
+#
+# ⚠️ `tools_activas` NO está en CLAVES_CONFIG, y es a propósito: así el `PUT /configuracion`
+# genérico —que descarta en silencio lo que no conoce— NO puede escribir esta clave NUNCA.
+# Endpoint propio = validación propia. Es la misma razón por la que `mensajes.py` tiene el suyo.
+
+class HerramientasIn(BaseModel):
+    activas: list[str]
+
+
+@router.get("/herramientas")
+async def obtener_herramientas(_: str = Depends(proveedora_actual)):
+    """Qué sabe hacer el bot, y qué se le puede apagar."""
+    from app.services.tools_config import BLINDADAS, TOOLS, leer_tools_activas
+
+    activas = await leer_tools_activas()
+    return {
+        "herramientas": [
+            {
+                "nombre": n,
+                "etiqueta": m["etiqueta"],
+                "descripcion": m["descripcion"],
+                "pierde": m["pierde"],
+                "activa": n in activas,
+                "blindada": n in BLINDADAS,
+                "motivo_blindaje": m.get("motivo_blindaje"),
+            }
+            for n, m in TOOLS.items()
+        ]
+    }
+
+
+@router.put("/herramientas")
+async def guardar_herramientas(datos: HerramientasIn, _: str = Depends(proveedora_actual)):
+    """Enciende y apaga capacidades del bot. Se manda la lista COMPLETA de activas (idempotente).
+
+    Se RECHAZA (400) el intento de apagar una BLINDADA en vez de ignorarlo en silencio: si el
+    panel manda algo que no puede, es un bug del panel y hay que verlo, no taparlo. Mismo criterio
+    que `PUT /tasa`, el otro sitio donde una validación protege el cobro.
+    """
+    from app.services.tools_config import BLINDADAS, CLAVE, TOOLS, serializar
+
+    pedidas = set(datos.activas)
+    if raras := pedidas - set(TOOLS):
+        raise HTTPException(
+            status_code=400, detail=f"Herramienta desconocida: {', '.join(sorted(raras))}"
+        )
+    if faltan := BLINDADAS - pedidas:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Estas no se pueden apagar (el cobro y las redes de seguridad dependen de ellas): "
+                + ", ".join(sorted(faltan))
+                + "."
+            ),
+        )
+    factory = get_session_factory()
+    async with factory() as session:
+        fila = await session.get(Configuracion, CLAVE)
+        valor = serializar(pedidas)
+        if fila is None:
+            session.add(Configuracion(clave=CLAVE, valor=valor, updated_at=now_utc()))
+        else:
+            fila.valor = valor
+            fila.updated_at = now_utc()
+        await session.commit()
+    return {"ok": True, "activas": sorted(pedidas)}
+
+
 # ─── Quién soy, y quiénes hay (roles — migración 024) ─────────────────
 
 @router.get("/yo")

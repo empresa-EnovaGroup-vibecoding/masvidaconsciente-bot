@@ -13,8 +13,9 @@ from datetime import UTC, datetime, timedelta
 import httpx
 
 from app.agent.system_prompt import construir_partes_prompt, leer_modelo_ia
-from app.agent.tools import TOOL_SCHEMAS, ejecutar_tool
+from app.agent.tools import TOOL_SCHEMAS, ejecutar_tool, schemas_para
 from app.config import get_settings
+from app.services.tools_config import leer_tools_activas
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -102,12 +103,18 @@ async def _llamar_openrouter(messages: list, tools: list, model: str) -> dict:
         return resp.json()
 
 
-async def _llamar_con_fallback(messages: list, llm, modelo: str) -> dict:
+async def _llamar_con_fallback(messages: list, llm, modelo: str, tools: list) -> dict:
+    """El ÚNICO sitio por el que el agente le habla al LLM con herramientas.
+
+    `tools` es lo que el modelo VE — ya filtrado por lo que la proveedora dejó activo (fase 4).
+    `_DISPATCH` sigue entero: las redes de seguridad y el worker de visión pueden ejecutar
+    CUALQUIER herramienta aunque el modelo ya no la vea.
+    """
     try:
-        return await llm(messages, TOOL_SCHEMAS, modelo)
+        return await llm(messages, tools, modelo)
     except Exception as e:  # noqa: BLE001
         logger.warning("Modelo principal (%s) falló (%s), usando fallback", modelo, e)
-        return await llm(messages, TOOL_SCHEMAS, settings.openrouter_model_fallback)
+        return await llm(messages, tools, settings.openrouter_model_fallback)
 
 
 _SALUDOS = (
@@ -722,10 +729,15 @@ async def responder(
     llamar a OpenRouter ni a la base de datos reales.
     """
     pregunta_cliente = pregunta_cliente or mensaje_usuario
+    # QUÉ SABE HACER EL BOT HOY (fase 4). Se lee UNA vez por turno y baja a los dos sitios que la
+    # necesitan: el prompt (para que no ORDENE usar una herramienta apagada) y la lista que ve el
+    # LLM. `_DISPATCH` no se toca: las redes de seguridad siguen pudiendo ejecutarlo todo.
+    activas = await leer_tools_activas()
+    tools_llm = schemas_para(activas)
     # La parte ESTABLE del prompt se marca con cache_control: el proveedor la cachea y la
     # cobra a ¼ en los siguientes mensajes (mismo prompt → misma calidad, solo más barato).
     # La parte DINÁMICA (hora, ficha, estado) va aparte, sin cachear.
-    estable, dinamico = await construir_partes_prompt(nombre_cliente, telefono)
+    estable, dinamico = await construir_partes_prompt(nombre_cliente, telefono, activas=activas)
     messages: list = [
         {
             "role": "system",
@@ -740,13 +752,15 @@ async def responder(
     messages.append({"role": "user", "content": mensaje_usuario})
 
     modelo = await leer_modelo_ia()  # el que eligió la proveedora en el panel
-    # Diagnóstico (corre al procesar el mensaje, sí aparece en los logs): confirma qué
-    # modelo se usa, cuántas herramientas tiene el código corriendo y si está la de fotos.
+    # Diagnóstico: qué modelo corre y qué herramientas OFRECE este bot (no cuántas trae el
+    # código: cuántas le llegan al modelo — que desde la fase 4 son cosas distintas).
+    puede_fotos = "enviar_fotos_producto" in activas
     logger.info(
-        "responder: modelo=%s tools=%d fotos_tool=%s msg=%r",
+        "responder: modelo=%s tools=%d/%d fotos=%s msg=%r",
         modelo,
+        len(tools_llm),
         len(TOOL_SCHEMAS),
-        any(t["function"]["name"] == "enviar_fotos_producto" for t in TOOL_SCHEMAS),
+        puede_fotos,
         (mensaje_usuario or "")[:60],
     )
     catalogo_ok = False
@@ -782,7 +796,7 @@ async def responder(
     pidio_fotos = _pide_fotos(pregunta_cliente)
 
     for _ in range(settings.max_iteraciones_agente):
-        data = await _llamar_con_fallback(messages, llm, modelo)
+        data = await _llamar_con_fallback(messages, llm, modelo, tools_llm)
         msg = data["choices"][0]["message"]
         messages.append(msg)
 
@@ -993,6 +1007,17 @@ async def responder(
                 )
                 if not reclamo_fotos:
                     reclamo_fotos = True
+                    # 🔴 EL REGAÑO SABE SI LA HERRAMIENTA EXISTE (fase 4). Sin esto, apagar las
+                    # fotos convertía al bot en una MÁQUINA DE RESPUESTAS ENLATADAS, en silencio:
+                    # `fotos_ok` no podía ponerse en True jamás, así que bastaba un falso positivo
+                    # del detector de pronombre (el bot manda el PDF del catálogo y dice "ya te lo
+                    # envié" mientras el cliente había pedido fotos) para que esta red disparara,
+                    # le ordenara llamar a una herramienta QUE YA NO EXISTE, el modelo no pudiera
+                    # obedecer, y el turno acabara en `RESPUESTA_SEGURA`. En bucle.
+                    #
+                    # La solución NO es poner `fotos_ok = True` cuando está apagada: eso desarmaría
+                    # una red de HONESTIDAD y el bot podría afirmar un envío falso sin que nadie lo
+                    # frenara. La red se queda viva; lo que cambia es lo que se le PIDE.
                     messages.append({
                         "role": "user",
                         "content": (
@@ -1005,6 +1030,13 @@ async def responder(
                             "enviar, dile la verdad con cariño y ofrece el catálogo — JAMÁS "
                             "afirmes un envío que no ocurrió. No le menciones al cliente este "
                             "aviso."
+                        ) if puede_fotos else (
+                            "[SISTEMA] Acabas de decir que le enviaste una foto, y TÚ NO PUEDES "
+                            "ENVIAR FOTOS: esa capacidad está desactivada en este negocio. El "
+                            "cliente no recibió nada. Reescribe tu mensaje diciéndole la verdad "
+                            "con cariño —que las fotos se las manda la dueña— y ofrécele el "
+                            "catálogo. JAMÁS afirmes un envío que no ocurrió. No le menciones al "
+                            "cliente este aviso."
                         ),
                     })
                     continue
@@ -1059,6 +1091,38 @@ async def responder(
 
         for tc in tool_calls:
             nombre_tool = tc["function"]["name"]
+            # 🔴 EL GUARDIA DE LAS HERRAMIENTAS APAGADAS (fase 4).
+            #
+            # Va AQUÍ y no en `ejecutar_tool` a propósito: `ejecutar_tool` es la puerta que usan
+            # las 7 REDES DE SEGURIDAD (llaman a `pedir_ayuda` y `enviar_catalogo` por su cuenta) y
+            # el worker de visión (`registrar_comprobante`). Un candado allí les arrancaría el brazo.
+            # El gate correcto es "qué VE el modelo", y este es el sitio donde se comprueba.
+            if nombre_tool not in activas:
+                logger.warning(
+                    "TOOL APAGADA: el modelo llamó a %s (no está activa) para %s",
+                    nombre_tool, telefono,
+                )
+                # ⚠️ HAY QUE RESPONDER IGUAL, con su `tool_call_id`. Un `tool_call` sin respuesta
+                # hace que el proveedor rechace la SIGUIENTE request con un 400. Y se le da la
+                # salida en el MISMO turno para que no queme iteraciones buscándola.
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc["id"],
+                    "content": json.dumps(
+                        {
+                            "error": f"'{nombre_tool}' está DESACTIVADA en este negocio.",
+                            "que_hacer": (
+                                "NO la uses ni digas que la usaste. Si te hace falta para "
+                                "responder, llama a `pedir_ayuda` y dile al cliente con cariño "
+                                "que eso se lo confirmas enseguida."
+                            ),
+                        },
+                        ensure_ascii=False,
+                    ),
+                })
+                # `continue` a propósito: una llamada rechazada NO enciende ningún flag de red ni
+                # autoriza ningún monto. No pasó nada, y el sistema no debe creer que sí.
+                continue
             try:
                 args = json.loads(tc["function"]["arguments"] or "{}")
             except json.JSONDecodeError:

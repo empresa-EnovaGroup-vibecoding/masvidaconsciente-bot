@@ -337,6 +337,24 @@ logger.info(
 )
 
 
+def schemas_para(activas) -> list[dict]:
+    """Lo que el LLM VE. `_DISPATCH` NO se filtra JAMÁS (fase 4).
+
+    🔴 LA ASIMETRÍA ES EL DISEÑO, no un descuido. `agent.py` nunca usa `TOOL_SCHEMAS` para
+    ejecutar — ejecuta por `ejecutar_tool` → `_DISPATCH`. Así, con la lista del modelo recortada
+    y el dispatch entero:
+
+      · Las 7 redes de seguridad siguen llamando a `pedir_ayuda` y `enviar_catalogo` aunque el
+        modelo ya no las vea.
+      · El worker de visión sigue llamando a `registrar_comprobante` directo.
+
+    Si se filtrara el dispatch, apagar una herramienta desde el panel le arrancaría el brazo a
+    una red de seguridad. El gate correcto es "qué VE el modelo", no "qué puede ejecutar el
+    código".
+    """
+    return [t for t in TOOL_SCHEMAS if t["function"]["name"] in activas]
+
+
 # ─── Implementaciones ────────────────────────────────────────────────
 
 def _fmt_usd(x) -> str:
