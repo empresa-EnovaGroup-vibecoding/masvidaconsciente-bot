@@ -181,10 +181,19 @@ def _asegurar_saludo(texto: str, mensaje_usuario: str, nombre_cliente: str | Non
 # La lectura ambigua sigue existiendo donde SÍ es ambigua ("22.40" puede ser 22,40 o 2.240), pero
 # "5.000" NO es ambiguo: en Venezuela son CINCO MIL. Un punto seguido de exactamente 3 cifras son
 # MILES, y punto. Se acabó la auto-autorización.
+#
+# 🔴 Y AHORA, ADEMÁS, SEPARADO POR MONEDA (el bug del "$23", con una clienta REAL, 2026-07-13).
+# Bolívares y dólares dejan de ser el mismo saco de números: el bot dijo "el total en bolívares es
+# de $23 USD" y la red lo dejó pasar porque solo miraba el NÚMERO. Un dólar solo puede calzar
+# contra dólares; un bolívar, contra bolívares.
+#   · grupos 1-2-3 = DÓLARES   ($28 · 28$ · 28 dólares · 28 USD)
+#   · grupos 4-5   = BOLÍVARES (28 Bs · 28 bolívares · Bs 16.591)
 _MONTO_RE = re.compile(
-    r"(?:\$\s*([\d.,]+)"                                         # $28
-    r"|([\d.,]+)\s*\$"                                           # 28$   (lo que el prompt le pide)
-    r"|([\d.,]+)\s*(?:bs\b|bol[íi]vares|d[óo]lares|dolares|usd\b))",  # 28 Bs · 28 dólares · 28 USD
+    r"\$\s*([\d.,]+)"                                    # $28
+    r"|([\d.,]+)\s*\$"                                   # 28$   (lo que el prompt le pide)
+    r"|([\d.,]+)\s*(?:d[óo]lares|dolares|usd\b)"         # 28 dólares · 28 USD
+    r"|([\d.,]+)\s*(?:bs\b|bol[íi]vares)"                # 28 Bs · 28 bolívares
+    r"|(?:bs\.?|bol[íi]vares)\s+([\d.,]+)",              # Bs 16.591,05
     re.IGNORECASE,
 )
 
@@ -242,33 +251,111 @@ def _num(s: str) -> set[float]:
         return set()
 
 
-def _montos_del_mensaje(texto: str) -> list[tuple[str, set[float]]]:
-    """Los montos de DINERO ($ · Bs · dólares · USD) que el bot escribió, cada uno con sus
-    lecturas PLAUSIBLES (ver `_lecturas_del_monto`: los miles ya no se leen como unidades)."""
-    montos: list[tuple[str, set[float]]] = []
+def _montos_del_mensaje(texto: str) -> list[tuple[str, str, set[float]]]:
+    """Los montos de DINERO que hay en un texto: (MONEDA, tal como se escribió, lecturas posibles).
+
+    🔴 SOLO cuenta como dinero lo que lleva MARCA de dinero ($ · Bs · bolívares · dólares · USD).
+    Un número pelado NO es dinero — y ese era el agujero por el que se coló el "$23".
+    """
+    montos: list[tuple[str, str, set[float]]] = []
     for m in _MONTO_RE.finditer(texto or ""):
-        crudo = m.group(1) or m.group(2) or m.group(3) or ""
+        crudo = m.group(1) or m.group(2) or m.group(3) or m.group(4) or m.group(5) or ""
+        moneda = "USD" if (m.group(1) or m.group(2) or m.group(3)) else "BS"
         lecturas = _lecturas_del_monto(crudo)
         if lecturas:
-            montos.append((crudo, lecturas))
+            montos.append((moneda, crudo, lecturas))
     return montos
 
 
-def _dinero_inventado(texto: str, autorizados: set[float]) -> list[str]:
-    """Devuelve los montos que el bot dijo y que NO salieron del código (ni de una herramienta,
-    ni del catálogo, ni de la boca del cliente)."""
+def autorizados_por_moneda(*textos: str) -> tuple[set[float], set[float]]:
+    """(dólares_ok, bolívares_ok) sacados de un texto: los montos que el CÓDIGO ya dio por buenos
+    (el catálogo, lo que devolvió una herramienta, lo que escribió el cliente).
+
+    🔥 ANTES esto era `_numeros_de(prompt entero)`: se tragaba **todos** los numerales — los
+    `id_para_pedir` del catálogo, la hora, la fecha, las cédulas y las cuentas bancarias. Por eso
+    el bot pudo decir "$23": el 23 **era el ID de una variante**, no un precio. La red lo dio por
+    bueno y le mandó a una clienta REAL un total inventado. Ahora, para entrar en la lista, un
+    número tiene que estar escrito COMO DINERO.
+    """
+    usd: set[float] = set()
+    bs: set[float] = set()
+    for t in textos:
+        for moneda, _crudo, lecturas in _montos_del_mensaje(t or ""):
+            (usd if moneda == "USD" else bs).update(lecturas)
+    return usd, bs
+
+
+def _calza(lecturas: set[float], permitidos: set[float]) -> bool:
+    """Tolerancia: los redondeos del modelo (0,50 o 1%)."""
+    return any(
+        abs(l - a) <= max(0.5, a * 0.01)
+        for l in lecturas
+        for a in permitidos
+        if l != 0
+    )
+
+
+# 🔴 LA FRASE ASESINA (caso REAL con una clienta, 2026-07-13):
+#     "El total en bolívares es de $23 USD a la tasa BCV del día."
+# La cifra está escrita como DÓLARES ($23) pero la frase dice BOLÍVARES. Con la tasa a 721,35, el
+# total en bolívares eran ~Bs 16.591. La red vieja miraba el NÚMERO (23) y no la MONEDA, así que
+# lo dejó pasar. Aquí se caza: si el bot presenta una cifra COMO bolívares, esa cifra TIENE que ser
+# el monto en bolívares que calculó el código. Nunca un dólar disfrazado.
+_DICE_BOLIVARES = re.compile(r"bol[íi]vares?\b|\bbs\b\.?", re.IGNORECASE)
+_DICE_TOTAL = re.compile(r"\btotal(es)?\b|\ben total\b|\bqueda(r[íi]a)? en\b|\bser[íi]an?\b", re.IGNORECASE)
+
+
+def _dinero_inventado(
+    texto: str,
+    usd_ok: set[float],
+    bs_ok: set[float],
+    usd_de_herramienta: set[float] | None = None,
+) -> list[str]:
+    """Los montos que el bot dijo y que NO salieron del código.
+
+    TRES redes, y cada una tapa un agujero REAL que se demostró rompiéndola:
+
+    1. **Por MONEDA.** Un dólar solo calza contra dólares autorizados; un bolívar contra bolívares.
+    2. **El TOTAL solo lo pone una HERRAMIENTA.** El catálogo autoriza PRECIOS SUELTOS, no totales.
+       Sin esto, el bot suma de cabeza y la suma se auto-autoriza por casualidad:
+       $20 + $5 = **$25**… y $25 es el precio del Pan Keto. La red lo daba por bueno.
+       Si el texto habla de un TOTAL, ese monto tiene que venir de `registrar_pedido` /
+       `generar_datos_pago` — no del catálogo, no de su cabeza.
+    3. **TOTAL + BOLÍVARES ⇒ tiene que haber un monto en bolívares de verdad.** El caso real fue
+       "El total en bolívares es de $23 USD". La primera versión de esta red solo cazaba ESA
+       redacción; los atacantes la rompieron al instante dándole la vuelta ("el total es $23 en
+       bolívares", "Total en bolívares:\\n$23", "El total en bolívares. Son $23"). Ahora no se mira
+       la frase: se mira si en ese párrafo hay o no un monto en bolívares AUTORIZADO.
+    """
     malos: list[str] = []
-    for crudo, lecturas in _montos_del_mensaje(texto):
-        # Tolerancia: redondeos del modelo (0,50 o 1%).
-        if any(
-            abs(l - a) <= max(0.5, a * 0.01)
-            for l in lecturas
-            for a in autorizados
-            if l != 0
-        ):
+
+    # 1) cada monto, contra su propia moneda
+    for moneda, crudo, lecturas in _montos_del_mensaje(texto):
+        if not _calza(lecturas, usd_ok if moneda == "USD" else bs_ok):
+            malos.append(f"{crudo} ({moneda})")
+
+    for parrafo in re.split(r"\n\s*\n|(?<=[.!?])\s+", texto or ""):
+        montos = _montos_del_mensaje(parrafo)
+        if not montos or not _DICE_TOTAL.search(parrafo):
             continue
-        malos.append(crudo)
-    return malos
+
+        # 2) un TOTAL en dólares tiene que venir de una herramienta
+        if usd_de_herramienta is not None:
+            for moneda, crudo, lecturas in montos:
+                if moneda == "USD" and not _calza(lecturas, usd_de_herramienta):
+                    malos.append(f"{crudo} (dijo que es un TOTAL y NO lo calculó el sistema)")
+
+        # 3) si dice que ese total está en BOLÍVARES, tiene que haber un bolívar de verdad
+        if _DICE_BOLIVARES.search(parrafo):
+            hay_bs_bueno = any(
+                moneda == "BS" and _calza(lecturas, bs_ok) for moneda, _c, lecturas in montos
+            )
+            if not hay_bs_bueno:
+                malos.append(
+                    f"{montos[0][1]} (lo llamó BOLÍVARES y no es el monto en bolívares del sistema)"
+                )
+
+    return list(dict.fromkeys(malos))
 
 
 # ─── RED DEL RELEVO: una promesa sin aviso es un cliente perdido ─────────────────────
@@ -534,13 +621,22 @@ async def responder(
         (mensaje_usuario or "")[:60],
     )
     catalogo_ok = False
-    # Montos AUTORIZADOS de este turno: los precios reales del catálogo (van inyectados en el
-    # prompt), lo que escribió el cliente, y lo que vayan devolviendo las herramientas.
-    autorizados: set[float] = _numeros_de(estable) | _numeros_de(dinamico)
-    autorizados |= _numeros_de(mensaje_usuario)
+    # Montos AUTORIZADOS de este turno, YA SEPARADOS POR MONEDA: los precios reales del catálogo
+    # (van inyectados en el prompt como "$12.00"), lo que escribió el cliente, y lo que vayan
+    # devolviendo las herramientas (el total, el monto en bolívares, la tasa).
+    #
+    # 🔥 Antes esto era `_numeros_de(prompt entero)` y se tragaba TODOS los numerales: los
+    # `id_para_pedir` del catálogo, la hora, la fecha, las cédulas. Por eso el bot pudo decirle a
+    # una clienta REAL que el total era "$23": el 23 era **el ID de una variante**, no un precio.
+    usd_ok, bs_ok = autorizados_por_moneda(estable, dinamico, mensaje_usuario)
     for h in historial or []:
         if isinstance(h, dict) and h.get("role") == "user":
-            autorizados |= _numeros_de(str(h.get("content") or ""))
+            u, b = autorizados_por_moneda(str(h.get("content") or ""))
+            usd_ok |= u
+            bs_ok |= b
+    # Los TOTALES solo los pone una HERRAMIENTA. El catálogo autoriza precios SUELTOS, no sumas:
+    # sin esto, "$20 + $5 = $25" se colaba porque $25 es el precio del Pan Keto.
+    usd_de_herramienta: set[float] = set()
     corregido = False
     pidio_ayuda = False  # ¿el bot llamó a pedir_ayuda en este turno?
     reescrito = False    # ya se le pidió una vez que no hable como un sistema
@@ -556,12 +652,14 @@ async def responder(
         if not tool_calls:
             texto = (msg.get("content") or "").strip() or RESPUESTA_SEGURA
 
-            # RED DEL DINERO: ningún monto puede salir de la cabeza del modelo.
-            inventados = _dinero_inventado(texto, autorizados)
+            # RED DEL DINERO: ningún monto puede salir de la cabeza del modelo. Y ahora, además,
+            # ninguna moneda puede salir cambiada: un dólar no puede presentarse como bolívar.
+            inventados = _dinero_inventado(texto, usd_ok, bs_ok, usd_de_herramienta)
             if inventados:
                 logger.error(
-                    "DINERO INVENTADO por el modelo para %s: %s (autorizados=%s) — texto=%r",
-                    telefono, inventados, sorted(autorizados)[:12], texto[:160],
+                    "DINERO INVENTADO por el modelo para %s: %s (usd_ok=%s bs_ok=%s tool=%s) — texto=%r",
+                    telefono, inventados, sorted(usd_ok)[:8], sorted(bs_ok)[:8],
+                    sorted(usd_de_herramienta)[:8], texto[:160],
                 )
                 if not corregido:
                     # Una oportunidad de corregirse, con los números buenos en la mano.
@@ -571,7 +669,10 @@ async def responder(
                         "content": (
                             "[SISTEMA] Te saliste del guion del DINERO: escribiste "
                             f"{inventados} y esos montos NO salieron de ninguna herramienta ni "
-                            "del catálogo. NUNCA calcules ni estimes dinero de cabeza. Reescribe "
+                            "del catálogo. NUNCA calcules, sumes ni conviertas dinero de cabeza "
+                            "(ni el envío, ni el total, ni los bolívares). Y JAMÁS llames "
+                            "'bolívares' a una cifra en dólares: el monto en bolívares SOLO existe "
+                            "si te lo dio `generar_datos_pago`. Reescribe "
                             "tu último mensaje usando EXACTAMENTE los montos que te devolvieron "
                             "las herramientas (`resumen` / `resumen_cobro`), copiados tal cual. "
                             "Si te falta un monto, LLAMA a la herramienta que lo da. No le "
@@ -746,9 +847,15 @@ async def responder(
                 # El pedido existe DE VERDAD en la base. Sin esto, el bot podía decir
                 # "listo, te agendo" sin haber registrado nada (caso real del 2026-07-12).
                 registro_ok = True
-            # Todo monto que devuelve una herramienta queda AUTORIZADO para este turno
-            # (totales, subtotales del `resumen`, bolívares, la tasa BCV…).
-            autorizados |= _numeros_de(json.dumps(resultado, ensure_ascii=False))
+            # Todo monto que devuelve una herramienta queda AUTORIZADO para este turno — pero
+            # CADA UNO EN SU MONEDA (el total en $ del `resumen`, los bolívares del `resumen_cobro`,
+            # la tasa BCV). Así el bot puede copiar el monto en bolívares… y solo ESE.
+            _crudo = json.dumps(resultado, ensure_ascii=False)
+            _u, _b = autorizados_por_moneda(_crudo)
+            usd_ok |= _u
+            bs_ok |= _b
+            # Y estos, además, son los ÚNICOS que pueden presentarse como un TOTAL.
+            usd_de_herramienta |= _u
             messages.append(
                 {
                     "role": "tool",
@@ -779,7 +886,8 @@ async def redactar_mensaje(
     nombre: str | None = None,
     telefono: str | None = None,
     *,
-    montos_ok: set[float] | None = None,
+    montos_usd: set[float] | None = None,
+    montos_bs: set[float] | None = None,
 ) -> str:
     """Redacta un mensaje natural para el cliente en la voz de Whuilianny.
 
@@ -842,22 +950,31 @@ async def redactar_mensaje(
     # Por eso el que llama (que es el CÓDIGO, y sabe lo que es verdad en ese momento: cuánto se
     # cobró, cuánto llegó, cuánto falta) le pasa una lista CERRADA con los únicos montos decibles.
     # Todo lo demás se frena, aunque "exista" en algún sitio.
-    if montos_ok is None:
-        autorizados: set[float] = (
-            _numeros_de(estable) | _numeros_de(dinamico) | _numeros_de(situacion)
-        )
+    # La situación la escribe el CÓDIGO y trae los montos exactos ("faltan Bs 800"), cada uno con
+    # su moneda: se leen igual que todo lo demás, marcados.
+    usd_sit, bs_sit = autorizados_por_moneda(situacion)
+    if montos_usd is None and montos_bs is None:
+        usd_ok, bs_ok = autorizados_por_moneda(estable, dinamico)
+        usd_ok |= usd_sit
+        bs_ok |= bs_sit
     else:
-        autorizados = set(montos_ok) | _numeros_de(situacion)
+        # LISTA CERRADA, y CADA MONEDA EN SU SACO: lo que el código cobró en dólares solo autoriza
+        # dólares, y lo que cobró en bolívares solo autoriza bolívares. Mezclarlos era justo el bug
+        # ("el total en bolívares es de $23 USD").
+        usd_ok = set(montos_usd or ()) | usd_sit
+        bs_ok = set(montos_bs or ()) | bs_sit
     for h in historial or []:
         if isinstance(h, dict) and h.get("role") == "user":
-            autorizados |= _numeros_de(str(h.get("content") or ""))
+            u, b = autorizados_por_moneda(str(h.get("content") or ""))
+            usd_ok |= u
+            bs_ok |= b
 
     for intento in (1, 2):
         texto = await _pedir_redaccion(messages, modelo)
         if not texto:
             return ""
         prohibida = frase_prohibida_siempre(texto)
-        inventados = _dinero_inventado(texto, autorizados)
+        inventados = _dinero_inventado(texto, usd_ok, bs_ok)
         if not prohibida and not inventados:
             return texto
 

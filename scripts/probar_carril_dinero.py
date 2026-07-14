@@ -30,7 +30,12 @@ from datetime import timedelta
 from sqlalchemy import delete, select
 
 from app.agent import agent as ag
-from app.agent.agent import _dinero_inventado, _frase_prohibida, frase_prohibida_siempre
+from app.agent.agent import (
+    _dinero_inventado,
+    _frase_prohibida,
+    autorizados_por_moneda,
+    frase_prohibida_siempre,
+)
 from app.models import Cliente, Configuracion, Intervencion, Mensaje, now_utc
 from app.services import redis_client as rc
 from app.services.db import get_session_factory
@@ -68,8 +73,9 @@ async def main() -> None:
     f = get_session_factory()
 
     print("\n1) 💵 LA RED DEL DINERO YA NO ES CIEGA (antes solo veía '$28' y '28 bs')")
-    # Autorizados = lo que de verdad salió de una herramienta/catálogo.
-    autorizados = {14.0, 28.0, 4.0, 7.0, 31936.21}
+    # Autorizados = lo que de verdad salió de una herramienta/catálogo, YA SEPARADO POR MONEDA.
+    usd_ok = {14.0, 28.0, 4.0, 7.0}
+    bs_ok = {31936.21}
     for texto, esperado, nota in [
         ("El total es $28", False, "lo autorizado pasa"),
         ("El total es 28$", False, "PEGADO — el formato que el propio prompt le enseña"),
@@ -81,10 +87,24 @@ async def main() -> None:
         ("Son Bs 31.936,21", False, "el monto REAL en bolívares, con su formato"),
         ("son 5.000 Bs", True, "🔴 EL AGUJERO GORDO: se autorizaba solo (5.000 se leía como 5)"),
         ("son 45.000 Bs", True, "🔴 ídem (45 es un precio del catálogo… 45.000 Bs NO lo es)"),
+        # 🔴🔴 EL CASO REAL DE LA CLIENTA (2026-07-13): la cifra está en DÓLARES y la frase dice
+        # BOLÍVARES. El 28 SÍ está autorizado… pero como DÓLAR, no como bolívar.
+        ("El total en bolívares es de $28 USD a la tasa BCV", True,
+         "🔴🔴 EL CASO REAL: llamó bolívares a unos dólares"),
+        ("El total en bolívares es de Bs 31.936,21", False, "el de verdad: pasa"),
     ]:
-        malos = _dinero_inventado(texto, autorizados)
+        malos = _dinero_inventado(texto, usd_ok, bs_ok)
         check(f"{'FRENA ' if esperado else 'pasa  '} | {texto:<28} ({nota})",
               bool(malos) == esperado, f"detectados={malos}")
+
+    print("\n1.b) 🏷️ UN ID DEL CATÁLOGO **NO** ES UN PRECIO (de aquí salió el '$23')")
+    # El prompt inyecta: precio $20.00 (id_para_pedir=23). El 23 es un ID, no dinero.
+    catalogo = "Pan de Sándwich [SOLO PARA TI]: precio $20.00 (id_para_pedir=23)"
+    u, b = autorizados_por_moneda(catalogo)
+    check("el precio ($20) SÍ entra como dinero", 20.0 in u, str(sorted(u)))
+    check("🔴 el id (23) NO entra como dinero", 23.0 not in u,
+          "el id se colaba como precio: por eso el bot dijo '$23'")
+    check("y por eso '$23' AHORA se frena", bool(_dinero_inventado("El total es $23", u, b)))
 
     print("\n2) 🧭 LAS DOS LISTAS: lo que es mentira SIEMPRE vs. lo que la situación SÍ le manda decir")
     for texto, siempre, charla in [
@@ -123,22 +143,22 @@ async def main() -> None:
     ag._pedir_redaccion = _modelo_mentiroso
     r = await ag.redactar_mensaje(
         "el cliente pago Bs 1.200 pero el total era Bs 2.000, asi que faltan Bs 800",
-        [], "Rosa", TEL, montos_ok=set(),
+        [], "Rosa", TEL, montos_usd=set(), montos_bs=set(),
     )
     check("🔴 un dólar CALCULADO de cabeza ($12) ⇒ el mensaje se descarta", r == "",
           f"salió: {r!r}")
 
     ag._pedir_redaccion = _modelo_del_banco
-    r = await ag.redactar_mensaje("el cliente mandó su comprobante", [], "Rosa", TEL, montos_ok=set())
+    r = await ag.redactar_mensaje("el cliente mandó su comprobante", [], "Rosa", TEL, montos_usd=set(), montos_bs=set())
     check("'ya revisé mi banco' ⇒ el mensaje se descarta", r == "", f"salió: {r!r}")
 
     ag._pedir_redaccion = _modelo_bueno
-    r = await ag.redactar_mensaje("el cliente mandó su comprobante", [], "Rosa", TEL, montos_ok=set())
+    r = await ag.redactar_mensaje("el cliente mandó su comprobante", [], "Rosa", TEL, montos_usd=set(), montos_bs=set())
     check("y el mensaje BUENO sí pasa (no frenamos de más)", r != "", f"salió: {r!r}")
 
     ag._pedir_redaccion = _modelo_repite_total
     r = await ag.redactar_mensaje(
-        "el cliente mandó su comprobante", [], "Rosa", TEL, montos_ok={28.0},
+        "el cliente mandó su comprobante", [], "Rosa", TEL, montos_usd={28.0}, montos_bs=set(),
     )
     check("repetir el total que SÍ se cobró ($28) también pasa", r != "", f"salió: {r!r}")
     ag._pedir_redaccion = guardado

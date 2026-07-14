@@ -713,8 +713,9 @@ async def _responder_situacion(
         return []  # bot apagado o fuera de la lista blanca: se registra el pago, pero no se habla
     try:
         historial = await rc.obtener_historial(telefono)
+        _usd, _bs = await _montos_decibles(telefono)
         mensaje = await redactar_mensaje(
-            situacion, historial, nombre, telefono, montos_ok=await _montos_decibles(telefono)
+            situacion, historial, nombre, telefono, montos_usd=_usd, montos_bs=_bs
         )
     except Exception:  # noqa: BLE001
         logger.exception("No se pudo redactar el mensaje al cliente %s", telefono)
@@ -758,16 +759,23 @@ def _a_float(x):
         return None
 
 
-async def _montos_decibles(telefono: str) -> set[float]:
-    """LA LISTA CERRADA de montos que el bot puede decir en el carril del DINERO.
+async def _montos_decibles(telefono: str) -> tuple[set[float], set[float]]:
+    """LA LISTA CERRADA de montos que el bot puede decir en el carril del DINERO: (dólares, bolívares).
 
     Son los que el CÓDIGO cobró de verdad en esta conversación (la cotización que guardó
-    `generar_datos_pago`: el total en $, en Bs, y en divisas con descuento). Nada más. El catálogo
-    NO entra: aquí el bot no está cotizando productos, está hablando de UN pago — y autorizar el
-    catálogo entero fue justo lo que dejaba pasar el "$12" inventado (12 = precio de otro producto).
+    `generar_datos_pago`). Nada más. El catálogo NO entra: aquí el bot no está cotizando productos,
+    está hablando de UN pago — y autorizar el catálogo entero fue justo lo que dejaba pasar el "$12"
+    inventado (12 = precio de otro producto).
+
+    🔴 Y van SEPARADOS POR MONEDA. Devolverlos en un solo saco era repetir el bug del "$23": el bot
+    llamaba "bolívares" a una cifra en dólares y la red la daba por buena porque el número estaba
+    en la lista. Un dólar solo autoriza dólares; un bolívar solo autoriza bolívares.
     """
     bs, usd, divisas = await _montos_cobrados(telefono)
-    return {m for m in (bs, usd, divisas) if m is not None}
+    return (
+        {m for m in (usd, divisas) if m is not None},   # dólares
+        {m for m in (bs,) if m is not None},            # bolívares
+    )
 
 
 async def _montos_cobrados(telefono: str):
@@ -1143,8 +1151,9 @@ async def _notificar_cliente_pago(telefono, situacion) -> None:
         return
     try:
         historial = await rc.obtener_historial(telefono)
+        _usd, _bs = await _montos_decibles(telefono)
         mensaje = await redactar_mensaje(
-            situacion, historial, None, telefono, montos_ok=await _montos_decibles(telefono)
+            situacion, historial, None, telefono, montos_usd=_usd, montos_bs=_bs
         )
     except Exception:  # noqa: BLE001
         logger.exception("No se pudo redactar el aviso de pago para %s", telefono)

@@ -58,12 +58,24 @@ async def _falso_media(*a, **k) -> dict:
     return {"messages": [{"id": "wamid.PRUEBA_MEDIA"}]}
 
 
+async def _siempre_encendido() -> bool:
+    """Este banco prueba EL RETOMAR, no el interruptor de encendido.
+
+    El interruptor puede estar legítimamente APAGADO en el servidor (el 2026-07-13 se apagó para
+    proteger a una clienta real mientras se blindaba el dinero) — y entonces el bot se calla, que es
+    lo CORRECTO. Sin esto, el banco entero salía rojo por el motivo equivocado y parecía una
+    regresión del código. El interruptor tiene su propia prueba en `probar_carril_dinero.py`.
+    """
+    return True
+
+
 def _amordazar_a_meta() -> None:
     """Ningún camino puede llegar a WhatsApp: ni el envío en globos ni las herramientas."""
     tasks.enviar_texto = _falso_envio          # el embudo del bot (_enviar_en_partes)
     tools.enviar_texto = _falso_envio          # las herramientas escriben directo
     tools.enviar_imagen = _falso_media
     tools.enviar_video = _falso_media
+    tasks._bot_activo = _siempre_encendido     # ver arriba: aquí se prueba el retomar, no el switch
 
 
 async def _limpiar() -> None:
