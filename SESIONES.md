@@ -17,6 +17,41 @@
 
 ---
 
+## 2026-07-14 — 🔍 FASE 1: EL BUSCADOR (el bot dejó de NEGAR lo que sí vende)
+
+**El bug, en una frase:** `ver_catalogo` devolvía CERO en **6 de 19 consultas normales** de cliente, y con la lista vacía mandaba esta nota: *"no tienes ningún producto que calce con 'X'; **dile con sinceridad que de eso no tienes**"*. Combinado con la regla ANTIINVENCIÓN del prompt, **el código le ORDENABA al bot negar productos que el negocio SÍ vende.** El bot no desobedecía: **obedecía un bug.**
+
+Lo que un cliente escribía y lo que el bot contestaba (verificado ejecutando el filtro real contra los 31 productos vivos):
+
+| El cliente escribe | Antes | La realidad |
+|---|---|---|
+| `pan sin gluten` | ⛔ "de eso no tengo" | **TODO el negocio es sin gluten**. Ninguna de las 31 descripciones contiene la palabra "gluten": vive en la personalidad, no en el catálogo. |
+| `bebidas` | ⛔ | Vende Kombucha, Kéfir, Yogurt Kéfirado |
+| `postres` | ⛔ | Vende Quesillo, Ponquesitos, Galletas, Tortas, Chocolate |
+| `algo para diabéticos` | ⛔ | **24 de 31 productos** tienen `apto_diabeticos` lleno |
+| `desayuno` · `snacks` | ⛔ | — |
+
+**Las tres causas, todas de CÓDIGO:** el filtro era un **AND de prefijos** (una palabra mala tiraba todo a cero); la **categoría no era buscable**; y el **plural rompía** (`_singular()` existía, pero solo se usaba en el carril del COBRO).
+
+**Lo hecho** — `ver_catalogo` baja ahora por **7 escalones deterministas**, y el último garantiza que SIEMPRE hay algo que ofrecer: exacto → categoría → sinónimo comercial → atributo (apto diabéticos) → difusa → **mejor cobertura** → catálogo completo. Ninguno adivina: si un producto sale, es porque el CÓDIGO lo emparejó.
+
+- **La lista vacía dejó de existir.** Y la nota cambió: cuando no calza exacto, se le dice la verdad al bot (*"esto es LO MÁS PARECIDO"*, o *"eso puntual no lo tienes"*) **pero se le prohíbe el "no tengo" a secas**. Honestidad sin cortar la venta.
+- **"pan sin gluten" lo salva el escalón de MEJOR COBERTURA**: 'pan' calza con 4 productos y 'gluten' con ninguno, así que el AND lo tiraba todo a cero; ahora gana el que más palabras cubre. Lo que no está, no se inventa: simplemente no puntúa.
+- **Sinónimos comerciales editables** desde el panel (clave `sinonimos_busqueda`, fail-open al default): `bebidas → kombucha, kefir, yogurt`.
+- **RSK-1 desactivada:** las tools devuelven ahora `precio_texto: "$25"`. La red del dinero (`autorizados_por_moneda`) **solo reconoce cifras con marca**; un `precio_usd: 25.0` pelado NO entraba en la lista blanca. Hoy se salvaba solo porque `_catalogo_bloque` mete "$25.00" en el prompt — pero ese bloque **colapsa si el catálogo pasa de 60 productos**, y entonces el bot no habría podido decir NINGÚN precio sin que saltara "DINERO INVENTADO".
+- También: `ORDER BY` estable · la difusa **loguea** su excepción en vez de tragársela · aviso "NO SE PUEDE VENDER" si un producto no tiene precio.
+
+**🔴 LA TRAMPA QUE CASI ROMPE EL COBRO (y por qué el banco vigila las DOS mitades):**
+`_coincide_texto` y la búsqueda difusa **las comparten los dos carriles**: `ver_catalogo` (asesoría) y `_buscar_producto` (**el DINERO**). Aflojarlas arregla la asesoría **y rompe el cobro a la vez**:
+- Si se metiera la categoría en el filtro, `_buscar_producto('pan')` traería las **Empanadas Keto** (categoria=`panaderia`) → el bot cobraría el producto equivocado. **Es el bug de julio ($12 vs $14).** El comentario del código que decía *"la categoría NO se incluye a propósito"* **tenía razón**: se respetó, y los escalones nuevos viven aparte.
+- **Y sí cometí esa regresión, y el banco la cazó:** al encender la búsqueda por DESCRIPCIÓN en la difusa, `_buscar_producto('bebidas')` empezó a devolver el **Kéfir** (su descripción dice *"Bebida láctea"*). En `master` daba `None`. Ahora `con_descripcion` es **opt-in** y el cobro NO la enciende — con un caso centinela que se pone rojo si alguien lo intenta.
+
+**Banco nuevo:** `scripts/probar_buscador.py` (nº 12, registrado en `correr_bancos.py`). 21 consultas reales de cliente + la comprobación de que el cobro sigue estricto. **Escrito ANTES del arreglo y confirmado ROJO (15 fallos)** — un test que no falla antes no demuestra nada.
+
+**Verificado:** 12 bancos verdes contra un `pg_dump` de la BD REAL · ruff + 77 tests verdes.
+
+---
+
 ## 2026-07-14 — 🧱 FASE 0: LOS CIMIENTOS (ruff · pytest · CI que valida ANTES · **D1 CERRADA**)
 
 **Por qué:** una auditoría encontró tres bugs (el buscador del catálogo niega productos que sí existen; la multimedia que el bot envía no se guarda en `mensajes`; el prompt está saturado) y el plan es arreglarlos **por fases validadas**. Pero no había con qué validar: **cero ruff, cero pytest, y el CI ni siquiera hacía `checkout`** — mandaba el `curl` a Coolify y probaba DESPUÉS, dentro del contenedor ya desplegado.

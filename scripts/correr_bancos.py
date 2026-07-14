@@ -23,6 +23,10 @@ BANCOS = [
     # el esquema real y detecta cualquier migración que no llegó a aplicarse (los de mañana).
     # Va aquí, pegado a él: si la base no es la que el código cree, TODO lo de abajo miente.
     "probar_drift",
+    # EL BUSCADOR (fase 1): el bot NO puede negar lo que sí vende. Vigila las dos mitades:
+    # que la ASESORÍA encuentre ("bebidas", "postres", "pan sin gluten"…) y que arreglarla NO
+    # haya aflojado el COBRO (ambos carriles comparten `_coincide_texto` y la difusa).
+    "probar_buscador",
     "probar_cobro",
     "probar_datos_bancarios",
     "probar_delivery",

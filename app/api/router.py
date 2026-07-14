@@ -117,6 +117,12 @@ CLAVES_CONFIG = [
     # Modelo de IA conversacional, lo elige la PROVEEDORA (no la clienta). El bot
     # lo lee con leer_modelo_ia(). La voz (transcripción) va aparte y fija.
     "modelo_ia",
+    # SINÓNIMOS DEL BUSCADOR: lo que el cliente DICE no siempre es lo que está ESCRITO en el
+    # catálogo. Pide "bebidas" y en la base pone "Kombucha", "Kéfir", "Yogurt Kéfirado" —
+    # ninguna contiene esa palabra, así que el buscador devolvía CERO y el bot decía "de eso no
+    # tengo" sobre tres productos que SÍ vende. Formato: una línea por término,
+    # "termino: palabra1, palabra2". Vacío = se usa el default de tools.py (_SINONIMOS_DEFAULT).
+    "sinonimos_busqueda",
 ]
 
 

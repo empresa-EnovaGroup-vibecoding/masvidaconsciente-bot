@@ -409,31 +409,66 @@ def _coincide_texto(prod, palabras: list[str], extra: str = "") -> bool:
 
 
 async def _buscar_productos_difuso(
-    session, consulta, *, limite=12, umbral=0.3, solo_disponibles=True
+    session, consulta, *, limite=12, umbral=0.3, solo_disponibles=True, con_descripcion=False
 ):
     """Búsqueda TOLERANTE a errores de tipeo y acentos (pg_trgm + unaccent).
     Encuentra 'galletas' aunque escriban 'galetas', y 'limón' aunque pongan 'limon'.
     Devuelve productos ordenados del más parecido al menos. Si pg_trgm aún no está
     o la consulta falla, devuelve [] y el llamador cae a la búsqueda exacta de
-    siempre: NUNCA rompe el flujo (la búsqueda difusa es una mejora, no un requisito)."""
+    siempre: NUNCA rompe el flujo (la búsqueda difusa es una mejora, no un requisito).
+
+    🔴 `con_descripcion` ES OPT-IN, Y NO ES UN CAPRICHO. Esta función la comparten los DOS
+    carriles, y buscar también en la descripción los afecta al revés:
+
+      · ver_catalogo (ASESORÍA) → BIEN: la descripción del Kéfir dice "Bebida láctea
+        fermentada", así que 'bebidas' lo encuentra. Traer de más aquí es gratis.
+      · _buscar_producto (COBRO) → MAL: con la descripción encendida, `_buscar_producto('bebidas')`
+        devolvía el Kéfir — o sea, el bot podía COBRAR un producto porque la palabra aparecía
+        en su descripción. Verificado: en `master` devuelve None (correcto) y al encenderla
+        pasaba a devolver el Kéfir. Es la misma familia del bug de las Empanadas ($12 vs $14).
+
+    Por eso el DEFAULT es False (el comportamiento de siempre, el del cobro) y solo la asesoría
+    la enciende.
+    """
     q = (consulta or "").strip()
     if len(q) < 2:
         return []
     cond = "AND disponible IS TRUE" if solo_disponibles else ""
+    # El nombre lleva un bonus (+0.2) para que un calce por NOMBRE gane siempre a uno por
+    # descripción, aunque la descripción se parezca más.
+    sim = (
+        "GREATEST("
+        "  word_similarity(unaccent(lower(:q)), unaccent(lower(nombre))) + 0.2,"
+        "  word_similarity(unaccent(lower(:q)), unaccent(lower(COALESCE(descripcion, ''))))"
+        ")"
+        if con_descripcion
+        else "word_similarity(unaccent(lower(:q)), unaccent(lower(nombre)))"
+    )
+    extra_where = (
+        " OR word_similarity(unaccent(lower(:q)), unaccent(lower(COALESCE(descripcion, '')))) >= :umbral"
+        if con_descripcion
+        else ""
+    )
     sql = text(
         f"""
-        SELECT id, word_similarity(unaccent(lower(:q)), unaccent(lower(nombre))) AS sim
+        SELECT id, {sim} AS sim
         FROM productos
         WHERE (word_similarity(unaccent(lower(:q)), unaccent(lower(nombre))) >= :umbral
-               OR unaccent(lower(nombre)) LIKE '%' || unaccent(lower(:q)) || '%')
+               OR unaccent(lower(nombre)) LIKE '%' || unaccent(lower(:q)) || '%'
+               {extra_where})
               {cond}
-        ORDER BY sim DESC
+        ORDER BY sim DESC, id
         LIMIT :lim
         """
     )
     try:
         rows = (await session.execute(sql, {"q": q, "umbral": umbral, "lim": limite})).all()
-    except Exception:  # noqa: BLE001 — sin pg_trgm: el llamador usa la búsqueda exacta
+    except Exception as e:  # noqa: BLE001 — sin pg_trgm: el llamador usa la búsqueda exacta
+        # 🔴 ANTES ESTO ERA UN `return []` MUDO. Si a un cliente nuevo le faltaba `pg_trgm`
+        # (CREATE EXTENSION normalmente exige superusuario), la difusa fallaba en CADA
+        # llamada, en silencio, para siempre — y nadie se enteraba. Ahora grita en el log.
+        await session.rollback()
+        logger.warning("Búsqueda difusa CAÍDA (¿falta pg_trgm/unaccent?): %s", e)
         return []
     ids = [r.id for r in rows]
     if not ids:
@@ -446,49 +481,254 @@ async def _buscar_productos_difuso(
     return prods
 
 
+# ══════════════════════════════════════════════════════════════════════════════════════
+#  EL BUSCADOR DE LA ASESORÍA — los escalones que el carril del DINERO **no** tiene
+# ══════════════════════════════════════════════════════════════════════════════════════
+#
+# 🔴 POR QUÉ ESTO VIVE APARTE Y NO DENTRO DE `_coincide_texto`:
+#
+# `_coincide_texto` lo comparten DOS carriles, y quieren cosas OPUESTAS:
+#
+#   · `ver_catalogo`     → la ASESORÍA. Aquí conviene ser GENEROSO: encontrar un producto de
+#                          más solo cuesta que el bot lo ofrezca. Es un error barato.
+#   · `_buscar_producto` → el COBRO. Aquí ser generoso CUESTA DINERO: si 'pan' calzara con la
+#                          categoría 'panaderia', `_buscar_producto('pan')` traería las
+#                          **Empanadas Keto** (categoria=panaderia) y el bot podría COBRAR el
+#                          producto equivocado. Es literalmente el bug del 2026-07-11 ($12 vs
+#                          $14) que documenta CLAUDE.md.
+#
+# Aflojar el filtro compartido arreglaría la asesoría **y rompería el cobro a la vez**. Por eso
+# el filtro estricto se queda INTACTO, y lo que sigue son ESCALONES que solo usa la asesoría.
+
+# Sinónimos COMERCIALES: lo que el cliente DICE no siempre es lo que está ESCRITO en el catálogo.
+# El cliente pide "bebidas"; en la base pone "Kombucha", "Kéfir de Leche de cabra…", "Yogurt
+# Kéfirado". Ninguna de las tres contiene la palabra "bebidas": el filtro devolvía CERO y el
+# código le ordenaba al bot decir "de eso no tengo" — sobre tres productos que SÍ vende.
+#
+# La dueña lo edita desde el panel (clave `sinonimos_busqueda`). Formato: una línea por término,
+# "termino: palabra1, palabra2". La derecha pueden ser palabras del catálogo O una CATEGORÍA.
+# FAIL-OPEN: sin clave, se usa este default (mismo criterio que `dias_entrega`).
+_SINONIMOS_DEFAULT = """
+bebida: kombucha, kefir, yogurt
+bebidas: kombucha, kefir, yogurt
+tomar: kombucha, kefir, yogurt
+postre: dulceria
+postres: dulceria
+dulce: dulceria
+snack: galleta, tequeno, barra, ponquesito
+snacks: galleta, tequeno, barra, ponquesito
+merienda: galleta, tequeno, barra, ponquesito
+desayuno: pan, arepa, wafle, granola
+almuerzo: empanada, tequeno, caldo
+cena: empanada, tequeno, caldo
+"""
+
+# Palabras con las que el cliente pregunta por un producto APTO PARA DIABÉTICOS. No es una
+# palabra del catálogo: es el campo `apto_diabeticos` (lo tienen 24 de los 31 productos).
+_PALABRAS_DIABETICO = ("diabetic", "diabete", "glicemia", "glucosa", "azucar en sangre")
+
+
+def _parsear_sinonimos(texto: str) -> dict[str, list[str]]:
+    """'bebidas: kombucha, kefir' → {'bebidas': ['kombucha', 'kefir']}. Nunca lanza."""
+    mapa: dict[str, list[str]] = {}
+    for linea in (texto or "").splitlines():
+        if ":" not in linea:
+            continue
+        clave, _, valores = linea.partition(":")
+        clave = _sin_acentos(clave.strip())
+        palabras = [_sin_acentos(v.strip()) for v in valores.split(",") if v.strip()]
+        if clave and palabras:
+            mapa[clave] = palabras
+    return mapa
+
+
+async def _leer_sinonimos(session) -> dict[str, list[str]]:
+    """Los sinónimos que editó la dueña, o el default. Cualquier fallo cae al default."""
+    try:
+        valor = (
+            await session.execute(
+                select(Configuracion.valor).where(Configuracion.clave == "sinonimos_busqueda")
+            )
+        ).scalars().first()
+    except Exception:  # noqa: BLE001 — sin sinónimos el bot sigue buscando
+        return _parsear_sinonimos(_SINONIMOS_DEFAULT)
+    mapa = _parsear_sinonimos(valor) if valor and valor.strip() else {}
+    return mapa or _parsear_sinonimos(_SINONIMOS_DEFAULT)
+
+
+def _calza_categoria(palabra: str, categoria: str) -> bool:
+    """¿La palabra buscada ES esta categoría? ('dulces' → 'dulceria', 'harinas' → 'harinas')
+
+    🔴 EXIGE ≥5 LETRAS PARA EL CALCE POR PREFIJO, y no es un capricho: con menos, **'pan'
+    calzaría con 'panaderia'** y la asesoría de "pan" traería las Empanadas Keto (que son de
+    panadería). Es el mismo veneno que el bug del cobro, servido en el otro carril.
+    """
+    p, c = _singular(palabra), _singular(_sin_acentos(categoria or ""))
+    if not p or not c:
+        return False
+    return p == c or (len(palabra) >= 5 and c.startswith(p))
+
+
+def _es_apto_diabeticos(prod) -> bool:
+    """El campo dice que sí ('si', 'si.', 'si, con stevia'). 'no' y vacío NO cuentan."""
+    return _sin_acentos(prod.apto_diabeticos or "").strip().startswith("si")
+
+
+def _cobertura(prod, palabras: list[str], extra: str = "") -> int:
+    """CUÁNTAS de las palabras buscadas calzan con este producto (no todas: cuántas).
+
+    Es el escalón que salva 'pan sin gluten'. El filtro estricto es un AND: 'pan' calza con 4
+    productos, pero **'gluten' no calza con ninguno** —ninguna de las 31 descripciones contiene
+    esa palabra; "todo es sin gluten" vive en la personalidad, no en el catálogo— así que el AND
+    tiraba TODO a cero y el bot negaba tener pan. Aquí se ordena por cuántas calzan y ganan los
+    panes: 1 de 2. Lo que no está, no se inventa; simplemente no puntúa.
+    """
+    tokens = _tokens_producto(prod, extra)
+    return sum(1 for w in palabras if any(t.startswith(w) for t in tokens))
+
+
 async def ver_catalogo(session, telefono, categoria=None, busqueda=None):
-    stmt = select(Producto).where(Producto.disponible.is_(True))
+    """El catálogo para ASESORAR. La lista vacía ya no existe.
+
+    🔴 EL BUG QUE ESTO MATA (auditoría 2026-07-14, verificado ejecutando el filtro real):
+    esta función devolvía `productos: []` en **6 de 19 consultas normales** de cliente —
+    "pan sin gluten", "bebidas", "postres", "algo para diabéticos", "desayuno", "snacks"— y
+    con la lista vacía mandaba esta nota:
+
+        "no tienes ningún producto que calce con 'X'; dile con sinceridad que de eso no tienes"
+
+    Combinado con la regla ANTIINVENCIÓN del prompt, **el código le ORDENABA al bot negar
+    productos que el negocio SÍ vende.** El bot no desobedecía: obedecía un bug.
+
+    Ahora la búsqueda baja por ESCALONES deterministas, y el último garantiza que SIEMPRE hay
+    algo que ofrecer. Ninguno adivina: si un producto sale, es porque el CÓDIGO lo emparejó.
+    """
+    stmt = select(Producto).where(Producto.disponible.is_(True)).order_by(Producto.id)
+    # ORDER BY estable: sin él Postgres devuelve el orden que le da la gana y dos servidores
+    # con el MISMO código contestan distinto. Es la misma familia del bug de las Empanadas.
     if categoria:
         stmt = stmt.where(Producto.categoria == categoria.lower())
     productos = (await session.execute(stmt)).scalars().all()
-    if busqueda:
-        # Filtro DETERMINISTA por nombre + INGREDIENTES: 'empanada plátano' trae SOLO
-        # las que de verdad son de plátano (no las Horneadas de yuca). El CÓDIGO decide
-        # el match (mira la descripción), no el modelo. 'pan' = panes, NO em-PAN-adas.
+    como = "exacto"  # por qué escalón salieron (gobierna la NOTA de más abajo)
+
+    if busqueda and productos:
         palabras = _palabras_busqueda(busqueda)
         # Los SABORES viven en el TAMAÑO desde la migración 022 (la kombucha de 700ml tiene
         # cúrcuma y flor de jamaica; la de 350ml, no). Se los damos al filtro o "flor de
         # jamaica" no encontraría nada.
         _sab = await _tamanos_de(session, [p.id for p in productos])
-        _extra = {
-            pid: " ".join(v.sabores or "" for v in vs) for pid, vs in _sab.items()
-        }
-        exactos = (
-            [p for p in productos if _coincide_texto(p, palabras, _extra.get(p.id, ""))]
+        _extra = {pid: " ".join(v.sabores or "" for v in vs) for pid, vs in _sab.items()}
+        todos = list(productos)
+
+        def _con(fn):
+            return [p for p in todos if fn(p)]
+
+        # ── ESCALÓN 1 · EXACTO. El AND estricto de siempre (el mismo del cobro).
+        #    'empanada plátano' trae SOLO las de plátano, nunca las Horneadas de yuca.
+        hallados = (
+            _con(lambda p: _coincide_texto(p, palabras, _extra.get(p.id, "")))
             if palabras
-            else productos
+            else todos
         )
-        if exactos:
-            productos = exactos
-        else:
-            # Nada calzó (typo o nombre suelto): DIFUSA tolerante a errores/acentos (por nombre).
+
+        # ── ESCALÓN 2 · CATEGORÍA. 'harinas', 'dulces', 'congelados'… son categorías reales,
+        #    y NUNCA fueron buscables (`_tokens_producto` las excluye a propósito, y con razón:
+        #    ver `_calza_categoria`). Aquí se resuelven aparte, sin contaminar el filtro.
+        if not hallados and palabras:
+            hallados = _con(lambda p: any(_calza_categoria(w, p.categoria) for w in palabras))
+            if hallados:
+                como = "categoria"
+
+        # ── ESCALÓN 3 · SINÓNIMO COMERCIAL. 'bebidas' → kombucha/kéfir/yogurt.
+        #    Lo que el cliente DICE no es lo que está ESCRITO en el catálogo.
+        if not hallados and palabras:
+            mapa = await _leer_sinonimos(session)
+            expandidas = [w for p in palabras for w in mapa.get(_singular(p), mapa.get(p, []))]
+            if expandidas:
+                hallados = _con(
+                    lambda p: any(
+                        _coincide_texto(p, [w], _extra.get(p.id, "")) or _calza_categoria(w, p.categoria)
+                        for w in expandidas
+                    )
+                )
+                if hallados:
+                    como = "sinonimo"
+
+        # ── ESCALÓN 4 · ATRIBUTO. "algo para diabéticos" no es una palabra del catálogo: es el
+        #    campo `apto_diabeticos`, que tienen 24 de los 31 productos.
+        if not hallados:
+            t = _sin_acentos(busqueda)
+            if any(w in t for w in _PALABRAS_DIABETICO):
+                hallados = _con(_es_apto_diabeticos)
+                if hallados:
+                    como = "diabeticos"
+
+        # ── ESCALÓN 5 · DIFUSA. Typos y acentos: 'galetas' → Galletas New York.
+        #    Aquí SÍ se mira la descripción (`con_descripcion=True`): en la asesoría encontrar de
+        #    más es gratis. En el cobro NO se enciende jamás — ver `_buscar_productos_difuso`.
+        if not hallados:
             difusos = await _buscar_productos_difuso(
-                session, busqueda, limite=12, umbral=0.4, solo_disponibles=True
+                session, busqueda, limite=12, umbral=0.4, solo_disponibles=True,
+                con_descripcion=True,
             )
             if categoria:
                 difusos = [p for p in difusos if (p.categoria or "") == categoria.lower()]
-            productos = difusos
+            if difusos:
+                hallados, como = difusos, "difusa"
+
+        # ── ESCALÓN 6 · MEJOR COBERTURA. El que salva "pan sin gluten": 'pan' calza con 4
+        #    productos y 'gluten' con ninguno, así que el AND lo tiraba todo a cero. Aquí gana
+        #    el que más palabras cubre. No inventa nada: lo que no calza, no puntúa.
+        if not hallados and len(palabras) > 1:
+            puntuados = [(_cobertura(p, palabras, _extra.get(p.id, "")), p) for p in todos]
+            mejor = max((n for n, _ in puntuados), default=0)
+            if mejor > 0:
+                hallados = [p for n, p in puntuados if n == mejor]
+                como = "parcial"
+
+        # ── ESCALÓN 7 · NUNCA VACÍO. Si de verdad no hay nada que se parezca, el bot recibe el
+        #    CATÁLOGO ENTERO y una nota honesta. Puede (y debe) decir que ESO no lo tiene —
+        #    pero con algo real en la mano, no cortando la venta con un "no tengo" a secas.
+        if not hallados:
+            hallados, como = todos, "nada"
+
+        productos = hallados
+
     if not productos:
-        nota = (
-            f"no tienes ningún producto que calce con '{busqueda}'; dile con sinceridad que de eso no tienes y ofrécele lo que sí hay"
-            if busqueda
-            else "no hay productos en esa categoría"
-        )
-        return {"productos": [], "nota": nota}
+        # Solo llega aquí si el catálogo está VACÍO de verdad, o la categoría no existe.
+        return {
+            "productos": [],
+            "nota": (
+                "no hay NINGÚN producto cargado en el catálogo (ni siquiera para ofrecer otra "
+                "cosa). Dile con cariño que ahorita no tienes nada disponible y llama a "
+                "`pedir_ayuda`."
+                if not busqueda
+                else "no hay productos en esa categoría"
+            ),
+        }
     _nota_interno = (
         "El precio_usd y 'trae' (unidades) son INTERNOS: dilos SOLO si el cliente los "
         "pregunta o ya está comprando."
     )
+    # ── EL AVISO DEL ESCALÓN. El bot obedece la `nota`, así que aquí está el arreglo de verdad:
+    #    cuando el calce NO fue exacto, se le dice la VERDAD (no calzó del todo) y a la vez se le
+    #    PROHÍBE el "de eso no tengo" a secas. Antes, no calzar significaba lista vacía + una
+    #    orden de negar. Ahora: honestidad SIN cortar la venta.
+    _aviso = ""
+    if como in ("parcial", "difusa"):
+        _aviso = (
+            f" OJO: no hay nada que calce EXACTO con '{busqueda}'. Esto es LO MÁS PARECIDO que "
+            "sí tienes. Ofrécelo como tal, con naturalidad. NO afirmes que es exactamente lo que "
+            "pidió, y NO le digas que no tienes nada. "
+        )
+    elif como == "nada":
+        _aviso = (
+            f" 🔴 NADA en el catálogo se parece a '{busqueda}'. Dile con cariño y SIN RODEOS que "
+            "ESO puntual no lo tienes — pero NUNCA cortes ahí: de esta lista (que es TODO lo que "
+            "vendes) ofrécele lo que mejor encaje con lo que buscaba. Un 'no tengo' a secas mata "
+            "la venta; un 'eso no, pero mira esto' la salva. "
+        )
+
     if len(productos) > 1:
         # VARIOS productos calzan (ej. 'empanadas' = 3 familias): NO soltar el folleto.
         # El CÓDIGO decide (por el conteo) que se nombren solo los tipos y se retenga el
@@ -510,6 +750,7 @@ async def ver_catalogo(session, telefono, categoria=None, busqueda=None):
     # bot registra: sin esto no puede vender, y con esto no puede cobrar mal).
     por_prod = await _tamanos_de(session, [p.id for p in productos])
     salida = []
+    sin_precio = []
     for p in productos:
         vs = por_prod.get(p.id) or []
         tamanos = []
@@ -519,6 +760,14 @@ async def ver_catalogo(session, telefono, categoria=None, busqueda=None):
                 "id_para_pedir": v.id,
                 "tamano": v.presentacion,
                 "precio_usd": float(precio) if precio is not None else "el precio de hoy no lo sabes: pide_ayuda",
+                # 🔴 `precio_texto` NO es decoración: es lo que hace VISIBLE el precio para la RED
+                # DEL DINERO. `autorizados_por_moneda` (agent.py) solo reconoce cifras con MARCA de
+                # dinero ($25, 25 Bs); un `precio_usd: 25.0` pelado NO entra en la lista blanca.
+                # Hoy el bot se salva solo porque `_catalogo_bloque` mete "$25.00" en el system
+                # prompt — pero ese bloque COLAPSA a categorías si el catálogo pasa de 60 productos
+                # (`_CATALOGO_INLINE_MAX`). El día que un cliente tenga catálogo grande, el bot no
+                # podría decir NINGÚN precio sin que saltara "DINERO INVENTADO". Esto lo desactiva.
+                "precio_texto": _fmt_usd(precio) if precio is not None else None,
                 "sabores": v.sabores,
                 "agotado": (not v.disponible) or (not p.disponible),
             })
@@ -528,16 +777,29 @@ async def ver_catalogo(session, telefono, categoria=None, busqueda=None):
             "de_que_es": p.descripcion,
             "tamanos": tamanos,
         }
-        if len(tamanos) == 1:
+        if not tamanos:
+            # Un producto SIN tamaños no se puede vender: no hay precio ni `id_para_pedir`. No
+            # debería pasar (la migración le da uno a cada uno), pero si pasa el bot NO improvisa.
+            # El prompt ya lo avisa en su bloque de catálogo; la herramienta también, ahora.
+            ficha["NO_SE_PUEDE_VENDER"] = "sin precio cargado: no lo ofrezcas ni lo registres"
+            sin_precio.append(p.nombre)
+        elif len(tamanos) == 1:
             # Un solo tamaño: se ve IGUAL que siempre (la palabra "tamaño" ni aparece).
             ficha["precio_usd"] = tamanos[0]["precio_usd"]
+            ficha["precio_texto"] = tamanos[0]["precio_texto"]
             ficha["trae"] = None if vs[0].presentacion == "única" else vs[0].presentacion
             ficha["id_para_pedir"] = tamanos[0]["id_para_pedir"]
         salida.append(ficha)
+    nota += _aviso
     if any(len(f["tamanos"]) > 1 for f in salida):
         nota += (
             " OJO: alguno tiene VARIOS TAMAÑOS con precios distintos — PREGÚNTALE al cliente "
             "cuál quiere antes de registrar, y usa el `id_para_pedir` de ESE tamaño."
+        )
+    if sin_precio:
+        nota += (
+            f" ⚠️ Estos NO se pueden vender (sin precio cargado): {', '.join(sin_precio)}. "
+            "No los ofrezcas ni los registres."
         )
     return {"productos": salida, "nota": nota}
 
