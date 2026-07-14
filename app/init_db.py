@@ -106,7 +106,17 @@ async def main() -> None:
 
         # Descubrimiento AUTOMÁTICO. Adiós a la lista escrita a mano: un .sql nuevo en
         # `migrations/` se aplica solo. Ya no se puede "olvidar registrar" una migración.
-        archivos = sorted(MIGRATIONS.glob("*.sql"), key=lambda f: f.name)
+        #
+        # ⚠️ SE IGNORAN LOS OCULTOS (los que empiezan por '.'). Esto NO es paranoia: al desplegar
+        # esto la primera vez, un `tar` hecho en macOS coló ficheros AppleDouble
+        # (`._001_init.sql`) — que CALZAN con el glob `*.sql`, son binarios, y al intentar leerlos
+        # como UTF-8 reventaban el arranque. El fallo ruidoso hizo su trabajo (el contenedor se
+        # negó a arrancar en vez de correr con la base a medias), pero una migración nunca empieza
+        # por un punto: `.DS_Store`, `._x.sql` y compañía son basura, no esquema.
+        archivos = sorted(
+            (f for f in MIGRATIONS.glob("*.sql") if not f.name.startswith(".")),
+            key=lambda f: f.name,
+        )
         if not archivos:
             raise RuntimeError(f"No hay migraciones en {MIGRATIONS} — ¿falta el COPY del Dockerfile?")
 
