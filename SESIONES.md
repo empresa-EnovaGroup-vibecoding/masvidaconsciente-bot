@@ -17,6 +17,26 @@
 
 ---
 
+## 2026-07-14 — 🔒 EL CANDADO DE LOS DATOS BANCARIOS (y el ZELLE que el sistema no conocía)
+
+**Era el pendiente #1 del ROADMAP.** Los datos bancarios (cédula, cuenta, Zelle, Binance) vivían escritos **en el TEXTO de la personalidad** y el modelo los pegaba **sin que hubiera pedido** — se lo hizo a una clienta real el 2026-07-13. La regla *"envía SOLO los del método que el cliente elija"* vivía en el prompt: humo.
+
+**La misma doctrina de siempre: el texto sugiere, el CÓDIGO impide.**
+
+1. **`generar_datos_pago` es ahora la ÚNICA fuente de los datos** (campo nuevo `metodos_de_pago`): los lee de la tabla `metodos_pago` — **la MISMA contra la que la visión valida los comprobantes** y la que edita el panel. Antes había TRES copias de la verdad (el texto de la personalidad, la tabla, y las claves `pago_movil_*` de configuracion) y cada pieza del sistema leía una distinta: si la dueña cambiaba la cuenta en el panel, el bot dictaba la vieja. Las llaves viejas quedan como respaldo (aditivo).
+2. **RED NUEVA en el código** (`agent.py`): una corrida de **6+ dígitos** (cédula, teléfono, cuenta, wallet) o un **correo** SOLO sale si en ESE turno lo devolvió una herramienta o lo escribió el propio cliente (su referencia). Se le corrige UNA vez; si insiste, **el mensaje NO sale** y se escala a la dueña. Aplica en `responder()` **y en el carril del dinero** (`redactar_mensaje`, donde JAMÁS hay datos bancarios legítimos). Cuidados para no frenar de más: el dinero con separador de miles ("Bs 18.033,64") no es una cuenta · las fechas ISO no son cédulas · citar un pedazo de un dato autorizado ("termina en 7595") vale · los dígitos partidos con espacios o guiones ("0134 0188…") se juntan y se cazan igual.
+3. **La CIRUGÍA del texto** (taller): el bloque "DATOS DE PAGO" de la personalidad quedó reducido a *"los datos te los da el sistema al generar el cobro"*. **Backup previo** en `/root/personalidad_backup_20260714.txt` y ensayo con BEGIN/ROLLBACK antes de aplicar. No se tocó ni una letra más del texto de Maired.
+
+**🔴 EL HALLAZGO GORDO (auditando el carril): ZELLE NO EXISTÍA EN `metodos_pago`** — ni en el taller ni en producción — y la personalidad lo anunciaba con su correo. La cadena verificada en el código: la visión valida el beneficiario del comprobante contra esa tabla ⇒ **un pago Zelle legítimo, al correo que el propio bot dictó, se rechazaba** (*"ese pago no te aparece a tu cuenta"*), en bucle y sin aviso a la dueña. **Creado el row en el taller** (ensayo+rollback primero). En producción entra al promover (la tabla está en la lista del script) o a mano. De paso: el mensaje de "pago a otra cuenta" decía *"verifica que lo enviaste a tu Pago Móvil"* aunque hubieran pagado por Zelle — ahora es neutral al método.
+
+**Banco NUEVO `probar_datos_bancarios.py`** (el detector, la autorización, la puerta en los dos carriles, y que la tabla tenga el Zelle). **LOS 10 BANCOS EN VERDE** en el taller tras desplegar.
+
+**⚠️ Susto del despliegue:** el workflow falló con timeout al puerto 8000 del taller **desde los runners de GitHub** (desde afuera y desde adentro el puerto respondía). Se desplegó por SSH → API local de Coolify, y el **rerun** del workflow después pasó en 5s: **era transitorio de la red de GitHub**, la tubería está sana. Queda la receta: si vuelve a pasar, `curl localhost:8000/api/v1/deploy?uuid=…` por SSH.
+
+**Descubierto y PENDIENTE de decidir con Maired (su texto, no se toca solo):** hoy hay **TRES personalidades divergentes** (el BRIEF quedó en la versión del 2026-07-10 · el taller ya NO dice "Eres humana" pero SÍ "la dueña" y tiene ediciones nuevas de ella, incluida una regla que apunta a un mecanismo que no existe: "RESPUESTA COMPLETA OBLIGATORIA" · **producción todavía dice "Eres humana"**). Propuestas listas: quitar "la dueña" y el bloque "si te preguntan si eres un bot… sin entrar en detalle" (contradicen `_REGLAS` y la red los frena) · reescribir el ejemplo de la alulosa (*"así no te sube el azúcar"* es LITERALMENTE una frase que la red prohíbe: el prompt ordena lo que el código mata) · alinear lo del médico · reparar una frase rota en QUÉ NO HACER. Ojo: `promover_a_produccion.sh` copia `configuracion` completa ⇒ la personalidad del taller pisará la de producción al promover.
+
+---
+
 ## 2026-07-14 — 🚚 EL DELIVERY: el envío es DINERO, así que va por el código de barras
 
 **Construido a raíz del bug de arriba.** La causa de fondo de que el bot inventara el *"$23"* no era el modelo ni el prompt: **el sistema NO SABÍA COBRAR DELIVERY** (no existía ni la tabla). *Y lo que no existe, el modelo lo inventa.*
