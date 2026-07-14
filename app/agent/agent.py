@@ -571,6 +571,64 @@ def _suena_a_sistema(texto: str) -> bool:
     return bool(_SUENA_A_SISTEMA.search(texto or ""))
 
 
+# ─── RED DE LOS DATOS BANCARIOS: los datos de pago SOLO salen de una herramienta ──────
+#
+# 🔴 Caso REAL (2026-07-13, una clienta): el bot le pegó los DATOS BANCARIOS COMPLETOS
+# (cédula, cuenta, Zelle, Binance) SIN que hubiera un pedido, porque vivían escritos en el
+# TEXTO de la personalidad y el modelo los copiaba de ahí cuando le parecía. La regla
+# "envía SOLO los del método que el cliente elija" vivía en el prompt: humo.
+#
+# La pared: un dato sensible (una corrida de 6+ dígitos —cédula, teléfono, cuenta, wallet—
+# o un correo) SOLO puede salir si en ESTE turno lo devolvió una herramienta
+# (generar_datos_pago, info_negocio…) o si el propio cliente lo escribió (su referencia,
+# su teléfono). Lo que no vino de ahí NO sale — aunque esté escrito en la personalidad.
+# El mismo movimiento que la red del dinero: el prompt sugiere, el código impide.
+_EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}")
+_FECHA_ISO_RE = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
+_CORRIDA_DIGITOS_RE = re.compile(r"\d(?:[\d\s\-]*\d)?")
+
+
+def _datos_sensibles(texto: str) -> set[str]:
+    """Los correos y las corridas de 6+ dígitos (cédulas, teléfonos, cuentas, wallets,
+    referencias) que hay en un texto. Los dígitos se juntan aunque vengan partidos por
+    espacios o guiones ('0134-0188 8518…' es UNA cuenta); los PUNTOS no juntan (son el
+    separador de miles del dinero: '18.033,64' no es una cuenta). Las fechas ISO
+    (2026-07-18) se quitan antes para no confundirlas con una cédula."""
+    t = _FECHA_ISO_RE.sub(" ", texto or "")
+    encontrados = {m.group(0).lower() for m in _EMAIL_RE.finditer(t)}
+    for m in _CORRIDA_DIGITOS_RE.finditer(t):
+        digitos = re.sub(r"[\s\-]", "", m.group(0))
+        if len(digitos) >= 6:
+            encontrados.add(digitos)
+    return encontrados
+
+
+def _datos_sensibles_inventados(
+    texto: str,
+    autorizados: set[str],
+    usd_ok: set[float] | None = None,
+    bs_ok: set[float] | None = None,
+) -> list[str]:
+    """Los datos sensibles del texto que NO vinieron de una herramienta ni del cliente.
+
+    Un número que en realidad es un MONTO autorizado (un total en Bs escrito sin separador
+    de miles) no cuenta como dato sensible: de que sea el monto correcto ya se encarga la
+    red del dinero. Y citar un PEDAZO de un dato autorizado ('termina en 7595') vale."""
+    dinero_ok = (usd_ok or set()) | (bs_ok or set())
+    malos: list[str] = []
+    for dato in sorted(_datos_sensibles(texto)):
+        if "@" in dato:
+            if dato not in autorizados:
+                malos.append(dato)
+            continue
+        if any("@" not in a and (dato in a or a in dato) for a in autorizados):
+            continue
+        if dinero_ok and _calza(_lecturas_del_monto(dato), dinero_ok):
+            continue
+        malos.append(dato)
+    return malos
+
+
 async def responder(
     telefono: str,
     mensaje_usuario: str,
@@ -629,11 +687,17 @@ async def responder(
     # `id_para_pedir` del catálogo, la hora, la fecha, las cédulas. Por eso el bot pudo decirle a
     # una clienta REAL que el total era "$23": el 23 era **el ID de una variante**, no un precio.
     usd_ok, bs_ok = autorizados_por_moneda(estable, dinamico, mensaje_usuario)
+    # DATOS SENSIBLES autorizados (cédulas, teléfonos, cuentas, correos): SOLO lo que escribió
+    # el cliente y lo que devuelvan las herramientas en este turno. El prompt NO autoriza —
+    # justo porque los datos bancarios escritos en la personalidad eran la fuga.
+    datos_ok = _datos_sensibles(mensaje_usuario)
     for h in historial or []:
         if isinstance(h, dict) and h.get("role") == "user":
-            u, b = autorizados_por_moneda(str(h.get("content") or ""))
+            contenido_h = str(h.get("content") or "")
+            u, b = autorizados_por_moneda(contenido_h)
             usd_ok |= u
             bs_ok |= b
+            datos_ok |= _datos_sensibles(contenido_h)
     # Los TOTALES solo los pone una HERRAMIENTA. El catálogo autoriza precios SUELTOS, no sumas:
     # sin esto, "$20 + $5 = $25" se colaba porque $25 es el precio del Pan Keto.
     usd_de_herramienta: set[float] = set()
@@ -697,6 +761,49 @@ async def responder(
                     )
                 except Exception:  # noqa: BLE001 — si el aviso falla, igual NO mandamos el monto
                     logger.exception("No se pudo escalar el dinero inventado de %s", telefono)
+                return RESPUESTA_SEGURA
+
+            # 🔴 RED DE LOS DATOS BANCARIOS: una cédula, cuenta, teléfono o correo solo puede
+            # salir si lo devolvió una herramienta en ESTE turno o lo escribió el cliente.
+            # (El caso real: los datos vivían en el texto de la personalidad y el bot se los
+            # pegó completos a una clienta SIN que hubiera pedido.)
+            sensibles = _datos_sensibles_inventados(texto, datos_ok, usd_ok, bs_ok)
+            if sensibles:
+                logger.error(
+                    "DATOS SENSIBLES INVENTADOS por el modelo para %s: %s — texto=%r",
+                    telefono, sensibles, texto[:160],
+                )
+                if not corregido:
+                    corregido = True
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "[SISTEMA] Escribiste datos de pago o datos personales "
+                            f"({', '.join(sensibles)}) que NINGUNA herramienta te dio en este "
+                            "turno. Los datos bancarios SOLO se dan copiados de lo que devuelve "
+                            "`generar_datos_pago` (campo `metodos_de_pago`), y SOLO los del "
+                            "método que el cliente eligió. Si el cliente va a pagar, llama a "
+                            "`generar_datos_pago`; si no, reescribe tu mensaje SIN esos datos. "
+                            "No le menciones al cliente este aviso."
+                        ),
+                    })
+                    continue
+                # Insistió: NO se le mandan al cliente datos que el sistema no dio.
+                logger.error("DATOS SENSIBLES 2 veces para %s: se escala a la dueña", telefono)
+                try:
+                    await ejecutar(
+                        "pedir_ayuda",
+                        {
+                            "motivo": "no_se",
+                            "detalle": (
+                                "el bot iba a mandar datos de pago/números que NO salieron del "
+                                f"sistema ({sensibles}); NO se le enviaron al cliente"
+                            ),
+                        },
+                        telefono,
+                    )
+                except Exception:  # noqa: BLE001 — si el aviso falla, igual NO se mandan
+                    logger.exception("No se pudo escalar los datos sensibles de %s", telefono)
                 return RESPUESTA_SEGURA
 
             # RED DE LA HONESTIDAD: hay frases que NO pueden salir nunca.
@@ -856,6 +963,10 @@ async def responder(
             bs_ok |= _b
             # Y estos, además, son los ÚNICOS que pueden presentarse como un TOTAL.
             usd_de_herramienta |= _u
+            # Los datos sensibles que devuelve una herramienta (los datos de pago de
+            # generar_datos_pago, el teléfono del negocio de info_negocio…) quedan
+            # AUTORIZADOS para este turno. Solo estos y los del cliente pueden salir.
+            datos_ok |= _datos_sensibles(_crudo)
             messages.append(
                 {
                     "role": "tool",
@@ -963,11 +1074,17 @@ async def redactar_mensaje(
         # ("el total en bolívares es de $23 USD").
         usd_ok = set(montos_usd or ()) | usd_sit
         bs_ok = set(montos_bs or ()) | bs_sit
+    # Datos sensibles (cédulas, cuentas, correos): en este carril NO hay herramientas, así que
+    # lo único decible es lo que la SITUACIÓN (que la escribe el código) o el CLIENTE trajeron.
+    # Los datos bancarios de la personalidad NO autorizan: eran la fuga.
+    datos_ok = _datos_sensibles(situacion)
     for h in historial or []:
         if isinstance(h, dict) and h.get("role") == "user":
-            u, b = autorizados_por_moneda(str(h.get("content") or ""))
+            contenido_h = str(h.get("content") or "")
+            u, b = autorizados_por_moneda(contenido_h)
             usd_ok |= u
             bs_ok |= b
+            datos_ok |= _datos_sensibles(contenido_h)
 
     for intento in (1, 2):
         texto = await _pedir_redaccion(messages, modelo)
@@ -975,14 +1092,16 @@ async def redactar_mensaje(
             return ""
         prohibida = frase_prohibida_siempre(texto)
         inventados = _dinero_inventado(texto, usd_ok, bs_ok)
-        if not prohibida and not inventados:
+        sensibles = _datos_sensibles_inventados(texto, datos_ok, usd_ok, bs_ok)
+        if not prohibida and not inventados and not sensibles:
             return texto
 
         logger.error(
-            "CARRIL DEL DINERO (intento %d): %s%s — texto=%r",
+            "CARRIL DEL DINERO (intento %d): %s%s%s — texto=%r",
             intento,
             f"frase prohibida ({prohibida})" if prohibida else "",
             f" · montos inventados {inventados}" if inventados else "",
+            f" · datos sensibles {sensibles}" if sensibles else "",
             texto[:160],
         )
         if intento == 2:
@@ -997,6 +1116,9 @@ async def redactar_mensaje(
                 + (f"Y escribiste montos que NO te dio nadie ({inventados}): NUNCA calcules ni "
                    "conviertas dinero de cabeza. Usa SOLO las cifras EXACTAS que te dieron en la "
                    "situación, copiadas tal cual; si te falta una, NO la digas. " if inventados else "")
+                + (f"Y escribiste datos de pago o números ({', '.join(sensibles)}) que nadie te "
+                   "dio en esta situación: en este mensaje NO se dan datos bancarios. Quítalos. "
+                   if sensibles else "")
                 + "Reescribe el mensaje sin eso, cálido y natural. No menciones este aviso."
             ),
         })

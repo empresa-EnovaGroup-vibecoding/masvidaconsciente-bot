@@ -862,13 +862,17 @@ async def _procesar_comprobante(telefono, message_id, media_id, caption, nombre,
         es_pantalla = _pant is True or str(_pant).strip().lower() in ("true", "si", "sí", "yes", "1")
         if es_pantalla:
             # SÍ es la pantalla de un pago/transferencia, pero NO a la cuenta de la dueña.
+            # OJO: método-NEUTRAL a propósito. Antes decía "verifica que lo envió a tu Pago
+            # Móvil" aunque el cliente hubiera pagado por Zelle o Binance — confundía justo
+            # en el momento del dinero.
             situacion = (
                 "El cliente te mandó una imagen de un pago o transferencia, pero ese pago NO te "
-                "aparece hecho a TU cuenta / Pago Móvil (parece que fue a otra cuenta). Contéstale "
+                "aparece hecho a TU cuenta (parece que fue a otra cuenta). Contéstale "
                 "con calidez y con TUS PROPIAS PALABRAS, natural y DISTINTA cada vez (JAMÁS repitas "
                 "la misma frase ni suenes a plantilla o robot): dile con cariño que ese pago no te "
-                "aparece a tu cuenta, y pídele que verifique que lo envió a tu Pago Móvil y te "
-                "reenvíe la captura. No lo acuses ni des el pago por hecho; solo pídele que confirme."
+                "aparece a tu cuenta, pídele que verifique que lo envió a los datos exactos que le "
+                "diste (del método que él eligió) y que te reenvíe la captura. No lo acuses ni des "
+                "el pago por hecho; solo pídele que confirme."
             )
         else:
             # No parece un comprobante (foto cualquiera, o no se ve el pago).

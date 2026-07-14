@@ -22,6 +22,7 @@ from app.models import (
     Feriado,
     Intervencion,
     Mensaje,
+    MetodoPago,
     Pago,
     Pedido,
     PrecioDia,
@@ -224,7 +225,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "generar_datos_pago",
-            "description": "Genera el cobro: calcula el total en bolivares (tasa BCV del dia) y devuelve los datos de Pago Movil y un `resumen_cobro` listo para copiar. Usala JUSTO despues de registrar_pedido, pasando el `pedido_id` que esa te devolvio (para cobrar ESE pedido, no uno viejo).",
+            "description": "Genera el cobro: calcula el total en bolivares (tasa BCV del dia), devuelve un `resumen_cobro` listo para copiar y los datos de TODOS los metodos de pago (`metodos_de_pago`). Usala JUSTO despues de registrar_pedido, pasando el `pedido_id` que esa te devolvio (para cobrar ESE pedido, no uno viejo). Es la UNICA fuente de los datos de pago (cedula, telefono, cuenta, correo): dale al cliente SOLO los del metodo que el elija, copiados tal cual — JAMAS los escribas de memoria. Si el cliente pide los datos otra vez, vuelve a llamarla.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1463,6 +1464,36 @@ async def generar_datos_pago(session, telefono, pedido_id=None):
         for f in (await session.execute(select(Configuracion))).scalars().all()
     }
 
+    # 🔴 LOS DATOS DE PAGO SALEN DE AQUÍ (la tabla `metodos_pago`, la que edita el panel y la
+    # MISMA contra la que la visión valida el beneficiario del comprobante) — NO del texto de
+    # la personalidad. Antes vivían escritos en ese texto y el modelo los pegaba SIN que
+    # hubiera pedido (le pasó a una clienta real el 2026-07-13); y peor: eran una SEGUNDA
+    # copia de la verdad (si la dueña cambiaba la cuenta en el panel, el bot dictaba la
+    # vieja). Una sola fuente. La red de datos bancarios (agent.py) frena cualquier dato
+    # que no haya salido de una herramienta en ese turno.
+    metodos = (
+        await session.execute(
+            select(MetodoPago)
+            .where(MetodoPago.activo.is_(True))
+            .order_by(MetodoPago.orden, MetodoPago.id)
+        )
+    ).scalars().all()
+    metodos_datos = []
+    for m in metodos:
+        d = {"metodo": m.titulo or m.tipo}
+        for campo in ("titular", "banco", "telefono", "cedula", "cuenta", "correo", "wallet", "instrucciones"):
+            v = getattr(m, campo, None)
+            if v:
+                d[campo] = v
+        metodos_datos.append(d)
+
+    # Compatibilidad: las llaves sueltas de Pago Móvil que ya usaba el bot. Se toman del
+    # MISMO método de la tabla (una sola verdad); las claves de configuracion quedan solo
+    # como respaldo si la tabla estuviera vacía.
+    pm = next(
+        (m for m in metodos if "movil" in _sin_acentos(f"{m.tipo} {m.titulo}")), None
+    )
+
     # Guarda la cotizacion para amarrarla al comprobante cuando llegue.
     try:
         await set_cache(
@@ -1499,11 +1530,18 @@ async def generar_datos_pago(session, telefono, pedido_id=None):
         "tasa_bcv": float(tasa),
         "monto_bs": float(monto_bs),
         "resumen_cobro": resumen_cobro,
-        "banco": config.get("pago_movil_banco"),
-        "cedula": config.get("pago_movil_cedula"),
-        "telefono_pago": config.get("pago_movil_telefono"),
-        "titular": config.get("pago_movil_titular"),
-        "nota": "presenta el cobro copiando EXACTO `resumen_cobro` (NO recalcules) junto con los datos de Pago Movil; pide la captura del comprobante",
+        "banco": (pm.banco if pm else None) or config.get("pago_movil_banco"),
+        "cedula": (pm.cedula if pm else None) or config.get("pago_movil_cedula"),
+        "telefono_pago": (pm.telefono if pm else None) or config.get("pago_movil_telefono"),
+        "titular": (pm.titular if pm else None) or config.get("pago_movil_titular"),
+        "metodos_de_pago": metodos_datos,
+        "nota": (
+            "presenta el cobro copiando EXACTO `resumen_cobro` (NO recalcules). Los datos "
+            "de las cuentas están en `metodos_de_pago`: dale al cliente SOLO los del método "
+            "que ÉL elija, copiados TAL CUAL (si aún no eligió, pregúntale cómo prefiere "
+            "pagar nombrándole los métodos, sin soltar todos los datos). Pide la captura "
+            "del comprobante."
+        ),
     }
 
 
