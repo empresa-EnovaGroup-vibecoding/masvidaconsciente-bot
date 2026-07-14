@@ -17,6 +17,39 @@
 
 ---
 
+## 2026-07-14 — 🎛️ FASE 4: LAS HERRAMIENTAS SE APAGAN DESDE EL PANEL (sin romper el cobro)
+
+La proveedora enciende y apaga capacidades del agente **sin desplegar**. **7 blindadas · 5 desactivables.**
+
+**🔴 LA COSTURA QUE HACE QUE ESTO SEA SEGURO.** `agent.py` **nunca** usa `TOOL_SCHEMAS` para ejecutar — ejecuta por `ejecutar_tool` → `_DISPATCH`. `TOOL_SCHEMAS` solo sirve para **decirle al LLM qué existe**. Por eso se filtra **solo lo que el modelo VE**, y `_DISPATCH` queda **intacto**:
+- Las 7 redes siguen llamando a `pedir_ayuda` y `enviar_catalogo` aunque el modelo ya no las vea.
+- El worker de visión sigue llamando a `registrar_comprobante` directo.
+
+Si se filtrara el dispatch, apagar una tool desde el panel **le arrancaría el brazo a una red**: un bot que inventa dinero se quedaría callado, sin avisar a nadie.
+
+**Los tres riesgos, y cómo se cierran:**
+
+**1. El prompt no DESCRIBE las tools: se las ORDENA.** *"tu ÚNICA forma de saber si un producto tiene media es llamar `enviar_fotos_producto`"*, *"PROHIBIDO decir 'no tengo fotos' SIN llamar antes a la herramienta"*. Apagar una tool sin tocar el prompt deja al modelo en una contradicción irresoluble, y hace **lo peor que puede hacer: afirma haber hecho algo que no hizo** — justo la clase de mentira contra la que existen las redes.
+→ **Marcas** sobre el literal (`@tool línea` / `{{tool|fragmento}}`). **Sin marca ⇒ el texto va SIEMPRE**, así que las reglas del cobro son **intocables por el mecanismo**. Verificado con grep: el bloque del cobro **no menciona ni una tool desactivable**.
+
+**2. 🔴 LA RED DEL DINERO SE QUEDA CIEGA — el bug invisible de toda la fase.** `autorizados_por_moneda` construye la lista blanca de montos leyendo el **TEXTO DEL PROMPT**: los precios entran a `usd_ok` porque `_catalogo_bloque` escribe `"$25.00"` ahí. Si alguien "simplificara" haciendo condicional el bloque de **fichas**, la red marcaría como **INVENTADO todo precio legítimo** ⇒ `RESPUESTA_SEGURA` en cada cotización. **Ni un test de schemas ni uno de prompts lo vería.**
+→ El catálogo **NO es condicional**. Por eso `ver_catalogo` e `info_producto` son **blindadas**: no son *features*, son el **SUELO ANTIINVENCIÓN** del bot. El banco lo comprueba **con las 5 apagadas**.
+
+**3. Bucle de `RESPUESTA_SEGURA`.** Con `enviar_fotos_producto` apagada, `fotos_ok` **no puede ponerse en True jamás**. Basta un falso positivo del detector de pronombre para que la red del envío fantasma dispare, le ordene llamar a una herramienta **que ya no existe**, y el turno acabe enlatado. **En bucle, y en silencio.**
+→ **El regaño sabe si la tool existe.** La red se queda **viva** (poner `fotos_ok=True` desarmaría una red de honestidad); lo que cambia es lo que se le **pide**.
+
+**Y la lección que el código ya había aprendido:** restar una capacidad **sin declararla** es peor que no restarla. *"El sistema no sabía cobrar delivery, y **cuando algo no existe, el modelo lo inventa**"* — ese fue el `$23 USD` que le llegó a una clienta real. Por eso cada tool apagada **inyecta su límite** (`_LIMITES`), y **todos desembocan en `pedir_ayuda`** — que es exactamente por qué esa tiene que ser blindada.
+
+**Fail-open en tres capas** (ausente / vacía / basura ⇒ las 12) y las blindadas se re-inyectan **en la LECTURA**, no solo en la API: si alguien escribe el CSV a mano en Postgres y se deja fuera `pedir_ayuda`, **el bot la tiene igual**.
+
+**Banco nuevo:** `scripts/probar_herramientas.py` (nº 15). Prueba **las 32 combinaciones** posibles: las 11 frases canónicas del cobro sobreviven a **todas**, ninguna marca queda sin resolver, y ninguna tool apagada sigue nombrada en el prompt.
+
+**✅ PROBADO CON EL BOT REAL.** Con las fotos apagadas, a *"me mandas una foto del quesillo?"* contestó: *"Con sinceridad, las fotos me las manda la dueña directamente. Pero te puedo compartir el catálogo completo… ¿Te lo envío?"* — **no miente, no dice que la envió, y no corta la venta.**
+
+**Verificado:** 15 bancos verdes en el contenedor desplegado · ruff + 77 tests · `tsc` del panel limpio.
+
+---
+
 ## 2026-07-14 — 🔐 FASE 3: ROLES (proveedora vs dueña) — y **nadie se queda fuera**
 
 **El agujero:** hasta hoy **no había roles**. La tabla `usuarios` no tenía columna de rol y el JWT solo llevaba el email, así que **cualquiera que entrara al panel veía y editaba TODO**. Y había **UNA sola cuenta**, compartida por Enova y la clienta.
