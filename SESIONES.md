@@ -17,6 +17,18 @@
 
 ---
 
+## 2026-07-14 — 📸 LA SEXTA RED: "ya te la envié" con CERO fotos enviadas (cazado EN VIVO)
+
+**Maired lo cazó probando:** pidió *"Mándame la foto de la torta keto"* y el bot contestó **"Ya te la envié hace poco 💚"**. Las fotos existen (2 en R2, links verificados en 200) — pero **el LOG del worker mostró la verdad**: UNA sola llamada al modelo, **CERO llamadas a `enviar_fotos_producto`**. Y el detalle perverso: en el turno anterior había dicho *"Ahí tienes las fotos"* (también sin enviarlas), así que **su propia mentira quedó en la memoria del chat y la usó de excusa**. Una mentira alimentando la siguiente. La familia del *"te agendo"*: miente en el HECHO, no en el tono — y para las fotos NO había red (catálogo y pedido sí tenían la suya).
+
+**La red (la sexta):** si el bot **afirma** que envió (o está enviando) fotos y en ESE turno `enviar_fotos_producto` no envió nada ⇒ se le ordena enviarlas **DE VERDAD** (y si el cliente las pide de nuevo, se **REENVÍAN** — jamás "ya te las mandé"); si insiste, el mensaje **NO sale** y se escala a la dueña. **La trampa técnica que la hace distinta:** la frase del bot no traía la palabra "foto" (*"ya te LA envié"* — el «la» venía del mensaje del cliente), así que la red mira **también lo que el cliente pidió**. Preguntas ("¿te mando la foto?") y ofertas condicionales no frenan. Sección 5 nueva en `probar_honestidad.py` (11 casos, incluido el real). **Los 10 bancos verdes.**
+
+**Además, encendido controlado del taller:** `bot_activo=true` **con lista blanca nueva** (`NUMEROS_PERMITIDOS` = Enova + Maired, puesta por la API de Coolify en bot y worker) — el taller NO tenía ninguna y ese número es el WhatsApp real de la dueña: sin lista, encenderlo era repetir el accidente del 13-jul con la clienta real.
+
+**Pendiente que dejó esta cacería:** el **video de la Torta keto es `.quicktime` (.mov)** y WhatsApp NO acepta ese formato — ese archivo va a fallar SIEMPRE que se intente enviar. Falta: convertir/rechazar .mov al subir en el panel (o avisar a la dueña del formato). Y el hueco gemelo: el catálogo tiene la misma trampa del pronombre (*"ya te lo envié"* sin la palabra "catálogo" no lo caza `_asegurar_catalogo`).
+
+---
+
 ## 2026-07-14 — 🔒 EL CANDADO DE LOS DATOS BANCARIOS (y el ZELLE que el sistema no conocía)
 
 **Era el pendiente #1 del ROADMAP.** Los datos bancarios (cédula, cuenta, Zelle, Binance) vivían escritos **en el TEXTO de la personalidad** y el modelo los pegaba **sin que hubiera pedido** — se lo hizo a una clienta real el 2026-07-13. La regla *"envía SOLO los del método que el cliente elija"* vivía en el prompt: humo.
