@@ -17,6 +17,22 @@
 
 ---
 
+## 2026-07-14 — 🎬 CUALQUIER FORMATO SIRVE + 🛡️ EL VIGILANTE (los bancos corren SOLOS — D2 CERRADA)
+
+**Las dos peticiones de Maired:** (1) *"que la clienta suba cualquier formato y funcione"* y (2) *"no quiero estar diciendo a cada rato 'se arregló o se dañó' — algo definitivo"*.
+
+**1. LA PUERTA DE LA MEDIA (`app/services/media_convert.py` + ffmpeg en el Dockerfile del bot).** La dueña sube **lo que sea** (el .mov del iPhone, un HEIC, un WebP, un video pesado) y el sistema lo convierte **al subirlo** a lo que WhatsApp exige (video MP4/H.264 ≤16MB · imagen JPEG/PNG ≤5MB). Lo que queda guardado **ya es enviable**; lo inconvertible se **rechaza con mensaje claro** (jamás guardar algo que después no se pueda enviar). La conversión pasa UNA vez, en la puerta — no en cada envío.
+   - **Lo ya subido se migró** (`scripts/convertir_media_vieja.py`): no era solo la Torta keto — **había 5 videos .quicktime** (productos 3, 11, 16, 19, 30) que WhatsApp **rechazaba siempre**. Los 5 ahora son .mp4 (verificados en 200). *"Antes las enviaba"* era cierto para las fotos; **los videos nunca salieron**.
+   - ⚠️ **Susto y reparación:** taller y producción **comparten el bucket** de R2, y la migración del taller borró los .quicktime viejos ⇒ producción quedó apuntando a archivos borrados. **Reparado en producción** (ensayo ROLLBACK → COMMIT): sus 5 filas apuntan a los .mp4, y se borró una **referencia muerta de antes** (producto 6: su video apuntaba a un archivo que NO existe en el bucket desde hace tiempo — 404 previo a todo esto). Producción quedó con 0 referencias rotas. **Regla nueva: si los dos servidores comparten el bucket, una migración de media se hace en LOS DOS a la vez.**
+
+**2. EL VIGILANTE (deuda D2 — CERRADA Y PROBADA EN VIVO).** `scripts/correr_bancos.py` corre los 10 bancos; el workflow lo ejecuta **solo**, después de CADA despliegue del taller (espera por SSH a que el contenedor del commit esté corriendo — llave CI dedicada en los Secrets). Si algo sale ROJO: **el flujo queda ROJO en GitHub y a la dueña le llega un WhatsApp** con qué banco falló. *La regla "si sale rojo, no se despliega" ya no depende de la memoria de un humano.* Probado en el primer push: build → contenedor nuevo → **los 10 bancos en verde, corridos por GitHub**.
+
+**3. La red del catálogo aprendió la trampa del PRONOMBRE** (la gemela del caso de las fotos): *"ya te LO envié"* sin la palabra "catálogo" ahora también se caza **si el cliente lo acaba de pedir** — y la red lo reenvía de verdad.
+
+**La respuesta de fondo a "¿por qué se daña lo que funcionaba?":** el código no se dañó — **el modelo es probabilístico**: a veces llama a la herramienta y a veces "decide" que ya lo hizo. Todo lo que dependa de que el modelo obedezca fallará tarde o temprano; por eso lo definitivo es: **paredes de código** (las 6 redes) + **el vigilante** (los bancos corriendo solos en cada despliegue) + el ensayo general antes de abrir. Un "agente de escalado" que vigile al bot sería OTRA pieza probabilística vigilando a la primera — se descartó a propósito.
+
+---
+
 ## 2026-07-14 — 📸 LA SEXTA RED: "ya te la envié" con CERO fotos enviadas (cazado EN VIVO)
 
 **Maired lo cazó probando:** pidió *"Mándame la foto de la torta keto"* y el bot contestó **"Ya te la envié hace poco 💚"**. Las fotos existen (2 en R2, links verificados en 200) — pero **el LOG del worker mostró la verdad**: UNA sola llamada al modelo, **CERO llamadas a `enviar_fotos_producto`**. Y el detalle perverso: en el turno anterior había dicho *"Ahí tienes las fotos"* (también sin enviarlas), así que **su propia mentira quedó en la memoria del chat y la usó de excusa**. Una mentira alimentando la siguiente. La familia del *"te agendo"*: miente en el HECHO, no en el tono — y para las fotos NO había red (catálogo y pedido sí tenían la suya).
