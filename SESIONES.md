@@ -17,6 +17,36 @@
 
 ---
 
+## 2026-07-14 — 🚚 EL DELIVERY: el envío es DINERO, así que va por el código de barras
+
+**Construido a raíz del bug de arriba.** La causa de fondo de que el bot inventara el *"$23"* no era el modelo ni el prompt: **el sistema NO SABÍA COBRAR DELIVERY** (no existía ni la tabla). *Y lo que no existe, el modelo lo inventa.*
+
+**La misma doctrina que cerró la fuga de la Kombucha:** el bot **NO ESCRIBE** el envío — lo **ELIGE** de una lista CERRADA (`zona_id`), y **el costo lo pone el CÓDIGO**, que además **suma el total**.
+
+- **Migración 023:** `zonas_entrega` (nombre · costo · referencias · es_retiro) + `pedidos.zona_id` / `zona_nombre` / `costo_envio` **CONGELADOS** (si mañana sube el envío, **el pedido de ayer no cambia de precio**). ⚠️ **Sin sembrar zonas**: son datos de la dueña, no del producto (el error de la 003, que le siembra la cuenta bancaria real de Maired a todo cliente nuevo).
+- **`generar_datos_pago`: CANDADO — sin zona NO SE COBRA.** El candado va en la **caja**, no solo en el registro: así ningún pedido viejo ni ningún camino raro se cuela.
+- **El recibo enseña la línea del envío** (*"Envío a Barquisimeto oeste = $5"*). Sin eso, el cliente **no puede cantar una zona mal elegida** — es la misma red visible que el "paquete de 8 unidades".
+- 💵 **EL 20% DE DIVISAS NO TOCA EL FLETE.** *(Fuga encontrada ATACANDO el diseño, antes de construirlo.)* Si se aplicara al total, ($20 + $5) × 0,80 = **$18,40** ⇒ **la dueña pagaría el delivery de su bolsillo** en CADA venta cobrada en dólares. Ahora: productos × 0,80 **+ envío completo**. El mismo cálculo en `registrar_comprobante`, o el pago del cliente **no cuadraría**.
+- **El prompt inyecta las zonas CON su precio** (el cliente tiene que poder oírlas) + la orden de **preguntar o escalar** si el sitio no calza. *Jamás adivinar, jamás elegir la barata para cerrar.*
+- **API `/zonas`** (GET/POST/PUT/DELETE) para que la dueña las mantenga sola. Bloquea nombres repetidos.
+
+**⚠️ AVISO PARA EL FUTURO:** **NO meter `zonas_entrega` en el `TRUNCATE … CASCADE`** de `promover_a_produccion.sh`: con la FK nueva **se llevaría `pedidos` y `pagos` de PRODUCCIÓN**. (También lo encontró el atacante.)
+
+**El caso REAL, contra el bot vivo, después del arreglo:**
+```
+Pan de Sándwich x1 (paquete de 18 rebanadas) = $20
+Envío a Barquisimeto oeste = $5
+Total: $25
+Por Pago Móvil son 18.033,64 Bs · en dólares $21 (con el 20%)
+```
+**Y en la BD:** `pedido #285 · total $25 · envío $5 · zona "Barquisimeto oeste"`. Antes: *"el total en bolívares es de $23 USD"* y **cero pedidos**.
+
+**Banco nuevo `probar_delivery.py`. Los 9 bancos VERDES.** Zonas cargadas en el taller (Retiro La Mendera $0 · Barquisimeto $3 · Barquisimeto oeste $5).
+
+**Falta:** la **pantalla "Entregas"** en el panel (hoy las zonas se cargan por API) · el **candado de los datos bancarios** (siguen en el TEXTO de la personalidad: el modelo puede copiarlos sin pedido) · promover el delivery a producción.
+
+---
+
 ## 2026-07-14 — 💵 LA PARED DEL DINERO (el bot le inventó un precio a una CLIENTA REAL)
 
 **No fue una prueba. Fue una clienta de verdad**, a las 21:26. Quería un producto de **$20** con delivery. El bot escribió:
