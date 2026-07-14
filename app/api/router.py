@@ -7,8 +7,9 @@ from decimal import Decimal
 from typing import Annotated
 from uuid import uuid4
 
+import httpx
 from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, StringConstraints
 from sqlalchemy import delete, func, select
 
@@ -1256,10 +1257,15 @@ async def detalle_conversacion(telefono: str, _: str = Depends(usuario_actual)):
             "fecha": m.created_at.isoformat(),
             "tipo": m.tipo,
             "media_id": m.media_id,
-            # ¿hay un archivo que se pueda VER? (el comprobante del cliente). El panel lo
-            # descarga con su token desde /api/mensajes/{id}/media — nunca una URL pública:
-            # un comprobante trae datos bancarios.
-            "tiene_media": bool(m.media_url),
+            # ¿hay un archivo que se pueda VER? El panel lo descarga con su token desde
+            # /api/mensajes/{id}/media — nunca una URL pública: un comprobante trae datos
+            # bancarios.
+            #
+            # Cuenta `media_id` además de `media_url`: las fotos que la dueña manda desde SU
+            # celular llegan por el eco de Meta con `media_id` pero SIN archivo descargado, así
+            # que con la condición vieja (`bool(m.media_url)`) su burbuja salía VACÍA. El
+            # endpoint ahora sabe bajarlas de Meta al vuelo.
+            "tiene_media": bool(m.media_url or m.media_id),
             "estado": m.estado,  # enviado|entregado|leido|fallido (None = no lo enviamos nosotros)
             "error": m.error,
         }
@@ -1269,20 +1275,78 @@ async def detalle_conversacion(telefono: str, _: str = Depends(usuario_actual)):
 
 @router.get("/mensajes/{mensaje_id}/media")
 async def ver_media_mensaje(mensaje_id: int, _: str = Depends(usuario_actual)):
-    """Sirve el archivo de UN mensaje del hilo (el comprobante que mandó el cliente).
+    """Sirve el archivo de UN mensaje del hilo, venga de donde venga.
 
     PROTEGIDO con login: un comprobante trae datos bancarios. Y se pide por el **id numérico
     del mensaje**, nunca por el nombre del archivo: si la ruta viniera en la URL, un
     `../../etc/passwd` dejaría leer cualquier archivo del servidor.
+
+    🔴 TRES ORÍGENES, Y HASTA HOY SOLO SERVÍA UNO:
+
+    1. **Disco local** — el comprobante que sube el cliente. Es lo único que funcionaba.
+    2. **URL http(s)** — las fotos de producto que manda el bot (viven en Cloudflare R2) y el
+       catálogo PDF. `os.path.exists("https://…")` da **False**, así que esto devolvía 404 y el
+       panel pintaba *"No se pudo cargar el archivo"*. Por eso arreglar la persistencia (que el
+       bot GUARDE la fila) no bastaba: sin esto, el dato existiría y **seguiría sin verse**.
+    3. **Solo `media_id`, sin archivo** — las fotos que la dueña manda desde SU celular. El eco
+       de Meta trae el `media_id` pero nadie descargaba el archivo, así que su burbuja salía
+       vacía. Ahora se baja de Meta al vuelo (los media_id de Meta duran ~30 días).
+
+    Se hace PROXY, no redirect: así el archivo sigue viajando con el token del panel, el mismo
+    origen y sin depender de que el bucket de R2 mande cabeceras CORS.
     """
     factory = get_session_factory()
     async with factory() as session:
         m = await session.get(Mensaje, mensaje_id)
-    if m is None or not m.media_url:
-        raise HTTPException(status_code=404, detail="Ese mensaje no tiene archivo")
-    if not os.path.exists(m.media_url):
-        raise HTTPException(status_code=404, detail="Archivo no disponible")
-    return FileResponse(m.media_url, media_type=m.media_mime or None)
+    if m is None:
+        raise HTTPException(status_code=404, detail="Ese mensaje no existe")
+
+    # 2) Remoto (R2 / el propio bot): se proxea en streaming — un video puede pesar.
+    if m.media_url and m.media_url.startswith(("http://", "https://")):
+        cliente = httpx.AsyncClient(timeout=30, follow_redirects=True)
+        try:
+            req = cliente.build_request("GET", m.media_url)
+            resp = await cliente.send(req, stream=True)
+            if resp.status_code >= 400:
+                await resp.aclose()
+                await cliente.aclose()
+                raise HTTPException(status_code=404, detail="Archivo no disponible")
+        except HTTPException:
+            raise
+        except Exception:  # noqa: BLE001
+            await cliente.aclose()
+            logger.exception("No se pudo traer el archivo remoto del mensaje %s", mensaje_id)
+            raise HTTPException(status_code=404, detail="Archivo no disponible") from None
+
+        async def _stream():
+            try:
+                async for trozo in resp.aiter_bytes():
+                    yield trozo
+            finally:
+                await resp.aclose()
+                await cliente.aclose()
+
+        return StreamingResponse(
+            _stream(),
+            media_type=resp.headers.get("content-type") or m.media_mime or "application/octet-stream",
+        )
+
+    # 1) Disco local (el comprobante del cliente).
+    if m.media_url and os.path.exists(m.media_url):
+        return FileResponse(m.media_url, media_type=m.media_mime or None)
+
+    # 3) Sin archivo pero CON media_id: se baja de Meta al vuelo (la foto de la dueña).
+    if m.media_id:
+        try:
+            from app.services.meta_client import descargar_media
+
+            contenido, mime = await descargar_media(m.media_id)
+        except Exception:  # noqa: BLE001
+            logger.exception("No se pudo bajar de Meta el media %s", m.media_id)
+            raise HTTPException(status_code=404, detail="Archivo no disponible") from None
+        return Response(content=contenido, media_type=mime or m.media_mime or None)
+
+    raise HTTPException(status_code=404, detail="Ese mensaje no tiene archivo")
 
 
 @router.post("/conversaciones/{telefono}/leido")

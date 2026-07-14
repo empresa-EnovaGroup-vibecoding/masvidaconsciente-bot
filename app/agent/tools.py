@@ -1,4 +1,4 @@
-"""Las 5 herramientas del agente.
+"""Las 12 herramientas del agente.
 
 El número de teléfono del cliente se inyecta server-side (desde el contexto del
 webhook) — el LLM nunca lo ve ni lo puede falsificar.
@@ -6,6 +6,7 @@ webhook) — el LLM nunca lo ve ni lo puede falsificar.
 import json
 import logging
 import math
+import mimetypes
 import unicodedata
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -2109,6 +2110,51 @@ async def registrar_comprobante(
     }
 
 
+async def _guardar_media_saliente(
+    *, telefono: str, tipo: str, contenido: str, url: str, respuesta: dict | None
+) -> None:
+    """Mete en el hilo del panel la FOTO/VIDEO/PDF que el bot le acaba de mandar al cliente.
+
+    🔴 POR QUÉ EXISTE (auditoría 2026-07-14, verificado contra la BD de producción):
+    el bot SÍ enviaba la multimedia por WhatsApp —eso funcionaba— pero **NO la guardaba**.
+    `enviar_fotos_producto` y `enviar_catalogo` hacían el POST a Meta y se acababa ahí. Las 130
+    filas de `mensajes` eran TODAS `tipo='text'` y NINGUNA tenía `media_url`, aunque el esquema
+    admite `image`/`video`/`document` desde la migración 021. La dueña abría el chat interno y
+    veía una conversación donde el bot "nunca" mandó una foto — cuando sí la había mandado.
+
+    El molde es `_guardar_media_en_hilo` (workers/tasks.py), que hace esto BIEN para el
+    ENTRANTE. Esto es su gemelo para el SALIENTE.
+
+    ⚠️ SESIÓN PROPIA Y EXCEPCIÓN TRAGADA, a propósito: la foto YA salió hacia el cliente. Si
+    escribir la burbuja fallara y la excepción subiera, `ejecutar_tool` la convertiría en
+    `{"error": …}` y el LLM creería que el envío falló — y le diría al cliente que no pudo
+    mandarle la foto que sí recibió. Un fallo cosmético del panel jamás puede romper el envío.
+    """
+    from app.models import Mensaje
+    from app.services.db import get_session_factory
+    from app.services.meta_client import wa_message_id
+
+    try:
+        mime, _ = mimetypes.guess_type(url)
+        factory = get_session_factory()
+        async with factory() as session:
+            session.add(
+                Mensaje(
+                    cliente_telefono=telefono,
+                    rol="assistant",
+                    tipo=tipo,               # image | video | document (lo admite el CHECK de la 021)
+                    contenido=contenido,     # el pie de la burbuja: 'mensajes.contenido' es NOT NULL
+                    media_url=url,
+                    media_mime=mime,
+                    wa_message_id=wa_message_id(respuesta),  # ← antes se TIRABA
+                    estado="enviado",
+                )
+            )
+            await session.commit()
+    except Exception:  # noqa: BLE001 — la burbuja es cosmética; el envío YA ocurrió
+        logger.exception("No se pudo meter en el hilo la media saliente de %s", telefono)
+
+
 async def enviar_catalogo(session, telefono):
     """Envía el catálogo en PDF (guardado en la BD). El cliente lo recibe como
     archivo. Si no hay PDF cargado, avisa para que el agente use ver_catalogo."""
@@ -2124,10 +2170,18 @@ async def enviar_catalogo(session, telefono):
     settings = get_settings()
     link = f"{settings.public_base_url.rstrip('/')}/api/catalogo/archivo"
     try:
-        await enviar_documento(telefono, link, "Catalogo.pdf")
-        return {"ok": True, "nota": "catalogo PDF enviado al cliente; confirmaselo con calidez"}
+        resp = await enviar_documento(telefono, link, "Catalogo.pdf")
     except Exception:  # noqa: BLE001
         return {"ok": False, "nota": "no se pudo enviar el catalogo PDF; usa ver_catalogo (texto)"}
+    # El catálogo que el cliente recibió ahora SÍ aparece en el chat interno de la dueña.
+    await _guardar_media_saliente(
+        telefono=telefono,
+        tipo="document",
+        contenido="(catálogo en PDF)",
+        url=link,
+        respuesta=resp,
+    )
+    return {"ok": True, "nota": "catalogo PDF enviado al cliente; confirmaselo con calidez"}
 
 
 async def enviar_fotos_producto(session, telefono, nombre, variante_id=None):
@@ -2186,25 +2240,49 @@ async def enviar_fotos_producto(session, telefono, nombre, variante_id=None):
             ),
         }
     enviadas = 0
+    sin_url = 0
     # Tope de 3 (antes 8): ocho archivos de golpe es una descarga de spam y le baja la calidad
     # al número. LOS VIDEOS CUENTAN dentro del tope.
+    if len(medios) > 3:
+        logger.info(
+            "enviar_fotos_producto: %s tiene %d archivos, se envían los 3 primeros (tope anti-spam)",
+            prod.nombre, len(medios),
+        )
     for m in medios[:3]:
         url = r2.url_publica(m.clave)
         if not url:
+            sin_url += 1
             logger.warning(
                 "enviar_fotos_producto: URL vacía (¿falta R2_PUBLIC_URL en el worker?) media=%s",
                 m.id,
             )
             continue
+        es_video = m.tipo == "video"
         try:
-            if m.tipo == "video":
-                await enviar_video(telefono, url)
-            else:
-                await enviar_imagen(telefono, url)
+            resp = (
+                await enviar_video(telefono, url) if es_video else await enviar_imagen(telefono, url)
+            )
             enviadas += 1
             logger.info("enviar_fotos_producto: enviado %s de %s (url=%s)", m.tipo, prod.nombre, url)
         except Exception as e:  # noqa: BLE001 — si una falla, intentamos las demás
             logger.warning("No se pudo enviar media %s de %s: %s", m.id, prod.nombre, e)
+            continue
+        # 🔴 LA FILA QUE FALTABA. El cliente recibía la foto y la dueña, en su chat interno, no
+        # veía NADA: el bot parecía no haberla mandado nunca. Ahora la burbuja existe.
+        await _guardar_media_saliente(
+            telefono=telefono,
+            tipo="video" if es_video else "image",
+            contenido=f"({'video' if es_video else 'foto'} de {prod.nombre})",
+            url=url,
+            respuesta=resp,
+        )
+    if sin_url and enviadas == 0:
+        # R2 sin configurar en el worker: hasta hoy se saltaba en SILENCIO y el bot decía que el
+        # producto "no tiene fotos" — mentira: las tiene, pero no se pudieron construir las URLs.
+        logger.error(
+            "enviar_fotos_producto: %s TIENE %d archivo(s) pero R2_PUBLIC_URL no está puesta: "
+            "no se envió ninguno", prod.nombre, sin_url,
+        )
     if enviadas == 0:
         return {
             "enviadas": 0,

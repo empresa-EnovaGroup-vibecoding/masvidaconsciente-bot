@@ -27,6 +27,10 @@ BANCOS = [
     # que la ASESORÍA encuentre ("bebidas", "postres", "pan sin gluten"…) y que arreglarla NO
     # haya aflojado el COBRO (ambos carriles comparten `_coincide_texto` y la difusa).
     "probar_buscador",
+    # LA MULTIMEDIA (fase 2): lo que el bot manda por WhatsApp, la dueña lo ve en el panel.
+    # Vigila LAS DOS mitades del arreglo: que el bot GUARDE la fila, y que el endpoint SEPA
+    # servirla (las fotos viven en R2: `os.path.exists("https://…")` daba 404).
+    "probar_media",
     "probar_cobro",
     "probar_datos_bancarios",
     "probar_delivery",
