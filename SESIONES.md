@@ -17,6 +17,34 @@
 
 ---
 
+## 2026-07-14 — 🔐 FASE 3: ROLES (proveedora vs dueña) — y **nadie se queda fuera**
+
+**El agujero:** hasta hoy **no había roles**. La tabla `usuarios` no tenía columna de rol y el JWT solo llevaba el email, así que **cualquiera que entrara al panel veía y editaba TODO**. Y había **UNA sola cuenta**, compartida por Enova y la clienta.
+
+Eso chocaba con una decisión que el propio proyecto ya había tomado y documentado (`CLAUDE.md` §5): el selector de modelo de IA es *"palanca de PROVEEDOR, no de la clienta; cuando la clienta tenga su propio rol/login **se le esconde**"*. El rol nunca existió, así que **nunca se escondió**: la dueña podía cambiarle el modelo al bot desde Configuración. Y en la fase 4 se le suma el interruptor de las herramientas — apagarle `generar_datos_pago` a su propio bot **le rompería el cobro sin enterarse**.
+
+**Lo hecho:**
+- **`migrations/024_usuario_rol.sql`** — columna `rol` (`'proveedora'` | `'duena'`), CHECK e índice. **🎯 ES LA PRIMERA MIGRACIÓN QUE PASA POR EL SISTEMA DE LA FASE 0**, y funcionó: el log de producción dice *"**25 en disco, 24 ya aplicadas, 1 pendientes**"* → se aplicó **sola**. Añadí un `.sql` y ya está: no hay lista que actualizar ni de qué olvidarse. **La prueba de fuego, pasada.**
+- `leer_rol()` + dependencia **`proveedora_actual`** (403 para la dueña).
+- `GET /api/yo` · `GET/POST/PATCH/DELETE /api/usuarios` (solo proveedora).
+- Las claves de proveedora (hoy `modelo_ia`) se **omiten** en el GET de configuración y se **rechazan con 403** en el PUT si vienen de una dueña.
+- **Panel:** la sección del modelo solo la ve la proveedora + **pantalla de USUARIOS** para crear la cuenta de la dueña (sin esto los roles no servirían de nada: hay una sola cuenta).
+
+**El rol se lee de la BD, NO del JWT.** Meterlo como claim sería más rápido, pero: (a) los tokens **ya emitidos** no lo llevan, así que al desplegar la proveedora se quedaría **fuera de sus propias palancas** hasta que caduque (12 h); y (b) quitarle el rol a alguien **no surtiría efecto** hasta su próxima sesión. Leyéndolo de la BD, el rol es **la verdad de ahora**.
+
+**🔒 LA MITAD QUE MÁS IMPORTA NO ES "QUE LA DUEÑA NO PUEDA", SINO QUE NADIE SE QUEDE FUERA.** Un sistema de roles mal puesto es **un candado sin llave**. Tres redes:
+1. `_crear_admin` fuerza `rol='proveedora'` a `ADMIN_EMAIL` **en cada arranque**.
+2. La API se niega a **degradar o borrar** esa cuenta.
+3. La API se niega a dejar el sistema con **cero proveedoras**.
+
+**🔴 UNA LECCIÓN QUE EL BANCO SE DIO A SÍ MISMO** (y es gemela de la de la fase 2): la primera versión llamaba a las funciones de los endpoints **directamente** (`await listar_usuarios(DUENA)`) — y así **FastAPI nunca evalúa el `Depends(proveedora_actual)`**: el guardia sencillamente no corre. El banco reportó *"la dueña se ascendió a proveedora sola"*, lo cual era **mentira**: la protección sí estaba, pero el test la esquivaba. Ahora hace **peticiones HTTP reales** contra la app ASGI, con **JWT real**, por toda la cadena de dependencias. *Un test que no pasa por la puerta no prueba que la puerta cierre.*
+
+**Y la trampa del panel:** el PUT de configuración manda el objeto **entero**. Como el GET de la dueña ya no trae `modelo_ia`, iría con el `""` del estado inicial y el backend se lo rechazaría con 403… **dejándola sin poder guardar NADA**, por una clave que ni siquiera ve. Por eso las claves de proveedora se quitan del envío.
+
+**Banco nuevo:** `scripts/probar_roles.py` (nº 14). **Verificado:** 14 bancos verdes en el contenedor desplegado · ruff + 77 tests · `tsc` del panel limpio.
+
+---
+
 ## 2026-07-14 — 📸 FASE 2: LA MULTIMEDIA LLEGA AL PANEL (lo que el bot manda, la dueña lo ve)
 
 **El bug:** el bot **SÍ enviaba** la multimedia por WhatsApp —las fotos de producto y el catálogo PDF llegaban al cliente— pero **NO la guardaba**. `enviar_fotos_producto` y `enviar_catalogo` hacían el POST a Meta y se acababa ahí: **cero filas** en `mensajes`.
