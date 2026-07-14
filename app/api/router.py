@@ -33,6 +33,7 @@ from app.models import (
     Producto,
     ProductoMedia,
     ProductoVariante,
+    ZonaEntrega,
     hoy_venezuela,
     inicio_dia_venezuela,
     now_utc,
@@ -1930,6 +1931,133 @@ async def borrar_conocimiento(cid: int, _: str = Depends(usuario_actual)):
 
 
 # ─── Métodos de pago (cuentas de la dueña que el bot ofrece y valida) ─
+
+# ─── ENTREGAS: las ZONAS y su costo (el "código de barras" del envío) ─
+#
+# 🔴 Existe por un caso REAL (2026-07-13): el bot le dijo a una clienta "el total en bolívares es
+# de $23 USD" porque sumó $20 del producto + $3 del delivery DE CABEZA. El prompt se lo prohibía
+# dos veces. La causa de fondo: **el sistema no sabía cobrar delivery** — y lo que no existe, el
+# modelo lo inventa. Aquí la dueña carga sus zonas y el CÓDIGO cobra el envío.
+
+class ZonaIn(BaseModel):
+    nombre: Annotated[str, StringConstraints(min_length=1, max_length=80, strip_whitespace=True)]
+    costo: float = 0
+    # Los barrios/urbanizaciones que caen en esta zona. Es lo que impide que el bot ADIVINE.
+    referencias: str | None = None
+    es_retiro: bool = False
+    disponible: bool = True
+    orden: int = 0
+
+
+def _zona_json(z: ZonaEntrega) -> dict:
+    return {
+        "id": z.id,
+        "nombre": z.nombre,
+        "costo": float(z.costo or 0),
+        "referencias": z.referencias,
+        "es_retiro": z.es_retiro,
+        "disponible": z.disponible,
+        "orden": z.orden,
+    }
+
+
+@router.get("/zonas")
+async def listar_zonas(_: str = Depends(usuario_actual)):
+    """Las zonas de entrega con su costo (lo que el bot cobra por llevarlo)."""
+    factory = get_session_factory()
+    async with factory() as session:
+        filas = (
+            await session.execute(
+                select(ZonaEntrega).order_by(ZonaEntrega.orden, ZonaEntrega.id)
+            )
+        ).scalars().all()
+    return [_zona_json(z) for z in filas]
+
+
+@router.post("/zonas")
+async def crear_zona(datos: ZonaIn, _: str = Depends(usuario_actual)):
+    """Crea una zona. NO se permiten dos zonas con el mismo nombre: el bot elegiría una al azar
+    y cobraría el envío equivocado (la enfermedad de la Kombucha, otra vez)."""
+    factory = get_session_factory()
+    async with factory() as session:
+        repetida = (
+            await session.execute(
+                select(ZonaEntrega).where(
+                    func.lower(ZonaEntrega.nombre) == datos.nombre.strip().lower()
+                )
+            )
+        ).scalar_one_or_none()
+        if repetida is not None:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Ya tienes una zona que se llama «{repetida.nombre}». Ponle otro nombre "
+                       "o edita la que ya existe.",
+            )
+        if datos.costo < 0:
+            raise HTTPException(status_code=400, detail="El costo del envío no puede ser negativo.")
+        zona = ZonaEntrega(
+            nombre=datos.nombre.strip(),
+            costo=Decimal(str(datos.costo)),
+            referencias=(datos.referencias or "").strip() or None,
+            es_retiro=datos.es_retiro,
+            disponible=datos.disponible,
+            orden=datos.orden,
+        )
+        session.add(zona)
+        await session.commit()
+        await session.refresh(zona)
+        return _zona_json(zona)
+
+
+@router.put("/zonas/{zona_id}")
+async def editar_zona(zona_id: int, datos: ZonaIn, _: str = Depends(usuario_actual)):
+    """Edita una zona. Ojo: cambiar el costo NO cambia los pedidos YA hechos — cada pedido se
+    guarda con el costo CONGELADO del día en que se hizo."""
+    factory = get_session_factory()
+    async with factory() as session:
+        zona = await session.get(ZonaEntrega, zona_id)
+        if zona is None:
+            raise HTTPException(status_code=404, detail="Zona no encontrada")
+        repetida = (
+            await session.execute(
+                select(ZonaEntrega).where(
+                    func.lower(ZonaEntrega.nombre) == datos.nombre.strip().lower(),
+                    ZonaEntrega.id != zona_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if repetida is not None:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Ya tienes otra zona que se llama «{repetida.nombre}».",
+            )
+        if datos.costo < 0:
+            raise HTTPException(status_code=400, detail="El costo del envío no puede ser negativo.")
+        zona.nombre = datos.nombre.strip()
+        zona.costo = Decimal(str(datos.costo))
+        zona.referencias = (datos.referencias or "").strip() or None
+        zona.es_retiro = datos.es_retiro
+        zona.disponible = datos.disponible
+        zona.orden = datos.orden
+        zona.updated_at = now_utc()
+        await session.commit()
+        await session.refresh(zona)
+        return _zona_json(zona)
+
+
+@router.delete("/zonas/{zona_id}")
+async def borrar_zona(zona_id: int, _: str = Depends(usuario_actual)):
+    """Borra una zona. Los pedidos que ya la usaron NO se tocan: conservan su zona y su costo
+    congelados (por eso `pedidos.zona_id` es ON DELETE SET NULL)."""
+    factory = get_session_factory()
+    async with factory() as session:
+        zona = await session.get(ZonaEntrega, zona_id)
+        if zona is None:
+            raise HTTPException(status_code=404, detail="Zona no encontrada")
+        await session.delete(zona)
+        await session.commit()
+    return {"ok": True}
+
 
 @router.get("/metodos-pago")
 async def listar_metodos_pago(_: str = Depends(usuario_actual)):

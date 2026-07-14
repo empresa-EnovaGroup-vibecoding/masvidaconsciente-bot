@@ -192,6 +192,34 @@ class Feriado(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 
 
+class ZonaEntrega(Base):
+    """DÓNDE se entrega y CUÁNTO cuesta llevarlo (migración 023).
+
+    🔴 Nació de un caso real: el bot le dijo a una clienta "el total en bolívares es de $23 USD"
+    porque sumó $20 del producto + $3 del delivery **de cabeza**. El prompt se lo prohibía dos
+    veces y lo hizo igual. La causa de fondo: **el sistema no sabía cobrar delivery** — no existía
+    ni esta tabla — y cuando algo no existe, el modelo lo inventa.
+
+    Es el mismo "código de barras" que cerró la fuga de la Kombucha: el bot **no escribe** el
+    envío, lo **ELIGE** de esta lista cerrada, y el **costo lo pone el código**.
+    """
+
+    __tablename__ = "zonas_entrega"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    nombre: Mapped[str] = mapped_column(Text)
+    costo: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0"))
+    # Los barrios/urbanizaciones que caen aquí. Es lo que impide que el bot ADIVINE la zona:
+    # si el cliente dice un sitio que no está en ninguna, pregunta o escala — jamás deduce.
+    referencias: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # La zona de RETIRO (el cliente va a buscarlo a La Mendera): sale gratis y no es un envío.
+    es_retiro: Mapped[bool] = mapped_column(Boolean, default=False)
+    disponible: Mapped[bool] = mapped_column(Boolean, default=True)
+    orden: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
 class Pedido(Base):
     __tablename__ = "pedidos"
     __table_args__ = (
@@ -215,6 +243,15 @@ class Pedido(Base):
     # La FECHA real acordada (no un texto que haya que adivinar). El código la valida contra
     # el calendario del negocio: día de entrega, feriados y anticipación de los productos.
     entrega_fecha: Mapped[date | None] = mapped_column(Date, nullable=True)
+    # ── EL ENVÍO (migración 023) ──
+    # `zona_id` = de qué zona es (lista CERRADA: el bot la ELIGE, no la escribe).
+    # `zona_nombre` y `costo_envio` van CONGELADOS aquí, igual que el precio del producto: si
+    # mañana la dueña sube el envío de $3 a $4, un pedido de AYER no puede cambiar de precio solo.
+    zona_id: Mapped[int | None] = mapped_column(
+        ForeignKey("zonas_entrega.id", ondelete="SET NULL"), nullable=True
+    )
+    zona_nombre: Mapped[str | None] = mapped_column(Text, nullable=True)
+    costo_envio: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 

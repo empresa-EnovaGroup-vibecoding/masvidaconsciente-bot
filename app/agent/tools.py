@@ -151,6 +151,20 @@ TOOL_SCHEMAS = [
                             "PREGÚNTALA siempre antes de cobrar."
                         ),
                     },
+                    "zona_id": {
+                        "type": "integer",
+                        "description": (
+                            "El NÚMERO de la zona, copiado EXACTO del `id_zona` de la lista de "
+                            "ZONAS DE ENTREGA que te doy en cada mensaje. Es un código de barras, "
+                            "igual que el del producto: el COSTO DEL ENVÍO lo pone el sistema a "
+                            "partir de este id, y lo SUMA al total. TÚ NUNCA sumas ni estimas el "
+                            "envío. Si el cliente lo retira, usa el id de la zona de RETIRO (sale "
+                            "sin costo). Si el sitio que dice el cliente no calza claramente con "
+                            "una zona, LÉELE las zonas y pregúntale en cuál está; si aun así no "
+                            "calza, llama a `pedir_ayuda`. JAMÁS adivines la zona ni elijas la más "
+                            "barata para cerrar la venta."
+                        ),
+                    },
                 },
                 "required": ["items"],
             },
@@ -848,14 +862,65 @@ async def _validar_entrega(session, fecha: date, items_pedido) -> dict | None:
     }
 
 
+async def _lista_de_zonas(session) -> list[dict]:
+    """La lista CERRADA de zonas: el bot elige un `id_zona` de aquí. No puede escribir otro."""
+    from app.models import ZonaEntrega
+
+    filas = (
+        await session.execute(
+            select(ZonaEntrega)
+            .where(ZonaEntrega.disponible.is_(True))
+            .order_by(ZonaEntrega.orden, ZonaEntrega.id)
+        )
+    ).scalars().all()
+    return [
+        {
+            "id_zona": z.id,
+            "zona": z.nombre,
+            "costo": float(z.costo),
+            "es_retiro": z.es_retiro,
+            "referencias": z.referencias,
+        }
+        for z in filas
+    ]
+
+
 async def registrar_pedido(
-    session, telefono, items, notas=None, entrega=None, entrega_fecha=None
+    session, telefono, items, notas=None, entrega=None, entrega_fecha=None, zona_id=None
 ):
+    """Registra el pedido. El TOTAL lo suma el CÓDIGO: productos + envío.
+
+    🔴 EL ENVÍO ES DINERO, así que va por el mismo "código de barras" que los productos: el bot
+    manda un `zona_id` de una lista CERRADA y **el costo lo pone el código**. Nunca lo escribe él.
+    (El 2026-07-13 el bot sumó $20 + $3 de cabeza y le dijo a una clienta REAL que el total en
+    bolívares eran "$23 USD". El prompt se lo prohibía dos veces. Lo que vive en el texto se rompe.)
+    """
+    from app.models import ZonaEntrega
+
     cliente = (
         await session.execute(select(Cliente).where(Cliente.telefono == telefono))
     ).scalar_one_or_none()
     if cliente is None:
         session.add(Cliente(telefono=telefono))
+
+    # ── LA ZONA (si la mandó): de la lista CERRADA, y su costo lo pone el CÓDIGO ──
+    zona = None
+    if zona_id is not None:
+        try:
+            zona = await session.get(ZonaEntrega, int(zona_id))
+        except (TypeError, ValueError):
+            zona = None
+        if zona is None or not zona.disponible:
+            return {
+                "ok": False,
+                "nota": (
+                    f"La zona {zona_id!r} no existe o no está disponible. NO la inventes ni "
+                    "deduzcas el costo: elige un `id_zona` EXACTO de la lista y vuelve a registrar "
+                    "el pedido COMPLETO. Si el sitio del cliente no calza con ninguna zona, "
+                    "pregúntale en cuál está; si sigue sin calzar, llama a `pedir_ayuda`."
+                ),
+                "zonas": await _lista_de_zonas(session),
+            }
 
     items_pedido = []
     total = Decimal("0")
@@ -980,6 +1045,15 @@ async def registrar_pedido(
 
     entrega_txt = str(entrega or "").strip() or None
 
+    # ══ LA SUMA DEL ENVÍO LA HACE EL CÓDIGO ══
+    # `total` hasta aquí = solo los productos. El envío se suma AQUÍ, con el costo que sale de la
+    # BD (nunca del modelo). Se guarda `subtotal_productos` porque el 20% de descuento en divisas
+    # se aplica SOLO a los productos: el flete se cobra completo, o la dueña estaría pagando el
+    # delivery de su bolsillo en cada venta pagada en dólares.
+    subtotal_productos = total
+    costo_envio = Decimal(str(zona.costo)) if zona is not None else Decimal("0")
+    total = subtotal_productos + costo_envio
+
     # CANDADO DE LA ENTREGA (por FECHA REAL, no por palabras). El bot pasa la fecha que
     # acordó con el cliente y el CÓDIGO la valida contra el calendario del negocio. Si no
     # sirve, le devuelve el motivo y LA PRIMERA FECHA BUENA (calculada aquí, no por el modelo).
@@ -1021,12 +1095,20 @@ async def registrar_pedido(
             pedido.entrega = entrega_txt
         if fecha_entrega:
             pedido.entrega_fecha = fecha_entrega
+        if zona is not None:
+            # CONGELADOS en el pedido: si mañana sube el envío, este pedido no cambia de precio.
+            pedido.zona_id = zona.id
+            pedido.zona_nombre = zona.nombre
+            pedido.costo_envio = costo_envio
         pedido.estado = "pendiente"  # vuelve a estar en armado; el cobro se genera de nuevo
         nuevo = False
     else:
         pedido = Pedido(
             cliente_telefono=telefono, items=items_pedido, total=total,
             notas=notas, entrega=entrega_txt, entrega_fecha=fecha_entrega,
+            zona_id=(zona.id if zona else None),
+            zona_nombre=(zona.nombre if zona else None),
+            costo_envio=costo_envio,
         )
         session.add(pedido)
         nuevo = True
@@ -1050,6 +1132,16 @@ async def registrar_pedido(
             linea += f" — {it['opciones']}"
         linea += f" = {_fmt_usd(subtotal)}"
         lineas.append(linea)
+
+    # EL ENVÍO VA EN EL RECIBO, EN SU PROPIA LÍNEA. Sin esto el total no cuadra con las líneas y
+    # el cliente NO puede cantar una zona mal elegida (cobrarle Barquisimeto $3 cuando vive en el
+    # oeste, que son $5). Es la misma red visible que el "paquete de 8 unidades".
+    if pedido.zona_nombre:
+        if pedido.costo_envio and Decimal(str(pedido.costo_envio)) > 0:
+            lineas.append(f"Envío a {pedido.zona_nombre} = {_fmt_usd(pedido.costo_envio)}")
+        else:
+            lineas.append(f"{pedido.zona_nombre} — sin costo")
+
     resumen = "\n".join(lineas) + f"\nTotal: {_fmt_usd(total)}"
     if pedido.entrega_fecha or pedido.entrega:
         # La entrega va en el RECIBO a propósito: el cliente confirma el día ANTES de pagar.
@@ -1327,6 +1419,24 @@ async def generar_datos_pago(session, telefono, pedido_id=None):
             ),
         }
 
+    # 🔴 CANDADO DEL ENVÍO (el bug de la clienta, 2026-07-13): NO SE COBRA SIN SABER SI ES RETIRO
+    # O DELIVERY — y a qué zona. Si no, el total sale SIN el envío (la dueña regala el flete) o el
+    # bot lo suma de cabeza (que es exactamente lo que hizo: "$20 + $3 = $23"). El candado va aquí,
+    # en la CAJA, y no solo en el registro: así ningún pedido viejo ni ningún camino raro se cuela.
+    if pedido.zona_id is None:
+        zonas = await _lista_de_zonas(session)
+        return {
+            "ok": False,
+            "nota": (
+                "todavía NO le puedes cobrar: falta saber CÓMO lo recibe. Pregúntale si lo retira "
+                "o si quiere delivery, y en ese caso EN QUÉ ZONA está (léele las zonas con su "
+                "costo). Después vuelve a registrar el pedido COMPLETO pasando el `zona_id` que "
+                "corresponda. NUNCA sumes tú el envío ni lo estimes: el costo lo pone el sistema. "
+                "Si el sitio del cliente no calza con ninguna zona, llama a `pedir_ayuda`."
+            ),
+            "zonas": zonas,
+        }
+
     try:
         tasa = await obtener_tasa_bcv()
     except Exception:  # noqa: BLE001
@@ -1336,7 +1446,14 @@ async def generar_datos_pago(session, telefono, pedido_id=None):
     monto_bs = (monto_usd * tasa).quantize(Decimal("0.01"))
     # 20% de descuento por pagar en DIVISAS (Zelle, Binance o efectivo en dólares).
     # En Bs (Pago Móvil/transferencia) NO aplica: va el precio completo.
-    monto_usd_divisas = (monto_usd * Decimal("0.80")).quantize(Decimal("0.01"))
+    #
+    # 🔴 EL DESCUENTO NO TOCA EL FLETE (fuga encontrada al ATACAR el diseño, antes de construirlo):
+    # si se aplicara al total, ($20 + $3) × 0,80 = $18,40 ⇒ la dueña estaría **pagando el delivery
+    # de su bolsillo** en CADA venta cobrada en dólares ($0,60 en la zona de $3, $1 en la de $5).
+    # El descuento es sobre lo que ella produce, no sobre lo que le cuesta el motorizado.
+    envio = Decimal(str(pedido.costo_envio or 0))
+    productos = monto_usd - envio
+    monto_usd_divisas = (productos * Decimal("0.80")).quantize(Decimal("0.01")) + envio
 
     pedido.estado = "esperando_pago"
     await session.commit()
@@ -1628,7 +1745,14 @@ async def registrar_comprobante(
     if monto_leido is not None and monto_usd is not None:
         try:
             leido = Decimal(str(monto_leido))
-            en_divisas = (monto_usd * Decimal("0.80")).quantize(Decimal("0.01"))
+            # ⚠️ EL MISMO DESCUENTO QUE EN `generar_datos_pago`, Y POR EL MISMO MOTIVO: el 20% NO
+            # toca el flete. Si aquí se calculara sobre el total y allá sobre los productos, el
+            # comprobante del cliente NO CALZARÍA con lo cobrado y el pago quedaría marcado como
+            # "no cuadra" en cada venta con delivery pagada en dólares.
+            _envio = Decimal(str(getattr(pedido, "costo_envio", 0) or 0))
+            en_divisas = (
+                ((monto_usd - _envio) * Decimal("0.80")).quantize(Decimal("0.01")) + _envio
+            )
             # Tolerancia del 2% (redondeos). Se compara contra el monto en DÓLARES: si el
             # comprobante viene en Bs, el número es mil veces mayor y no calza con ninguno.
             def _calza(a: Decimal, b: Decimal) -> bool:

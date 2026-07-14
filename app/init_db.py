@@ -181,6 +181,12 @@ async def main() -> None:
         await session.commit()
         logger.info("Migracion 022b (tamaños: datos) aplicada")
 
+        # 023: EL DELIVERY — las zonas y su costo (el "código de barras" del envío).
+        for stmt in _statements(MIGRATIONS / "023_zonas_entrega.sql"):
+            await session.execute(text(stmt))
+        await session.commit()
+        logger.info("Migracion 023 (zonas de entrega) aplicada")
+
         # El admin se crea/verifica siempre, exista o no el catálogo
         await _crear_admin(session)
 

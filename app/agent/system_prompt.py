@@ -533,6 +533,60 @@ async def _ficha_cliente_texto(telefono: str) -> str:
     return "FICHA DEL CLIENTE:\n" + "\n".join(partes)
 
 
+async def _zonas_bloque() -> str:
+    """LAS ZONAS DE ENTREGA — la lista CERRADA del envío (el 'código de barras' del delivery).
+
+    🔴 Nació de un caso real (2026-07-13): el bot le dijo a una clienta *"el total en bolívares es
+    de $23 USD"* porque sumó $20 del producto + $3 del delivery **de cabeza**. El prompt se lo
+    prohibía DOS VECES y lo hizo igual. La causa: **el sistema no sabía cobrar delivery**, y cuando
+    algo no existe, el modelo lo inventa.
+
+    Ahora el bot NO ESCRIBE el envío: ELIGE un `id_zona` de esta lista, y **el costo lo pone el
+    código**. El precio va aquí a la vista (a diferencia del catálogo) porque el cliente TIENE que
+    poder oírlo antes de decidir: sin eso, no puede cantar una zona mal elegida.
+    """
+    from app.models import ZonaEntrega
+
+    factory = get_session_factory()
+    async with factory() as session:
+        zonas = (
+            await session.execute(
+                select(ZonaEntrega)
+                .where(ZonaEntrega.disponible.is_(True))
+                .order_by(ZonaEntrega.orden, ZonaEntrega.id)
+            )
+        ).scalars().all()
+    if not zonas:
+        # Sin zonas cargadas, el bot NO puede cobrar un envío (generar_datos_pago lo rechaza).
+        # Se lo decimos aquí para que escale en vez de improvisar.
+        return (
+            "\n\nENTREGAS: la dueña todavía NO ha cargado las zonas de envío. Puedes hablar de "
+            "retiro y de delivery, pero NO puedes decir cuánto cuesta el envío ni cobrarlo: si el "
+            "cliente quiere delivery, llama a `pedir_ayuda`."
+        )
+
+    lineas = []
+    for z in zonas:
+        costo = "sin costo" if not z.costo or float(z.costo) == 0 else f"${float(z.costo):g}"
+        linea = f"- {z.nombre} = {costo} (id_zona={z.id})"
+        if z.es_retiro:
+            linea += " [el cliente lo RETIRA]"
+        if z.referencias:
+            linea += f" — incluye: {z.referencias}"
+        lineas.append(linea)
+
+    return (
+        "\n\nZONAS DE ENTREGA (lista CERRADA — el envío es DINERO):\n"
+        + "\n".join(lineas)
+        + "\n· Antes de cobrar, pregunta si lo RETIRA o quiere DELIVERY, y pásale a "
+          "`registrar_pedido` el `id_zona` que corresponda. El sistema le suma el envío al total: "
+          "TÚ NUNCA lo sumes, ni lo estimes, ni lo descuentes.\n"
+        "· Si el sitio que dice el cliente NO calza claramente con una zona, LÉELE las zonas con "
+        "su costo y pregúntale en cuál está. Si sigue sin calzar, llama a `pedir_ayuda`. JAMÁS "
+        "adivines la zona, ni elijas la más barata para cerrar la venta."
+    )
+
+
 async def construir_partes_prompt(
     nombre_cliente: str | None = None, telefono: str | None = None
 ) -> tuple[str, str]:
@@ -544,6 +598,7 @@ async def construir_partes_prompt(
       sin cachear. (Best practice: lo fijo primero, lo variable al final.)"""
     estable = await leer_personalidad() + "\n" + _REGLAS
     estable += await _catalogo_bloque()
+    estable += await _zonas_bloque()
     indice = await _conocimiento_indice()
     if indice:
         estable += (
