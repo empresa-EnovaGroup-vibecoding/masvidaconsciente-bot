@@ -1,5 +1,6 @@
 """TANDA 2 — las dos redes: la del RELEVO (promesa sin aviso) y la de la HONESTIDAD."""
 from app.agent.agent import (
+    _afirma_envio_fotos,
     _afirma_pedido_registrado,
     _frase_prohibida,
     _promete_averiguar,
@@ -108,6 +109,27 @@ PEDIDO_FANTASMA = [
     ("El total es $28. Te paso los datos de pago", False),
 ]
 
+# ── 5. LA RED DEL ENVÍO FANTASMA DE FOTOS: "no digas que las mandaste si NO las mandaste" ──
+# Caso REAL (2026-07-14, confirmado en el LOG del worker): el cliente pidió "Mándame la foto
+# de la torta keto" y el bot contestó "Ya te la envié hace poco 💚" — UNA sola llamada al
+# modelo, CERO llamadas a enviar_fotos_producto. La trampa: la frase NO trae la palabra
+# "foto" (el «la» viene del mensaje del cliente) — por eso la red mira TAMBIÉN qué pidió él.
+FOTOS_FANTASMA = [
+    # (texto del bot, ¿el cliente pidió fotos?, ¿debe frenar?)
+    ("Ya te la envié hace poco 💚", True, True),                       # EL CASO REAL
+    ("Ahí tienes las fotos de la Torta Keto 💚", False, True),         # con la palabra "fotos"
+    ("Listo, ahí van las fotos 💚", False, True),
+    ("Te las acabo de mandar 💚", True, True),
+    ("Te mando la foto ahorita", True, True),                          # presente = "te agendo"
+    # Lo que NO debe frenar (frenar de más rompe la venta):
+    ("¿Te mando la foto del quesillo?", True, False),                  # pregunta
+    ("¿Quieres ver fotos del pan keto?", False, False),                # pregunta
+    ("Si quieres te mando la foto del quesillo", True, False),         # condicional/oferta
+    ("De ese no tengo fotos por ahora, pero tengo el catálogo 💚", True, False),  # la verdad
+    ("Ya te la envié hace poco", False, False),      # sin foto de por medio, no es de esta red
+    ("La torta keto es sin gluten y sin azúcar refinada 💚", True, False),
+]
+
 fallos = 0
 print("\n1) RED DEL RELEVO — 'si prometes averiguar, TIENES que avisarle a la dueña'")
 for texto, esperado in PROMESAS:
@@ -147,6 +169,15 @@ for texto, esperado in PEDIDO_FANTASMA:
     accion = "FRENA (no salió)" if got else "pasa           "
     print(f"   {marca} {accion} | {texto[:58]}")
 
+print("\n5) RED DEL ENVÍO FANTASMA DE FOTOS — 'no digas que las mandaste si NO las mandaste'")
+for texto, pidio, esperado in FOTOS_FANTASMA:
+    got = _afirma_envio_fotos(texto, pidio)
+    ok = got == esperado
+    fallos += 0 if ok else 1
+    marca = "[OK ]" if ok else "[MAL]"
+    accion = "FRENA (no salió)" if got else "pasa           "
+    print(f"   {marca} {accion} | pidió_fotos={'sí' if pidio else 'no'} | {texto[:52]}")
+
 print()
-print("   ✅ LAS CUATRO REDES FUNCIONAN" if not fallos else f"   🔴 {fallos} CASO(S) MAL")
+print("   ✅ LAS CINCO REDES FUNCIONAN" if not fallos else f"   🔴 {fallos} CASO(S) MAL")
 raise SystemExit(1 if fallos else 0)

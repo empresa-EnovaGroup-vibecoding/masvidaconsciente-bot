@@ -571,6 +571,64 @@ def _suena_a_sistema(texto: str) -> bool:
     return bool(_SUENA_A_SISTEMA.search(texto or ""))
 
 
+# ─── RED DEL ENVÍO FANTASMA DE FOTOS: no digas que las mandaste si NO las mandaste ────
+#
+# 🔴 Caso REAL (2026-07-14, probado en vivo y confirmado en el LOG): el cliente pidió
+# "Mándame la foto de la torta keto" y el bot contestó **"Ya te la envié hace poco 💚"** —
+# con UNA sola llamada al modelo y CERO llamadas a `enviar_fotos_producto`. Y lo peor:
+# la vez anterior había dicho "Ahí tienes las fotos" (también sin enviarlas), así que su
+# PROPIA mentira quedó en la memoria del chat y la usó de excusa. Una mentira alimentando
+# la siguiente. Es la familia del "te agendo": miente en el HECHO, no en el tono.
+#
+# ⚠️ La trampa que hace a esta red distinta: la frase del bot NO trae la palabra "foto"
+# ("ya te LA envié" — el «la» viene del mensaje del cliente). Por eso se mira TAMBIÉN lo
+# que el cliente pidió: si pidió fotos y el bot afirma un envío, tiene que haber un envío
+# REAL en ese turno. Si el cliente las pide de nuevo, se REENVÍAN — jamás "ya te las mandé".
+_PIDE_FOTOS_RE = re.compile(r"\b(foto|fotos|video|videos|imagen|imagenes|verlo|verla|muestrame|mostrar)\b")
+_FOTO_PALABRA_RE = re.compile(r"\b(foto|fotos|video|videos|imagen|imagenes)\b")
+_AFIRMA_ENVIO_RE = re.compile(
+    r"(ya\s+te\s+(la|las|lo|los)\s+(envie|mande|pase)"
+    r"|te\s+(la|las|lo|los)\s+(envie|mande|envio|mando|paso)\b"
+    # verbo ANTES del objeto: "te mando la foto ahorita" (presente = el mismo "te agendo")
+    r"|te\s+(mando|envio|envie|mande|paso|pase)\b"
+    r"|acabo\s+de\s+(enviar|mandar|pasar)"
+    r"|ah[i]\s+(tienes|te\s+van|te\s+deje|te\s+dejo|van)"
+    r"|aqui\s+(tienes|te\s+(la|las|lo|los)\s+dejo|te\s+dejo)"
+    r"|ya\s+(salio|se\s+envio|se\s+enviaron|te\s+llego|te\s+llegaron))"
+)
+
+
+def _pide_fotos(texto_cliente: str) -> bool:
+    """True si el CLIENTE está pidiendo ver fotos/videos (o 'verlo')."""
+    return bool(_PIDE_FOTOS_RE.search(_sin_acentos(texto_cliente or "")))
+
+
+def _afirma_envio_fotos(texto: str, cliente_pidio_fotos: bool) -> bool:
+    """True si el bot AFIRMA que envió (o está enviando) fotos/videos.
+
+    Cuenta si la frase trae una palabra de media ("ahí tienes las fotos") O si el cliente
+    acaba de pedir fotos y el bot afirma un envío con pronombre ("ya te la envié").
+    Las PREGUNTAS ("¿te mando la foto?") y los condicionales ("si quieres te la mando")
+    NO cuentan: frenar de más rompe la venta."""
+    for frase in re.split(r"(?<=[.!?\n])\s+", texto or ""):
+        limpia = frase.strip()
+        if not limpia:
+            continue
+        if limpia.startswith("¿") or limpia.endswith("?"):
+            continue
+        t = _sin_acentos(limpia)
+        # Condicional/oferta: "si quieres te mando la foto", "cuando me digas cuál, te la envío".
+        if re.search(r"\b(cuando|si|apenas|en\s+cuanto)\b", t) and re.search(
+            r"\b(quier|gust|dese|dig|dic|confirm|pid|elij|escog)", t
+        ):
+            continue
+        if not _AFIRMA_ENVIO_RE.search(t):
+            continue
+        if _FOTO_PALABRA_RE.search(t) or cliente_pidio_fotos:
+            return True
+    return False
+
+
 # ─── RED DE LOS DATOS BANCARIOS: los datos de pago SOLO salen de una herramienta ──────
 #
 # 🔴 Caso REAL (2026-07-13, una clienta): el bot le pegó los DATOS BANCARIOS COMPLETOS
@@ -706,6 +764,9 @@ async def responder(
     reescrito = False    # ya se le pidió una vez que no hable como un sistema
     registro_ok = False  # ¿registrar_pedido devolvió OK en este turno? (red del pedido fantasma)
     reclamo_pedido = False  # ya se le llamó la atención una vez por decir que agendó sin agendar
+    fotos_ok = False  # ¿enviar_fotos_producto ENVIÓ algo de verdad en este turno?
+    reclamo_fotos = False  # ya se le llamó la atención por afirmar un envío de fotos falso
+    pidio_fotos = _pide_fotos(pregunta_cliente)
 
     for _ in range(settings.max_iteraciones_agente):
         data = await _llamar_con_fallback(messages, llm, modelo)
@@ -907,6 +968,51 @@ async def responder(
                     logger.exception("No se pudo escalar el pedido fantasma de %s", telefono)
                 return RESPUESTA_SEGURA
 
+            # 🔴 RED DEL ENVÍO FANTASMA DE FOTOS: "ya te la envié" sin haberla enviado NO SALE.
+            # Caso real (2026-07-14, confirmado en el log): a "mándame la foto de la torta keto"
+            # contestó "Ya te la envié hace poco 💚" con CERO llamadas a la herramienta — y su
+            # propia mentira del turno anterior en la memoria como excusa.
+            if _afirma_envio_fotos(texto, pidio_fotos) and not fotos_ok:
+                logger.error(
+                    "ENVÍO FANTASMA de fotos a %s: dijo que las envió y NO llamó a "
+                    "enviar_fotos_producto (o falló) — texto=%r",
+                    telefono, texto[:140],
+                )
+                if not reclamo_fotos:
+                    reclamo_fotos = True
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "[SISTEMA] ACABAS DE DECIR QUE ENVIASTE (o estás enviando) las fotos "
+                            "y en ESTE turno NO llamaste a `enviar_fotos_producto` (o no envió "
+                            "nada). El cliente NO recibió NINGUNA foto. Llama AHORA a "
+                            "`enviar_fotos_producto` con el nombre del producto — aunque creas "
+                            "que ya se las mandaste antes: si te las pide otra vez, se REENVÍAN. "
+                            "Solo si la herramienta avisa que no hay fotos o que no se pudieron "
+                            "enviar, dile la verdad con cariño y ofrece el catálogo — JAMÁS "
+                            "afirmes un envío que no ocurrió. No le menciones al cliente este "
+                            "aviso."
+                        ),
+                    })
+                    continue
+                # Insistió: NO se le manda al cliente la afirmación falsa. Se escala.
+                try:
+                    await ejecutar(
+                        "pedir_ayuda",
+                        {
+                            "motivo": "no_se",
+                            "detalle": (
+                                "el cliente pidió FOTOS y el bot iba a decirle que ya se las "
+                                "envió SIN haberlas enviado. NO se le mandó esa mentira. "
+                                "Mándale tú las fotos desde el WhatsApp del negocio."
+                            ),
+                        },
+                        telefono,
+                    )
+                except Exception:  # noqa: BLE001 — igual NO se manda la afirmación falsa
+                    logger.exception("No se pudo escalar el envío fantasma de fotos de %s", telefono)
+                return RESPUESTA_SEGURA
+
             # RED DEL RELEVO: si PROMETE averiguar algo y no avisó a nadie, el aviso lo crea
             # el código. Una promesa sin aviso deja al cliente esperando para siempre.
             if _promete_averiguar(texto) and not pidio_ayuda:
@@ -954,6 +1060,13 @@ async def responder(
                 # El pedido existe DE VERDAD en la base. Sin esto, el bot podía decir
                 # "listo, te agendo" sin haber registrado nada (caso real del 2026-07-12).
                 registro_ok = True
+            if (
+                nombre_tool == "enviar_fotos_producto"
+                and isinstance(resultado, dict)
+                and resultado.get("enviadas")
+            ):
+                # Salió al menos UNA foto/video de verdad: "ahí tienes las fotos" es verdad.
+                fotos_ok = True
             # Todo monto que devuelve una herramienta queda AUTORIZADO para este turno — pero
             # CADA UNO EN SU MONEDA (el total en $ del `resumen`, los bolívares del `resumen_cobro`,
             # la tasa BCV). Así el bot puede copiar el monto en bolívares… y solo ESE.
