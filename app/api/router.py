@@ -1566,8 +1566,13 @@ async def guardar_notas_cliente(telefono: str, datos: NotasIn, _: str = Depends(
     return {"ok": True}
 
 
-def _disparar_retomar(telefono: str, nombre: str | None) -> None:
+def _disparar_retomar(telefono: str, nombre: str | None, pausado_por: str | None = None) -> None:
     """LA DUEÑA DEVOLVIÓ EL CHAT: que el bot CONTESTE lo que quedó pendiente.
+
+    `pausado_por` (la FIRMA del freno, leída ANTES de borrarla) decide si el cliente sigue
+    esperando: si lo pausó el BOT, es que escaló algo y su "te lo confirmo enseguida" era un
+    PAGARÉ, no una respuesta — y hay que pagarlo. Sin esta firma, el bot se quedaba MUDO
+    justo en el caso estrella (el precio del día). Ver `_retomar` en tasks.py.
 
     Hasta hoy, devolver el chat solo apagaba la bandera de pausa. Pero el bot únicamente habla
     cuando ENTRA un mensaje nuevo por el webhook, y los mensajes que el cliente escribió durante
@@ -1584,7 +1589,7 @@ def _disparar_retomar(telefono: str, nombre: str | None) -> None:
     try:
         from app.workers.tasks import retomar_chat
 
-        retomar_chat.apply_async((telefono, nombre))
+        retomar_chat.apply_async((telefono, nombre, pausado_por))
     except Exception:  # noqa: BLE001 — el chat YA quedó devuelto; esto es solo el disparador
         logger.exception("No se pudo encolar el retomar del chat de %s", telefono)
 
@@ -1599,6 +1604,9 @@ async def pausar_bot_cliente(telefono: str, datos: PausaIn, _: str = Depends(usu
         ).scalar_one_or_none()
         if cliente is None:
             raise HTTPException(status_code=404, detail="Cliente no encontrado")
+        # La FIRMA de quién había apretado el freno, ANTES de borrarla: decide si el cliente
+        # todavía está esperando una respuesta que el bot le prometió. Ver `_retomar`.
+        firma_previa = cliente.pausado_por
         cliente.bot_pausado = datos.pausado
         # Este botón lo aprieta UNA PERSONA: queda firmado como 'dueña' para que el bot se
         # calle del todo. Al devolver el chat, la firma se borra. Ver migración 020.
@@ -1606,7 +1614,7 @@ async def pausar_bot_cliente(telefono: str, datos: PausaIn, _: str = Depends(usu
         nombre = cliente.nombre
         await session.commit()
     if not datos.pausado:
-        _disparar_retomar(telefono, nombre)
+        _disparar_retomar(telefono, nombre, firma_previa)
     return {"ok": True, "pausado": datos.pausado}
 
 
@@ -1681,6 +1689,9 @@ _MOTIVO_TEXTO = {
     # Le devolviste el chat al bot, pero pasaron +24h desde el último mensaje del cliente:
     # WhatsApp no deja escribirle. El bot NO le escribió (lado seguro) y te lo avisa a ti.
     "ventana_cerrada": "Pasaron 24h: el bot no puede escribirle",
+    # La red del dinero tumbó lo que el bot iba a decir (un monto inventado, una frase prohibida).
+    # Al cliente solo le llegó un acuse: la conversación la termina una persona.
+    "bot_frenado": "Frené un mensaje del bot: entra tú",
 }
 
 
@@ -1730,7 +1741,7 @@ async def resolver_intervencion(
     """La dueña ya atendió ese chat: cierra el aviso y (por defecto) REACTIVA el bot,
     para que vuelva a atender a ese cliente — y le CONTESTE lo que quedó pendiente."""
     factory = get_session_factory()
-    devolver: tuple[str, str | None] | None = None
+    devolver: tuple[str, str | None, str | None] | None = None
     async with factory() as session:
         inter = await session.get(Intervencion, intervencion_id)
         if inter is None:
@@ -1744,9 +1755,12 @@ async def resolver_intervencion(
                 )
             ).scalar_one_or_none()
             if cliente is not None:
+                # Este es EL CASO ESTRELLA: casi siempre `pausado_por` == 'bot' (el bot escaló
+                # porque no sabía el precio del día). Esa firma es lo que le dice al bot que el
+                # cliente SIGUE esperando, aunque el último mensaje del chat sea suyo.
+                devolver = (cliente.telefono, cliente.nombre, cliente.pausado_por)
                 cliente.bot_pausado = False
                 cliente.pausado_por = None
-                devolver = (cliente.telefono, cliente.nombre)
         await session.commit()
     if devolver:
         _disparar_retomar(*devolver)

@@ -166,15 +166,39 @@ def _asegurar_saludo(texto: str, mensaje_usuario: str, nombre_cliente: str | Non
 # (precios reales de la BD), (b) lo que devolvieron las herramientas en ESTE turno (totales,
 # subtotales, Bs, tasa), o (c) lo que el propio cliente escribió ("tengo $40"). Todo lo demás
 # es inventado.
+#
+# 🔥 AUTO-BLINDAJE (auditoría de arquitectura, 2026-07-13). La red tenía DOS agujeros por los que
+# se colaba dinero inventado, y se demostraron EJECUTANDO el regex, no leyéndolo:
+#
+#   1. Solo veía "$28" y "28 bs". Era CIEGA a "28$", "28 dólares" y "28 USD" — y el propio prompt
+#      le enseña al bot a escribir el precio pegado ("Pan keto 25$"). O sea: la red no sabía leer
+#      el formato que el sistema le pide usar.
+#   2. Peor: "son 5.000 Bs" PASABA. Al monto se le sacaban TODAS las lecturas posibles (5.000 se
+#      leía como cinco mil Y como 5) y bastaba con que UNA estuviera autorizada. Como el 5 casi
+#      siempre está (es el precio de algo), **cualquier cifra en bolívares con punto de miles se
+#      autorizaba a sí misma**. Justo el carril donde el bot cobra de verdad.
+#
+# La lectura ambigua sigue existiendo donde SÍ es ambigua ("22.40" puede ser 22,40 o 2.240), pero
+# "5.000" NO es ambiguo: en Venezuela son CINCO MIL. Un punto seguido de exactamente 3 cifras son
+# MILES, y punto. Se acabó la auto-autorización.
 _MONTO_RE = re.compile(
-    r"(?:\$\s*([\d.,]+)|([\d.,]+)\s*(?:bs\b|bolívares|bolivares))",
+    r"(?:\$\s*([\d.,]+)"                                         # $28
+    r"|([\d.,]+)\s*\$"                                           # 28$   (lo que el prompt le pide)
+    r"|([\d.,]+)\s*(?:bs\b|bol[íi]vares|d[óo]lares|dolares|usd\b))",  # 28 Bs · 28 dólares · 28 USD
     re.IGNORECASE,
 )
+
+_MILES_RE = re.compile(r"^\d{1,3}(\.\d{3})+$")      # 5.000 · 31.936  -> MILES, sin ambigüedad
+_MILES_COMA_RE = re.compile(r"^\d{1,3}(,\d{3})+$")  # 5,000 · 31,936  -> MILES (formato gringo)
 
 
 def _numeros_de(texto: str) -> set[float]:
     """Todos los números que aparecen en un texto, en las dos lecturas posibles del formato
-    venezolano (1.234,56 y 1,234.56), para no dar por inventado algo que sí está."""
+    venezolano (1.234,56 y 1,234.56), para no dar por inventado algo que sí está.
+
+    Se usa para construir la lista de AUTORIZADOS: aquí ser generoso es SEGURO (autorizar de más
+    solo evita frenar un mensaje bueno). Lo que NO puede ser generoso es la lectura de lo que el
+    bot ESCRIBE — para eso está `_lecturas_del_monto`."""
     encontrados: set[float] = set()
     for crudo in re.findall(r"\d[\d.,]*", texto or ""):
         for variante in (
@@ -189,15 +213,42 @@ def _numeros_de(texto: str) -> set[float]:
     return encontrados
 
 
+def _lecturas_del_monto(crudo: str) -> set[float]:
+    """Las lecturas PLAUSIBLES de un monto que el bot escribió. A diferencia de `_numeros_de`,
+    esta NO regala lecturas: si el número lleva punto de MILES ("5.000"), la única lectura es
+    CINCO MIL — no 5. Ese regalo era el agujero: con él, cualquier monto en bolívares se
+    autorizaba solo, porque su lectura chiquita casi siempre estaba en el catálogo."""
+    crudo = (crudo or "").strip().rstrip(".,")
+    if not crudo:
+        return set()
+    # Miles inequívocos: 5.000 / 31.936 / 1.234.567 (y su gemelo gringo 5,000).
+    if _MILES_RE.match(crudo):
+        return _num(crudo.replace(".", ""))
+    if _MILES_COMA_RE.match(crudo):
+        return _num(crudo.replace(",", ""))
+    if "." in crudo and "," in crudo:
+        # Lleva los dos: manda el ÚLTIMO (es el decimal). 31.936,21 -> 31936.21 · 31,936.21 -> igual
+        if crudo.rfind(",") > crudo.rfind("."):
+            return _num(crudo.replace(".", "").replace(",", "."))
+        return _num(crudo.replace(",", ""))
+    # Un solo separador y no es patrón de miles: ambiguo de verdad (22.40 / 22,40) -> las dos.
+    return _num(crudo.replace(",", ".")) | _num(crudo.replace(",", "").replace(".", ""))
+
+
+def _num(s: str) -> set[float]:
+    try:
+        return {round(float(s), 2)}
+    except ValueError:
+        return set()
+
+
 def _montos_del_mensaje(texto: str) -> list[tuple[str, set[float]]]:
-    """Los montos de DINERO ($ o Bs) que el bot escribió, cada uno con TODAS sus lecturas
-    posibles. "$22.40" puede leerse 22,40 (decimal) o 2.240 (miles): si CUALQUIERA de las dos
-    está autorizada, el monto es bueno. Preferimos dejar pasar algo dudoso antes que frenar
-    un mensaje correcto (frenar de más también rompe la venta)."""
+    """Los montos de DINERO ($ · Bs · dólares · USD) que el bot escribió, cada uno con sus
+    lecturas PLAUSIBLES (ver `_lecturas_del_monto`: los miles ya no se leen como unidades)."""
     montos: list[tuple[str, set[float]]] = []
     for m in _MONTO_RE.finditer(texto or ""):
-        crudo = m.group(1) or m.group(2) or ""
-        lecturas = _numeros_de(crudo)
+        crudo = m.group(1) or m.group(2) or m.group(3) or ""
+        lecturas = _lecturas_del_monto(crudo)
         if lecturas:
             montos.append((crudo, lecturas))
     return montos
@@ -323,16 +374,33 @@ def _afirma_pedido_registrado(texto: str) -> bool:
 # "Soy Whuilianny 💚 Sí, soy yo". Mentirle al cliente sobre el DINERO o sobre QUIÉN ES es lo
 # más grave que puede hacer: quema la marca y, siendo Tech Provider de Meta, arriesga la
 # cuenta de TODOS los clientes.
-_PROHIBIDO = [
-    # Afirmar que miró el banco / que el pago entró (solo la dueña lo sabe, desde SU banco).
-    (re.compile(r"(revis|verifi|chequ|mir)\w*\s+(en\s+)?(mi|el|tu)\s+(banco|cuenta)", re.I),
-     "dijo que revisó el banco"),
-    (re.compile(r"(mi|el)\s+banco\s+(ya\s+)?(me\s+)?(confirm|avis|lleg)", re.I),
-     "dijo que el banco confirmó"),
+#
+# 🔴 DOS GRUPOS, Y LA DIFERENCIA IMPORTA (auditoría de arquitectura, 2026-07-13):
+#
+#   · _PROHIBIDO_SIEMPRE = mentiras que son falsas SIEMPRE, en cualquier carril y pase lo que
+#     pase: el bot NO tiene banco, NO es una persona y NO es médica. Ninguna situación del sistema
+#     puede volverlas ciertas. Estas se aplican TAMBIÉN al carril del dinero (el comprobante y el
+#     aviso de pago), que hasta hoy no tenía NINGUNA red.
+#   · _PROHIBIDO_EN_CHARLA = frases que en una conversación normal son mentira (el bot no puede
+#     saber si el pago llegó)… pero que en el carril del PAGO son justo lo que el código le ORDENA
+#     decir: cuando el cliente manda el comprobante, la situación dice literalmente "dile que
+#     recibiste su pago"; y cuando la dueña RECHAZA un pago, hay que poder decírselo al cliente.
+#     Aplicarlas allí mataría el mensaje CORRECTO. Por eso van aparte.
+#
+# (Antes eran una sola lista y por eso no se podía proteger el carril del dinero sin romperlo.)
+_PROHIBIDO_EN_CHARLA = [
     (re.compile(r"(ya\s+)?(me\s+)?(lleg[óo]|entr[óo]|recib[íi])\s+(tu|el)\s+pago\b", re.I),
      "afirmó que el pago ya llegó"),
     (re.compile(r"no\s+(me\s+)?(ha\s+)?(lleg\w+|aparec\w+)\s+(tu|el|ning[úu]n)\s+pago", re.I),
      "afirmó que el pago NO llegó"),
+]
+
+_PROHIBIDO_SIEMPRE = [
+    # Afirmar que miró el banco (el bot NO tiene banco: eso solo lo sabe la dueña, en el suyo).
+    (re.compile(r"(revis|verifi|chequ|mir)\w*\s+(en\s+)?(mi|el|tu)\s+(banco|cuenta)", re.I),
+     "dijo que revisó el banco"),
+    (re.compile(r"(mi|el)\s+banco\s+(ya\s+)?(me\s+)?(confirm|avis|lleg)", re.I),
+     "dijo que el banco confirmó"),
     # Jurar que es humana cuando le preguntan de frente.
     (re.compile(r"(no\s+soy\s+un[a]?\s+(bot|robot|m[áa]quina|ia|inteligencia))", re.I),
      "negó ser un asistente virtual"),
@@ -375,6 +443,19 @@ _PROHIBIDO = [
      "opinó sobre un medicamento"),
 ]
 
+# En la CHARLA se aplican las dos listas (el bot ahí no sabe nada del banco).
+_PROHIBIDO = _PROHIBIDO_SIEMPRE + _PROHIBIDO_EN_CHARLA
+
+
+def frase_prohibida_siempre(texto: str) -> str | None:
+    """Las mentiras que NINGUNA situación puede volver ciertas: el bot no tiene banco, no es una
+    persona y no es médica. Se usa en el carril del DINERO (comprobante / aviso de pago), donde
+    hasta hoy el modelo escribía SIN ninguna red."""
+    for patron, que in _PROHIBIDO_SIEMPRE:
+        if patron.search(texto or ""):
+            return que
+    return None
+
 
 def _frase_prohibida(texto: str) -> str | None:
     for patron, que in _PROHIBIDO:
@@ -409,14 +490,22 @@ async def responder(
     historial: list | None = None,
     nombre_cliente: str | None = None,
     *,
+    pregunta_cliente: str | None = None,
     llm=_llamar_openrouter,
     ejecutar=ejecutar_tool,
 ) -> str:
     """Devuelve el texto de respuesta para enviar al cliente.
 
+    `pregunta_cliente`: lo que el CLIENTE preguntó de verdad, para los avisos a la dueña. Casi
+    siempre es `mensaje_usuario` — pero en el RETOMAR, `mensaje_usuario` es una orden interna
+    ("[SISTEMA] vuelves a atender este chat…") y no un mensaje del cliente. Sin esto, el aviso de
+    la bandeja le decía a la dueña: *El cliente preguntó: "[SISTEMA] Vuelves a atender…"*. Basura
+    en el único sitio donde ella mira para entender qué pasa.
+
     `llm` y `ejecutar` son inyectables para poder testear el loop sin
     llamar a OpenRouter ni a la base de datos reales.
     """
+    pregunta_cliente = pregunta_cliente or mensaje_usuario
     # La parte ESTABLE del prompt se marca con cache_control: el proveedor la cachea y la
     # cobra a ¼ en los siguientes mensajes (mismo prompt → misma calidad, solo más barato).
     # La parte DINÁMICA (hora, ficha, estado) va aparte, sin cachear.
@@ -624,7 +713,7 @@ async def responder(
                             "motivo": "no_se",
                             "detalle": (
                                 f'el bot le prometió al cliente que le confirma algo que NO sabe. '
-                                f'El cliente preguntó: "{(mensaje_usuario or "")[:160]}"'
+                                f'El cliente preguntó: "{(pregunta_cliente or "")[:160]}"'
                             ),
                         },
                         telefono,
@@ -672,8 +761,25 @@ async def responder(
     return RESPUESTA_SEGURA
 
 
+async def _pedir_redaccion(messages: list, modelo: str) -> str:
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.post(
+            OPENROUTER_URL,
+            headers={"Authorization": f"Bearer {settings.openrouter_api_key}"},
+            json={"model": modelo, "messages": messages, "temperature": 0.7},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return (data["choices"][0]["message"].get("content") or "").strip()
+
+
 async def redactar_mensaje(
-    situacion: str, historial: list | None = None, nombre: str | None = None
+    situacion: str,
+    historial: list | None = None,
+    nombre: str | None = None,
+    telefono: str | None = None,
+    *,
+    montos_ok: set[float] | None = None,
 ) -> str:
     """Redacta un mensaje natural para el cliente en la voz de Whuilianny.
 
@@ -681,8 +787,28 @@ async def redactar_mensaje(
     para que cada mensaje salga distinto y humano. Se usa para momentos que
     dispara el sistema (comprobante recibido, pago confirmado/rechazado), donde
     no hay un texto del cliente que responder pero hay que decir algo con calidez.
+
+    🔴 LA PUERTA DEL DINERO, QUE NO TENÍA GUARDIA (auditoría de arquitectura, 2026-07-13).
+    Esta función devolvía el texto del modelo **TAL CUAL**, sin UNA SOLA comprobación — y es la
+    que habla en los TRES momentos del dinero: cuando entra el comprobante, cuando el monto NO
+    cuadra, y cuando la dueña confirma o rechaza un pago. El caso feo, con el código delante: en
+    un pago parcial el sistema le pasa "faltan Bs 1.200" y el modelo remataba con "…o sea unos
+    $12 más" — un dólar inventado, con una tasa inventada, directo al cliente. Y la frase "revisé
+    mi banco y no me aparece tu pago" (la que ya explotó una vez, y que ESTÁ en la lista de
+    prohibidas) salía por aquí sin que nadie la mirara, porque la lista solo se aplicaba en el
+    otro camino.
+
+    Ahora pasa por la MISMA red del dinero (`_dinero_inventado`) y por las mentiras que NINGUNA
+    situación puede volver ciertas (`frase_prohibida_siempre`: el banco, la identidad, la salud).
+    Lo que la situación SÍ le manda decir ("recibí tu pago", "no me llegó") no se toca: para eso
+    están las dos listas separadas.
+
+    Devuelve "" si el mensaje no se puede salvar ni corrigiéndolo. El que llama NO debe callarse:
+    manda un acuse seguro y avisa a la dueña. Preferimos un mensaje sobrio a una mentira.
     """
-    estable, dinamico = await construir_partes_prompt(nombre)
+    # `telefono` (nuevo): el carril del dinero era el que MENOS contexto tenía — redactaba sin la
+    # ficha del cliente, justo en el momento en que hay que tratarlo mejor.
+    estable, dinamico = await construir_partes_prompt(nombre, telefono)
     messages: list = [
         {
             "role": "system",
@@ -703,15 +829,61 @@ async def redactar_mensaje(
         ),
     })
     modelo = await leer_modelo_ia()  # mismo modelo elegido para conversar
-    async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.post(
-            OPENROUTER_URL,
-            headers={"Authorization": f"Bearer {settings.openrouter_api_key}"},
-            json={"model": modelo, "messages": messages, "temperature": 0.7},
+
+    # 🔴 LA LISTA CERRADA DEL DINERO (el mismo movimiento que el "código de barras" del catálogo).
+    #
+    # La primera versión de esta red autorizaba, como en la charla, TODOS los números del prompt —
+    # o sea, el catálogo entero. Y el banco de pruebas la tumbó al instante: el bot escribía
+    # "faltan Bs 1.200, o sea unos $12 más" (un dólar CALCULADO con una tasa inventada) y **pasaba**,
+    # porque el 12 existe en el catálogo: es el precio de las Empanadas Keto. Autorizar el catálogo
+    # aquí no tiene ningún sentido: en este carril el bot NO está cotizando productos, está hablando
+    # de UN pago concreto.
+    #
+    # Por eso el que llama (que es el CÓDIGO, y sabe lo que es verdad en ese momento: cuánto se
+    # cobró, cuánto llegó, cuánto falta) le pasa una lista CERRADA con los únicos montos decibles.
+    # Todo lo demás se frena, aunque "exista" en algún sitio.
+    if montos_ok is None:
+        autorizados: set[float] = (
+            _numeros_de(estable) | _numeros_de(dinamico) | _numeros_de(situacion)
         )
-        resp.raise_for_status()
-        data = resp.json()
-        return (data["choices"][0]["message"].get("content") or "").strip()
+    else:
+        autorizados = set(montos_ok) | _numeros_de(situacion)
+    for h in historial or []:
+        if isinstance(h, dict) and h.get("role") == "user":
+            autorizados |= _numeros_de(str(h.get("content") or ""))
+
+    for intento in (1, 2):
+        texto = await _pedir_redaccion(messages, modelo)
+        if not texto:
+            return ""
+        prohibida = frase_prohibida_siempre(texto)
+        inventados = _dinero_inventado(texto, autorizados)
+        if not prohibida and not inventados:
+            return texto
+
+        logger.error(
+            "CARRIL DEL DINERO (intento %d): %s%s — texto=%r",
+            intento,
+            f"frase prohibida ({prohibida})" if prohibida else "",
+            f" · montos inventados {inventados}" if inventados else "",
+            texto[:160],
+        )
+        if intento == 2:
+            return ""  # insistió: NO se le manda una mentira al cliente
+        messages.append({"role": "assistant", "content": texto})
+        messages.append({
+            "role": "user",
+            "content": (
+                "[SISTEMA] Ese mensaje NO puede salir. "
+                + (f"Dijiste algo que tienes PROHIBIDO ({prohibida}): tú no tienes acceso al banco, "
+                   "no eres una persona y no eres médica. " if prohibida else "")
+                + (f"Y escribiste montos que NO te dio nadie ({inventados}): NUNCA calcules ni "
+                   "conviertas dinero de cabeza. Usa SOLO las cifras EXACTAS que te dieron en la "
+                   "situación, copiadas tal cual; si te falta una, NO la digas. " if inventados else "")
+                + "Reescribe el mensaje sin eso, cálido y natural. No menciones este aviso."
+            ),
+        })
+    return ""
 
 
 _FORMATOS_AUDIO = {

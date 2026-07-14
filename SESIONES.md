@@ -17,6 +17,49 @@
 
 ---
 
+## 2026-07-13 (madrugada) — 🏛️ AUDITORÍA DE ARQUITECTURA: LA PUERTA DEL DINERO NO TENÍA GUARDIA (y el caso estrella no funcionaba)
+
+**Maired preguntó: *"¿está bien esto, arquitectónicamente?"*. La respuesta honesta era NO.** Una auditoría adversarial (8 lentes, cada hallazgo refutado contra el código) destapó dos cosas que las 12/12 pruebas en verde NO veían — y la peor la había construido yo.
+
+### 🌟 1. EL CASO ESTRELLA NO FUNCIONABA (y mis pruebas me daban la razón)
+
+El ROADMAP promete: *"pon el precio del día y devuelve el chat: el bot lo venderá solo"*. **Probado con el bot vivo, hacía esto:**
+
+> Cliente: *"¿cuánto la torta keto de 1kg?"* → el bot no lo sabe → **escala** (te deja el aviso y le dice al cliente *"te lo confirmo enseguida"*) → tú pones el precio y aprietas **"Ya lo atendí"** → **el bot SE QUEDA MUDO.** El cliente nunca se entera del precio. **Se pierde la venta. Y tú te quedas creyendo que el bot contestó.**
+
+**La causa era mi guard:** preguntaba *"¿el último mensaje es del cliente?"* — y **no lo es**: el último es el del propio bot. El error de fondo: **el mensaje del bot al escalar NO es una respuesta, es un PAGARÉ.** La pregunta del cliente sigue viva.
+
+**El arreglo:** el disparador ahora lleva la **FIRMA de la pausa** (`pausado_por`, leída ANTES de borrarla). `'bot'` = escaló y nadie contestó ⇒ **el bot habla** (y con una instrucción que le dice *"vuelve a consultar la herramienta: el dato que te faltaba YA está cargado"*). `'dueña'` = ella tomó el chat ⇒ solo habla si el cliente escribió después. *(Si ella contesta —panel o celular— la firma pasa a 'dueña' sola: el bot nunca le habla encima.)*
+
+**Verificado:** la dueña carga *Premezclas 500gr = $37*, aprieta el botón, y el bot le dice al cliente **"Premezclas (500gr) cuesta $37 💚"** y **sigue vendiendo**. Prueba nueva en `probar_retomar.py` — la que faltaba, y que **no exige solo que no se calle: exige que DIGA EL PRECIO**.
+
+**Por qué no lo vieron las pruebas:** las sembré yo, todas terminando en un mensaje del cliente. **Probé el caso que diseñé, no el caso que el producto necesita.**
+
+### 💰 2. LA PUERTA DEL DINERO NO TENÍA GUARDIA (esto estaba VIVO en producción)
+
+`responder()` tiene 5 redes y corre a temperatura 0.15. **`redactar_mensaje` no tenía NINGUNA y corre a 0.7** — y es la que habla en los **tres momentos del dinero**: cuando entra el comprobante, cuando el monto **no cuadra**, y cuando la dueña **confirma o rechaza** un pago. Devolvía el texto del modelo **tal cual**.
+
+- **El caso feo, con el código delante:** en un pago parcial el sistema le pasa *"faltan Bs 1.200"* y el modelo remataba con *"…o sea unos **$12** más"* — **un dólar CALCULADO con una tasa inventada**, directo al cliente.
+- Y *"revisé mi banco y no me aparece tu pago"* —la frase que ya explotó una vez y que **ESTÁ** en la lista de prohibidas— **salía por aquí sin que nadie la mirara**, porque la lista solo se aplicaba en el otro camino.
+
+**Arreglado:** ahora pasa por la red del dinero y por las mentiras que **ninguna situación puede volver ciertas**. Piezas:
+- **Dos listas, y la diferencia importa:** `_PROHIBIDO_SIEMPRE` (el banco, ser una persona, la salud) se aplica en **todos** los carriles; `_PROHIBIDO_EN_CHARLA` (*"recibí tu pago"*) **no**, porque en el carril del comprobante es justo lo que el código le **ORDENA** decir. Aplicar la lista entera habría matado el mensaje **correcto**.
+- **🔑 LISTA CERRADA DE MONTOS (el "código de barras" del dinero):** el primer arreglo **lo tumbó el banco de pruebas al instante** — el `$12` **seguía pasando**, porque autorizaba **todos los números del prompt**… y el **12 es el precio de las Empanadas Keto**. En el carril del pago el bot **no está cotizando productos**: habla de **UN pago**. Ahora el **código** le pasa la lista **cerrada** de lo que se cobró de verdad. Todo lo demás se frena, **exista donde exista**.
+- Si el modelo insiste ⇒ **el mensaje NO sale**: al cliente le llega un acuse sobrio y **la dueña recibe el aviso** (`bot_frenado`). Nunca una mentira, nunca un silencio.
+
+### 🔴 3. Y LO QUE ENCONTRÓ LA AUDITORÍA Y NADIE ESPERABA
+
+- **El aviso de pago NO miraba la ventana de 24h de Meta.** Es el **único** camino que le habla al cliente **días después** (la dueña confirma el pago cuando puede). Meta lo **rechaza** y le **baja la calidad al número** — siendo Tech Provider, eso arriesga la cuenta de **todos** los clientes. Ahora **falla cerrada** y te avisa a ti.
+- **El interruptor de apagado no cubría el comprobante:** con el bot **apagado**, un cliente que mandaba su captura **recibía respuesta igual**. Ahora el pago se registra (el dinero nunca se pierde) pero el bot **no habla**.
+- **La red del dinero era medio ciega:** solo veía `$28`. **No** veía `28$` (¡el formato que el propio prompt le enseña!), ni `28 dólares`, ni `28 USD`. Y peor: **`"son 5.000 Bs"` se autorizaba solo** — al monto se le sacaban todas las lecturas posibles (5.000 se leía **también como 5**) y bastaba que **una** estuviera autorizada. Como el 5 casi siempre está, **cualquier cifra en bolívares pasaba**. Cerrado: un punto seguido de 3 cifras son **MILES**, y punto.
+- **🤯 EL PROMPT ORDENABA LA MENTIRA.** El *"soy la dueña"* del ensayo **no lo causó mi instrucción: lo destapó.** El prompt blindado decía *"hablas **COMO Whuilianny, la dueña**"* y, tres líneas más abajo, *"PROHIBIDO jurar que eres humana"*. **Se contradecía a sí mismo.** Arreglado en `_REGLAS`: hablar en primera persona del negocio ≠ mentir sobre quién eres. *(⚠️ **Y la PERSONALIDAD, en la BD, dice literalmente "Eres Whuilianny Zabala, la dueña… Eres humana". Eso es de Maired: NO se toca sin su OK — pero mientras esté ahí, el bot lo va a seguir intentando y solo lo frena la red.** Pendiente de decidir con ella.)*
+
+**Verde:** cobro **27/27** · honestidad · **carril del dinero (banco NUEVO)** · retomar (con el caso estrella) · bandeja · Fase 2 · tamaños. Ensayo de los 12 clientes falsos: **ninguna regla dura rota**.
+
+**Sigue pendiente (dicho sin adornos):** el retomar **sigue siendo un segundo camino** con su propia instrucción. Lo correcto es el **REPLAY** (guardar lo que quedó sin responder en una cola durable y volver a meterlo por el camino normal, que lleva meses endurecido): eso mata de raíz esta familia de bugs, cubre el comprobante que entró durante la pausa y sobrevive a pausas largas. **No lo hice: es un refactor del camino del dinero y no se toca con prisa.**
+
+---
+
 ## 2026-07-13 (noche) — 🔁 EL BOT YA CONTESTA AL RETOMAR EL CHAT (Bandeja Fase 3 · FASE A)
 
 **El hueco que reportó Maired con una captura:** ella toma el chat, el cliente sigue escribiendo (*"¿cuánto sería en Bs?"*, *"quedo pendiente del monto"*), ella le devuelve el chat al bot… **y el bot se queda MUDO**. La conversación —y la venta— se moría ahí.

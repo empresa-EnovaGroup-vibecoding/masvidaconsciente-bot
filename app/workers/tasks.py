@@ -452,6 +452,19 @@ _INSTRUCCION_RETOMAR = (
     "herramienta que lo dé: jamás inventes un precio ni un monto."
 )
 
+# El caso ESTRELLA: el bot escaló (no sabía el precio del día), la dueña lo cargó y le devolvió el
+# chat. Lo que le faltaba YA ESTÁ en el sistema — pero solo lo verá si vuelve a preguntárselo a la
+# herramienta. Si no se le dice esto, el modelo "recuerda" que no lo sabía y se queda ahí.
+_INSTRUCCION_RETOMAR_ESCALADO = (
+    "[SISTEMA] Le pediste ayuda a la dueña sobre este chat y ella YA la resolvió: el dato que te "
+    "faltaba (por ejemplo, el precio del día) ya está cargado en el sistema. VUELVE A CONSULTARLO "
+    "con tus herramientas —no des por hecho que sigue faltando— y dale al cliente la respuesta que "
+    "le prometiste, retomando la venta donde quedó. "
+    "SIGUES SIENDO LA MISMA DE SIEMPRE: la asistente virtual del negocio. NO eres la dueña ni una "
+    "persona. No vuelvas a saludar ni a presentarte, no repitas lo que ya se dijo y no menciones "
+    "este aviso. Y si el dato SIGUE sin estar, NO lo inventes: llama otra vez a `pedir_ayuda`."
+)
+
 
 async def _ventana_abierta(telefono: str) -> bool:
     """¿Se le puede escribir texto libre a este cliente AHORA? (la regla de las 24h de Meta).
@@ -525,13 +538,33 @@ async def _avisar_ventana_cerrada(telefono: str, nombre: str | None) -> None:
         logger.exception("No se pudo avisar de la ventana cerrada de %s", telefono)
 
 
+# 🔴🔴 EL CASO ESTRELLA, QUE NO FUNCIONABA (auditoría de arquitectura, 2026-07-13).
+#
+# El ROADMAP promete esto: *"pon el precio del día y devuelve el chat: el bot lo venderá solo"*.
+# Probado con el bot vivo, hacía ESTO:
+#     cliente: "¿cuánto la torta keto de 1kg?"  →  el bot NO lo sabe (precio del día) → escala:
+#     le deja el aviso a la dueña y le dice al cliente "te lo confirmo enseguida".
+#     La dueña pone el precio y aprieta "Ya lo atendí (reactivar el bot)".
+#     El bot… SE QUEDA MUDO. El cliente nunca se entera del precio. Se pierde la venta.
+#     Y la dueña se queda creyendo que el bot le contestó.
+#
+# La causa era MI guard: preguntaba "¿el último mensaje es del cliente?" — y NO lo es: el último
+# es el del propio bot ("te lo confirmo enseguida"). Así que concluía "aquí no hay nada pendiente".
+#
+# El error de fondo: **el mensaje del bot al escalar NO es una respuesta, es un pagaré.** La
+# pregunta del cliente sigue viva. Por eso ahora el disparador trae la FIRMA de la pausa:
+#   · pausado_por='bot'   → el bot escaló y NADIE le ha contestado al cliente ⇒ el bot habla.
+#   · pausado_por='dueña' → ella tomó el chat ⇒ solo habla si el cliente escribió DESPUÉS.
+# (Si ella contesta —por el panel o desde su celular— la firma pasa a 'dueña' sola, así que el
+#  bot nunca le habla encima.)
+
 @celery_app.task(name="retomar_chat")
-def retomar_chat(telefono: str, nombre: str | None = None):
+def retomar_chat(telefono: str, nombre: str | None = None, pausado_por: str | None = None):
     """Tarea Celery: la dueña devolvió el chat → el bot contesta lo que quedó pendiente."""
-    _run(_retomar(telefono, nombre))
+    _run(_retomar(telefono, nombre, pausado_por))
 
 
-async def _retomar(telefono: str, nombre: str | None) -> None:
+async def _retomar(telefono: str, nombre: str | None, pausado_por: str | None = None) -> None:
     # EL MISMO lock por-teléfono que usa el buffer: si justo ahora el bot ya está contestando un
     # mensaje nuevo de ese cliente, no hay nada que retomar (ese turno ya arrastra los pendientes).
     # Se sale ANTES de gastar el candado, para que la dueña pueda volver a apretar.
@@ -555,10 +588,16 @@ async def _retomar(telefono: str, nombre: str | None) -> None:
 
         historial = await rc.obtener_historial(telefono)
 
+        # ¿El bot había ESCALADO? Entonces su último mensaje ("te lo confirmo enseguida") NO es una
+        # respuesta: es un PAGARÉ. La pregunta del cliente sigue viva y hay que pagarla.
+        venia_de_escalada = pausado_por == "bot"
+
         # GUARD DE HONESTIDAD: el bot solo habla si el cliente quedó ESPERANDO. Si la dueña ya le
-        # contestó todo a mano (el último turno es de ella), abrir la boca sería un envío
-        # PROACTIVO —lo que Meta prohíbe sin aprobación humana— y encima le hablaría encima.
-        if not historial or historial[-1].get("role") != "user":
+        # contestó a mano (el último turno es de ella), abrir la boca sería un envío PROACTIVO
+        # —lo que Meta prohíbe sin aprobación humana— y encima le hablaría encima.
+        if not historial:
+            return
+        if historial[-1].get("role") != "user" and not venia_de_escalada:
             logger.info(
                 "Retomar %s: no hay nada pendiente (el último turno no es del cliente)", telefono
             )
@@ -574,7 +613,17 @@ async def _retomar(telefono: str, nombre: str | None) -> None:
         # Lo que escribió el cliente YA está en el historial: NO se reinyecta como mensaje (se
         # duplicaría el turno). Lo que va en su lugar es una orden EFÍMERA de sistema, que el bot
         # lee y NO se guarda en ningún lado: en la memoria solo queda su respuesta.
-        respuesta = await responder(telefono, _INSTRUCCION_RETOMAR, historial, nombre)
+        #
+        # `pregunta_cliente`: lo que el cliente preguntó DE VERDAD. Sin esto, si el bot vuelve a
+        # escalar, el aviso de la bandeja le decía a la dueña: *El cliente preguntó: "[SISTEMA]
+        # Vuelves a atender este chat…"*. Basura, justo donde ella mira para entender qué pasa.
+        ultima_del_cliente = next(
+            (h.get("content") for h in reversed(historial) if h.get("role") == "user"), ""
+        )
+        instruccion = _INSTRUCCION_RETOMAR_ESCALADO if venia_de_escalada else _INSTRUCCION_RETOMAR
+        respuesta = await responder(
+            telefono, instruccion, historial, nombre, pregunta_cliente=ultima_del_cliente
+        )
         respuesta = _proteger_afirmacion_de_pago(respuesta)
 
         partes = await _enviar_en_partes(telefono, respuesta)
@@ -654,18 +703,35 @@ async def _responder_situacion(
     telefono: str, situacion: str, nombre: str | None
 ) -> list[dict]:
     """Whuilianny REDACTA un mensaje para el cliente según la situación (no plantilla),
-    lo protege contra afirmaciones de pago, lo envía en partes y lo guarda en historial."""
-    if not _numero_permitido(telefono):
-        return  # lista blanca de pruebas: no responder a numeros fuera de la lista
+    lo protege contra afirmaciones de pago, lo envía en partes y lo guarda en historial.
+
+    🔴 El INTERRUPTOR no cubría este carril (auditoría 2026-07-13): con el bot APAGADO desde el
+    panel, un cliente que mandaba su comprobante RECIBÍA respuesta igual. El pago se registra
+    siempre (el dinero nunca se pierde), pero si la dueña apagó el bot, el bot NO habla.
+    """
+    if not _numero_permitido(telefono) or not await _bot_activo():
+        return []  # bot apagado o fuera de la lista blanca: se registra el pago, pero no se habla
     try:
         historial = await rc.obtener_historial(telefono)
-        mensaje = await redactar_mensaje(situacion, historial, nombre)
+        mensaje = await redactar_mensaje(
+            situacion, historial, nombre, telefono, montos_ok=await _montos_decibles(telefono)
+        )
     except Exception:  # noqa: BLE001
         logger.exception("No se pudo redactar el mensaje al cliente %s", telefono)
-        return
+        return []
     mensaje = _proteger_afirmacion_de_pago(mensaje or "")
     if not mensaje.strip():
-        return []
+        # La red del dinero tumbó el mensaje (montos inventados o una frase prohibida) y el modelo
+        # insistió. NO se le manda una mentira al cliente — pero tampoco se le deja en silencio
+        # justo cuando acaba de pagar: acuse sobrio + la dueña se entera.
+        logger.error("Carril del dinero: no salió un mensaje limpio para %s; acuse seguro", telefono)
+        partes = await _enviar_en_partes(telefono, _RESPUESTA_PAGO_SEGURA)
+        if _algo_llego(partes):
+            await rc.guardar_historial(telefono, "assistant", _RESPUESTA_PAGO_SEGURA)
+        if partes:
+            await _guardar_en_panel(telefono, nombre, "", partes)
+        await _avisar_mensaje_frenado(telefono, nombre)
+        return partes
     partes = await _enviar_en_partes(telefono, mensaje)
     # Si no se envió (la dueña tomó el chat), NO se guarda en el historial: el bot no puede
     # "recordar" haber dicho algo que el cliente nunca vio.
@@ -690,6 +756,18 @@ def _a_float(x):
         return float(s)
     except ValueError:
         return None
+
+
+async def _montos_decibles(telefono: str) -> set[float]:
+    """LA LISTA CERRADA de montos que el bot puede decir en el carril del DINERO.
+
+    Son los que el CÓDIGO cobró de verdad en esta conversación (la cotización que guardó
+    `generar_datos_pago`: el total en $, en Bs, y en divisas con descuento). Nada más. El catálogo
+    NO entra: aquí el bot no está cotizando productos, está hablando de UN pago — y autorizar el
+    catálogo entero fue justo lo que dejaba pasar el "$12" inventado (12 = precio de otro producto).
+    """
+    bs, usd, divisas = await _montos_cobrados(telefono)
+    return {m for m in (bs, usd, divisas) if m is not None}
 
 
 async def _montos_cobrados(telefono: str):
@@ -979,16 +1057,105 @@ def notificar_cliente_pago(telefono, situacion):
     _run(_notificar_cliente_pago(telefono, situacion))
 
 
+async def _avisar_a_la_duena(
+    telefono: str, *, motivo: str, detalle: str, mensaje_cliente: str, whatsapp: str
+) -> None:
+    """Deja el aviso en la BANDEJA y le manda un WhatsApp a la dueña.
+
+    Se usa cuando el bot NO pudo hacer su trabajo y alguien tiene que enterarse. Si esto fallara
+    en silencio, el cliente se quedaría esperando a nadie — que es el peor final posible.
+    """
+    from sqlalchemy import select
+
+    from app.models import Configuracion, Intervencion
+
+    try:
+        factory = get_session_factory()
+        async with factory() as session:
+            session.add(Intervencion(
+                cliente_telefono=telefono,
+                motivo=motivo,
+                detalle=detalle,
+                mensaje_cliente=mensaje_cliente,
+            ))
+            fila = (
+                await session.execute(
+                    select(Configuracion).where(Configuracion.clave == "dueno_telefono")
+                )
+            ).scalar_one_or_none()
+            await session.commit()
+        destino = (fila.valor if fila else None) or settings.dueno_telefono
+        if destino:
+            await enviar_texto(destino, whatsapp)
+    except Exception:  # noqa: BLE001 — el aviso es lo último que hay; que no tumbe al worker
+        logger.exception("No se pudo avisar a la dueña sobre %s", telefono)
+
+
+async def _avisar_mensaje_frenado(telefono: str, nombre: str | None) -> None:
+    """La red del dinero tumbó lo que el bot iba a decir (dos veces). El cliente recibió un acuse
+    sobrio, pero la conversación la tiene que terminar una persona."""
+    quien = nombre or telefono
+    await _avisar_a_la_duena(
+        telefono,
+        motivo="bot_frenado",
+        detalle=(
+            f"Frené un mensaje del bot a {quien}: iba a decir un monto que NO salió del sistema, o "
+            "una frase que tiene prohibida (el banco, ser una persona, un tema de salud). Al cliente "
+            "solo le llegó un acuse. Entra tú al chat y termínalo."
+        ),
+        mensaje_cliente="(el bot se frenó solo)",
+        whatsapp=(
+            f"⚠️ Frené un mensaje del bot a {quien}: iba a decir algo que no puede. Solo le mandé un "
+            "acuse. Entra al chat y contéstale tú."
+        ),
+    )
+
+
 async def _notificar_cliente_pago(telefono, situacion) -> None:
+    """La dueña confirmó o rechazó un pago desde el panel: hay que decírselo al cliente.
+
+    🔴 ES EL ÚNICO CAMINO QUE LE HABLA AL CLIENTE **DÍAS DESPUÉS** (auditoría 2026-07-13). Todos
+    los demás contestan a un mensaje que el cliente ACABA de mandar, así que la ventana de 24h de
+    Meta está abierta por definición. Aquí NO: la dueña confirma el pago cuando puede (esa misma
+    noche, al día siguiente…). Sin esta comprobación, Meta RECHAZA el envío y le BAJA LA CALIDAD
+    AL NÚMERO — y siendo Enova Tech Provider, eso arriesga la cuenta de Meta de TODOS los clientes.
+    Falla CERRADA: si no se le puede escribir, se le avisa a ELLA para que lo haga desde su
+    teléfono. Un pago confirmado no se puede quedar sin avisar.
+    """
+    if not _numero_permitido(telefono):
+        return
+    if not await _ventana_abierta(telefono):
+        logger.warning("Aviso de pago a %s: ventana de 24h CERRADA → el bot NO escribe", telefono)
+        await _avisar_a_la_duena(
+            telefono,
+            motivo="ventana_cerrada",
+            detalle=(
+                "Tocaste confirmar/rechazar el pago de este cliente, pero pasaron más de 24 horas "
+                "desde su último mensaje: WhatsApp NO deja escribirle. El bot no le avisó nada — "
+                "escríbele tú desde tu teléfono."
+            ),
+            mensaje_cliente="(esperando el resultado de su pago)",
+            whatsapp=(
+                f"⏰ No pude avisarle a {telefono} lo de su pago: pasaron más de 24 horas desde su "
+                "último mensaje y WhatsApp no deja escribirle. Escríbele tú."
+            ),
+        )
+        return
     try:
         historial = await rc.obtener_historial(telefono)
-        mensaje = await redactar_mensaje(situacion, historial, None)
+        mensaje = await redactar_mensaje(
+            situacion, historial, None, telefono, montos_ok=await _montos_decibles(telefono)
+        )
     except Exception:  # noqa: BLE001
         logger.exception("No se pudo redactar el aviso de pago para %s", telefono)
         return
-    if mensaje.strip():
-        partes = await _enviar_en_partes(telefono, mensaje)
-        if _algo_llego(partes):
-            await rc.guardar_historial(telefono, "assistant", mensaje)
-        if partes:
-            await _guardar_en_panel(telefono, None, "", partes)
+    if not mensaje.strip():
+        # La red del dinero lo tumbó dos veces: NO se le manda una mentira sobre su pago.
+        logger.error("Aviso de pago a %s: no salió un mensaje limpio; lo pasa la dueña", telefono)
+        await _avisar_mensaje_frenado(telefono, None)
+        return
+    partes = await _enviar_en_partes(telefono, mensaje)
+    if _algo_llego(partes):
+        await rc.guardar_historial(telefono, "assistant", mensaje)
+    if partes:
+        await _guardar_en_panel(telefono, None, "", partes)

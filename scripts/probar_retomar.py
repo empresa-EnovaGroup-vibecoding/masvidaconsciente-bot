@@ -23,11 +23,15 @@ mundo real. Lo que se mira es la BASE DE DATOS.
 import asyncio
 import sys
 from datetime import timedelta
+from decimal import Decimal
 
 from sqlalchemy import delete, select
 
 from app.agent import tools
-from app.models import Cliente, Intervencion, Mensaje, Pedido, now_utc
+from app.agent.system_prompt import hoy_venezuela
+from app.models import (
+    Cliente, Intervencion, Mensaje, Pedido, PrecioDia, Producto, ProductoVariante, now_utc,
+)
 from app.services import redis_client as rc
 from app.services.db import get_session_factory
 from app.workers import tasks
@@ -206,6 +210,59 @@ async def main() -> None:
     check("no hay ningún pedido cobrado en $0",
           not [p for p in pedidos if p.total is not None and float(p.total) == 0],
           str([(p.items, float(p.total or 0)) for p in pedidos]))
+
+    print("\n4.b) 🌟 EL CASO ESTRELLA: el bot ESCALÓ (no sabía el precio del día) y ella lo resolvió")
+    print("     (el ROADMAP lo promete así: 'pon el precio del día y devuelve el chat: el bot lo")
+    print("      venderá solo'. Antes de este arreglo, el bot SE QUEDABA MUDO y se perdía la venta.)")
+    await _limpiar()
+    factory = get_session_factory()
+    ahora = now_utc()
+    # LA DUEÑA PONE EL PRECIO DEL DÍA (eso es lo que ella hace en el panel antes de apretar).
+    # Sin esto la prueba sería trampa: el bot re-escalaría (honesto) y parecería que "funciona".
+    async with factory() as s:
+        prod, var = (await s.execute(
+            select(Producto, ProductoVariante)
+            .join(ProductoVariante, ProductoVariante.producto_id == Producto.id)
+            .where(ProductoVariante.precio.is_(None))
+            .order_by(ProductoVariante.id)
+        )).first()
+        await s.execute(delete(PrecioDia).where(PrecioDia.variante_id == var.id,
+                                                PrecioDia.fecha == hoy_venezuela()))
+        s.add(PrecioDia(producto_id=prod.id, variante_id=var.id,
+                        precio=Decimal("37.00"), fecha=hoy_venezuela()))
+        s.add(Cliente(
+            telefono=TEL, nombre="Prueba Retomar", ultimo_entrante_at=ahora,
+            ultima_interaccion=ahora, bot_pausado=False, pausado_por=None,  # ella ya lo devolvió
+        ))
+        pregunta = f"cuánto cuesta {prod.nombre} ({var.presentacion})?"
+        s.add(Mensaje(cliente_telefono=TEL, rol="user", contenido=pregunta,
+                      created_at=ahora - timedelta(minutes=5)))
+        await s.commit()
+    print(f"     (la dueña acaba de cargar: {prod.nombre} {var.presentacion} = $37)")
+    # El hilo TAL COMO QUEDA tras un escalado: lo último que se dijo NO es del cliente —
+    # es el PAGARÉ del propio bot ("te lo confirmo enseguida"). El guard viejo leía eso como
+    # "aquí no hay nada pendiente" y se callaba. Pero el cliente SIGUE esperando.
+    await rc.guardar_historial(TEL, "user", pregunta)
+    await rc.guardar_historial(TEL, "assistant", "Te confirmo ese precio enseguida 💚")
+    enviados.clear()
+    # `pausado_por='bot'` = la FIRMA del escalado (la lee el endpoint antes de borrarla).
+    await _retomar(TEL, "Prueba Retomar", "bot")
+    hilo = await _mensajes()
+    del_bot = [m for m in hilo if m.rol == "assistant"]
+    for i, m in enumerate(del_bot, 1):
+        print(f"       ↳ globo {i}: {m.contenido}")
+    check("🌟 el bot NO se queda mudo: le contesta al cliente", bool(del_bot),
+          "SE QUEDÓ MUDO — el cliente nunca se entera del precio y se pierde la venta")
+    # Y LO QUE DE VERDAD IMPORTA: que VENDA. Que le diga el precio que ella acaba de cargar.
+    dijo_todo = " ".join(m.contenido for m in del_bot)
+    check("🌟 y le DICE EL PRECIO que ella acaba de cargar ($37) — o sea: VENDE",
+          "37" in dijo_todo, f"no dijo el precio: {dijo_todo[:120]!r}")
+    check("y su respuesta queda DESPUÉS de la pregunta del cliente",
+          bool(hilo) and hilo[-1].rol == "assistant")
+    async with factory() as s:
+        await s.execute(delete(PrecioDia).where(PrecioDia.variante_id == var.id,
+                                                PrecioDia.fecha == hoy_venezuela()))
+        await s.commit()
 
     print("\n5) 🔁 DOBLE CLICK → un solo mensaje (candado de idempotencia)")
     cuantos = len(enviados)
