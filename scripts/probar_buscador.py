@@ -72,7 +72,7 @@ CONSULTAS = [
     ("kombucha", "Kombucha"),
     ("tortas", "Torta"),
     ("torta keto", "Torta"),
-    ("chocolate", "hocolate"),          # sin la C: hay productos con may/minúscula distinta
+    ("chocolate", "chocolate"),
     ("dulces", None),
     ("queso", None),
     ("yuca", None),
@@ -117,7 +117,17 @@ async def main() -> None:
             if not prods:
                 check(f"'{consulta}' devuelve algo", False, "CERO productos → el bot dirá 'de eso no tengo'")
                 continue
-            if debe_estar and not any(debe_estar.lower() in n.lower() for n in nombres):
+            # 🔴 CALCE POR PALABRA, NO POR SUBCADENA. La primera versión usaba `in`, y
+            # `"pan" in "empanadas keto"` es True: si el buscador devolviera EMPANADAS para
+            # "panes", este banco habría salido VERDE. Es el mismo veneno del bug original
+            # ('pan' calzaba por substring con em-PAN-adas) — servido en el test.
+            def _calza(nombre: str, palabra: str) -> bool:
+                return any(
+                    w.lower().startswith(palabra.lower())
+                    for w in nombre.replace("-", " ").split()
+                )
+
+            if debe_estar and not any(_calza(n, debe_estar) for n in nombres):
                 check(
                     f"'{consulta}' trae {debe_estar!r}",
                     False,
@@ -125,6 +135,15 @@ async def main() -> None:
                 )
                 continue
             check(f"'{consulta}' → {len(prods)} producto(s)", True)
+
+        # 🔴 EL BUG ORIGINAL, EN EL CARRIL DE LA ASESORÍA: 'pan' NO puede traer em-PAN-adas.
+        for q in ("pan", "panes"):
+            r = await ver_catalogo(session, TEL, busqueda=q)
+            malos = [
+                p["nombre"] for p in (r.get("productos") or [])
+                if "empanada" in p["nombre"].lower()
+            ]
+            check(f"'{q}' NUNCA trae una empanada", not malos, str(malos))
 
         print("\n2) LA NOTA NUNCA ORDENA NEGAR EL CATÁLOGO")
         for consulta in ("bebidas", "postres", "pan sin gluten", "pizza", "sushi"):

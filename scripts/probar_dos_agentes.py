@@ -162,7 +162,25 @@ async def main() -> None:
         ag._afirma_pedido_registrado("Listo, te lo agendé 💚") and vacia.pedido_id is None,
     )
 
-    print("\n7) LA BANDERA: volver atrás es un UPDATE")
+    print("\n7) 🔴 EL BOT PUEDE DECIR UN PRECIO DEL CATÁLOGO (lo cazó la prueba con el bot real)")
+    # La primera versión hacía la lista blanca DEMASIADO estrecha: solo lo que devolvían las
+    # TOOLS. Resultado absurdo: el bot se NEGÓ a decir "el Pan Keto cuesta $25" —que es la
+    # verdad— porque el precio venía del catálogo de su prompt y no de una llamada a
+    # `ver_catalogo`. La red funcionaba DE MÁS y el turno moría en RESPUESTA_SEGURA.
+    e_op2, d_op2 = await construir_partes_prompt(None, None, quien="operador")
+    usd_cat, _ = ag.autorizados_por_moneda(e_op2, d_op2)
+    check(
+        "los precios del catálogo autorizan al OPERADOR",
+        len(usd_cat) >= 5,
+        f"solo {len(usd_cat)} precios ⇒ el bot no podría cotizar nada",
+    )
+    check(
+        "y un `id_para_pedir` NO se cuela (exige marca de dinero: el bug del '$23' sigue muerto)",
+        not ag._dinero_inventado("cuesta $14", {14.0}, set(), set())
+        and bool(ag._dinero_inventado("son $999", usd_cat, set(), set())),
+    )
+
+    print("\n8) LA BANDERA: volver atrás es un UPDATE")
     from app.agent.system_prompt import leer_config_agente
 
     modo, m_op, m_voz = await leer_config_agente()

@@ -1316,18 +1316,31 @@ async def _responder_dos_agentes(
 
     # ── EL SEAM: el ENCARGO del Operador se valida ANTES de pasárselo a la Voz ──────────
     #
-    # Si el Operador coló un monto que ninguna herramienta le dio, el `[SISTEMA]` **rebota AL
-    # OPERADOR** — que es quien TIENE la herramienta para arreglarlo. Hoy ese mismo aviso ("LLAMA
-    # a la herramienta que lo da") se le grita a un modelo que ya está en modo redacción y no
-    # puede obedecerlo. Mañana llega a quien puede.
-    if _dinero_inventado(hoja.encargo, usd_ok, bs_ok, totales_ok):
+    # 🔴 LA LISTA BLANCA DEL OPERADOR **NO** ES LA DE LA VOZ, Y ES A PROPÓSITO.
+    #
+    # El Operador SÍ tiene el catálogo en su prompt (con los precios escritos como "$25.00"), y
+    # leerlo de ahí es LEGÍTIMO: son los precios reales de la BD. La primera versión de esto solo
+    # autorizaba lo que devolvían las TOOLS, y el resultado fue absurdo — el bot se NEGÓ a decir
+    # "el Pan Keto cuesta $25", que es la verdad, porque el precio venía del catálogo y no de una
+    # llamada a `ver_catalogo`. La red funcionaba DE MÁS. Lo cazó la prueba con el bot real.
+    #
+    # ⚠️ Y esto NO reabre el bug del "$23": `autorizados_por_moneda` exige **marca de dinero**
+    # ($ · Bs · USD), y un `id_para_pedir=23` no la lleva. Los ids siguen fuera.
+    usd_op, bs_op = autorizados_por_moneda(estable, dinamico)
+    usd_val, bs_val = usd_ok | usd_op, bs_ok | bs_op
+
+    if _dinero_inventado(hoja.encargo, usd_val, bs_val, totales_ok):
         logger.error("DINERO INVENTADO en el ENCARGO de %s: %r", telefono, hoja.encargo[:120])
+        # El `[SISTEMA]` **rebota AL OPERADOR** — que es quien TIENE la herramienta para
+        # arreglarlo. Hoy ese mismo aviso ("LLAMA a la herramienta que lo da") se le grita a un
+        # modelo que ya está en modo redacción y no puede obedecerlo. Aquí llega a quien puede.
         messages.append({
             "role": "user",
             "content": (
-                "[SISTEMA] Escribiste un monto que NO salió de ninguna herramienta. NUNCA calcules "
-                "ni conviertas dinero de cabeza. Si te falta una cifra, LLAMA a la herramienta que "
-                "la da (`registrar_pedido` / `generar_datos_pago`) y vuelve a escribir el encargo."
+                "[SISTEMA] Escribiste un monto que no salió ni del catálogo ni de una herramienta. "
+                "NUNCA calcules ni conviertas dinero de cabeza. Si te falta una cifra, LLAMA a la "
+                "herramienta que la da (`registrar_pedido` / `generar_datos_pago`) y vuelve a "
+                "escribir el encargo."
             ),
         })
         data = await _llamar_con_fallback(messages, llm, modelo_operador, tools_llm)
@@ -1343,6 +1356,18 @@ async def _responder_dos_agentes(
             hoja.anotar_tool(n, await ejecutar(n, args, telefono))
         hoja.encargo = (msg.get("content") or "").strip() or hoja.encargo
         usd_ok, bs_ok, totales_ok, datos_ok = hoja.listas_blancas()
+
+    # 🔑 EL ENCARGO VALIDADO **PASA A SER VERDAD**. Sin esto, la Voz no podría repetir un precio
+    # que el Operador leyó del catálogo (ella no lo ve) y el turno moriría en `RESPUESTA_SEGURA`.
+    # Solo entran MONTOS SUELTOS: un TOTAL sigue naciendo únicamente de `registrar_pedido` o
+    # `generar_datos_pago`, nunca de una frase.
+    u_enc, b_enc = autorizados_por_moneda(hoja.encargo)
+    hoja.montos_usd |= u_enc
+    hoja.montos_bs |= b_enc
+    usd_ok, bs_ok, totales_ok, datos_ok = hoja.listas_blancas()
+    u, b = autorizados_por_moneda(mensaje_usuario)
+    usd_ok, bs_ok = usd_ok | u, bs_ok | b
+    datos_ok = datos_ok | _datos_sensibles(mensaje_usuario)
 
     # ── LA VOZ ─────────────────────────────────────────────────────────────────────────
     #
