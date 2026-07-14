@@ -25,7 +25,13 @@ import tempfile
 logger = logging.getLogger(__name__)
 
 MAX_VIDEO = 16 * 1024 * 1024  # 16 MB (límite de video de WhatsApp)
-MAX_IMAGEN = 5 * 1024 * 1024  # 5 MB (límite de imagen de WhatsApp)
+MAX_IMAGEN = 5 * 1024 * 1024  # 5 MB (límite DURO de imagen de WhatsApp)
+# 🔴 EL OBJETIVO REAL no es el límite de 5 MB: es que Meta descargue el enlace de R2 RÁPIDO y no
+# lo rechace bajo ráfagas (caso real 2026-07-14: fotos de 1.5 MB fallaban al pedir varias
+# seguidas). WhatsApp muestra las fotos pequeñas; 1600px de lado y ~500 KB se ven idénticas en el
+# teléfono, cargan al instante y no gatillan el rate-limit de la URL pública de R2.
+OBJETIVO_IMAGEN = 500 * 1024   # 500 KB: la meta de compresión (no el límite)
+LADO_MAX_IMAGEN = 1600         # px del lado mayor: de sobra para una foto de producto en WhatsApp
 
 
 class MediaInvalida(Exception):
@@ -107,12 +113,10 @@ async def normalizar_video(contenido: bytes) -> tuple[bytes, str, str]:
 
 def _convertir_imagen_sync(contenido: bytes, content_type: str) -> tuple[bytes, str, str]:
     ct = (content_type or "").split(";")[0].strip().lower()
-    # JPEG/PNG que ya caben: tal cual (no re-comprimir lo que ya sirve).
-    if ct in ("image/jpeg", "image/jpg", "image/png") and len(contenido) <= MAX_IMAGEN:
-        ext = "png" if ct == "image/png" else "jpeg"
-        return contenido, f"image/{'png' if ext == 'png' else 'jpeg'}", ext
-
-    # Todo lo demás (HEIC de iPhone, WebP, o un JPEG gigante) → JPEG que quepa.
+    # ⚡ SIEMPRE se optimiza para el ENVÍO, no solo si pasa el límite de 5 MB. Un JPEG de 1.5 MB
+    # "cabía" en 5 MB y antes se dejaba TAL CUAL — y era justo el que Meta rechazaba bajo ráfagas.
+    # Ahora todo pasa por aquí: se baja a 1600px y se comprime hasta ~500 KB. Si el original ya es
+    # un JPEG pequeño y liviano, sale casi idéntico; si es pesado, se aligera.
     from PIL import Image
     try:
         from pillow_heif import register_heif_opener  # fotos de iPhone (HEIC/HEIF)
@@ -129,14 +133,21 @@ def _convertir_imagen_sync(contenido: bytes, content_type: str) -> tuple[bytes, 
             "No se pudo leer la imagen. Prueba guardarla como JPG y subirla de nuevo."
         ) from e
 
-    # Fotos de cámara enormes: bajar el lado mayor a 2048px (de sobra para WhatsApp).
-    if max(img.size) > 2048:
-        img.thumbnail((2048, 2048))
-    for calidad in (90, 80, 70, 60):
+    # Baja el lado mayor a 1600px (de sobra para una foto de producto en WhatsApp).
+    if max(img.size) > LADO_MAX_IMAGEN:
+        img.thumbnail((LADO_MAX_IMAGEN, LADO_MAX_IMAGEN))
+
+    # Comprime buscando ~500 KB; si a calidad 60 aún no baja de 5 MB, es que era descomunal.
+    ultimo = None
+    for calidad in (85, 78, 70, 62, 55):
         buf = io.BytesIO()
         img.save(buf, format="JPEG", quality=calidad, optimize=True)
-        if buf.tell() <= MAX_IMAGEN:
-            return buf.getvalue(), "image/jpeg", "jpeg"
+        ultimo = buf.getvalue()
+        if len(ultimo) <= OBJETIVO_IMAGEN:
+            return ultimo, "image/jpeg", "jpeg"
+    # No llegó a 500 KB (foto muy detallada): vale igual mientras respete el límite DURO de 5 MB.
+    if ultimo is not None and len(ultimo) <= MAX_IMAGEN:
+        return ultimo, "image/jpeg", "jpeg"
     raise MediaInvalida("La imagen es demasiado pesada incluso comprimida. Usa una foto más pequeña.")
 
 

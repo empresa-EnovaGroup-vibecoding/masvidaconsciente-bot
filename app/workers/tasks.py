@@ -366,6 +366,13 @@ async def _numero_permitido(telefono: str) -> bool:
     from app.models import Configuracion
     from app.services.db import get_session_factory
 
+    # Los teléfonos INTERNOS (simulador del panel, bancos de prueba) empiezan por "__" y NUNCA
+    # son un WhatsApp real: pasan siempre, la lista blanca es solo para números de verdad. Sin
+    # esto, poner un número real en `numeros_permitidos_extra` volvía la lista NO vacía y de
+    # rebote bloqueaba a `__prueba_dinero__` / `__simulador__` (rompía los bancos).
+    if (telefono or "").startswith("__"):
+        return True
+
     permitidos = (settings.numeros_permitidos or "").strip()
     extra = ""
     try:

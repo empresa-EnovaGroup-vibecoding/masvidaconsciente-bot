@@ -118,7 +118,7 @@ FOTOS_FANTASMA = [
     # (texto del bot, ¿el cliente pidió fotos?, ¿debe frenar?)
     ("Ya te la envié hace poco 💚", True, True),                       # EL CASO REAL
     ("Ahí las tienes 💚", True, True),        # 2026-07-14: el pronombre en medio burlaba la red
-    ("Aquí los tienes 💚", False, True),      # aquí + pronombre, sin la palabra foto
+    ("Aquí los tienes 💚", True, True),       # aquí + pronombre, y el cliente pidió fotos → FRENA
     ("Ahí tienes las fotos de la Torta Keto 💚", False, True),         # con la palabra "fotos"
     ("Listo, ahí van las fotos 💚", False, True),
     ("Te las acabo de mandar 💚", True, True),
