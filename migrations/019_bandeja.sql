@@ -29,8 +29,26 @@ ALTER TABLE mensajes ADD CONSTRAINT ck_mensaje_rol
 -- no se ve NADA del intercambio del pago. Responder así es responder a ciegas.
 ALTER TABLE mensajes ADD COLUMN IF NOT EXISTS tipo TEXT NOT NULL DEFAULT 'text';
 ALTER TABLE mensajes DROP CONSTRAINT IF EXISTS ck_mensaje_tipo;
+-- 🔴🔴 ESTA LISTA REVENTÓ PRODUCCIÓN EN SILENCIO DURANTE DÍAS (encontrado el 2026-07-14).
+--
+-- Aquí decía solo ('text','image','audio','document','sticker','video'). La migración 021 la
+-- AMPLIÓ después (para el eco de la dueña: ubicaciones, contactos, reacciones…). Pero como NO hay
+-- tabla de migraciones aplicadas (deuda D1), **init_db vuelve a correr TODAS en cada arranque** —
+-- y esta corre ANTES que la 021. En cuanto un cliente real mandó un contacto o algo raro, la fila
+-- quedó con tipo='contacts'/'otro' y esta línea empezó a fallar:
+--     CheckViolationError: check constraint "ck_mensaje_tipo" is violated by some row
+-- `main.py` se TRAGA esa excepción, así que **el contenedor arrancaba VERDE**… y las migraciones
+-- 020, 021, 022 y 022b **YA NO SE APLICABAN NUNCA**. Consecuencia real y cara: la 015 volvía a
+-- crear el índice viejo `ux_precio_dia_producto_fecha` y la 022 (que lo borra) no llegaba a correr
+-- ⇒ **en producción NO se podía cargar el precio del día de dos tamaños del mismo producto**
+-- (la torta de 250g y la de 1kg). El bug que la 022 vino a arreglar seguía VIVO en producción.
+--
+-- La lista se pone IGUAL que la de la 021: así esta migración se puede re-correr contra datos ya
+-- evolucionados sin reventar. Una migración que no aguanta volver a correr sobre datos REALES no
+-- es idempotente, por muchos IF NOT EXISTS que lleve.
 ALTER TABLE mensajes ADD CONSTRAINT ck_mensaje_tipo
-    CHECK (tipo IN ('text', 'image', 'audio', 'document', 'sticker', 'video'));
+    CHECK (tipo IN ('text', 'image', 'audio', 'document', 'sticker', 'video',
+                    'location', 'contacts', 'reaction', 'otro'));
 ALTER TABLE mensajes ADD COLUMN IF NOT EXISTS media_id TEXT;
 
 -- ─── 3. CÓMO llegó (nada de fallos en silencio) ────────────────────────────────

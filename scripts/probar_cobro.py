@@ -87,7 +87,52 @@ async def variantes_de(session, nombre_like):
     return prod, vs
 
 
+# 🔴 ESTE BANCO ESCRIBE EN LA BASE (pone precios del día de mentira para probar el cobro).
+#
+# El 2026-07-14 se corrió contra PRODUCCIÓN, reventó a mitad… y **dejó vivo un precio FALSO**:
+# "Tortas keto 250g = $25", cargado como EL PRECIO DE HOY. El bot se lo habría dicho a un cliente
+# real. Se borró a mano — pero no puede volver a depender de que la prueba termine bien.
+#
+# Ahora la limpieza corre SIEMPRE (`finally`) y con BISTURÍ: se anota qué filas HABÍA antes y solo
+# se borran las que creó el banco. (Borrar "todos los precios de hoy" habría sido peor: le habría
+# borrado a la dueña los precios REALES que acabara de cargar.)
+_PRECIOS_QUE_YA_ESTABAN: set[int] = set()
+
+
+async def _anotar_precios_previos() -> None:
+    factory = get_session_factory()
+    async with factory() as s:
+        _PRECIOS_QUE_YA_ESTABAN.update(
+            (await s.execute(select(PrecioDia.id))).scalars().all()
+        )
+
+
+async def _borrar_precios_de_prueba() -> None:
+    factory = get_session_factory()
+    try:
+        async with factory() as s:
+            if _PRECIOS_QUE_YA_ESTABAN:
+                stmt = delete(PrecioDia).where(PrecioDia.id.not_in(_PRECIOS_QUE_YA_ESTABAN))
+            else:
+                stmt = delete(PrecioDia)  # no había ninguno antes ⇒ todo lo de ahora es del banco
+            borradas = (await s.execute(stmt)).rowcount
+            await s.commit()
+        if borradas:
+            print(f"   🧹 limpiado: {borradas} precio(s) del día de prueba (los reales, intactos)")
+    except Exception as exc:  # noqa: BLE001
+        print(f"   ⚠️  NO se pudo limpiar el precio del día de prueba: {exc}")
+
+
 async def main() -> None:
+    await _anotar_precios_previos()
+    try:
+        await _correr()
+    finally:
+        # Pase lo que pase (aunque el banco reviente a mitad), no queda un precio de mentira vivo.
+        await _borrar_precios_de_prueba()
+
+
+async def _correr() -> None:
     factory = get_session_factory()
     async with factory() as session:
 
