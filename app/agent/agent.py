@@ -37,20 +37,33 @@ _AFIRMA_ENVIO_CATALOGO = (
 )
 
 
-def _afirma_envio_catalogo(texto: str) -> bool:
-    """True si el texto AFIRMA haber enviado el catálogo/menú (no si lo ofrece/pregunta)."""
+def _pide_catalogo(texto_cliente: str) -> bool:
+    """True si el CLIENTE está pidiendo el catálogo/menú/carta."""
+    t = _sin_acentos(texto_cliente or "")
+    return any(p in t for p in ("catalogo", "menu", "carta", "lista de productos"))
+
+
+def _afirma_envio_catalogo(texto: str, cliente_pidio_catalogo: bool = False) -> bool:
+    """True si el texto AFIRMA haber enviado el catálogo/menú (no si lo ofrece/pregunta).
+
+    ⚠️ La trampa del PRONOMBRE (2026-07-14, gemela de la de las fotos): si el cliente pidió
+    el catálogo y el bot dice "ya te LO envié", la frase NO trae la palabra "catálogo" — el
+    «lo» viene del mensaje del cliente. Por eso, si el cliente lo acaba de pedir, la
+    afirmación cuenta aunque la palabra no esté."""
     t = _sin_acentos(texto)
-    if "catalogo" not in t and "menu" not in t:
+    if "catalogo" not in t and "menu" not in t and not cliente_pidio_catalogo:
         return False
     return any(frase in t for frase in _AFIRMA_ENVIO_CATALOGO)
 
 
-async def _asegurar_catalogo(texto: str, catalogo_ok: bool, telefono: str, ejecutar) -> str:
+async def _asegurar_catalogo(
+    texto: str, catalogo_ok: bool, telefono: str, ejecutar, pidio_catalogo: bool = False
+) -> str:
     """Red de seguridad: si el bot DICE que envió el catálogo pero no llamó a la
     herramienta, lo enviamos de verdad (su afirmación se vuelve cierta y el cliente
     SÍ recibe el PDF, además en el orden correcto: PDF primero, texto después).
     Si no hay PDF, evitamos dejar una afirmación falsa."""
-    if catalogo_ok or not _afirma_envio_catalogo(texto):
+    if catalogo_ok or not _afirma_envio_catalogo(texto, pidio_catalogo):
         return texto
     try:
         resultado = await ejecutar("enviar_catalogo", {}, telefono)
@@ -1036,7 +1049,10 @@ async def responder(
                 except Exception:  # noqa: BLE001 — el aviso no puede tumbar el turno
                     logger.exception("No se pudo crear el aviso automático de %s", telefono)
 
-            texto = await _asegurar_catalogo(texto, catalogo_ok, telefono, ejecutar)
+            texto = await _asegurar_catalogo(
+                texto, catalogo_ok, telefono, ejecutar,
+                pidio_catalogo=_pide_catalogo(pregunta_cliente),
+            )
             if _es_inicio_conversacion(historial):
                 texto = _asegurar_saludo(texto, mensaje_usuario, nombre_cliente)
             return texto

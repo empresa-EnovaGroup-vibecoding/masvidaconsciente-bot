@@ -806,9 +806,8 @@ async def borrar_producto(producto_id: int, _: str = Depends(usuario_actual)):
 
 
 # ─── Media de productos (fotos/videos en R2) ─────────────────────────────
-
-_MAX_IMAGEN = 5 * 1024 * 1024   # 5 MB (límite de imagen de WhatsApp)
-_MAX_VIDEO = 16 * 1024 * 1024   # 16 MB (límite de video de WhatsApp)
+# Los límites de WhatsApp (video 16 MB · imagen 5 MB) viven en app/services/media_convert.py,
+# que es quien deja CUALQUIER archivo subido en el formato que WhatsApp exige.
 
 
 @router.get("/productos/{producto_id}/media")
@@ -831,8 +830,14 @@ async def listar_media(producto_id: int, _: str = Depends(usuario_actual)):
 async def subir_media(
     producto_id: int, archivo: UploadFile = File(...), _: str = Depends(usuario_actual)
 ):
-    """Sube una foto o video del producto a R2. En la BD se guarda solo la ruta (clave)."""
-    from app.services import r2
+    """Sube una foto o video del producto a R2. En la BD se guarda solo la ruta (clave).
+
+    🔴 EL FORMATO SE ARREGLA AQUÍ, EN LA PUERTA (2026-07-14): la dueña sube LO QUE SEA
+    (el .mov del iPhone, un HEIC, un WebP) y el sistema lo convierte a lo que WhatsApp
+    exige (video MP4/H.264 ≤16MB · imagen JPEG/PNG ≤5MB). Antes el .mov de la Torta keto
+    se guardaba tal cual y el envío por WhatsApp iba a fallar SIEMPRE. Lo que queda en R2
+    ya es enviable; si no se puede convertir, se RECHAZA con un mensaje claro."""
+    from app.services import media_convert, r2
 
     if not r2.configurado():
         raise HTTPException(
@@ -840,19 +845,27 @@ async def subir_media(
         )
     ct = (archivo.content_type or "").lower()
     if ct.startswith("image/"):
-        tipo, limite = "imagen", _MAX_IMAGEN
+        tipo = "imagen"
     elif ct.startswith("video/"):
-        tipo, limite = "video", _MAX_VIDEO
+        tipo = "video"
     else:
         raise HTTPException(status_code=400, detail="Solo se aceptan imágenes o videos")
-    ext = (ct.split("/")[-1].split(";")[0] or "bin").strip()
     contenido = await archivo.read()
-    if len(contenido) > limite:
-        mb = limite // (1024 * 1024)
-        cosa = "videos" if tipo == "video" else "imágenes"
+    # Tope de ENTRADA generoso (el video crudo del teléfono pesa mucho más que el
+    # convertido): la conversión de abajo lo deja en el límite real de WhatsApp.
+    if len(contenido) > 300 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="El archivo es muy grande (máximo 300 MB)")
+    try:
+        if tipo == "video":
+            contenido, ct, ext = await media_convert.normalizar_video(contenido)
+        else:
+            contenido, ct, ext = await media_convert.normalizar_imagen(contenido, ct)
+    except media_convert.MediaInvalida as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:  # noqa: BLE001 — mejor rechazar que guardar algo inenviable
         raise HTTPException(
-            status_code=413, detail=f"El archivo es muy grande (máximo {mb} MB para {cosa})"
-        )
+            status_code=500, detail="No se pudo procesar el archivo; intenta de nuevo"
+        ) from e
     factory = get_session_factory()
     async with factory() as session:
         prod = await session.get(Producto, producto_id)

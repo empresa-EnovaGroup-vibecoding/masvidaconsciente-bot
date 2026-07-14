@@ -72,6 +72,22 @@ async def borrar(clave: str) -> bool:
         return False
 
 
+async def bajar(clave: str) -> bytes | None:
+    """Descarga un objeto de R2. None si no está configurado o falla (nunca lanza)."""
+    if not configurado() or not clave:
+        return None
+
+    def _get() -> bytes:
+        obj = _cliente().get_object(Bucket=settings.r2_bucket, Key=clave)
+        return obj["Body"].read()
+
+    try:
+        return await asyncio.to_thread(_get)
+    except Exception as e:  # noqa: BLE001
+        logger.error("R2 bajar falló (%s): %s", clave, e)
+        return None
+
+
 def url_publica(clave: str) -> str:
     """URL pública del objeto (R2_PUBLIC_URL + clave). Si un día se cambia el dominio
     público, solo se cambia R2_PUBLIC_URL: las rutas guardadas en la BD no se tocan."""

@@ -32,6 +32,36 @@ jobs:
             -H "Authorization: Bearer ${{ secrets.COOLIFY_OLD_TOKEN }}" \
             "http://2.25.139.106:8000/api/v1/deploy?uuid=qlfrx5yviileijm6lmovy67i,erzq5ycbrs323vwkcbam54a9"
 
+      # 🛡️ EL VIGILANTE (deuda D2, cerrada 2026-07-14): después de CADA despliegue del taller,
+      # los 10 bancos de prueba corren SOLOS dentro del contenedor nuevo. Si alguno sale ROJO:
+      # (1) este flujo queda ROJO aquí en GitHub, y (2) a la dueña le llega un WhatsApp
+      # (scripts/correr_bancos.py). La regla "si sale rojo, no se despliega a producción" ya
+      # no depende de que un humano se acuerde de correrlos por SSH.
+      - name: LOS BANCOS (el taller se prueba SOLO — si algo se rompió, esto queda ROJO)
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.TALLER_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20 root@2.25.139.106 \
+            'bash -s' -- "$GITHUB_SHA" <<'SCRIPT'
+          set -e
+          SHA="$1"
+          echo "Esperando a que el contenedor NUEVO (commit $SHA) esté corriendo…"
+          BOT=""
+          for i in $(seq 1 60); do
+            BOT=$(docker ps --format '{{.Names}} {{.Image}}' | grep '^qlfrx' | grep "$SHA" | head -1 | cut -d' ' -f1 || true)
+            WORKER=$(docker ps --format '{{.Names}} {{.Image}}' | grep '^erzq' | grep "$SHA" | head -1 | cut -d' ' -f1 || true)
+            if [ -n "$BOT" ] && [ -n "$WORKER" ]; then break; fi
+            sleep 15
+          done
+          if [ -z "$BOT" ] || [ -z "$WORKER" ]; then
+            echo "🔴 El contenedor con el commit $SHA nunca arrancó (¿falló el build en Coolify?)"
+            exit 1
+          fi
+          echo "Contenedores nuevos: bot=$BOT worker=$WORKER — corriendo los bancos…"
+          docker exec -w /app -e PYTHONPATH=/app "$BOT" python scripts/correr_bancos.py
+          SCRIPT
+
       - name: PRODUCCIÓN (solo a mano y con la casilla marcada — bot + worker, netcup, clientes reales)
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.produccion }}
         run: |
