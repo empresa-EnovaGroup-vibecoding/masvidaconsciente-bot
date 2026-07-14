@@ -22,6 +22,41 @@ Las **FASES 0 a 3 ya están hechas y desplegadas**:
 
 > 📍 **Pestaña NUEVA de Claude: empieza leyendo este bloque + la última entrada de SESIONES.** Ahí está el estado REAL (no asumir de memoria vieja).
 
+---
+
+# 🚦 ESTADO REAL A 2026-07-14 (verificado, no supuesto)
+
+| | Estado |
+|---|---|
+| 🔴 **EL BOT ESTÁ APAGADO EN EL TALLER** | `bot_activo = false`. Se apagó porque **le estaba contestando a una CLIENTA REAL** e inventó un precio. **No encenderlo sin el OK de Maired.** |
+| 🔇 **En PRODUCCIÓN el bot NO le habla a los clientes** | `NUMEROS_PERMITIDOS = 573005690062` (solo el número de Maired). Los clientes escriben y **ella les contesta A MANO** (esta semana: 65 mensajes de un cliente, **1** del bot, **33** de ella). |
+| ✅ **La PARED DEL DINERO** | En taller **y producción**. El bot **no puede** sumar, ni confundir bolívares con dólares, ni decir un total que no calculó el sistema. |
+| ✅ **El DELIVERY** | Construido: zonas de lista CERRADA + el **código** suma. **Solo en el TALLER** (falta promover a producción). Zonas: Retiro La Mendera $0 · Barquisimeto $3 · Barquisimeto oeste $5. |
+| ✅ **Pantalla "Entregas"** | En el panel del taller. Maired ya puede cargar zonas sola. |
+| ✅ **La base de datos** | Arreglada: producción llevaba **días** arrancando "en verde" con el esquema a medias (migraciones 019→022b sin aplicar). Detector nuevo: `probar_migraciones.py`. |
+| ✅ **9 BANCOS DE PRUEBA** | `probar_cobro` (27/27) · `probar_delivery` · `probar_carril_dinero` · `probar_honestidad` · `probar_retomar` · `probar_bandeja` · `probar_fase2` · `probar_panel_tamanos` · `probar_migraciones`. **Todos VERDES.** Correrlos **siempre** antes de desplegar. |
+
+### 🔴 LO QUE FALTA (en orden)
+
+1. **EL CANDADO DE LOS DATOS BANCARIOS.** Hoy la cédula, la cuenta, el Zelle y el Binance están escritos **en el TEXTO de la personalidad** (BD, clave `personalidad`) — el modelo los **copia y pega sin que haya pedido**. Se lo hizo a una clienta real. Están **duplicados** en la tabla `metodos_pago` (que es la que usa la herramienta `generar_datos_pago`, y esa sí hace las cosas bien). → **Sacarlos del texto + red en el código** que frene un mensaje con datos de pago si no hubo `generar_datos_pago` OK en ese turno.
+2. **LA PERSONALIDAD ORDENA LA MENTIRA.** Su primera línea dice: *"Eres Whuilianny Zabala, **la dueña**… **Eres humana**"*. Por eso, cuando un cliente pide hablar con una persona, el bot dice *"soy la dueña"*. **Es el texto de Maired: NO se toca sin su OK.** Hoy solo lo frena una red de código. *(Propuesta: quitar las dos palabras "Eres humana" y nada más.)*
+3. **Promover el DELIVERY a producción** (`gh workflow run deploy.yml -f produccion=true`) y cargar las zonas allí.
+4. **El ENSAYO GENERAL** (`scripts/ensayo_retomar.py` + los 12 clientes falsos) **antes de encender el bot**.
+5. **D1 de verdad:** tabla `schema_migrations` + que el arranque **falle RUIDOSAMENTE**. Hoy `main.py` se traga la excepción y el contenedor arranca verde con la base a medias (ya mordió).
+6. **El RETOMAR sigue siendo un segundo camino** con su propia instrucción `[SISTEMA]`. Lo correcto es el **REPLAY** (los pendientes vuelven a entrar por el camino normal). Eso mata de raíz toda esa familia de bugs.
+7. **Conocimiento está desordenado** (lo dijo Maired). Falta ordenarlo.
+8. ❓ **Pregunta de negocio abierta:** *¿el 20% de descuento por pagar en divisas aplica también al ENVÍO?* Hoy está implementado como **NO** (descuento solo al producto; el flete se cobra completo) — si aplicara al total, **Whuilianny pagaría el delivery de su bolsillo** en cada venta en dólares. **Falta confirmarlo con ella.**
+
+### ⚠️ REGLAS QUE COSTARON SANGRE (no re-aprenderlas)
+
+- **El DINERO va en el CÓDIGO, nunca en el prompt.** El prompt decía *"no sumes el envío al total"* **dos veces** y el bot lo sumó igual, a una clienta real. *Lo que se puede desobedecer, se desobedece.*
+- **Verificar en la BD, no en el chat.** El bot dijo *"te agendo"* con **cero pedidos** en la base.
+- **Todo lo que mueve dinero necesita una LISTA CERRADA** (el "código de barras"): `variante_id` para el producto, `zona_id` para el envío. El modelo **elige**, nunca **escribe**.
+- **Un contenedor en VERDE no significa que la base esté bien.**
+- **Push a master = SOLO el taller.** Producción es a mano (`-f produccion=true`).
+
+---
+
 ### 🎯 EL ORDEN RECOMENDADO (decidido con Maired, 2026-07-13)
 
 1. **La DEUDA TÉCNICA** (D1–D5, aquí abajo). No es lo más vistoso, pero **es lo que puede romper lo que YA funciona** — hoy, si alguien despliega sin correr los bancos a mano, rompe el cobro y nadie se entera.
