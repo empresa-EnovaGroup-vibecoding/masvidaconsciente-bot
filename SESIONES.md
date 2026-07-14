@@ -17,6 +17,30 @@
 
 ---
 
+## 2026-07-14 — 💣 LA BOMBA DE D1 EXPLOTÓ: PRODUCCIÓN LLEVABA DÍAS ARRANCANDO EN VERDE CON EL ESQUEMA A MEDIAS
+
+**Encontrado POR ACCIDENTE al desplegar.** No lo buscaba nadie. Es el mayor hallazgo de la sesión.
+
+```
+INFO:init_db:Migracion 018 (horas) aplicada
+ERROR:app.main:init_db fallo en el arranque (la app sigue funcionando)   ← arranca VERDE igual
+CheckViolationError: check constraint "ck_mensaje_tipo" is violated by some row
+```
+
+**La cadena, verificada (no supuesta):** no hay tabla de migraciones aplicadas (**deuda D1**) ⇒ `init_db` **re-corre las 24 migraciones en CADA arranque**. La **019** ponía un candado ESTRECHO a `mensajes.tipo`; la **021** lo AMPLIÓ después (para el eco: ubicaciones, **contactos**, reacciones). En cuanto un cliente real mandó un **contacto**, esa fila dejó de caber en el candado de la 019 ⇒ **la 019 revienta** ⇒ `main.py` **se traga la excepción** ⇒ **las migraciones 020, 021, 022 y 022b YA NO SE APLICABAN NUNCA.** Y el contenedor, **verde**.
+
+**El coste, real y vivo:** la **015** volvía a crear el índice viejo `ux_precio_dia_producto_fecha` y la **022** (que lo borra) no llegaba a correr ⇒ **en PRODUCCIÓN no se podía cargar el precio del día de DOS TAMAÑOS del mismo producto** (la torta de 250g y la de 1kg). **El bug que la 022 vino a matar seguía vivo en producción** — y el taller decía que todo estaba bien, **porque allí no había mensajes de tipo `contacts`**.
+
+**Arreglado:** el CHECK de la 019 pasa a ser el mismo de la 021 (una migración que no aguanta re-correrse sobre datos ya evolucionados **no es idempotente**, por muchos `IF NOT EXISTS` que lleve). Ensayado **en producción con BEGIN/ROLLBACK** antes de aplicarlo: la 022b **no cambia ni una fila** (28 productos, 33 tamaños, 35 fotos, antes y después). Verificado en vivo: **019, 020, 021, 022 y 022b aplicadas**, índice viejo **borrado**, `probar_cobro` **27/27 en producción**.
+
+**🧹 Y un susto que me llevé yo:** corrí `probar_cobro.py` **contra producción**, reventó a mitad… y **dejó vivo un precio FALSO**: *"Tortas keto 250g = $25"*, cargado **como el precio de hoy**. El bot **se lo habría dicho a un cliente real**. Lo borré a mano. Ahora ese banco limpia **siempre** (`finally`) y **con bisturí**: anota qué filas había ANTES y solo borra las suyas (borrar "todos los precios de hoy" habría sido peor: le borra a la dueña los precios **reales** que acabara de cargar).
+
+**🛡️ El vigilante nuevo — `probar_migraciones.py`:** comprueba que el esquema esté **COMPLETO** (las columnas de cada migración, los índices que deben estar, **y el índice viejo que NO puede volver**). Salió **verde en el taller y ROJO en producción** — cazó el bug. *Un contenedor en verde NO significa que la base esté como el código cree.*
+
+**Sigue abierto:** **D1 de verdad** (tabla de migraciones + que el arranque falle **RUIDOSAMENTE**). Hoy se tapó el síntoma y se puso un detector; la bomba sigue armada para la próxima migración que no aguante re-correrse.
+
+---
+
 ## 2026-07-13 (madrugada) — 🏛️ AUDITORÍA DE ARQUITECTURA: LA PUERTA DEL DINERO NO TENÍA GUARDIA (y el caso estrella no funcionaba)
 
 **Maired preguntó: *"¿está bien esto, arquitectónicamente?"*. La respuesta honesta era NO.** Una auditoría adversarial (8 lentes, cada hallazgo refutado contra el código) destapó dos cosas que las 12/12 pruebas en verde NO veían — y la peor la había construido yo.
