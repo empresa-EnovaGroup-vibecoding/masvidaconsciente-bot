@@ -128,6 +128,12 @@ CLAVES_CONFIG = [
     # tengo" sobre tres productos que SÍ vende. Formato: una línea por término,
     # "termino: palabra1, palabra2". Vacío = se usa el default de tools.py (_SINONIMOS_DEFAULT).
     "sinonimos_busqueda",
+    # LOS DOS AGENTES (fase 5, migración 025). Palancas de la PROVEEDORA.
+    # `agente_modo`: 'uno' (el agente único de siempre) | 'dos' (Operador + Voz).
+    # `modelo_operador` / `modelo_voz`: ausentes ⇒ caen a `modelo_ia` (compatibilidad).
+    "agente_modo",
+    "modelo_operador",
+    "modelo_voz",
 ]
 
 
@@ -985,7 +991,7 @@ async def servir_catalogo_pdf():
 # clienta; cuando la clienta tenga su propio rol/login se le esconde"*. Ese rol ya existe
 # (migración 024), así que aquí se esconde de verdad — hasta hoy la whitelist era plana y la
 # dueña podía cambiarle el modelo al bot desde la pantalla de Configuración.
-CLAVES_PROVEEDORA = {"modelo_ia"}
+CLAVES_PROVEEDORA = {"modelo_ia", "agente_modo", "modelo_operador", "modelo_voz"}
 
 
 @router.get("/configuracion")

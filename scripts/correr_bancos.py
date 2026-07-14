@@ -40,6 +40,11 @@ BANCOS = [
     # el brazo a una red), que la red del DINERO no se quede ciega (el bug invisible), y que
     # apagar las fotos no convierta al bot en una máquina de respuestas enlatadas.
     "probar_herramientas",
+    # LOS DOS AGENTES (fase 5): la VOZ no puede inventar porque NO TIENE DE DÓNDE (sin
+    # catálogo, sin zonas, sin calendario). Vigila que las 9 redes sigan con su nombre y su
+    # firma (3 bancos las importan así), que NO se toque ninguna temperatura, y que la lista
+    # blanca del dinero deje de tragarse los `id_para_pedir` (el bug del "$23").
+    "probar_dos_agentes",
     "probar_cobro",
     "probar_datos_bancarios",
     "probar_delivery",

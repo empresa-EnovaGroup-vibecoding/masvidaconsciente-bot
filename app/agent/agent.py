@@ -12,7 +12,12 @@ from datetime import UTC, datetime, timedelta
 
 import httpx
 
-from app.agent.system_prompt import construir_partes_prompt, leer_modelo_ia
+from app.agent.hoja import HojaDeHechos
+from app.agent.system_prompt import (
+    construir_partes_prompt,
+    leer_config_agente,
+    leer_modelo_ia,
+)
 from app.agent.tools import TOOL_SCHEMAS, ejecutar_tool, schemas_para
 from app.config import get_settings
 from app.services.tools_config import leer_tools_activas
@@ -715,6 +720,7 @@ async def responder(
     *,
     pregunta_cliente: str | None = None,
     llm=_llamar_openrouter,
+    voz=None,
     ejecutar=ejecutar_tool,
 ) -> str:
     """Devuelve el texto de respuesta para enviar al cliente.
@@ -725,10 +731,26 @@ async def responder(
     la bandeja le decía a la dueña: *El cliente preguntó: "[SISTEMA] Vuelves a atender…"*. Basura
     en el único sitio donde ella mira para entender qué pasa.
 
-    `llm` y `ejecutar` son inyectables para poder testear el loop sin
-    llamar a OpenRouter ni a la base de datos reales.
+    `llm`, `voz` y `ejecutar` son inyectables para poder testear el loop sin llamar a OpenRouter
+    ni a la base de datos reales.
+
+    🔴 LA FIRMA NO CAMBIA, Y ESO ES EL DISEÑO. Toda la arquitectura de DOS AGENTES (fase 5) vive
+    DETRÁS de esta función, que sigue devolviendo un `str`. `tasks.py` (4 sitios) y el simulador
+    del panel no se tocan. Radio de explosión: mínimo.
     """
     pregunta_cliente = pregunta_cliente or mensaje_usuario
+
+    # 🔒 LA BANDERA. 'uno' = el agente de siempre (lo que corre hoy). 'dos' = Operador + Voz.
+    # Volver atrás es UN `UPDATE` en `configuracion`, sin redeploy: el bot lo obedece en el
+    # siguiente mensaje. El camino viejo NO se borra — se envuelve (regla ADITIVA, CLAUDE.md §3).
+    modo, modelo_operador, modelo_voz = await leer_config_agente()
+    if modo == "dos":
+        return await _responder_dos_agentes(
+            telefono, mensaje_usuario, historial, nombre_cliente,
+            pregunta_cliente=pregunta_cliente,
+            llm=llm, voz=voz or _pedir_redaccion, ejecutar=ejecutar,
+            modelo_operador=modelo_operador, modelo_voz=modelo_voz,
+        )
     # QUÉ SABE HACER EL BOT HOY (fase 4). Se lee UNA vez por turno y baja a los dos sitios que la
     # necesitan: el prompt (para que no ORDENE usar una herramienta apagada) y la lista que ve el
     # LLM. `_DISPATCH` no se toca: las redes de seguridad siguen pudiendo ejecutarlo todo.
@@ -1170,6 +1192,243 @@ async def responder(
 
     logger.warning("Agente excedió max iteraciones para %s", telefono)
     return RESPUESTA_SEGURA
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════
+#  LOS DOS AGENTES (fase 5) — el que HACE y el que HABLA
+# ══════════════════════════════════════════════════════════════════════════════════════════
+#
+# 🔴 NO SE CONSTRUYEN DOS AGENTES: SE GENERALIZA UNO QUE YA EXISTE. `redactar_mensaje` (abajo) ya
+# es una VOZ —un LLM sin herramientas, en la voz de Whuilianny, con las redes del dinero encima—
+# y lleva semanas en producción hablando en los tres momentos del cobro. Aquí ese patrón, que ya
+# funciona, se extiende a TODOS los turnos, y el `situacion: str` degradado pasa a ser una HOJA
+# DE HECHOS de verdad.
+#
+# ⚠️ NO SE TOCA NI UNA TEMPERATURA. El Operador reusa `_llamar_openrouter` VERBATIM (0.15, con
+# tools, el carril del dinero). La Voz reusa `_pedir_redaccion` VERBATIM (0.7, sin tools). Cada
+# función conserva la suya. La naturalidad no sale de subir un dial: sale de que la Voz deja de
+# cargar 12 herramientas, el catálogo, el calendario y 20 reglas de acción que no puede romper.
+#
+# ⚠️ NINGUNA RED SE RETIRA, y ninguna cambia de nombre ni de firma (3 bancos las importan por
+# nombre). Lo que cambia es DE QUÉ SE ALIMENTAN: su lista blanca pasa de "todo número con marca de
+# dinero en 16.400 tokens de prompt" a "los 2-5 montos que devolvieron las tools EN ESTE TURNO".
+# El bug del "$23" —que era el `id_para_pedir` de una variante -- se vuelve IMPOSIBLE por
+# construcción: los ids nunca entran a la hoja como dinero.
+
+async def _dar_voz(
+    hoja: HojaDeHechos, telefono, nombre_cliente, historial, pregunta, voz, modelo,
+) -> str:
+    """La VOZ: escribe el mensaje. Sin herramientas. Sin catálogo. Sin datos bancarios."""
+    estable, dinamico = await construir_partes_prompt(nombre_cliente, telefono, quien="voz")
+    messages: list = [
+        {
+            "role": "system",
+            "content": [
+                {"type": "text", "text": estable, "cache_control": {"type": "ephemeral"}},
+                {"type": "text", "text": dinamico},
+            ],
+        }
+    ]
+    if historial:
+        messages.extend(historial)
+    # La hoja va en el turno `user` FINAL, no en el system: cambia cada turno, y meterla arriba
+    # rompería el caché de la Voz en CADA mensaje. (Mismo criterio de siempre: lo fijo primero.)
+    messages.append({"role": "user", "content": hoja.render(pregunta)})
+    return await voz(messages, modelo)
+
+
+async def _responder_dos_agentes(
+    telefono, mensaje_usuario, historial, nombre_cliente, *,
+    pregunta_cliente, llm, voz, ejecutar, modelo_operador, modelo_voz,
+) -> str:
+    activas = await leer_tools_activas()
+    tools_llm = schemas_para(activas)
+    puede_fotos = "enviar_fotos_producto" in activas
+    hoja = HojaDeHechos()
+
+    # ── EL OPERADOR ────────────────────────────────────────────────────────────────────
+    estable, dinamico = await construir_partes_prompt(
+        nombre_cliente, telefono, activas=activas, quien="operador"
+    )
+    messages: list = [
+        {
+            "role": "system",
+            "content": [
+                {"type": "text", "text": estable, "cache_control": {"type": "ephemeral"}},
+                {"type": "text", "text": dinamico},
+            ],
+        }
+    ]
+    if historial:
+        messages.extend(historial)
+    messages.append({"role": "user", "content": mensaje_usuario})
+
+    logger.info(
+        "responder[DOS]: op=%s voz=%s tools=%d msg=%r",
+        modelo_operador, modelo_voz, len(tools_llm), (mensaje_usuario or "")[:50],
+    )
+
+    for _ in range(settings.max_iteraciones_agente):
+        data = await _llamar_con_fallback(messages, llm, modelo_operador, tools_llm)
+        msg = data["choices"][0]["message"]
+        messages.append(msg)
+        tool_calls = msg.get("tool_calls")
+        if not tool_calls:
+            hoja.encargo = (msg.get("content") or "").strip()
+            break
+        for tc in tool_calls:
+            nombre_tool = tc["function"]["name"]
+            if nombre_tool not in activas:  # el guardia de la fase 4
+                logger.warning("TOOL APAGADA (dos): %s para %s", nombre_tool, telefono)
+                messages.append({
+                    "role": "tool", "tool_call_id": tc["id"],
+                    "content": json.dumps(
+                        {"error": f"'{nombre_tool}' está DESACTIVADA.",
+                         "que_hacer": "No la uses. Si te hace falta, llama a `pedir_ayuda`."},
+                        ensure_ascii=False,
+                    ),
+                })
+                continue
+            try:
+                args = json.loads(tc["function"]["arguments"] or "{}")
+            except json.JSONDecodeError:
+                args = {}
+            resultado = await ejecutar(nombre_tool, args, telefono)
+            hoja.anotar_tool(nombre_tool, resultado)   # ← el CÓDIGO anota, no el modelo
+            messages.append({
+                "role": "tool", "tool_call_id": tc["id"],
+                "content": json.dumps(resultado, ensure_ascii=False),
+            })
+    else:
+        logger.warning("Operador excedió max iteraciones para %s", telefono)
+
+    # ── LAS LISTAS BLANCAS: la HOJA, y lo que escribió el propio cliente ────────────────
+    usd_ok, bs_ok, totales_ok, datos_ok = hoja.listas_blancas()
+    u, b = autorizados_por_moneda(mensaje_usuario)
+    usd_ok, bs_ok = usd_ok | u, bs_ok | b
+    datos_ok = datos_ok | _datos_sensibles(mensaje_usuario)
+    for h in historial or []:
+        if isinstance(h, dict) and h.get("role") == "user":
+            c = str(h.get("content") or "")
+            u, b = autorizados_por_moneda(c)
+            usd_ok, bs_ok = usd_ok | u, bs_ok | b
+            datos_ok |= _datos_sensibles(c)
+
+    # ── EL SEAM: el ENCARGO del Operador se valida ANTES de pasárselo a la Voz ──────────
+    #
+    # Si el Operador coló un monto que ninguna herramienta le dio, el `[SISTEMA]` **rebota AL
+    # OPERADOR** — que es quien TIENE la herramienta para arreglarlo. Hoy ese mismo aviso ("LLAMA
+    # a la herramienta que lo da") se le grita a un modelo que ya está en modo redacción y no
+    # puede obedecerlo. Mañana llega a quien puede.
+    if _dinero_inventado(hoja.encargo, usd_ok, bs_ok, totales_ok):
+        logger.error("DINERO INVENTADO en el ENCARGO de %s: %r", telefono, hoja.encargo[:120])
+        messages.append({
+            "role": "user",
+            "content": (
+                "[SISTEMA] Escribiste un monto que NO salió de ninguna herramienta. NUNCA calcules "
+                "ni conviertas dinero de cabeza. Si te falta una cifra, LLAMA a la herramienta que "
+                "la da (`registrar_pedido` / `generar_datos_pago`) y vuelve a escribir el encargo."
+            ),
+        })
+        data = await _llamar_con_fallback(messages, llm, modelo_operador, tools_llm)
+        msg = data["choices"][0]["message"]
+        for tc in (msg.get("tool_calls") or []):
+            n = tc["function"]["name"]
+            if n not in activas:
+                continue
+            try:
+                args = json.loads(tc["function"]["arguments"] or "{}")
+            except json.JSONDecodeError:
+                args = {}
+            hoja.anotar_tool(n, await ejecutar(n, args, telefono))
+        hoja.encargo = (msg.get("content") or "").strip() or hoja.encargo
+        usd_ok, bs_ok, totales_ok, datos_ok = hoja.listas_blancas()
+
+    # ── LA VOZ ─────────────────────────────────────────────────────────────────────────
+    #
+    # LA ESCALERA DE DEGRADACIÓN: la Voz NO puede ser un nuevo punto único de fallo. Si se cae,
+    # el turno NO se pierde — sale el encargo del Operador, pasado por las mismas redes. Es lo que
+    # HOY habría salido de todos modos.
+    try:
+        texto = await _dar_voz(
+            hoja, telefono, nombre_cliente, historial, pregunta_cliente, voz, modelo_voz,
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("La VOZ falló para %s: sale el encargo del Operador", telefono)
+        texto = ""
+    texto = (texto or "").strip() or hoja.encargo.strip() or RESPUESTA_SEGURA
+
+    # ── LAS REDES, sobre lo que de verdad le llega al cliente ───────────────────────────
+    #
+    # NINGUNA se retira. Lo que cambia es su lista blanca: ya no es "todo el prompt", es la HOJA.
+    async def _escalar(motivo: str, detalle: str) -> None:
+        try:
+            await ejecutar("pedir_ayuda", {"motivo": motivo, "detalle": detalle}, telefono)
+        except Exception:  # noqa: BLE001
+            logger.exception("No se pudo escalar (%s) para %s", motivo, telefono)
+
+    inventados = _dinero_inventado(texto, usd_ok, bs_ok, totales_ok)
+    if inventados:
+        logger.error("VOZ: dinero inventado %s para %s — NO sale", inventados, telefono)
+        await _escalar("no_se", f"la Voz iba a decir un monto que no salió del sistema ({inventados})")
+        return RESPUESTA_SEGURA
+
+    sensibles = _datos_sensibles_inventados(texto, datos_ok, usd_ok, bs_ok)
+    if sensibles:
+        logger.error("VOZ: datos sensibles %s para %s — NO sale", sensibles, telefono)
+        await _escalar("no_se", f"la Voz iba a mandar datos que no salieron del sistema ({sensibles})")
+        return RESPUESTA_SEGURA
+
+    # En el carril del PAGO, "recibí tu pago" es lo que el código ORDENA decir: ahí solo se aplican
+    # las mentiras que NINGUNA situación puede volver ciertas (el banco, la identidad, la salud).
+    prohibida = (
+        frase_prohibida_siempre(texto) if hoja.pago_registrado else _frase_prohibida(texto)
+    )
+    if prohibida:
+        logger.error("VOZ: frase prohibida (%s) para %s — NO sale", prohibida, telefono)
+        await _escalar("reclamo", f"la Voz iba a decir algo que tiene PROHIBIDO ({prohibida})")
+        return RESPUESTA_SEGURA
+
+    # El PEDIDO FANTASMA y el ENVÍO FANTASMA, re-anclados a la HOJA (no a unos flags sueltos).
+    if _afirma_pedido_registrado(texto) and hoja.pedido_id is None:
+        logger.error("VOZ: pedido fantasma para %s — NO sale", telefono)
+        await _escalar(
+            "reclamo",
+            "la Voz le dijo al cliente que le AGENDÓ el pedido pero NO existe. Entra tú y agéndalo.",
+        )
+        return RESPUESTA_SEGURA
+
+    if _afirma_envio_fotos(texto, _pide_fotos(pregunta_cliente)) and hoja.fotos_enviadas == 0:
+        logger.error("VOZ: envío fantasma de fotos para %s — NO sale", telefono)
+        await _escalar(
+            "no_se",
+            "el cliente pidió FOTOS y la Voz iba a decir que se las envió SIN haberlas enviado."
+            + ("" if puede_fotos else " (las fotos están DESACTIVADAS: mándaselas tú)"),
+        )
+        return RESPUESTA_SEGURA
+
+    # La RED DEL RELEVO: una promesa sin aviso deja al cliente esperando para siempre.
+    if _promete_averiguar(texto) and not hoja.escalado:
+        logger.warning("VOZ: promesa sin aviso de %s — el aviso lo crea el código", telefono)
+        await _escalar(
+            "no_se",
+            f'la Voz le prometió al cliente confirmarle algo. El cliente preguntó: '
+            f'"{(pregunta_cliente or "")[:160]}"',
+        )
+
+    # La RED DE LA VOZ. Casi sin trabajo ahora: la Voz NO TIENE sistema del que hablar (no ve el
+    # catálogo, ni las notas de las tools, ni un solo `"ok": false`). Si dispara, es que la HOJA
+    # está mal escrita — es su test.
+    if _suena_a_sistema(texto):
+        logger.warning("VOZ: sonó a sistema (¿la hoja está mal escrita?) — %r", texto[:90])
+
+    texto = await _asegurar_catalogo(
+        texto, hoja.catalogo_enviado, telefono, ejecutar,
+        pidio_catalogo=_pide_catalogo(pregunta_cliente),
+    )
+    if _es_inicio_conversacion(historial):
+        texto = _asegurar_saludo(texto, mensaje_usuario, nombre_cliente)
+    return texto
 
 
 async def _pedir_redaccion(messages: list, modelo: str) -> str:
