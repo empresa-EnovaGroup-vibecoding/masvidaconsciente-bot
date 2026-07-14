@@ -163,7 +163,18 @@ async def main() -> None:
 
 
 async def _crear_admin(session) -> None:
-    """Crea el usuario admin del dashboard si no existe."""
+    """Crea el usuario admin del dashboard si no existe, y lo mantiene como PROVEEDORA.
+
+    🔒 LA RED ANTI-BLOQUEO (migración 024). El rol de la cuenta ADMIN_EMAIL se fuerza a
+    'proveedora' EN CADA ARRANQUE. Da igual lo que pase por la API: si alguien se degrada a sí
+    mismo, si un `UPDATE` a mano se equivoca, o si la migración 024 le puso el default 'duena' a
+    la fila que ya existía — el siguiente arranque lo restaura. Sin esto, un error de un clic
+    podría dejar el sistema SIN NINGUNA proveedora y sin forma de recuperar el acceso a las
+    palancas (el modelo de IA, y desde la fase 4 las herramientas del agente).
+
+    Corolario: la cuenta ADMIN_EMAIL **no se puede degradar**. Es a propósito. Para darle acceso
+    a la clienta se crea OTRA cuenta con rol 'duena'.
+    """
     from app.api.security import hash_password
     from app.config import get_settings
     from app.models import Usuario
@@ -180,22 +191,27 @@ async def _crear_admin(session) -> None:
         # Sincroniza la contrasena del admin con ADMIN_PASSWORD en cada arranque.
         # Antes el admin se creaba UNA sola vez: cambiar ADMIN_PASSWORD no actualizaba
         # el login. Ahora cambiar la variable (+ redeploy) si cambia la contrasena real.
+        # Y de paso, el rol: la cuenta admin SIEMPRE es la proveedora.
         await session.execute(
-            text("UPDATE usuarios SET password_hash = :ph WHERE email = :email"),
+            text(
+                "UPDATE usuarios SET password_hash = :ph, rol = 'proveedora' "
+                "WHERE email = :email"
+            ),
             {"ph": nuevo_hash, "email": settings.admin_email},
         )
         await session.commit()
-        logger.info("Usuario admin: contrasena sincronizada con ADMIN_PASSWORD")
+        logger.info("Usuario admin: contrasena y rol (proveedora) sincronizados")
         return
     session.add(
         Usuario(
             email=settings.admin_email,
             password_hash=nuevo_hash,
             nombre="Administrador",
+            rol="proveedora",
         )
     )
     await session.commit()
-    logger.info("Usuario admin creado: %s", settings.admin_email)
+    logger.info("Usuario admin creado (proveedora): %s", settings.admin_email)
 
 
 async def _backfill_embeddings(session) -> None:

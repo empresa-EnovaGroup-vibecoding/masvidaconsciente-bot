@@ -304,6 +304,11 @@ class Usuario(Base):
     email: Mapped[str] = mapped_column(Text, unique=True)
     password_hash: Mapped[str] = mapped_column(Text)
     nombre: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 'proveedora' (Enova) | 'duena' (la clienta). Migración 024.
+    # La PROVEEDORA tiene palancas que la clienta no debe tocar: el selector de modelo de IA
+    # (CLAUDE.md §5: "palanca de PROVEEDOR, no de la clienta") y, desde la fase 4, el interruptor
+    # de las herramientas del agente. Sin acentos a propósito: viaja por el JWT y la API.
+    rol: Mapped[str] = mapped_column(Text, default="duena")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 
 

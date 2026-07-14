@@ -51,3 +51,51 @@ def usuario_actual(token: str = Depends(oauth2_scheme)) -> str:
         # `from None`: el 401 ES la respuesta prevista, no un fallo secundario. Encadenar
         # el JWTError solo mete las tripas de la librería en el traceback de un login malo.
         raise cred_error from None
+
+
+# ─── ROLES (migración 024): proveedora (Enova) vs dueña (la clienta) ──────────────────
+
+async def leer_rol(email: str) -> str:
+    """El rol de un usuario, LEÍDO DE LA BASE — no del token.
+
+    🔴 Y ES UNA DECISIÓN, NO UN DESCUIDO. Meter el rol como claim del JWT sería más rápido (una
+    consulta menos), pero trae dos problemas feos:
+
+      1. **Los tokens ya emitidos no lo llevan.** El día que esto se despliegue, todo el mundo
+         tiene un token viejo SIN el claim. Si la puerta exigiera el claim, la proveedora se
+         quedaría FUERA de sus propias palancas hasta que el token caduque (12h).
+      2. **Un cambio de rol no surtiría efecto hasta la próxima sesión.** Si le quitas el rol a
+         alguien, seguiría entrando durante horas con el token que ya tiene en la mano.
+
+    Leyéndolo de la BD, el rol es la VERDAD DE AHORA. Cuesta una consulta por request en un panel
+    de dos usuarios: es gratis.
+
+    Si el usuario no existe (borrado con la sesión abierta), devuelve 'duena' — el rol de MENOS
+    privilegio. Fail-closed: ante la duda, la puerta se cierra.
+    """
+    from sqlalchemy import select
+
+    from app.models import Usuario
+    from app.services.db import get_session_factory
+
+    factory = get_session_factory()
+    async with factory() as session:
+        rol = (
+            await session.execute(select(Usuario.rol).where(Usuario.email == email))
+        ).scalars().first()
+    return rol or "duena"
+
+
+async def proveedora_actual(email: str = Depends(usuario_actual)) -> str:
+    """Puerta de las palancas de la PROVEEDORA (Enova). La dueña recibe 403.
+
+    Qué protege: el selector de modelo de IA (CLAUDE.md §5: *"palanca de PROVEEDOR, no de la
+    clienta"*) y, desde la fase 4, el interruptor de las herramientas del agente. La dueña no
+    debería poder apagarle tools a su propio bot sin querer.
+    """
+    if await leer_rol(email) != "proveedora":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Esto solo lo puede tocar la proveedora (Enova).",
+        )
+    return email

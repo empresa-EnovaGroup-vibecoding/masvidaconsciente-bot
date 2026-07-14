@@ -31,6 +31,10 @@ BANCOS = [
     # Vigila LAS DOS mitades del arreglo: que el bot GUARDE la fila, y que el endpoint SEPA
     # servirla (las fotos viven en R2: `os.path.exists("https://…")` daba 404).
     "probar_media",
+    # LOS ROLES (fase 3): la dueña no toca las palancas de la proveedora — y NADIE se queda
+    # fuera. Hace peticiones HTTP REALES contra la app ASGI: llamar a las funciones de los
+    # endpoints a pelo NO evalúa los `Depends`, así que el guardia ni siquiera correría.
+    "probar_roles",
     "probar_cobro",
     "probar_datos_bancarios",
     "probar_delivery",

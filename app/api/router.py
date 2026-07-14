@@ -15,9 +15,12 @@ from sqlalchemy import delete, func, select
 
 from app.api.security import (
     crear_token,
+    leer_rol,
+    proveedora_actual,
     usuario_actual,
     verify_password,
 )
+from app.config import get_settings
 from app.models import (
     CatalogoPdf,
     Cliente,
@@ -33,6 +36,7 @@ from app.models import (
     Producto,
     ProductoMedia,
     ProductoVariante,
+    Usuario,
     ZonaEntrega,
     hoy_venezuela,
     inicio_dia_venezuela,
@@ -976,21 +980,53 @@ async def servir_catalogo_pdf():
 
 # ─── Configuración del negocio (datos que el bot usa) ────────────────
 
+# Claves que SOLO puede ver y tocar la PROVEEDORA (Enova), nunca la clienta.
+# `modelo_ia` ya estaba documentado así en CLAUDE.md §5: *"palanca de PROVEEDOR, no de la
+# clienta; cuando la clienta tenga su propio rol/login se le esconde"*. Ese rol ya existe
+# (migración 024), así que aquí se esconde de verdad — hasta hoy la whitelist era plana y la
+# dueña podía cambiarle el modelo al bot desde la pantalla de Configuración.
+CLAVES_PROVEEDORA = {"modelo_ia"}
+
+
 @router.get("/configuracion")
-async def obtener_configuracion(_: str = Depends(usuario_actual)):
+async def obtener_configuracion(email: str = Depends(usuario_actual)):
     """Devuelve los datos editables del negocio (nombre, ubicacion, Pago Movil,
-    WhatsApp de avisos...). Son las claves que el bot lee para atender y cobrar."""
+    WhatsApp de avisos...). Son las claves que el bot lee para atender y cobrar.
+
+    Las claves de PROVEEDORA se omiten si quien pregunta es la dueña.
+    """
+    es_proveedora = await leer_rol(email) == "proveedora"
     factory = get_session_factory()
     async with factory() as session:
         filas = (await session.execute(select(Configuracion))).scalars().all()
         actual = {f.clave: f.valor for f in filas}
-    return {clave: actual.get(clave) for clave in CLAVES_CONFIG}
+    return {
+        clave: actual.get(clave)
+        for clave in CLAVES_CONFIG
+        if es_proveedora or clave not in CLAVES_PROVEEDORA
+    }
 
 
 @router.put("/configuracion")
-async def guardar_configuracion(datos: ConfiguracionIn, _: str = Depends(usuario_actual)):
+async def guardar_configuracion(datos: ConfiguracionIn, email: str = Depends(usuario_actual)):
     """Guarda (upsert) los datos del negocio. Ignora claves desconocidas por
-    seguridad: solo se aceptan las de CLAVES_CONFIG."""
+    seguridad: solo se aceptan las de CLAVES_CONFIG.
+
+    Y las de PROVEEDORA se rechazan (403) si quien las manda es la dueña. Se RECHAZA en vez de
+    ignorarlas en silencio: si el panel manda una clave que no le toca, es un bug del panel y hay
+    que verlo, no taparlo.
+    """
+    es_proveedora = await leer_rol(email) == "proveedora"
+    if not es_proveedora:
+        prohibidas = CLAVES_PROVEEDORA & set(datos.valores)
+        if prohibidas:
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    f"Estas opciones solo las toca la proveedora (Enova): "
+                    f"{', '.join(sorted(prohibidas))}."
+                ),
+            )
     factory = get_session_factory()
     async with factory() as session:
         for clave, valor in datos.valores.items():
@@ -1002,6 +1038,151 @@ async def guardar_configuracion(datos: ConfiguracionIn, _: str = Depends(usuario
             else:
                 fila.valor = valor
                 fila.updated_at = now_utc()
+        await session.commit()
+    return {"ok": True}
+
+
+# ─── Quién soy, y quiénes hay (roles — migración 024) ─────────────────
+
+@router.get("/yo")
+async def quien_soy(email: str = Depends(usuario_actual)):
+    """El usuario de la sesión y su ROL. El panel lo usa para esconder lo que no le toca.
+
+    Ojo: esconder en el frontend es COSMÉTICO. La puerta de verdad es `proveedora_actual` en el
+    backend — quien quiera saltarse el panel y llamar la API a mano se come un 403 igual.
+    """
+    return {"email": email, "rol": await leer_rol(email)}
+
+
+class UsuarioIn(BaseModel):
+    email: Annotated[str, StringConstraints(strip_whitespace=True, min_length=5, max_length=120)]
+    password: Annotated[str, StringConstraints(min_length=8, max_length=72)]
+    nombre: Annotated[str | None, StringConstraints(strip_whitespace=True, max_length=80)] = None
+    rol: str = "duena"
+
+
+class RolIn(BaseModel):
+    rol: str
+
+
+@router.get("/usuarios")
+async def listar_usuarios(_: str = Depends(proveedora_actual)):
+    """Los usuarios del panel. Solo la proveedora."""
+    factory = get_session_factory()
+    async with factory() as session:
+        filas = (
+            await session.execute(select(Usuario).order_by(Usuario.id))
+        ).scalars().all()
+    settings = get_settings()
+    return [
+        {
+            "id": u.id,
+            "email": u.email,
+            "nombre": u.nombre,
+            "rol": u.rol,
+            # La cuenta ADMIN_EMAIL no se puede degradar ni borrar: `_crear_admin` le fuerza
+            # rol='proveedora' en CADA arranque. Es la red anti-bloqueo. El panel la pinta en gris.
+            "protegido": u.email == settings.admin_email,
+        }
+        for u in filas
+    ]
+
+
+@router.post("/usuarios")
+async def crear_usuario(datos: UsuarioIn, _: str = Depends(proveedora_actual)):
+    """Crea un usuario del panel (p. ej. la cuenta de la DUEÑA). Solo la proveedora.
+
+    Aquí es donde la separación de roles se vuelve útil: hasta hoy había UNA sola cuenta que
+    compartían Enova y la clienta, así que el rol no podía servir de nada.
+    """
+    from app.api.security import hash_password
+
+    if datos.rol not in ("proveedora", "duena"):
+        raise HTTPException(status_code=400, detail="El rol debe ser 'proveedora' o 'duena'.")
+    email = datos.email.lower()
+    factory = get_session_factory()
+    async with factory() as session:
+        ya = (
+            await session.execute(select(Usuario).where(Usuario.email == email))
+        ).scalars().first()
+        if ya is not None:
+            raise HTTPException(status_code=400, detail="Ya existe un usuario con ese correo.")
+        u = Usuario(
+            email=email,
+            password_hash=hash_password(datos.password),
+            nombre=datos.nombre or None,
+            rol=datos.rol,
+        )
+        session.add(u)
+        await session.commit()
+        await session.refresh(u)
+    return {"id": u.id, "email": u.email, "nombre": u.nombre, "rol": u.rol}
+
+
+@router.patch("/usuarios/{usuario_id}/rol")
+async def cambiar_rol(usuario_id: int, datos: RolIn, _: str = Depends(proveedora_actual)):
+    """Cambia el rol de un usuario. Solo la proveedora.
+
+    🔒 DOS CANDADOS ANTI-BLOQUEO:
+      · La cuenta ADMIN_EMAIL no se toca (además, `_crear_admin` la restauraría al arrancar).
+      · No se puede dejar el sistema con CERO proveedoras: si esta es la última, se rechaza.
+        Sin esto, un clic podría dejar el sistema sin nadie que pueda tocar el modelo de IA ni
+        (desde la fase 4) las herramientas del agente.
+    """
+    if datos.rol not in ("proveedora", "duena"):
+        raise HTTPException(status_code=400, detail="El rol debe ser 'proveedora' o 'duena'.")
+    settings = get_settings()
+    factory = get_session_factory()
+    async with factory() as session:
+        u = await session.get(Usuario, usuario_id)
+        if u is None:
+            raise HTTPException(status_code=404, detail="Ese usuario no existe.")
+        if u.email == settings.admin_email:
+            raise HTTPException(
+                status_code=400,
+                detail="La cuenta principal siempre es la proveedora: no se puede degradar.",
+            )
+        if u.rol == "proveedora" and datos.rol != "proveedora":
+            cuantas = (
+                await session.execute(
+                    select(func.count()).select_from(Usuario).where(Usuario.rol == "proveedora")
+                )
+            ).scalar() or 0
+            if cuantas <= 1:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Es la única proveedora: si la degradas, nadie podría volver a entrar.",
+                )
+        u.rol = datos.rol
+        await session.commit()
+    return {"ok": True, "id": usuario_id, "rol": datos.rol}
+
+
+@router.delete("/usuarios/{usuario_id}")
+async def borrar_usuario(usuario_id: int, _: str = Depends(proveedora_actual)):
+    """Borra un usuario del panel. Solo la proveedora. Mismos candados anti-bloqueo."""
+    settings = get_settings()
+    factory = get_session_factory()
+    async with factory() as session:
+        u = await session.get(Usuario, usuario_id)
+        if u is None:
+            raise HTTPException(status_code=404, detail="Ese usuario no existe.")
+        if u.email == settings.admin_email:
+            raise HTTPException(
+                status_code=400, detail="La cuenta principal no se puede borrar."
+            )
+        if u.rol == "proveedora":
+            cuantas = (
+                await session.execute(
+                    select(func.count()).select_from(Usuario).where(Usuario.rol == "proveedora")
+                )
+            ).scalar() or 0
+            if cuantas <= 1:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Es la única proveedora: si la borras, nadie podría volver a entrar.",
+                )
+        await session.delete(u)
         await session.commit()
     return {"ok": True}
 
