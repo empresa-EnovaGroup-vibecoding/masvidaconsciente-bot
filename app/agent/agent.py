@@ -617,8 +617,12 @@ _AFIRMA_ENVIO_RE = re.compile(
     # verbo ANTES del objeto: "te mando la foto ahorita" (presente = el mismo "te agendo")
     r"|te\s+(mando|envio|envie|mande|paso|pase)\b"
     r"|acabo\s+de\s+(enviar|mandar|pasar)"
-    r"|ah[i]\s+(tienes|te\s+van|te\s+deje|te\s+dejo|van)"
-    r"|aqui\s+(tienes|te\s+(la|las|lo|los)\s+dejo|te\s+dejo)"
+    # 🔴 EL PRONOMBRE EN MEDIO (caso REAL, 2026-07-14): a "enviame foto de las keto" el bot
+    # contestó "Ahí LAS tienes 💚" cuando las fotos habían FALLADO. La versión vieja pedía "ahi"
+    # pegado a "tienes" y ese «las» la burlaba — el mismo tipo de hueco que el «te LA envié».
+    # Ahora el pronombre (la/las/lo/los) es opcional entre medias.
+    r"|ah[i]\s+((la|las|lo|los)\s+)?(tienes|van|te\s+van|te\s+deje|te\s+dejo)"
+    r"|aqui\s+((la|las|lo|los)\s+)?(tienes|te\s+(la|las|lo|los)\s+dejo|te\s+dejo)"
     r"|ya\s+(salio|se\s+envio|se\s+enviaron|te\s+llego|te\s+llegaron))"
 )
 
