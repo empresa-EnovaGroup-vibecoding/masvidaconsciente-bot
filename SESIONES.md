@@ -17,6 +17,40 @@
 
 ---
 
+## 2026-07-14 — 🎭 FASE 5: DOS AGENTES (Operador + Voz) — la Voz **no puede** inventar
+
+**El problema:** el bot corre con **~16.400 tokens** de instrucciones por turno, **42 reglas** imperativas, **55 prohibiciones** — y con **DOS reglas que se declaran ambas *"la MÁS importante"*** (ANTIINVENCIÓN y BREVEDAD). Cuando todo es crítico, nada lo es. Por eso hay **siete redes de regex** que existen solo para atrapar al modelo incumpliendo, y el propio código lo confiesa: *"el prompt se lo prohibía DOS VECES y lo hizo igual"*, *"la regla vivía en el prompt: humo"*.
+
+La salida no es una regla más. Es **partir el agente en dos**:
+- **OPERADOR** — tiene las herramientas. Busca, registra, cobra. **No le escribe al cliente.**
+- **VOZ** — escribe el mensaje. **Sin herramientas, sin catálogo, sin datos bancarios.**
+
+**🔑 NO SE CONSTRUYEN DOS AGENTES: SE GENERALIZA UNO QUE YA EXISTE.** `redactar_mensaje` **ya era una Voz** —un LLM sin herramientas, en la voz de Whuilianny, con las redes del dinero encima— y lleva semanas en producción hablando en los tres momentos del cobro. Aquí ese patrón, **que ya funciona**, se extiende a todos los turnos.
+
+**🔴 LA HOJA NO LA ESCRIBE EL MODELO. LA ESCRIBE EL CÓDIGO.** Si el Operador la emitiera como JSON, podría **mentir dentro de la hoja**, y habríamos movido la mentira una capa más abajo con una capa más de prompt pidiéndole que no mienta.
+
+**LA HOJA *ES* LA LISTA BLANCA DEL DINERO.** Hoy: `autorizados_por_moneda(estable, dinamico, …)` ← **el prompt entero**. Esa línea es por qué el bot le pudo decir **"$23"** a una clienta real: **el 23 era el `id_para_pedir` de una variante.** Con la hoja, la lista blanca colapsa a *"lo que devolvieron las tools"* + los precios reales del catálogo (que llevan `$`). **El bug se vuelve imposible por construcción: los ids no llevan marca de dinero.**
+
+**LA VOZ NO PUEDE INVENTAR — Y NO ES UNA PROHIBICIÓN, ES UNA AUSENCIA:** sin catálogo no puede inventar un producto; sin zonas, un envío; sin calendario, una fecha. *El prompt sugiere; el código impide.*
+
+**LA CONTRADICCIÓN SE DISUELVE SOLA.** ANTIINVENCIÓN se queda en el Operador y BREVEDAD en la Voz: **cada prompt tiene exactamente UNA regla que reclama primacía**, y ya no compiten porque no viven en el mismo sitio. No hay que "resolver" la contradicción: hay que **dejar de pedirle a un modelo que tenga dos prioridades número uno**.
+
+**⚠️ NO SE TOCA NI UNA TEMPERATURA.** El Operador reusa `_llamar_openrouter` **verbatim** (0.15, con tools) y la Voz reusa `_pedir_redaccion` **verbatim** (0.7, sin tools). La naturalidad no sale de subir un dial: sale de que la Voz **deja de cargar 12 herramientas, el catálogo, el calendario y 20 reglas de acción que no puede romper**.
+
+**Ninguna de las 9 redes se retira**, y ninguna cambia de nombre ni de firma (3 bancos las importan así).
+
+**Tokens (medido):** Voz **−68%** · Operador **−25%** · turno típico **−9%** · cobro **−14%**. Y lo mejor: **cuando salta una red, −29%** — hoy un tropiezo de estilo quema una llamada COMPLETA de 15.453 tokens solo para reescribir una frase; ahora cuesta 4.910. **Las redes dejan de ser caras.** Coste honesto: la charla pura sube +7% y la latencia ~+2 s.
+
+**🔒 SE ESTRENA EN MODO `uno`:** el comportamiento **no cambia** al desplegar. Se enciende desde el panel, y volver atrás es **un `UPDATE`** — sin redeploy, efectivo en el siguiente mensaje.
+
+**🔴 DOS BUGS QUE CAZÓ LA PRUEBA CON EL BOT REAL** (y ninguno lo habría visto un test de unidad):
+1. **La lista blanca era demasiado estrecha.** Solo autorizaba lo que devolvían las tools, así que el bot **se negó a decir un precio correcto** (*"El Pan Keto cuesta $25"* → `DINERO INVENTADO` → respuesta enlatada). El Operador lo había leído del catálogo de su prompt, que es una fuente **legítima**. La red funcionaba **de más**. Arreglado: el catálogo autoriza, y el encargo **validado** pasa a ser verdad para la Voz.
+2. **El banco de la fase 1 era demasiado débil.** Comprobaba que el nombre *contuviera* `"Pan"`… y `"pan" in "empanadas keto"` es **True**. Si el buscador devolviera empanadas para "panes", **habría salido verde**. Es el mismo veneno del bug original, servido en el test. Ahora exige calce **por palabra**.
+
+**Banco nuevo:** `scripts/probar_dos_agentes.py` (nº 16). **Verificado:** 16 bancos verdes en el contenedor desplegado · ruff + 77 tests · `tsc` del panel limpio.
+
+---
+
 ## 2026-07-14 — 🎛️ FASE 4: LAS HERRAMIENTAS SE APAGAN DESDE EL PANEL (sin romper el cobro)
 
 La proveedora enciende y apaga capacidades del agente **sin desplegar**. **7 blindadas · 5 desactivables.**
