@@ -126,14 +126,18 @@ def _proteger_afirmacion_de_pago(respuesta: str) -> str:
 # ─── Envío humano: plano + varios mensajitos cortos (no un mensajote) ─
 
 def _aplanar(texto: str) -> str:
-    """Quita el formato que delata a un bot: viñetas (* - •) al inicio de línea,
-    negritas/cursivas markdown (*texto*) y los decimales .00 de los precios.
-    La dueña escribe PLANO; esto es una red de seguridad por si el modelo igual
-    mete formato (a veces ignora la instrucción)."""
+    """Quita el formato que delata a un bot y lo deja como se escribe en WhatsApp: viñetas
+    (* - •) al inicio de línea, negritas/cursivas markdown (*texto*), los decimales .00 de los
+    precios y —clave para que suene NATURAL— los signos de APERTURA '¿' y '¡'. Nadie en un chat
+    escribe "¿Cómo estás?": escribe "como estas?". La dueña escribe PLANO e informal; esto es una
+    red de seguridad por si el modelo igual mete formato o puntuación de más (a veces la ignora)."""
     lineas = [re.sub(r"^[ \t]*[\*\-•]+[ \t]+", "", ln) for ln in texto.split("\n")]
     t = "\n".join(lineas)
     t = t.replace("*", "")  # negritas / asteriscos sueltos
     t = t.replace(" — ", ", ").replace("—", ", ")  # raya larga (em-dash) -> coma (suena a folleto)
+    # Fuera los signos de APERTURA: en WhatsApp nadie los usa. La pregunta queda "como estas?"
+    # (solo el cierre) y la exclamación "que rico" — más humano, menos acartonado.
+    t = t.replace("¿", "").replace("¡", "")
     t = re.sub(r"\$\s?(\d+)\.00(?!\d)", r"$\1", t)  # $18.00 -> $18
     return t
 

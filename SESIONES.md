@@ -17,6 +17,24 @@
 
 ---
 
+## 2026-07-15 — 💬 EL BOT ESCRIBE COMO EN WHATSAPP (sin los signos de apertura ¿ ¡)
+
+**Pedido del usuario:** que suene más natural, sin el perfeccionismo de los signos de apertura —
+*"como estas?"* en vez de *"¿Cómo estás?"*, solo el signo de cierre. Informal pero no descuidado.
+
+**Lo hecho (código + prompt):**
+- **`_aplanar`** (`tasks.py`, la limpieza que YA corría antes de enviar cada mensaje) ahora también
+  **quita los signos de APERTURA `¿` y `¡`**. Garantizado en código, salga lo que salga del modelo:
+  "¿Cómo estás?" → "Cómo estás?", "¡Hola!" → "Hola!". (Es formato mecánico, como quitar negritas —
+  no una "red" que decida nada.)
+- **Prompt** (voz, `!v`): regla nueva — escribe informal como en WhatsApp, sin signos de apertura,
+  sin abusar de los de admiración (uno muy de vez en cuando), suelto y cálido pero claro y bien
+  escrito.
+
+Verificado: `_aplanar("¡Hola! ¿Cuántos quieres?")` → "Hola! Cuántos quieres?". **16 bancos verdes.**
+
+---
+
 ## 2026-07-15 — 🎛️ SELECTOR DE MODELO POR PROVEEDOR + 🔴 los contenedores estaban INVERTIDOS
 
 **Pedido del usuario:** el selector de modelo del panel con DOS niveles — arriba el **PROVEEDOR**,
