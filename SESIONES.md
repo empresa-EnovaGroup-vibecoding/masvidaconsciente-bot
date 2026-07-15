@@ -17,6 +17,36 @@
 
 ---
 
+## 2026-07-15 — 🗣️ EL BOT NO SE CALLA POR NO SABER UN PRECIO (el precio del día ya no pausa el chat)
+
+**Prueba real del usuario:** preguntó *"y la torta qué tal"* (la torta keto es **precio del día**, sin
+precio cargado). El bot la describió y prometió *"te confirmo el precio"* → la red del relevo lo
+escaló (`no_se`) y **PAUSÓ el chat**. Cuando el usuario pidió *"tienes foto"*, el bot **ya estaba
+mudo** y no contestó nada. Se perdía la venta por no saber UN precio.
+
+**Decisión del usuario:** que el bot **siga vendiendo** — muestre la foto, ofrezca lo que sí sabe,
+deje el aviso del precio en la bandeja, pero NO se quede callado.
+
+**Lo hecho:**
+- **`pedir_ayuda` solo PAUSA en `pide_persona` y `reclamo`** (cuando el cliente necesita a una
+  persona de verdad: `_MOTIVOS_DE_PAUSA`). Para `precio_del_dia` y `no_se` deja el aviso en la
+  bandeja pero **NO pausa**: el bot sigue mostrando fotos, ofreciendo otros productos y tomando el
+  pedido. La dueña carga el precio del día en el panel y el bot lo usa en el siguiente mensaje.
+- **La red proactiva de fotos muestra la foto aunque el bot escale** por precio/dato (nuevo
+  `escalo_duro` en `agent.py`: solo `pide_persona`/`reclamo` la frenan; el precio del día no).
+- **Singular/plural** en la detección (`_singular`): "torta" del cliente calza con "Tortas" del
+  catálogo.
+
+**Verificado end-to-end** (bot real, simulador): *"y la torta keto qué tal"* → el bot muestra la foto
+de las Tortas keto y **NO se pausa**; luego *"tienes foto"* → el bot **responde** y la reenvía (el
+cliente la pidió). **17 bancos verdes** (bandeja, retomar y honestidad incluidos: el aviso se sigue
+creando, solo que ya no calla al bot para precio/no-sé).
+
+⚠️ Nota: *"y la torta"* a secas da empate (hay DOS tortas con foto: `Tortas keto` y `torta baja en
+carbohidratos`) → no adivina cuál. Con *"torta keto"* sí. A propósito: no bombardear.
+
+---
+
 ## 2026-07-15 — 🗑️ EL BOTÓN "BORRAR" LIMPIA TODA LA CONVERSACIÓN (mensajes + avisos + caché)
 
 **Petición del usuario:** que al borrar un chat se borre **toda** la conversación **+ la caché si la

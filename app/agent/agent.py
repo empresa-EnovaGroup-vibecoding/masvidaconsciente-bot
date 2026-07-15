@@ -819,6 +819,8 @@ async def responder(
     usd_de_herramienta: set[float] = set()
     corregido = False
     pidio_ayuda = False  # ¿el bot llamó a pedir_ayuda en este turno?
+    escalo_duro = False  # ¿escaló por pide_persona/reclamo? esos SÍ callan al bot y frenan la foto
+    #                      (el precio del día / un dato que no sabe, NO: el bot sigue vendiendo)
     reescrito = False    # ya se le pidió una vez que no hable como un sistema
     registro_ok = False  # ¿registrar_pedido devolvió OK en este turno? (red del pedido fantasma)
     reclamo_pedido = False  # ya se le llamó la atención una vez por decir que agendó sin agendar
@@ -1121,7 +1123,7 @@ async def responder(
             # nosotros. La misma doctrina que las redes de arriba: el prompt sugiere, el código
             # muestra. `producto_para_mostrar` sólo devuelve algo si el foco es UN producto único y
             # no se le mostró ya — así no bombardea. No corre si el bot escaló o registró un pedido.
-            if not fotos_ok and not pidio_ayuda and not registro_ok:
+            if not fotos_ok and not escalo_duro and not registro_ok:
                 try:
                     nombre_foco = await producto_para_mostrar(
                         pregunta_cliente, telefono, pidio_fotos=pidio_fotos
@@ -1185,6 +1187,8 @@ async def responder(
                 catalogo_ok = True
             if nombre_tool == "pedir_ayuda":
                 pidio_ayuda = True  # ya avisó: la red del relevo no tiene que hacer nada
+                if args.get("motivo") in ("pide_persona", "reclamo"):
+                    escalo_duro = True  # el cliente necesita a una persona: no es momento de fotos
             if (
                 nombre_tool == "registrar_pedido"
                 and isinstance(resultado, dict)

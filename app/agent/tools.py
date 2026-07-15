@@ -1834,6 +1834,11 @@ _MOTIVO_TITULO = {
 }
 
 
+# Motivos por los que el bot SÍ se calla y espera a la dueña: el cliente pide una persona o
+# reclama. Los otros (`precio_del_dia`, `no_se`) dejan aviso pero NO callan al bot: sigue vendiendo.
+_MOTIVOS_DE_PAUSA = {"pide_persona", "reclamo"}
+
+
 async def pedir_ayuda(session, telefono, motivo: str, detalle: str = ""):
     """RELEVO A LA HUMANA. El bot se topó con algo que NO le toca resolver (un precio que
     cambia, algo que no sabe, un cliente que pide una persona, un reclamo). En vez de
@@ -1854,11 +1859,17 @@ async def pedir_ayuda(session, telefono, motivo: str, detalle: str = ""):
     if cliente is None:
         cliente = Cliente(telefono=telefono)
         session.add(cliente)
-    # Lo pausa EL BOT (está escalando a la humana), NO la dueña. La diferencia es crítica:
-    # con 'bot', su último mensaje al cliente ("dame un momentito, te confirmo") SÍ sale;
-    # con 'dueña', el bot se calla del todo. Ver migración 020.
-    cliente.bot_pausado = True
-    cliente.pausado_por = "bot"
+    # 🔴 SOLO PAUSA (calla al bot) cuando el cliente necesita de VERDAD a una persona: pide hablar
+    # con alguien (`pide_persona`) o reclama (`reclamo`). Para un PRECIO DEL DÍA que el bot no sabe,
+    # o un dato puntual (`no_se`), deja el aviso en la bandeja pero el bot SIGUE VENDIENDO: muestra
+    # la foto, ofrece otros productos, toma el pedido. Quedarse MUDO por no saber UN precio mata la
+    # venta (caso real: pidieron "y la torta qué tal", el bot escaló el precio, se pausó, y ya no
+    # contestó ni "tienes foto"). La dueña carga el precio del día en el panel y el bot lo usa en
+    # el siguiente mensaje. Cuando SÍ pausa, lo pausa 'bot' (no 'dueña'): su mensaje de despedida
+    # igual sale (ver migración 020).
+    if motivo in _MOTIVOS_DE_PAUSA:
+        cliente.bot_pausado = True
+        cliente.pausado_por = "bot"
 
     # 2) Lo último que dijo el cliente (para que la dueña entienda sin abrir nada).
     ultimo = (
@@ -2357,10 +2368,14 @@ _PALABRAS_GENERICAS = {"masa", "con", "sin", "por", "para", "los", "las", "del",
 def _palabras_distintivas(nombre: str) -> set[str]:
     """Las palabras del nombre de un producto que de verdad lo distinguen de los demás.
 
-    'Empanadas de masa de yuca o de masa de plátano' → {empanadas, yuca, platano}. Así, si el
+    'Empanadas de masa de yuca o de masa de plátano' → {empanada, yuca, platano}. Así, si el
     cliente dice 'la de plátano', 'platano' lo apunta a ESTE producto y a ningún otro — aunque el
-    bot nunca escriba el nombre largo completo (que era por qué la versión vieja no lo detectaba)."""
-    return {w for w in _nombre_norm(nombre).split() if len(w) >= 3 and w not in _PALABRAS_GENERICAS}
+    bot nunca escriba el nombre largo completo (que era por qué la versión vieja no lo detectaba).
+    Se pasa a SINGULAR para que 'torta' del cliente calce con 'Tortas' del catálogo."""
+    return {
+        w for w in _singular(_nombre_norm(nombre)).split()
+        if len(w) >= 3 and w not in _PALABRAS_GENERICAS
+    }
 
 
 async def producto_para_mostrar(
@@ -2383,7 +2398,7 @@ async def producto_para_mostrar(
     (`pidio_fotos`): pedirla es motivo suficiente para reenviarla."""
     from app.models import Mensaje
 
-    palabras = set(_nombre_norm(mensaje_cliente or "").split())
+    palabras = set(_singular(_nombre_norm(mensaje_cliente or "")).split())
     if not palabras:
         return None
     factory = get_session_factory()
