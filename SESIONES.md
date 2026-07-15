@@ -17,6 +17,34 @@
 
 ---
 
+## 2026-07-15 — 🎛️ SELECTOR DE MODELO POR PROVEEDOR + 🔴 los contenedores estaban INVERTIDOS
+
+**Pedido del usuario:** el selector de modelo del panel con DOS niveles — arriba el **PROVEEDOR**,
+abajo el **MODELO** — y poder buscar entre todos los de cada proveedor (Gemini, Grok, OpenAI, Claude).
+
+**Lo hecho:**
+- **Backend:** endpoint `GET /api/modelos-openrouter` (solo la proveedora) que trae los **343 modelos**
+  de OpenRouter, cacheados 1 h. El panel los agrupa por proveedor con el prefijo del id ('anthropic/…').
+- **Panel** (`configuracion/page.tsx`, `lib/api.ts`): select de **Proveedor** (Anthropic/Claude,
+  Google/Gemini, OpenAI/GPT, xAI/Grok, DeepSeek, Mistral…) + un **buscador** + select de **Modelo**.
+  "Personalizado" sigue para pegar un ID a mano. Compilado con **Docker (node:22)** —esta Mac no tiene
+  node— y desplegado al contenedor del panel.
+
+**🔴 DESCUBIERTO — corrige `prompt_proxima_sesion.md` §5: los contenedores del bot están AL REVÉS de
+como se documentaron.**
+- **`qlfrx…163241538768` = BOT API** (uvicorn :8000, sirve el HTTP del dominio `api-masvida`). El doc
+  lo llamaba "Worker".
+- **`erzq5…163243567294` = WORKER** (Celery, procesa los mensajes de WhatsApp). El doc lo llamaba "Bot API".
+- Por eso el endpoint nuevo daba **404**: lo desplegué solo a `erzq5`, pero el HTTP lo sirve `qlfrx`.
+  Los cambios del BOT (fotos, prompt) sí estaban bien —se desplegaron SIEMPRE a los DOS—; verificado que
+  el worker real (`erzq5`/celery) tiene el caption, el prompt del "producto exacto" y `_MOTIVOS_DE_PAUSA`.
+- **Regla:** para el código del bot, desplegar a AMBOS. Para el endpoint HTTP, el que importa es `qlfrx`.
+
+**Multi-LLM:** el bot ya acepta cualquier modelo (el ID va a `modelo_ia`); las redes de seguridad viven
+en código, no dependen del modelo. "Óptimo" por modelo se afina probando cada uno.
+
+---
+
 ## 2026-07-15 — 🔄 FUERA LA RED DE FOTOS: el LLM elige qué foto mandar (tiene el contexto) + caption
 
 **Decisión del usuario (enfática), tras probar en vivo:** *"a la berga tu red, el LLM es el que debe

@@ -1366,6 +1366,38 @@ async def probar_bot(datos: ProbarIn, _: str = Depends(usuario_actual)):
     return {"respuesta": respuesta}
 
 
+# ─── Modelos de OpenRouter (para el selector del panel) ──────────────
+
+@router.get("/modelos-openrouter")
+async def modelos_openrouter(_: str = Depends(proveedora_actual)):
+    """Todos los modelos de OpenRouter, para el selector del panel. El panel los agrupa por
+    PROVEEDOR con el prefijo del id ('anthropic/…', 'google/…', 'x-ai/…'). Cacheado 1 h para no
+    pegarle a OpenRouter en cada carga. Solo la proveedora (Enova) lo ve."""
+    from app.services.redis_client import get_cache, set_cache
+
+    cache = await get_cache("cache:openrouter_modelos")
+    if cache:
+        return json.loads(cache)
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get("https://openrouter.ai/api/v1/models")
+            resp.raise_for_status()
+            data = resp.json().get("data", [])
+    except Exception:  # noqa: BLE001 — si OpenRouter no responde, el panel cae al modo "pegar ID"
+        logger.warning("No se pudo traer la lista de modelos de OpenRouter")
+        return {"modelos": []}
+    modelos = sorted(
+        ({"id": m["id"], "name": m.get("name") or m["id"]} for m in data if m.get("id")),
+        key=lambda m: m["id"],
+    )
+    salida = {"modelos": modelos}
+    try:
+        await set_cache("cache:openrouter_modelos", json.dumps(salida), 3600)
+    except Exception:  # noqa: BLE001
+        pass
+    return salida
+
+
 # ─── Interruptor del bot (encender / apagar) ─────────────────────────
 
 @router.get("/bot-estado")
