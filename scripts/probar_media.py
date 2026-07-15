@@ -31,7 +31,7 @@ from app.agent import tools
 from app.models import Mensaje, Producto, ProductoMedia
 from app.services.db import get_session_factory
 
-TEL = "__prueba_media__"
+TEL = "999000111222"  # NO empieza por "__": prueba el envío REAL (Meta va mockeado), no el simulador
 
 fallos: list[str] = []
 

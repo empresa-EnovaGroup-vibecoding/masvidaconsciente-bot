@@ -2180,13 +2180,21 @@ async def enviar_catalogo(session, telefono):
     if fila is None or not fila.contenido:
         return {"ok": False, "nota": "no hay un catalogo PDF cargado; usa ver_catalogo (texto)"}
 
+    settings = get_settings()
+    link = f"{settings.public_base_url.rstrip('/')}/api/catalogo/archivo"
+    # 🧪 SIMULADOR: no hay WhatsApp real; se simula el envío para que la dueña lo pruebe.
+    if (telefono or "").startswith("__"):
+        await _guardar_media_saliente(
+            telefono=telefono, tipo="document", contenido="(catálogo en PDF)",
+            url=link, respuesta=None,
+        )
+        return {"ok": True, "nota": "(SIMULADOR) le enviaste el catálogo PDF; confírmaselo con calidez"}
+
     # El archivo lo guarda y lo SIRVE el bot (su propia URL pública), no el worker.
     # Worker y bot no comparten disco, así que aquí NO revisamos el archivo local:
     # basta el flag en BD, y Meta descarga el PDF de la URL pública del bot.
     from app.services.meta_client import enviar_documento
 
-    settings = get_settings()
-    link = f"{settings.public_base_url.rstrip('/')}/api/catalogo/archivo"
     try:
         resp = await enviar_documento(telefono, link, "Catalogo.pdf")
     except Exception:  # noqa: BLE001
@@ -2257,6 +2265,30 @@ async def enviar_fotos_producto(session, telefono, nombre, variante_id=None):
                 "que se las enviaste"
             ),
         }
+    # 🧪 EL SIMULADOR DEL PANEL (teléfono "__simulador__…") NO tiene un WhatsApp real al que
+    # mandar: Meta rechaza el número falso con un 400 y el bot decía "no se pudieron enviar" —
+    # haciendo creer a la dueña que las fotos están rotas cuando en WhatsApp real SÍ funcionan.
+    # Aquí se SIMULA el envío: cuenta las fotos como enviadas (sin llamar a Meta) y las guarda en
+    # el hilo para que la dueña las VEA en el simulador. La cuenta de verdad es a números reales.
+    if (telefono or "").startswith("__"):
+        for m in medios[:3]:
+            url = r2.url_publica(m.clave)
+            if url:
+                await _guardar_media_saliente(
+                    telefono=telefono,
+                    tipo="video" if m.tipo == "video" else "image",
+                    contenido=f"({'video' if m.tipo=='video' else 'foto'} de {prod.nombre})",
+                    url=url, respuesta=None,
+                )
+        n = min(len(medios), 3)
+        return {
+            "enviadas": n, "producto": prod.nombre,
+            "nota": (
+                f"(SIMULADOR) le mostraste {n} foto(s) de '{prod.nombre}'. En WhatsApp real le "
+                "llegan de verdad. Coméntale cálido que ahí las tiene y sigue la venta."
+            ),
+        }
+
     enviadas = 0
     sin_url = 0
     # Tope de 3 (antes 8): ocho archivos de golpe es una descarga de spam y le baja la calidad
