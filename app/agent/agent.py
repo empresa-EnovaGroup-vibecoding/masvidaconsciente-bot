@@ -18,12 +18,7 @@ from app.agent.system_prompt import (
     leer_config_agente,
     leer_modelo_ia,
 )
-from app.agent.tools import (
-    TOOL_SCHEMAS,
-    ejecutar_tool,
-    producto_para_mostrar,
-    schemas_para,
-)
+from app.agent.tools import TOOL_SCHEMAS, ejecutar_tool, schemas_para
 from app.config import get_settings
 from app.services.tools_config import leer_tools_activas
 
@@ -819,8 +814,6 @@ async def responder(
     usd_de_herramienta: set[float] = set()
     corregido = False
     pidio_ayuda = False  # ¿el bot llamó a pedir_ayuda en este turno?
-    escalo_duro = False  # ¿escaló por pide_persona/reclamo? esos SÍ callan al bot y frenan la foto
-    #                      (el precio del día / un dato que no sabe, NO: el bot sigue vendiendo)
     reescrito = False    # ya se le pidió una vez que no hable como un sistema
     registro_ok = False  # ¿registrar_pedido devolvió OK en este turno? (red del pedido fantasma)
     reclamo_pedido = False  # ya se le llamó la atención una vez por decir que agendó sin agendar
@@ -1118,28 +1111,6 @@ async def responder(
                 texto, catalogo_ok, telefono, ejecutar,
                 pidio_catalogo=_pide_catalogo(pregunta_cliente),
             )
-            # 🖼️ RED PROACTIVA DE FOTOS: si el cliente se ENFOCÓ en UN producto con fotos y el
-            # modelo NO las mandó (el prompt se lo pide, pero es probabilístico), se las mostramos
-            # nosotros. La misma doctrina que las redes de arriba: el prompt sugiere, el código
-            # muestra. `producto_para_mostrar` sólo devuelve algo si el foco es UN producto único y
-            # no se le mostró ya — así no bombardea. No corre si el bot escaló o registró un pedido.
-            if not fotos_ok and not escalo_duro and not registro_ok:
-                try:
-                    nombre_foco = await producto_para_mostrar(
-                        pregunta_cliente, telefono, pidio_fotos=pidio_fotos
-                    )
-                    if nombre_foco:
-                        r_fotos = await ejecutar(
-                            "enviar_fotos_producto", {"nombre": nombre_foco}, telefono
-                        )
-                        if isinstance(r_fotos, dict) and r_fotos.get("enviadas"):
-                            fotos_ok = True
-                            logger.info(
-                                "FOTO PROACTIVA: mostré %s a %s (el modelo describió sin mostrar)",
-                                nombre_foco, telefono,
-                            )
-                except Exception:  # noqa: BLE001 — mostrar la foto NUNCA puede tumbar el turno
-                    logger.exception("No se pudo mostrar la foto proactiva de %s", telefono)
             if _es_inicio_conversacion(historial):
                 texto = _asegurar_saludo(texto, mensaje_usuario, nombre_cliente)
             return texto
@@ -1187,8 +1158,6 @@ async def responder(
                 catalogo_ok = True
             if nombre_tool == "pedir_ayuda":
                 pidio_ayuda = True  # ya avisó: la red del relevo no tiene que hacer nada
-                if args.get("motivo") in ("pide_persona", "reclamo"):
-                    escalo_duro = True  # el cliente necesita a una persona: no es momento de fotos
             if (
                 nombre_tool == "registrar_pedido"
                 and isinstance(resultado, dict)

@@ -17,6 +17,43 @@
 
 ---
 
+## 2026-07-15 — 🔄 FUERA LA RED DE FOTOS: el LLM elige qué foto mandar (tiene el contexto) + caption
+
+**Decisión del usuario (enfática), tras probar en vivo:** *"a la berga tu red, el LLM es el que debe
+ver los datos y seleccionar, ya que el LLM tiene sentido común."* Tenía razón.
+
+**El problema con la red determinista:** `producto_para_mostrar` elegía la foto por las PALABRAS del
+cliente, SIN el contexto de la conversación. El cliente pidió las *"Mini New York"* y luego dijo
+*"solo las galletas"*; la red mapeó "galletas" → **Galletas New York** (el único con esa palabra en
+el nombre — "Mini New York" no la tiene, solo en su descripción) y mandó la foto EQUIVOCADA (las
+grandes). El LLM SÍ tenía el contexto y habría elegido bien.
+
+**Lo hecho:**
+- **QUITADA la red** `producto_para_mostrar` (+ `_palabras_distintivas`) de `tools.py`, su llamada en
+  `agent.py` (y `escalo_duro`) y el banco `probar_fotos_proactivas`. El LLM decide qué foto mandar,
+  con su sentido común y el contexto — llama `enviar_fotos_producto` con el nombre EXACTO de lo que
+  el cliente eligió.
+- **Prompt reforzado** (`system_prompt.py`): sigue empujando a mostrar la foto proactivamente, y
+  ahora exige **el producto EXACTO** ("si pidió las Mini New York, la de ESAS, no la de las Galletas
+  New York").
+- **CAPTION bajo la foto** (`enviar_fotos_producto`): nombre + una línea de descripción, **SIN
+  precio**. La primera foto lo lleva completo; las demás, solo el nombre.
+
+**Verificado end-to-end** (bot real): cliente elige *"las mini"* → el bot llama
+`enviar_fotos_producto('Mini New York')` (¡el correcto!) y responde *"Te comparto una foto de las
+Mini New York"*. **16 bancos verdes.**
+
+**Se QUEDA** de las entradas anteriores de hoy: el **prompt proactivo** (mostrar la foto sin que la
+pidan) y que **el precio del día ya no pausa** (el bot sigue vendiendo). Cambió QUIÉN elige la foto:
+antes el código, ahora el LLM.
+
+**Pendiente (pedido del usuario):** (a) **selector de modelos con búsqueda/filtro por proveedor**
+(Gemini, Grok, OpenAI, Anthropic) en el panel — trabajo de dashboard (Next.js); (b) **prompt óptimo
+para cualquier LLM** que elija — las redes de seguridad ya viven en código (no dependen del modelo) y
+el prompt es imperativo/claro; "óptimo" por modelo se afina probando cada uno.
+
+---
+
 ## 2026-07-15 — 🗣️ EL BOT NO SE CALLA POR NO SABER UN PRECIO (el precio del día ya no pausa el chat)
 
 **Prueba real del usuario:** preguntó *"y la torta qué tal"* (la torta keto es **precio del día**, sin
