@@ -17,6 +17,96 @@
 
 ---
 
+## 2026-07-15 — 🗑️ EL BOTÓN "BORRAR" LIMPIA TODA LA CONVERSACIÓN (mensajes + avisos + caché)
+
+**Petición del usuario:** que al borrar un chat se borre **toda** la conversación **+ la caché si la
+hay**; y dejar el taller con **todas las conversaciones vacías** para probar limpio.
+
+**Lo que faltaba (verificado en el código):** `DELETE /conversaciones/{telefono}` borraba los
+mensajes + la memoria del bot (hist/buffer/lock/abuso), pero **dejaba dos cosas**:
+1. Las **intervenciones** (los avisos "te necesita" de la bandeja) — el chat desaparecía de la lista
+   pero el aviso quedaba vivo.
+2. La **caché del cobro en curso** (`cobro:{telefono}` en Redis) — `borrar_memoria` la respetaba a
+   propósito ("no toca dinero"), pero es **estado transitorio**, no el registro (los pedidos y pagos
+   viven en Postgres).
+
+**Lo hecho (aditivo):**
+- `borrar_conversacion` (`router.py`): ahora también borra las **intervenciones** del teléfono.
+- `borrar_memoria` (`redis_client.py`): ahora también borra `cobro:{telefono}`. Sigue SIN tocar el
+  registro del dinero (pedidos/pagos en Postgres, comprobantes en `comprob:`): solo el estado
+  transitorio del chat.
+- El **cliente y su dinero NO se tocan** (igual que antes): "Borrar chat" limpia el chat, no al cliente.
+- Panel: el texto del `confirm` ahora dice que borra mensajes + avisos + caché. *(El backend ya está
+  desplegado y el botón del panel actual ya llama a ese endpoint, así que la mejora YA funciona; el
+  texto nuevo entra en el próximo build del panel — la Mac no tiene node para recompilar el standalone.)*
+
+**Verificado end-to-end** (`probar_borrar.py`, dirigido): se sembró un chat con mensaje + aviso +
+`cobro:`/`hist:` en Redis, se llamó al endpoint, y quedó todo en 0 **menos el cliente** (conservado).
+**Los 17 bancos en verde.**
+
+**Limpieza del taller (a pedido):** se vaciaron **todas** las conversaciones — 128 mensajes, 10
+intervenciones, 11 clientes y las claves de conversación de Redis (incluidas 3 de `cobro:` a medias).
+**Respaldo previo en CSV** (`_respaldo_fases/respaldo_mensajes_taller_20260715.csv` y
+`respaldo_clientes_taller_20260715.csv`). La caché de tasa (`cache:tasa:bcv`) NO se tocó. Taller en 0.
+
+---
+
+## 2026-07-15 — 📸 EL BOT MUESTRA EL PRODUCTO SOLO (foto proactiva, sin bombardear)
+
+**Lo cazó el usuario probando con su celular real:** eligió "pan" (el Pan Keto), el bot lo
+**describió en texto** pero **esperó a que le pidieran la foto** para mandarla. Una vendedora buena
+enseña el producto sin que se lo rueguen. La petición: proactivo pero **inteligente, no
+bombardeante** — 2-3 fotos máx, un producto a la vez, una experiencia breve que haga sentir bien al
+cliente.
+
+**Dos capas, la doctrina de siempre (*el prompt SUGIERE, el código MUESTRA*):**
+
+1. **Prompt** (la regla de `enviar_fotos_producto` en `system_prompt.py`): de **REACTIVA** (mandaba
+   foto solo si la pedían / preguntaban por el aspecto / dudaban) a **PROACTIVA**: en cuanto el
+   cliente se ENFOCA en UN producto concreto (lo elige, pide su info o pregunta por él),
+   muéstraselo; la foto **reemplaza el muro de texto**; y explícito el **NO BOMBARDEES** (un
+   producto a la vez — si aún está entre varios, primero que elija; una vez por producto). La tool
+   ya traía **tope de 3** (anti-spam): el "2-3 fotos" ya vivía en el código. Medido en el simulador:
+   subió de **0/3 a ~2/3** de los turnos. Pero es probabilístico: a veces el modelo aún describe y
+   cierra sin mostrar.
+
+2. **Red determinista** (`producto_para_mostrar` en `tools.py` + una red en `responder()`,
+   `agent.py`): porque **lo que vive solo en el texto se rompe**. Tras la respuesta del modelo, si el
+   cliente se enfocó en UN producto con fotos y el modelo NO las mandó ⇒ el **CÓDIGO** las muestra.
+   Hermana de `_asegurar_catalogo` y `_asegurar_saludo`. **Anti-bombardeo POR CONSTRUCCIÓN:** dispara
+   SOLO si hay **EXACTAMENTE UN** producto en foco (si el texto menciona varios con fotos, no elige
+   ninguno — cuando el cliente sigue entre opciones no se le manda nada), el producto tiene fotos, y
+   **no se le mostró ya en las últimas 3 h** (no repite turno tras turno). No corre si el bot escaló
+   (`pedir_ayuda`) ni si registró un pedido.
+
+**Verificado (no supuesto):**
+- **Banco nuevo `probar_fotos_proactivas.py` (nº 17):** muestra cuando hay 1 foco claro con fotos ·
+  lo detecta tanto en lo que dijo el CLIENTE como en lo que respondió el BOT · **NO** dispara con
+  varios productos · **NO** con productos sin fotos · **NO** repite si ya se mostró. **6/6.**
+- **End-to-end con el bot REAL** (Sonnet 4.5) en el simulador: los 3 escenarios de la prueba del
+  usuario ahora mandan la foto (incluido el que antes daba **0**). Y con un `llm` **terco** que
+  describe SIN llamar la tool, **la red la manda igual** (log `FOTO PROACTIVA: mostré Pan Keto`) —
+  la prueba de que la red actúa cuando el modelo no colabora.
+- **Los 17 bancos EN VERDE** en el contenedor desplegado. Ninguna de las 9 redes ni el cobro se
+  tocaron (probar_cobro, probar_honestidad, probar_dos_agentes verdes).
+
+**Desplegado en el taller** por `docker cp` a bot API + worker + restart (el código vive en la capa
+del contenedor — mismo estado que el resto de la sesión, ver `prompt_proxima_sesion.md` §3). La red
+vive en el modo `uno` (`responder`); si un día se enciende el modo `dos`, se replica como las demás.
+
+**🐛 AFINADO con la prueba real del usuario (mismo día):** la primera versión buscaba el **nombre
+COMPLETO** del producto en el texto. Con 'Pan Keto' funcionaba, pero con **'Empanadas de masa de yuca
+o de masa de plátano'** NO —el bot nunca escribe ese nombre largo, dice "empanadas" + "masa de
+plátano"—, así que al elegir *"la de plátano"* no se mostraba nada. Arreglado: la red se guía ahora
+por las **PALABRAS DISTINTIVAS que dijo el CLIENTE** (`_palabras_distintivas`, ignora genéricas como
+"masa/de/o"): *"la de plátano"* → 'platano' apunta a ESE producto y a ningún otro ⇒ se muestra;
+*"empanadas"* a secas la comparten las 3 ⇒ empate ⇒ no dispara mientras el cliente sigue eligiendo.
+Y el "no repetir" **cede si el cliente PIDE la foto otra vez** de frente (`pidio_fotos`): pedirla es
+razón suficiente para reenviarla. Banco `probar_fotos_proactivas` reescrito (detecta por palabra
+distintiva, no por nombre completo; prueba el empate y el reenvío-por-petición). **17 bancos verdes.**
+
+---
+
 ## 2026-07-14 — 🎭 FASE 5: DOS AGENTES (Operador + Voz) — la Voz **no puede** inventar
 
 **El problema:** el bot corre con **~16.400 tokens** de instrucciones por turno, **42 reglas** imperativas, **55 prohibiciones** — y con **DOS reglas que se declaran ambas *"la MÁS importante"*** (ANTIINVENCIÓN y BREVEDAD). Cuando todo es crítico, nada lo es. Por eso hay **siete redes de regex** que existen solo para atrapar al modelo incumpliendo, y el propio código lo confiesa: *"el prompt se lo prohibía DOS VECES y lo hizo igual"*, *"la regla vivía en el prompt: humo"*.

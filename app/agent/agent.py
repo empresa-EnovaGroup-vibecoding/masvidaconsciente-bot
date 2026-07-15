@@ -18,7 +18,12 @@ from app.agent.system_prompt import (
     leer_config_agente,
     leer_modelo_ia,
 )
-from app.agent.tools import TOOL_SCHEMAS, ejecutar_tool, schemas_para
+from app.agent.tools import (
+    TOOL_SCHEMAS,
+    ejecutar_tool,
+    producto_para_mostrar,
+    schemas_para,
+)
 from app.config import get_settings
 from app.services.tools_config import leer_tools_activas
 
@@ -1111,6 +1116,28 @@ async def responder(
                 texto, catalogo_ok, telefono, ejecutar,
                 pidio_catalogo=_pide_catalogo(pregunta_cliente),
             )
+            # 🖼️ RED PROACTIVA DE FOTOS: si el cliente se ENFOCÓ en UN producto con fotos y el
+            # modelo NO las mandó (el prompt se lo pide, pero es probabilístico), se las mostramos
+            # nosotros. La misma doctrina que las redes de arriba: el prompt sugiere, el código
+            # muestra. `producto_para_mostrar` sólo devuelve algo si el foco es UN producto único y
+            # no se le mostró ya — así no bombardea. No corre si el bot escaló o registró un pedido.
+            if not fotos_ok and not pidio_ayuda and not registro_ok:
+                try:
+                    nombre_foco = await producto_para_mostrar(
+                        pregunta_cliente, telefono, pidio_fotos=pidio_fotos
+                    )
+                    if nombre_foco:
+                        r_fotos = await ejecutar(
+                            "enviar_fotos_producto", {"nombre": nombre_foco}, telefono
+                        )
+                        if isinstance(r_fotos, dict) and r_fotos.get("enviadas"):
+                            fotos_ok = True
+                            logger.info(
+                                "FOTO PROACTIVA: mostré %s a %s (el modelo describió sin mostrar)",
+                                nombre_foco, telefono,
+                            )
+                except Exception:  # noqa: BLE001 — mostrar la foto NUNCA puede tumbar el turno
+                    logger.exception("No se pudo mostrar la foto proactiva de %s", telefono)
             if _es_inicio_conversacion(historial):
                 texto = _asegurar_saludo(texto, mensaje_usuario, nombre_cliente)
             return texto

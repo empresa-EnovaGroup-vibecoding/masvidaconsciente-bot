@@ -266,7 +266,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "enviar_fotos_producto",
-            "description": "Envía al cliente las FOTOS y VIDEOS de UN producto por WhatsApp. Llámala SIEMPRE que el cliente pida ver/mostrar un producto: 'muéstrame', 'mándame una foto', '¿tienes foto?', 'quiero verlo', 'una foto para verlo', etc. Es la ÚNICA forma de saber si el producto tiene fotos: NO asumas que no hay sin llamarla primero. Si no tiene fotos cargadas, te avisa para que lo digas con sinceridad. (Para ver el menú/opciones en general usa enviar_catalogo.)",
+            "description": "Envía al cliente las FOTOS y VIDEOS de UN producto por WhatsApp. Es tu arma de venta, ÚSALA PROACTIVA: en cuanto el cliente se enfoque en UN producto concreto (lo elija, te pida su info o pregunte por él), muéstraselo SIN esperar a que pida la foto; y también cuando pida ver/mostrar ('muéstrame', 'mándame una foto', 'quiero verlo'), pregunte cómo se ve, o dude. UN producto a la vez (no mandes fotos de varios a la vez). Es la ÚNICA forma de saber si el producto tiene fotos: NO asumas que no hay sin llamarla primero. Manda las mejores (hasta 3). Si no tiene fotos cargadas, te avisa para que lo digas con sinceridad. (Para ver el menú/opciones en general usa enviar_catalogo.)",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -2346,6 +2346,87 @@ async def enviar_fotos_producto(session, telefono, nombre, variante_id=None):
             "los tiene y sigue la venta. NO digas que vas a enviarlos: ya están enviados"
         ),
     }
+
+
+# Palabras que aparecen en NOMBRES de producto pero no distinguen a UNO ("Empanadas de MASA de
+# yuca…"): no sirven para saber a cuál se refiere el cliente. Las de ≤2 letras (de, o, y, la…) ya
+# caen por longitud.
+_PALABRAS_GENERICAS = {"masa", "con", "sin", "por", "para", "los", "las", "del", "una", "unos", "unas"}
+
+
+def _palabras_distintivas(nombre: str) -> set[str]:
+    """Las palabras del nombre de un producto que de verdad lo distinguen de los demás.
+
+    'Empanadas de masa de yuca o de masa de plátano' → {empanadas, yuca, platano}. Así, si el
+    cliente dice 'la de plátano', 'platano' lo apunta a ESTE producto y a ningún otro — aunque el
+    bot nunca escriba el nombre largo completo (que era por qué la versión vieja no lo detectaba)."""
+    return {w for w in _nombre_norm(nombre).split() if len(w) >= 3 and w not in _PALABRAS_GENERICAS}
+
+
+async def producto_para_mostrar(
+    mensaje_cliente: str, telefono: str, *, pidio_fotos: bool = False
+) -> str | None:
+    """RED PROACTIVA DE FOTOS: devuelve el NOMBRE del producto que el bot DEBERÍA mostrar en
+    este turno, o None si no procede.
+
+    El prompt le PIDE al modelo enseñar el producto sin que se lo rueguen; pero el modelo es
+    probabilístico y a veces solo lo describe. Esta red lo vuelve determinista — la misma
+    doctrina que `_asegurar_catalogo` y `_asegurar_saludo`: *el prompt sugiere, el código muestra.*
+
+    Se guía por lo que dijo EL CLIENTE (es quien se enfoca), por sus PALABRAS distintivas — no por
+    el nombre completo, que el bot casi nunca escribe literal. Dispara SOLO si esas palabras apuntan
+    a UN producto con fotos de forma inequívoca:
+      - si el cliente dice una palabra que comparten VARIOS productos ('empanadas', 'pan'…) sin nada
+        que desempate, hay empate ⇒ NO dispara (sigue eligiendo, no se le bombardea);
+      - si una palabra lo apunta a UNO solo ('la de plátano' → ese producto) ⇒ ese es el foco.
+    No repite la misma foto en las últimas horas… salvo que el cliente la PIDA otra vez de frente
+    (`pidio_fotos`): pedirla es motivo suficiente para reenviarla."""
+    from app.models import Mensaje
+
+    palabras = set(_nombre_norm(mensaje_cliente or "").split())
+    if not palabras:
+        return None
+    factory = get_session_factory()
+    async with factory() as session:
+        prods = (
+            await session.execute(select(Producto).where(Producto.disponible.is_(True)))
+        ).scalars().all()
+        # Cuántas palabras distintivas de CADA producto (con fotos) nombró el cliente.
+        puntuados: list[tuple[int, Producto]] = []
+        for p in prods:
+            n = len(_palabras_distintivas(p.nombre) & palabras)
+            if n < 1:
+                continue
+            tiene = (
+                await session.execute(
+                    select(ProductoMedia.id).where(ProductoMedia.producto_id == p.id).limit(1)
+                )
+            ).first()
+            if tiene:
+                puntuados.append((n, p))
+        if not puntuados:
+            return None
+        max_n = max(n for n, _ in puntuados)
+        ganadores = [p for n, p in puntuados if n == max_n]
+        if len(ganadores) != 1:  # empate ⇒ el cliente no señaló UN producto ⇒ no bombardear
+            return None
+        prod = ganadores[0]
+        # No repetir la misma foto en las últimas horas — salvo que el cliente la esté PIDIENDO.
+        if not pidio_fotos:
+            limite = datetime.now(UTC) - timedelta(hours=3)
+            ya = (
+                await session.execute(
+                    select(Mensaje.id).where(
+                        Mensaje.cliente_telefono == telefono,
+                        Mensaje.tipo.in_(("image", "video")),
+                        Mensaje.contenido.ilike(f"%{prod.nombre}%"),
+                        Mensaje.created_at >= limite,
+                    ).limit(1)
+                )
+            ).first()
+            if ya:
+                return None
+        return prod.nombre
 
 
 _DISPATCH = {

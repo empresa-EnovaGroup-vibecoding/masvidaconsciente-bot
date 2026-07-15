@@ -75,15 +75,18 @@ async def obtener_historial(telefono: str) -> list[dict]:
 
 
 async def borrar_memoria(telefono: str) -> None:
-    """Borra el historial, buffer, lock y contadores anti-abuso de HOY de un cliente
-    en Redis. Se usa al 'Borrar chat' desde el panel: el bot arranca realmente limpio
-    con esa persona. NO toca claves de dinero (comprob:/msg:)."""
+    """Borra TODA la caché de conversación de un cliente en Redis: historial, buffer, lock,
+    contadores anti-abuso de HOY y el COBRO EN CURSO (`cobro:`, el estado transitorio de un
+    cobro a medias). Se usa al 'Borrar chat' desde el panel: el bot arranca realmente limpio
+    con esa persona. NO toca el REGISTRO del dinero (los pedidos y pagos viven en Postgres,
+    no aquí; los comprobantes en `comprob:`): solo el estado transitorio del chat."""
     await _client().delete(
         f"hist:{telefono}",
         f"buffer:{telefono}",
         f"lock:{telefono}",
         f"abuso:{telefono}:{_hoy()}",
         f"abuso_avisado:{telefono}:{_hoy()}",
+        f"cobro:{telefono}",
     )
 
 

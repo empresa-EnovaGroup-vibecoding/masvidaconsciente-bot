@@ -31,6 +31,10 @@ BANCOS = [
     # Vigila LAS DOS mitades del arreglo: que el bot GUARDE la fila, y que el endpoint SEPA
     # servirla (las fotos viven en R2: `os.path.exists("https://…")` daba 404).
     "probar_media",
+    # FOTO PROACTIVA (2026-07-15): el bot MUESTRA el producto sin que se lo pidan, pero sin
+    # bombardear. Vigila las dos mitades: que muestre cuando hay UN producto claro en foco con
+    # fotos, y que NO dispare con varios productos, sin fotos, o si ya se mostró (no repetir).
+    "probar_fotos_proactivas",
     # LOS ROLES (fase 3): la dueña no toca las palancas de la proveedora — y NADIE se queda
     # fuera. Hace peticiones HTTP REALES contra la app ASGI: llamar a las funciones de los
     # endpoints a pelo NO evalúa los `Depends`, así que el guardia ni siquiera correría.

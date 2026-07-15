@@ -1770,12 +1770,16 @@ async def responder_como_dueña(
 
 @router.delete("/conversaciones/{telefono}")
 async def borrar_conversacion(telefono: str, _: str = Depends(usuario_actual)):
-    """Borra el historial de mensajes de un cliente + su memoria en Redis.
-    NO toca al cliente, ni sus pedidos, ni sus pagos: el registro de cobro queda
-    intacto. Solo limpia el chat del panel y la memoria del bot."""
+    """Borra TODA la conversación de un cliente: sus mensajes, los avisos de la bandeja
+    ('te necesita') y la caché del bot en Redis (historial, buffer, cobro en curso…).
+    NO toca al cliente, ni sus pedidos, ni sus pagos: el registro del cobro queda intacto
+    en Postgres. Solo limpia el chat del panel y el estado transitorio del bot."""
     factory = get_session_factory()
     async with factory() as session:
         await session.execute(delete(Mensaje).where(Mensaje.cliente_telefono == telefono))
+        await session.execute(
+            delete(Intervencion).where(Intervencion.cliente_telefono == telefono)
+        )
         await session.commit()
     await borrar_memoria(telefono)
     return {"ok": True}
