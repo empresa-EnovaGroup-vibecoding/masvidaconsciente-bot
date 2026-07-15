@@ -47,6 +47,14 @@ abajo el **MODELO** — y poder buscar entre todos los de cada proveedor (Gemini
   Google/Gemini, OpenAI/GPT, xAI/Grok, DeepSeek, Mistral…) + un **buscador** + select de **Modelo**.
   "Personalizado" sigue para pegar un ID a mano. Compilado con **Docker (node:22)** —esta Mac no tiene
   node— y desplegado al contenedor del panel.
+  - ⚠️ **TRAMPA del build manual del panel (me mordió): `NEXT_PUBLIC_API_URL` es build-time.** El
+    primer build con Docker NO la pasó, así que el bundle del navegador cayó al default
+    `http://localhost:8000` (`lib/api.ts`) → **todo el panel daba "Failed to fetch"** (el Chrome del
+    usuario le hablaba a SU propia Mac). Fix: rebuild con
+    `docker run -e NEXT_PUBLIC_API_URL=https://api-masvida.enovagroup.tech node:22 … npm run build`.
+    Y **borrar `/app/.next` viejo antes de extraer**: el `tar` añade los chunks nuevos pero deja los
+    viejos (hashes distintos) — quedan huérfanos con la URL mala. Coolify pasa la variable solo; el
+    build a mano NO — hay que pasarla siempre.
 
 **🔴 DESCUBIERTO — corrige `prompt_proxima_sesion.md` §5: los contenedores del bot están AL REVÉS de
 como se documentaron.**
