@@ -34,6 +34,405 @@
 `docker exec -w /app -e PYTHONPATH=/app <bot-taller> python scripts/ensayo_closer.py --confirmar-taller --repeticiones 3`
 
 **Pendiente real:** correrlo en el taller, revisar las conversaciones con Maired y alinear la personalidad viva antes de promover un modelo. Este banco es manual —no entra al Vigilante de cada deploy— porque llama modelos reales, cuesta y su nota comercial es probabilística.
+## 2026-07-15 — 💬 EL BOT ESCRIBE COMO EN WHATSAPP (sin los signos de apertura ¿ ¡)
+
+**Pedido del usuario:** que suene más natural, sin el perfeccionismo de los signos de apertura —
+*"como estas?"* en vez de *"¿Cómo estás?"*, solo el signo de cierre. Informal pero no descuidado.
+
+**Lo hecho (código + prompt):**
+- **`_aplanar`** (`tasks.py`, la limpieza que YA corría antes de enviar cada mensaje) ahora también
+  **quita los signos de APERTURA `¿` y `¡`**. Garantizado en código, salga lo que salga del modelo:
+  "¿Cómo estás?" → "Cómo estás?", "¡Hola!" → "Hola!". (Es formato mecánico, como quitar negritas —
+  no una "red" que decida nada.)
+- **Prompt** (voz, `!v`): regla nueva — escribe informal como en WhatsApp, sin signos de apertura,
+  sin abusar de los de admiración (uno muy de vez en cuando), suelto y cálido pero claro y bien
+  escrito.
+
+Verificado: `_aplanar("¡Hola! ¿Cuántos quieres?")` → "Hola! Cuántos quieres?". **16 bancos verdes.**
+
+---
+
+## 2026-07-15 — 🎛️ SELECTOR DE MODELO POR PROVEEDOR + 🔴 los contenedores estaban INVERTIDOS
+
+**Pedido del usuario:** el selector de modelo del panel con DOS niveles — arriba el **PROVEEDOR**,
+abajo el **MODELO** — y poder buscar entre todos los de cada proveedor (Gemini, Grok, OpenAI, Claude).
+
+**Lo hecho:**
+- **Backend:** endpoint `GET /api/modelos-openrouter` (solo la proveedora) que trae los **343 modelos**
+  de OpenRouter, cacheados 1 h. El panel los agrupa por proveedor con el prefijo del id ('anthropic/…').
+- **Panel** (`configuracion/page.tsx`, `lib/api.ts`): select de **Proveedor** (Anthropic/Claude,
+  Google/Gemini, OpenAI/GPT, xAI/Grok, DeepSeek, Mistral…) + un **buscador** + select de **Modelo**.
+  "Personalizado" sigue para pegar un ID a mano. Compilado con **Docker (node:22)** —esta Mac no tiene
+  node— y desplegado al contenedor del panel.
+  - ⚠️ **TRAMPA del build manual del panel (me mordió): `NEXT_PUBLIC_API_URL` es build-time.** El
+    primer build con Docker NO la pasó, así que el bundle del navegador cayó al default
+    `http://localhost:8000` (`lib/api.ts`) → **todo el panel daba "Failed to fetch"** (el Chrome del
+    usuario le hablaba a SU propia Mac). Fix: rebuild con
+    `docker run -e NEXT_PUBLIC_API_URL=https://api-masvida.enovagroup.tech node:22 … npm run build`.
+    Y **borrar `/app/.next` viejo antes de extraer**: el `tar` añade los chunks nuevos pero deja los
+    viejos (hashes distintos) — quedan huérfanos con la URL mala. Coolify pasa la variable solo; el
+    build a mano NO — hay que pasarla siempre.
+
+**🔴 DESCUBIERTO — corrige `prompt_proxima_sesion.md` §5: los contenedores del bot están AL REVÉS de
+como se documentaron.**
+- **`qlfrx…163241538768` = BOT API** (uvicorn :8000, sirve el HTTP del dominio `api-masvida`). El doc
+  lo llamaba "Worker".
+- **`erzq5…163243567294` = WORKER** (Celery, procesa los mensajes de WhatsApp). El doc lo llamaba "Bot API".
+- Por eso el endpoint nuevo daba **404**: lo desplegué solo a `erzq5`, pero el HTTP lo sirve `qlfrx`.
+  Los cambios del BOT (fotos, prompt) sí estaban bien —se desplegaron SIEMPRE a los DOS—; verificado que
+  el worker real (`erzq5`/celery) tiene el caption, el prompt del "producto exacto" y `_MOTIVOS_DE_PAUSA`.
+- **Regla:** para el código del bot, desplegar a AMBOS. Para el endpoint HTTP, el que importa es `qlfrx`.
+
+**Multi-LLM:** el bot ya acepta cualquier modelo (el ID va a `modelo_ia`); las redes de seguridad viven
+en código, no dependen del modelo. "Óptimo" por modelo se afina probando cada uno.
+
+---
+
+## 2026-07-15 — 🔄 FUERA LA RED DE FOTOS: el LLM elige qué foto mandar (tiene el contexto) + caption
+
+**Decisión del usuario (enfática), tras probar en vivo:** *"a la berga tu red, el LLM es el que debe
+ver los datos y seleccionar, ya que el LLM tiene sentido común."* Tenía razón.
+
+**El problema con la red determinista:** `producto_para_mostrar` elegía la foto por las PALABRAS del
+cliente, SIN el contexto de la conversación. El cliente pidió las *"Mini New York"* y luego dijo
+*"solo las galletas"*; la red mapeó "galletas" → **Galletas New York** (el único con esa palabra en
+el nombre — "Mini New York" no la tiene, solo en su descripción) y mandó la foto EQUIVOCADA (las
+grandes). El LLM SÍ tenía el contexto y habría elegido bien.
+
+**Lo hecho:**
+- **QUITADA la red** `producto_para_mostrar` (+ `_palabras_distintivas`) de `tools.py`, su llamada en
+  `agent.py` (y `escalo_duro`) y el banco `probar_fotos_proactivas`. El LLM decide qué foto mandar,
+  con su sentido común y el contexto — llama `enviar_fotos_producto` con el nombre EXACTO de lo que
+  el cliente eligió.
+- **Prompt reforzado** (`system_prompt.py`): sigue empujando a mostrar la foto proactivamente, y
+  ahora exige **el producto EXACTO** ("si pidió las Mini New York, la de ESAS, no la de las Galletas
+  New York").
+- **CAPTION bajo la foto** (`enviar_fotos_producto`): nombre + una línea de descripción, **SIN
+  precio**. La primera foto lo lleva completo; las demás, solo el nombre.
+
+**Verificado end-to-end** (bot real): cliente elige *"las mini"* → el bot llama
+`enviar_fotos_producto('Mini New York')` (¡el correcto!) y responde *"Te comparto una foto de las
+Mini New York"*. **16 bancos verdes.**
+
+**Se QUEDA** de las entradas anteriores de hoy: el **prompt proactivo** (mostrar la foto sin que la
+pidan) y que **el precio del día ya no pausa** (el bot sigue vendiendo). Cambió QUIÉN elige la foto:
+antes el código, ahora el LLM.
+
+**Pendiente (pedido del usuario):** (a) **selector de modelos con búsqueda/filtro por proveedor**
+(Gemini, Grok, OpenAI, Anthropic) en el panel — trabajo de dashboard (Next.js); (b) **prompt óptimo
+para cualquier LLM** que elija — las redes de seguridad ya viven en código (no dependen del modelo) y
+el prompt es imperativo/claro; "óptimo" por modelo se afina probando cada uno.
+
+---
+
+## 2026-07-15 — 🗣️ EL BOT NO SE CALLA POR NO SABER UN PRECIO (el precio del día ya no pausa el chat)
+
+**Prueba real del usuario:** preguntó *"y la torta qué tal"* (la torta keto es **precio del día**, sin
+precio cargado). El bot la describió y prometió *"te confirmo el precio"* → la red del relevo lo
+escaló (`no_se`) y **PAUSÓ el chat**. Cuando el usuario pidió *"tienes foto"*, el bot **ya estaba
+mudo** y no contestó nada. Se perdía la venta por no saber UN precio.
+
+**Decisión del usuario:** que el bot **siga vendiendo** — muestre la foto, ofrezca lo que sí sabe,
+deje el aviso del precio en la bandeja, pero NO se quede callado.
+
+**Lo hecho:**
+- **`pedir_ayuda` solo PAUSA en `pide_persona` y `reclamo`** (cuando el cliente necesita a una
+  persona de verdad: `_MOTIVOS_DE_PAUSA`). Para `precio_del_dia` y `no_se` deja el aviso en la
+  bandeja pero **NO pausa**: el bot sigue mostrando fotos, ofreciendo otros productos y tomando el
+  pedido. La dueña carga el precio del día en el panel y el bot lo usa en el siguiente mensaje.
+- **La red proactiva de fotos muestra la foto aunque el bot escale** por precio/dato (nuevo
+  `escalo_duro` en `agent.py`: solo `pide_persona`/`reclamo` la frenan; el precio del día no).
+- **Singular/plural** en la detección (`_singular`): "torta" del cliente calza con "Tortas" del
+  catálogo.
+
+**Verificado end-to-end** (bot real, simulador): *"y la torta keto qué tal"* → el bot muestra la foto
+de las Tortas keto y **NO se pausa**; luego *"tienes foto"* → el bot **responde** y la reenvía (el
+cliente la pidió). **17 bancos verdes** (bandeja, retomar y honestidad incluidos: el aviso se sigue
+creando, solo que ya no calla al bot para precio/no-sé).
+
+⚠️ Nota: *"y la torta"* a secas da empate (hay DOS tortas con foto: `Tortas keto` y `torta baja en
+carbohidratos`) → no adivina cuál. Con *"torta keto"* sí. A propósito: no bombardear.
+
+---
+
+## 2026-07-15 — 🗑️ EL BOTÓN "BORRAR" LIMPIA TODA LA CONVERSACIÓN (mensajes + avisos + caché)
+
+**Petición del usuario:** que al borrar un chat se borre **toda** la conversación **+ la caché si la
+hay**; y dejar el taller con **todas las conversaciones vacías** para probar limpio.
+
+**Lo que faltaba (verificado en el código):** `DELETE /conversaciones/{telefono}` borraba los
+mensajes + la memoria del bot (hist/buffer/lock/abuso), pero **dejaba dos cosas**:
+1. Las **intervenciones** (los avisos "te necesita" de la bandeja) — el chat desaparecía de la lista
+   pero el aviso quedaba vivo.
+2. La **caché del cobro en curso** (`cobro:{telefono}` en Redis) — `borrar_memoria` la respetaba a
+   propósito ("no toca dinero"), pero es **estado transitorio**, no el registro (los pedidos y pagos
+   viven en Postgres).
+
+**Lo hecho (aditivo):**
+- `borrar_conversacion` (`router.py`): ahora también borra las **intervenciones** del teléfono.
+- `borrar_memoria` (`redis_client.py`): ahora también borra `cobro:{telefono}`. Sigue SIN tocar el
+  registro del dinero (pedidos/pagos en Postgres, comprobantes en `comprob:`): solo el estado
+  transitorio del chat.
+- El **cliente y su dinero NO se tocan** (igual que antes): "Borrar chat" limpia el chat, no al cliente.
+- Panel: el texto del `confirm` ahora dice que borra mensajes + avisos + caché. *(El backend ya está
+  desplegado y el botón del panel actual ya llama a ese endpoint, así que la mejora YA funciona; el
+  texto nuevo entra en el próximo build del panel — la Mac no tiene node para recompilar el standalone.)*
+
+**Verificado end-to-end** (`probar_borrar.py`, dirigido): se sembró un chat con mensaje + aviso +
+`cobro:`/`hist:` en Redis, se llamó al endpoint, y quedó todo en 0 **menos el cliente** (conservado).
+**Los 17 bancos en verde.**
+
+**Limpieza del taller (a pedido):** se vaciaron **todas** las conversaciones — 128 mensajes, 10
+intervenciones, 11 clientes y las claves de conversación de Redis (incluidas 3 de `cobro:` a medias).
+**Respaldo previo en CSV** (`_respaldo_fases/respaldo_mensajes_taller_20260715.csv` y
+`respaldo_clientes_taller_20260715.csv`). La caché de tasa (`cache:tasa:bcv`) NO se tocó. Taller en 0.
+
+---
+
+## 2026-07-15 — 📸 EL BOT MUESTRA EL PRODUCTO SOLO (foto proactiva, sin bombardear)
+
+**Lo cazó el usuario probando con su celular real:** eligió "pan" (el Pan Keto), el bot lo
+**describió en texto** pero **esperó a que le pidieran la foto** para mandarla. Una vendedora buena
+enseña el producto sin que se lo rueguen. La petición: proactivo pero **inteligente, no
+bombardeante** — 2-3 fotos máx, un producto a la vez, una experiencia breve que haga sentir bien al
+cliente.
+
+**Dos capas, la doctrina de siempre (*el prompt SUGIERE, el código MUESTRA*):**
+
+1. **Prompt** (la regla de `enviar_fotos_producto` en `system_prompt.py`): de **REACTIVA** (mandaba
+   foto solo si la pedían / preguntaban por el aspecto / dudaban) a **PROACTIVA**: en cuanto el
+   cliente se ENFOCA en UN producto concreto (lo elige, pide su info o pregunta por él),
+   muéstraselo; la foto **reemplaza el muro de texto**; y explícito el **NO BOMBARDEES** (un
+   producto a la vez — si aún está entre varios, primero que elija; una vez por producto). La tool
+   ya traía **tope de 3** (anti-spam): el "2-3 fotos" ya vivía en el código. Medido en el simulador:
+   subió de **0/3 a ~2/3** de los turnos. Pero es probabilístico: a veces el modelo aún describe y
+   cierra sin mostrar.
+
+2. **Red determinista** (`producto_para_mostrar` en `tools.py` + una red en `responder()`,
+   `agent.py`): porque **lo que vive solo en el texto se rompe**. Tras la respuesta del modelo, si el
+   cliente se enfocó en UN producto con fotos y el modelo NO las mandó ⇒ el **CÓDIGO** las muestra.
+   Hermana de `_asegurar_catalogo` y `_asegurar_saludo`. **Anti-bombardeo POR CONSTRUCCIÓN:** dispara
+   SOLO si hay **EXACTAMENTE UN** producto en foco (si el texto menciona varios con fotos, no elige
+   ninguno — cuando el cliente sigue entre opciones no se le manda nada), el producto tiene fotos, y
+   **no se le mostró ya en las últimas 3 h** (no repite turno tras turno). No corre si el bot escaló
+   (`pedir_ayuda`) ni si registró un pedido.
+
+**Verificado (no supuesto):**
+- **Banco nuevo `probar_fotos_proactivas.py` (nº 17):** muestra cuando hay 1 foco claro con fotos ·
+  lo detecta tanto en lo que dijo el CLIENTE como en lo que respondió el BOT · **NO** dispara con
+  varios productos · **NO** con productos sin fotos · **NO** repite si ya se mostró. **6/6.**
+- **End-to-end con el bot REAL** (Sonnet 4.5) en el simulador: los 3 escenarios de la prueba del
+  usuario ahora mandan la foto (incluido el que antes daba **0**). Y con un `llm` **terco** que
+  describe SIN llamar la tool, **la red la manda igual** (log `FOTO PROACTIVA: mostré Pan Keto`) —
+  la prueba de que la red actúa cuando el modelo no colabora.
+- **Los 17 bancos EN VERDE** en el contenedor desplegado. Ninguna de las 9 redes ni el cobro se
+  tocaron (probar_cobro, probar_honestidad, probar_dos_agentes verdes).
+
+**Desplegado en el taller** por `docker cp` a bot API + worker + restart (el código vive en la capa
+del contenedor — mismo estado que el resto de la sesión, ver `prompt_proxima_sesion.md` §3). La red
+vive en el modo `uno` (`responder`); si un día se enciende el modo `dos`, se replica como las demás.
+
+**🐛 AFINADO con la prueba real del usuario (mismo día):** la primera versión buscaba el **nombre
+COMPLETO** del producto en el texto. Con 'Pan Keto' funcionaba, pero con **'Empanadas de masa de yuca
+o de masa de plátano'** NO —el bot nunca escribe ese nombre largo, dice "empanadas" + "masa de
+plátano"—, así que al elegir *"la de plátano"* no se mostraba nada. Arreglado: la red se guía ahora
+por las **PALABRAS DISTINTIVAS que dijo el CLIENTE** (`_palabras_distintivas`, ignora genéricas como
+"masa/de/o"): *"la de plátano"* → 'platano' apunta a ESE producto y a ningún otro ⇒ se muestra;
+*"empanadas"* a secas la comparten las 3 ⇒ empate ⇒ no dispara mientras el cliente sigue eligiendo.
+Y el "no repetir" **cede si el cliente PIDE la foto otra vez** de frente (`pidio_fotos`): pedirla es
+razón suficiente para reenviarla. Banco `probar_fotos_proactivas` reescrito (detecta por palabra
+distintiva, no por nombre completo; prueba el empate y el reenvío-por-petición). **17 bancos verdes.**
+
+---
+
+## 2026-07-14 — 🎭 FASE 5: DOS AGENTES (Operador + Voz) — la Voz **no puede** inventar
+
+**El problema:** el bot corre con **~16.400 tokens** de instrucciones por turno, **42 reglas** imperativas, **55 prohibiciones** — y con **DOS reglas que se declaran ambas *"la MÁS importante"*** (ANTIINVENCIÓN y BREVEDAD). Cuando todo es crítico, nada lo es. Por eso hay **siete redes de regex** que existen solo para atrapar al modelo incumpliendo, y el propio código lo confiesa: *"el prompt se lo prohibía DOS VECES y lo hizo igual"*, *"la regla vivía en el prompt: humo"*.
+
+La salida no es una regla más. Es **partir el agente en dos**:
+- **OPERADOR** — tiene las herramientas. Busca, registra, cobra. **No le escribe al cliente.**
+- **VOZ** — escribe el mensaje. **Sin herramientas, sin catálogo, sin datos bancarios.**
+
+**🔑 NO SE CONSTRUYEN DOS AGENTES: SE GENERALIZA UNO QUE YA EXISTE.** `redactar_mensaje` **ya era una Voz** —un LLM sin herramientas, en la voz de Whuilianny, con las redes del dinero encima— y lleva semanas en producción hablando en los tres momentos del cobro. Aquí ese patrón, **que ya funciona**, se extiende a todos los turnos.
+
+**🔴 LA HOJA NO LA ESCRIBE EL MODELO. LA ESCRIBE EL CÓDIGO.** Si el Operador la emitiera como JSON, podría **mentir dentro de la hoja**, y habríamos movido la mentira una capa más abajo con una capa más de prompt pidiéndole que no mienta.
+
+**LA HOJA *ES* LA LISTA BLANCA DEL DINERO.** Hoy: `autorizados_por_moneda(estable, dinamico, …)` ← **el prompt entero**. Esa línea es por qué el bot le pudo decir **"$23"** a una clienta real: **el 23 era el `id_para_pedir` de una variante.** Con la hoja, la lista blanca colapsa a *"lo que devolvieron las tools"* + los precios reales del catálogo (que llevan `$`). **El bug se vuelve imposible por construcción: los ids no llevan marca de dinero.**
+
+**LA VOZ NO PUEDE INVENTAR — Y NO ES UNA PROHIBICIÓN, ES UNA AUSENCIA:** sin catálogo no puede inventar un producto; sin zonas, un envío; sin calendario, una fecha. *El prompt sugiere; el código impide.*
+
+**LA CONTRADICCIÓN SE DISUELVE SOLA.** ANTIINVENCIÓN se queda en el Operador y BREVEDAD en la Voz: **cada prompt tiene exactamente UNA regla que reclama primacía**, y ya no compiten porque no viven en el mismo sitio. No hay que "resolver" la contradicción: hay que **dejar de pedirle a un modelo que tenga dos prioridades número uno**.
+
+**⚠️ NO SE TOCA NI UNA TEMPERATURA.** El Operador reusa `_llamar_openrouter` **verbatim** (0.15, con tools) y la Voz reusa `_pedir_redaccion` **verbatim** (0.7, sin tools). La naturalidad no sale de subir un dial: sale de que la Voz **deja de cargar 12 herramientas, el catálogo, el calendario y 20 reglas de acción que no puede romper**.
+
+**Ninguna de las 9 redes se retira**, y ninguna cambia de nombre ni de firma (3 bancos las importan así).
+
+**Tokens (medido):** Voz **−68%** · Operador **−25%** · turno típico **−9%** · cobro **−14%**. Y lo mejor: **cuando salta una red, −29%** — hoy un tropiezo de estilo quema una llamada COMPLETA de 15.453 tokens solo para reescribir una frase; ahora cuesta 4.910. **Las redes dejan de ser caras.** Coste honesto: la charla pura sube +7% y la latencia ~+2 s.
+
+**🔒 SE ESTRENA EN MODO `uno`:** el comportamiento **no cambia** al desplegar. Se enciende desde el panel, y volver atrás es **un `UPDATE`** — sin redeploy, efectivo en el siguiente mensaje.
+
+**🔴 DOS BUGS QUE CAZÓ LA PRUEBA CON EL BOT REAL** (y ninguno lo habría visto un test de unidad):
+1. **La lista blanca era demasiado estrecha.** Solo autorizaba lo que devolvían las tools, así que el bot **se negó a decir un precio correcto** (*"El Pan Keto cuesta $25"* → `DINERO INVENTADO` → respuesta enlatada). El Operador lo había leído del catálogo de su prompt, que es una fuente **legítima**. La red funcionaba **de más**. Arreglado: el catálogo autoriza, y el encargo **validado** pasa a ser verdad para la Voz.
+2. **El banco de la fase 1 era demasiado débil.** Comprobaba que el nombre *contuviera* `"Pan"`… y `"pan" in "empanadas keto"` es **True**. Si el buscador devolviera empanadas para "panes", **habría salido verde**. Es el mismo veneno del bug original, servido en el test. Ahora exige calce **por palabra**.
+
+**Banco nuevo:** `scripts/probar_dos_agentes.py` (nº 16). **Verificado:** 16 bancos verdes en el contenedor desplegado · ruff + 77 tests · `tsc` del panel limpio.
+
+---
+
+## 2026-07-14 — 🎛️ FASE 4: LAS HERRAMIENTAS SE APAGAN DESDE EL PANEL (sin romper el cobro)
+
+La proveedora enciende y apaga capacidades del agente **sin desplegar**. **7 blindadas · 5 desactivables.**
+
+**🔴 LA COSTURA QUE HACE QUE ESTO SEA SEGURO.** `agent.py` **nunca** usa `TOOL_SCHEMAS` para ejecutar — ejecuta por `ejecutar_tool` → `_DISPATCH`. `TOOL_SCHEMAS` solo sirve para **decirle al LLM qué existe**. Por eso se filtra **solo lo que el modelo VE**, y `_DISPATCH` queda **intacto**:
+- Las 7 redes siguen llamando a `pedir_ayuda` y `enviar_catalogo` aunque el modelo ya no las vea.
+- El worker de visión sigue llamando a `registrar_comprobante` directo.
+
+Si se filtrara el dispatch, apagar una tool desde el panel **le arrancaría el brazo a una red**: un bot que inventa dinero se quedaría callado, sin avisar a nadie.
+
+**Los tres riesgos, y cómo se cierran:**
+
+**1. El prompt no DESCRIBE las tools: se las ORDENA.** *"tu ÚNICA forma de saber si un producto tiene media es llamar `enviar_fotos_producto`"*, *"PROHIBIDO decir 'no tengo fotos' SIN llamar antes a la herramienta"*. Apagar una tool sin tocar el prompt deja al modelo en una contradicción irresoluble, y hace **lo peor que puede hacer: afirma haber hecho algo que no hizo** — justo la clase de mentira contra la que existen las redes.
+→ **Marcas** sobre el literal (`@tool línea` / `{{tool|fragmento}}`). **Sin marca ⇒ el texto va SIEMPRE**, así que las reglas del cobro son **intocables por el mecanismo**. Verificado con grep: el bloque del cobro **no menciona ni una tool desactivable**.
+
+**2. 🔴 LA RED DEL DINERO SE QUEDA CIEGA — el bug invisible de toda la fase.** `autorizados_por_moneda` construye la lista blanca de montos leyendo el **TEXTO DEL PROMPT**: los precios entran a `usd_ok` porque `_catalogo_bloque` escribe `"$25.00"` ahí. Si alguien "simplificara" haciendo condicional el bloque de **fichas**, la red marcaría como **INVENTADO todo precio legítimo** ⇒ `RESPUESTA_SEGURA` en cada cotización. **Ni un test de schemas ni uno de prompts lo vería.**
+→ El catálogo **NO es condicional**. Por eso `ver_catalogo` e `info_producto` son **blindadas**: no son *features*, son el **SUELO ANTIINVENCIÓN** del bot. El banco lo comprueba **con las 5 apagadas**.
+
+**3. Bucle de `RESPUESTA_SEGURA`.** Con `enviar_fotos_producto` apagada, `fotos_ok` **no puede ponerse en True jamás**. Basta un falso positivo del detector de pronombre para que la red del envío fantasma dispare, le ordene llamar a una herramienta **que ya no existe**, y el turno acabe enlatado. **En bucle, y en silencio.**
+→ **El regaño sabe si la tool existe.** La red se queda **viva** (poner `fotos_ok=True` desarmaría una red de honestidad); lo que cambia es lo que se le **pide**.
+
+**Y la lección que el código ya había aprendido:** restar una capacidad **sin declararla** es peor que no restarla. *"El sistema no sabía cobrar delivery, y **cuando algo no existe, el modelo lo inventa**"* — ese fue el `$23 USD` que le llegó a una clienta real. Por eso cada tool apagada **inyecta su límite** (`_LIMITES`), y **todos desembocan en `pedir_ayuda`** — que es exactamente por qué esa tiene que ser blindada.
+
+**Fail-open en tres capas** (ausente / vacía / basura ⇒ las 12) y las blindadas se re-inyectan **en la LECTURA**, no solo en la API: si alguien escribe el CSV a mano en Postgres y se deja fuera `pedir_ayuda`, **el bot la tiene igual**.
+
+**Banco nuevo:** `scripts/probar_herramientas.py` (nº 15). Prueba **las 32 combinaciones** posibles: las 11 frases canónicas del cobro sobreviven a **todas**, ninguna marca queda sin resolver, y ninguna tool apagada sigue nombrada en el prompt.
+
+**✅ PROBADO CON EL BOT REAL.** Con las fotos apagadas, a *"me mandas una foto del quesillo?"* contestó: *"Con sinceridad, las fotos me las manda la dueña directamente. Pero te puedo compartir el catálogo completo… ¿Te lo envío?"* — **no miente, no dice que la envió, y no corta la venta.**
+
+**Verificado:** 15 bancos verdes en el contenedor desplegado · ruff + 77 tests · `tsc` del panel limpio.
+
+---
+
+## 2026-07-14 — 🔐 FASE 3: ROLES (proveedora vs dueña) — y **nadie se queda fuera**
+
+**El agujero:** hasta hoy **no había roles**. La tabla `usuarios` no tenía columna de rol y el JWT solo llevaba el email, así que **cualquiera que entrara al panel veía y editaba TODO**. Y había **UNA sola cuenta**, compartida por Enova y la clienta.
+
+Eso chocaba con una decisión que el propio proyecto ya había tomado y documentado (`CLAUDE.md` §5): el selector de modelo de IA es *"palanca de PROVEEDOR, no de la clienta; cuando la clienta tenga su propio rol/login **se le esconde**"*. El rol nunca existió, así que **nunca se escondió**: la dueña podía cambiarle el modelo al bot desde Configuración. Y en la fase 4 se le suma el interruptor de las herramientas — apagarle `generar_datos_pago` a su propio bot **le rompería el cobro sin enterarse**.
+
+**Lo hecho:**
+- **`migrations/024_usuario_rol.sql`** — columna `rol` (`'proveedora'` | `'duena'`), CHECK e índice. **🎯 ES LA PRIMERA MIGRACIÓN QUE PASA POR EL SISTEMA DE LA FASE 0**, y funcionó: el log de producción dice *"**25 en disco, 24 ya aplicadas, 1 pendientes**"* → se aplicó **sola**. Añadí un `.sql` y ya está: no hay lista que actualizar ni de qué olvidarse. **La prueba de fuego, pasada.**
+- `leer_rol()` + dependencia **`proveedora_actual`** (403 para la dueña).
+- `GET /api/yo` · `GET/POST/PATCH/DELETE /api/usuarios` (solo proveedora).
+- Las claves de proveedora (hoy `modelo_ia`) se **omiten** en el GET de configuración y se **rechazan con 403** en el PUT si vienen de una dueña.
+- **Panel:** la sección del modelo solo la ve la proveedora + **pantalla de USUARIOS** para crear la cuenta de la dueña (sin esto los roles no servirían de nada: hay una sola cuenta).
+
+**El rol se lee de la BD, NO del JWT.** Meterlo como claim sería más rápido, pero: (a) los tokens **ya emitidos** no lo llevan, así que al desplegar la proveedora se quedaría **fuera de sus propias palancas** hasta que caduque (12 h); y (b) quitarle el rol a alguien **no surtiría efecto** hasta su próxima sesión. Leyéndolo de la BD, el rol es **la verdad de ahora**.
+
+**🔒 LA MITAD QUE MÁS IMPORTA NO ES "QUE LA DUEÑA NO PUEDA", SINO QUE NADIE SE QUEDE FUERA.** Un sistema de roles mal puesto es **un candado sin llave**. Tres redes:
+1. `_crear_admin` fuerza `rol='proveedora'` a `ADMIN_EMAIL` **en cada arranque**.
+2. La API se niega a **degradar o borrar** esa cuenta.
+3. La API se niega a dejar el sistema con **cero proveedoras**.
+
+**🔴 UNA LECCIÓN QUE EL BANCO SE DIO A SÍ MISMO** (y es gemela de la de la fase 2): la primera versión llamaba a las funciones de los endpoints **directamente** (`await listar_usuarios(DUENA)`) — y así **FastAPI nunca evalúa el `Depends(proveedora_actual)`**: el guardia sencillamente no corre. El banco reportó *"la dueña se ascendió a proveedora sola"*, lo cual era **mentira**: la protección sí estaba, pero el test la esquivaba. Ahora hace **peticiones HTTP reales** contra la app ASGI, con **JWT real**, por toda la cadena de dependencias. *Un test que no pasa por la puerta no prueba que la puerta cierre.*
+
+**Y la trampa del panel:** el PUT de configuración manda el objeto **entero**. Como el GET de la dueña ya no trae `modelo_ia`, iría con el `""` del estado inicial y el backend se lo rechazaría con 403… **dejándola sin poder guardar NADA**, por una clave que ni siquiera ve. Por eso las claves de proveedora se quitan del envío.
+
+**Banco nuevo:** `scripts/probar_roles.py` (nº 14). **Verificado:** 14 bancos verdes en el contenedor desplegado · ruff + 77 tests · `tsc` del panel limpio.
+
+---
+
+## 2026-07-14 — 📸 FASE 2: LA MULTIMEDIA LLEGA AL PANEL (lo que el bot manda, la dueña lo ve)
+
+**El bug:** el bot **SÍ enviaba** la multimedia por WhatsApp —las fotos de producto y el catálogo PDF llegaban al cliente— pero **NO la guardaba**. `enviar_fotos_producto` y `enviar_catalogo` hacían el POST a Meta y se acababa ahí: **cero filas** en `mensajes`.
+
+Verificado contra la BD REAL: las **130 filas eran TODAS `tipo='text'`** y **NINGUNA** tenía `media_url` — aunque el esquema admite `image`/`video`/`document` **desde la migración 021** y las columnas existen desde entonces. **El esquema estaba listo; nadie lo escribía.** La dueña abría el chat interno y veía una conversación donde el bot *"nunca"* mandó una foto.
+
+**El arreglo tenía DOS mitades, y con una sola no se ve nada:**
+
+1. **Que el bot GUARDE la fila.** Nuevo `_guardar_media_saliente()` — el gemelo **saliente** de `_guardar_media_en_hilo` (que ya hacía esto bien para el **entrante**). Sesión propia y excepción tragada **a propósito**: la foto YA salió hacia el cliente, y si escribir la burbuja fallara, `ejecutar_tool` lo convertiría en `{"error": …}` y el LLM le diría al cliente que no pudo mandarle la foto **que sí recibió**.
+2. **Que el endpoint SEPA SERVIRLA.** `/api/mensajes/{id}/media` solo hacía `os.path.exists()` sobre disco local — y las fotos viven en **Cloudflare R2** (`https://…`), así que `os.path.exists("https://…")` daba **False ⇒ 404 ⇒ "No se pudo cargar el archivo"**. Guardar el dato sin esto habría sido guardar un dato **invisible**. Ahora el endpoint conoce **tres orígenes**: disco local (el comprobante), URL remota (proxy en streaming — un vídeo pesa) y solo-`media_id` (se baja de Meta al vuelo).
+
+**También:**
+- Se deja de **TIRAR el `wa_message_id`** que Meta devuelve en cada envío. Sin él no había forma de casar los acuses (entregado / leído / **FALLÓ**) con la foto: una foto que Meta rechazara **se perdía en silencio**.
+- **MED-5:** la foto que la dueña manda desde SU celular solo trae `media_id` (el eco no descarga el archivo). `tiene_media` era `bool(media_url)` ⇒ False ⇒ **burbuja vacía**.
+- **MED-8** (panel): solo distinguía imagen/no-imagen, así que un **vídeo** de producto salía como un enlace gris de *"Abrir el comprobante"*. Ahora se reproduce.
+- **MED-7:** si falta `R2_PUBLIC_URL`, las fotos se saltaban **en silencio** y el bot decía que el producto *"no tiene fotos"* — mentira. Ahora grita en el log.
+
+**🔴 UNA LECCIÓN SOBRE EL PROPIO TEST (que casi me la cuela):** la primera versión de `probar_media.py` salía **VERDE contra el código roto**. Los checks usaban `all()` sobre la lista de filas… **que estaba vacía**, y `all([])` es `True`. Y el check de MED-5 comprobaba `bool(media_url or media_id)` — o sea, **se probaba a sí mismo**: una tautología. Corregido: ahora exige lista **no vacía** y llama al endpoint **de verdad** (`detalle_conversacion`). *Un test que pasa cuando no hay datos no prueba nada.*
+
+**Banco nuevo:** `scripts/probar_media.py` (nº 13). **9 fallos** contra el código viejo, **14/14 verde** contra el nuevo.
+
+**Verificado end-to-end contra el bucket REAL de R2:** `os.path.exists()` no encuentra la URL (la prueba viva del 404) y el endpoint devuelve **bytes de imagen reales** (`content-type: image/png`), con el hilo mostrando `tipo=image · tiene_media=True · estado=enviado`. **13 bancos verdes** en el contenedor desplegado · ruff + 77 tests · `tsc` del panel limpio.
+
+---
+
+## 2026-07-14 — 🔍 FASE 1: EL BUSCADOR (el bot dejó de NEGAR lo que sí vende)
+
+**El bug, en una frase:** `ver_catalogo` devolvía CERO en **6 de 19 consultas normales** de cliente, y con la lista vacía mandaba esta nota: *"no tienes ningún producto que calce con 'X'; **dile con sinceridad que de eso no tienes**"*. Combinado con la regla ANTIINVENCIÓN del prompt, **el código le ORDENABA al bot negar productos que el negocio SÍ vende.** El bot no desobedecía: **obedecía un bug.**
+
+Lo que un cliente escribía y lo que el bot contestaba (verificado ejecutando el filtro real contra los 31 productos vivos):
+
+| El cliente escribe | Antes | La realidad |
+|---|---|---|
+| `pan sin gluten` | ⛔ "de eso no tengo" | **TODO el negocio es sin gluten**. Ninguna de las 31 descripciones contiene la palabra "gluten": vive en la personalidad, no en el catálogo. |
+| `bebidas` | ⛔ | Vende Kombucha, Kéfir, Yogurt Kéfirado |
+| `postres` | ⛔ | Vende Quesillo, Ponquesitos, Galletas, Tortas, Chocolate |
+| `algo para diabéticos` | ⛔ | **24 de 31 productos** tienen `apto_diabeticos` lleno |
+| `desayuno` · `snacks` | ⛔ | — |
+
+**Las tres causas, todas de CÓDIGO:** el filtro era un **AND de prefijos** (una palabra mala tiraba todo a cero); la **categoría no era buscable**; y el **plural rompía** (`_singular()` existía, pero solo se usaba en el carril del COBRO).
+
+**Lo hecho** — `ver_catalogo` baja ahora por **7 escalones deterministas**, y el último garantiza que SIEMPRE hay algo que ofrecer: exacto → categoría → sinónimo comercial → atributo (apto diabéticos) → difusa → **mejor cobertura** → catálogo completo. Ninguno adivina: si un producto sale, es porque el CÓDIGO lo emparejó.
+
+- **La lista vacía dejó de existir.** Y la nota cambió: cuando no calza exacto, se le dice la verdad al bot (*"esto es LO MÁS PARECIDO"*, o *"eso puntual no lo tienes"*) **pero se le prohíbe el "no tengo" a secas**. Honestidad sin cortar la venta.
+- **"pan sin gluten" lo salva el escalón de MEJOR COBERTURA**: 'pan' calza con 4 productos y 'gluten' con ninguno, así que el AND lo tiraba todo a cero; ahora gana el que más palabras cubre. Lo que no está, no se inventa: simplemente no puntúa.
+- **Sinónimos comerciales editables** desde el panel (clave `sinonimos_busqueda`, fail-open al default): `bebidas → kombucha, kefir, yogurt`.
+- **RSK-1 desactivada:** las tools devuelven ahora `precio_texto: "$25"`. La red del dinero (`autorizados_por_moneda`) **solo reconoce cifras con marca**; un `precio_usd: 25.0` pelado NO entraba en la lista blanca. Hoy se salvaba solo porque `_catalogo_bloque` mete "$25.00" en el prompt — pero ese bloque **colapsa si el catálogo pasa de 60 productos**, y entonces el bot no habría podido decir NINGÚN precio sin que saltara "DINERO INVENTADO".
+- También: `ORDER BY` estable · la difusa **loguea** su excepción en vez de tragársela · aviso "NO SE PUEDE VENDER" si un producto no tiene precio.
+
+**🔴 LA TRAMPA QUE CASI ROMPE EL COBRO (y por qué el banco vigila las DOS mitades):**
+`_coincide_texto` y la búsqueda difusa **las comparten los dos carriles**: `ver_catalogo` (asesoría) y `_buscar_producto` (**el DINERO**). Aflojarlas arregla la asesoría **y rompe el cobro a la vez**:
+- Si se metiera la categoría en el filtro, `_buscar_producto('pan')` traería las **Empanadas Keto** (categoria=`panaderia`) → el bot cobraría el producto equivocado. **Es el bug de julio ($12 vs $14).** El comentario del código que decía *"la categoría NO se incluye a propósito"* **tenía razón**: se respetó, y los escalones nuevos viven aparte.
+- **Y sí cometí esa regresión, y el banco la cazó:** al encender la búsqueda por DESCRIPCIÓN en la difusa, `_buscar_producto('bebidas')` empezó a devolver el **Kéfir** (su descripción dice *"Bebida láctea"*). En `master` daba `None`. Ahora `con_descripcion` es **opt-in** y el cobro NO la enciende — con un caso centinela que se pone rojo si alguien lo intenta.
+
+**Banco nuevo:** `scripts/probar_buscador.py` (nº 12, registrado en `correr_bancos.py`). 21 consultas reales de cliente + la comprobación de que el cobro sigue estricto. **Escrito ANTES del arreglo y confirmado ROJO (15 fallos)** — un test que no falla antes no demuestra nada.
+
+**Verificado:** 12 bancos verdes contra un `pg_dump` de la BD REAL · ruff + 77 tests verdes.
+
+---
+
+## 2026-07-14 — 🧱 FASE 0: LOS CIMIENTOS (ruff · pytest · CI que valida ANTES · **D1 CERRADA**)
+
+**Por qué:** una auditoría encontró tres bugs (el buscador del catálogo niega productos que sí existen; la multimedia que el bot envía no se guarda en `mensajes`; el prompt está saturado) y el plan es arreglarlos **por fases validadas**. Pero no había con qué validar: **cero ruff, cero pytest, y el CI ni siquiera hacía `checkout`** — mandaba el `curl` a Coolify y probaba DESPUÉS, dentro del contenedor ya desplegado.
+
+**Lo hecho:**
+
+1. **ruff** (`pyproject.toml` nuevo — el bot ni era un paquete declarado). 38 avisos → **0**. Los `# noqa: BLE001` que ya había en el código estaban escritos **para un linter que nunca se instaló**. Arreglos a mano que sí importaban: una `l` minúscula dentro de `_calza()` (la RED DEL DINERO — una `l` se lee como un `1`), y `_SIN_PRECIO` que se reconstruía en cada vuelta del bucle del catálogo. Los `File()` de FastAPI en los defaults son la firma del framework, no un bug: van a config, no a parche. Dev-deps en `requirements-dev.txt` **aparte**, porque `Dockerfile.worker` instala el mismo `requirements.txt` y habría engordado las dos imágenes.
+
+2. **pytest**: `tests/` con **77 tests** (0,17 s) sobre las cinco redes de seguridad. **UNA SOLA FUENTE DE VERDAD:** `tests/test_redes.py` **importa** las tablas de casos de `scripts/probar_honestidad.py` (al que se le envolvió la ejecución en un guard de `__main__`). Duplicarlas era garantizar que un día divergen y el CI diga "verde" sobre una red que ya no se prueba.
+
+3. **CI que valida ANTES de desplegar**: job nuevo `verificar` (checkout + python 3.12 + `ruff check` + `compileall` + `pytest`) y `desplegar` ahora lleva **`needs: verificar`**. Si sale rojo, el `curl` a Coolify **no llega a ejecutarse**. El paso "LOS BANCOS" (post-deploy) se queda igual: son complementarios — esta puerta caza lo que se ve leyendo el código; aquel vigilante, lo que solo se ve corriéndolo.
+
+4. **🔴 D1 CERRADA.** `init_db.py` (267 → 224 líneas) ya no es una lista escrita a mano: **descubre `migrations/*.sql` solas**, las aplica **UNA VEZ** y las anota en `schema_migrations`. Y **`main.py` ya NO se traga la excepción**: si una migración falla, **el contenedor no arranca**. Un contenedor rojo se ve en el acto; uno verde con la base a medias cobra mal durante días (ya pasó — ver la entrada de la 019/021 más abajo).
+
+5. **`scripts/probar_drift.py`** (banco #11, registrado en `correr_bancos.py` justo tras `probar_migraciones`): compara **`models.py` ENTERO** contra el esquema real de Postgres. Su hermano comprueba una lista escrita a mano — protege contra los bugs de ayer; este, contra los de mañana.
+
+**⚠️ LO QUE CASI SALE MUY MAL (y por qué el ensayo no era opcional):**
+**`002_seed_catalogo.sql` NO es idempotente** — su `INSERT INTO productos` **no tiene `ON CONFLICT`**. Un `schema_migrations` ingenuo, al estrenarse contra una base que ya lleva meses viva, habría pensado que el seed nunca corrió y **habría duplicado el catálogo entero**. Lleva un candado (si `productos` no está vacía, se **anota sin sembrar**).
+
+**Verificado, no supuesto** (regla de la casa: *el cobro se verifica en la BD, no en la respuesta*). Se hizo `pg_dump` de la BD **REAL del taller**, se restauró en un Postgres local y se arrancó el `init_db` nuevo **contra los datos de verdad**:
+
+| Escenario | Resultado |
+|---|---|
+| Base nueva | 24 migraciones aplicadas, catálogo sembrado, orden correcto |
+| **BD real del taller** (32 productos, 130 mensajes) | ✅ **arranca sin fallar · 32→32 · 37→37 · 130→130 · nada corrompido** |
+| Segundo arranque | idempotente: "nada que migrar" |
+| **Migración rota** | ✅ **aborta el arranque** y NO la anota |
+| Drift (columna borrada / migración sin aplicar) | ✅ se pone ROJO en los dos casos |
+| **Los 11 bancos contra la BD real** | **10 verdes** (el 11º, `probar_retomar`, necesita clave real de OpenRouter) |
+
+**Decisión tomada:** **NO se corrió `ruff format`** sobre el código legado. Generaba **3.757 líneas de diff en 37 archivos**, encima del carril del dinero, para cero ganancia funcional: habría hecho la fase irrevisable, chocado con el diff de todas las fases siguientes y destrozado el `git blame` — y viola la regla **ADITIVA** (`CLAUDE.md` §3). El CI exige `ruff check` (que caza bugs). El formateo masivo, si se quiere, será su propio commit aislado.
+
+**Pendiente (siguiente fase):** el **buscador del catálogo** — `ver_catalogo` filtra con un AND de prefijos que devuelve CERO en 6 de 19 consultas reales (`pan sin gluten`, `bebidas`, `postres`, `algo para diabéticos`…) y, cuando devuelve cero, **el código le ORDENA al bot decir "de eso no tengo"**. El bot no desobedece: obedece un bug.
 
 ---
 

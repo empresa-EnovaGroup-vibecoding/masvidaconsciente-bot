@@ -18,6 +18,33 @@ import sys
 # El orden importa: primero el esquema (si la base está a medias, lo demás miente).
 BANCOS = [
     "probar_migraciones",
+    # DRIFT (fase 0): el hermano GENÉRICO del de arriba. `probar_migraciones` comprueba una lista
+    # de columnas escrita a mano (los incidentes de ayer); este compara `models.py` ENTERO contra
+    # el esquema real y detecta cualquier migración que no llegó a aplicarse (los de mañana).
+    # Va aquí, pegado a él: si la base no es la que el código cree, TODO lo de abajo miente.
+    "probar_drift",
+    # EL BUSCADOR (fase 1): el bot NO puede negar lo que sí vende. Vigila las dos mitades:
+    # que la ASESORÍA encuentre ("bebidas", "postres", "pan sin gluten"…) y que arreglarla NO
+    # haya aflojado el COBRO (ambos carriles comparten `_coincide_texto` y la difusa).
+    "probar_buscador",
+    # LA MULTIMEDIA (fase 2): lo que el bot manda por WhatsApp, la dueña lo ve en el panel.
+    # Vigila LAS DOS mitades del arreglo: que el bot GUARDE la fila, y que el endpoint SEPA
+    # servirla (las fotos viven en R2: `os.path.exists("https://…")` daba 404).
+    "probar_media",
+    # LOS ROLES (fase 3): la dueña no toca las palancas de la proveedora — y NADIE se queda
+    # fuera. Hace peticiones HTTP REALES contra la app ASGI: llamar a las funciones de los
+    # endpoints a pelo NO evalúa los `Depends`, así que el guardia ni siquiera correría.
+    "probar_roles",
+    # LAS HERRAMIENTAS (fase 4): se apagan desde el panel sin romper el cobro ni las redes.
+    # Vigila los 3 riesgos: que el filtro NO toque `_DISPATCH` (o apagar una tool le arranca
+    # el brazo a una red), que la red del DINERO no se quede ciega (el bug invisible), y que
+    # apagar las fotos no convierta al bot en una máquina de respuestas enlatadas.
+    "probar_herramientas",
+    # LOS DOS AGENTES (fase 5): la VOZ no puede inventar porque NO TIENE DE DÓNDE (sin
+    # catálogo, sin zonas, sin calendario). Vigila que las 9 redes sigan con su nombre y su
+    # firma (3 bancos las importan así), que NO se toque ninguna temperatura, y que la lista
+    # blanca del dinero deje de tragarse los `id_para_pedir` (el bug del "$23").
+    "probar_dos_agentes",
     "probar_cobro",
     "probar_datos_bancarios",
     "probar_delivery",

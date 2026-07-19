@@ -148,6 +148,7 @@ async def main() -> None:
     async with factory() as s:
         # limpia el precio del día de prueba que dejó 5b (B3), si lo hubo
         from sqlalchemy import delete as _del
+
         from app.models import PrecioDia as _PD
         await s.execute(_del(_PD).where(_PD.nota == "PRUEBA-B3"))
         await s.commit()

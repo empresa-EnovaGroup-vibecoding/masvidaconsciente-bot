@@ -30,7 +30,14 @@ from sqlalchemy import delete, select
 from app.agent import tools
 from app.agent.system_prompt import hoy_venezuela
 from app.models import (
-    Cliente, Intervencion, Mensaje, Pedido, PrecioDia, Producto, ProductoVariante, now_utc,
+    Cliente,
+    Intervencion,
+    Mensaje,
+    Pedido,
+    PrecioDia,
+    Producto,
+    ProductoVariante,
+    now_utc,
 )
 from app.services import redis_client as rc
 from app.services.db import get_session_factory

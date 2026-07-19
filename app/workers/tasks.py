@@ -126,14 +126,18 @@ def _proteger_afirmacion_de_pago(respuesta: str) -> str:
 # ─── Envío humano: plano + varios mensajitos cortos (no un mensajote) ─
 
 def _aplanar(texto: str) -> str:
-    """Quita el formato que delata a un bot: viñetas (* - •) al inicio de línea,
-    negritas/cursivas markdown (*texto*) y los decimales .00 de los precios.
-    La dueña escribe PLANO; esto es una red de seguridad por si el modelo igual
-    mete formato (a veces ignora la instrucción)."""
+    """Quita el formato que delata a un bot y lo deja como se escribe en WhatsApp: viñetas
+    (* - •) al inicio de línea, negritas/cursivas markdown (*texto*), los decimales .00 de los
+    precios y —clave para que suene NATURAL— los signos de APERTURA '¿' y '¡'. Nadie en un chat
+    escribe "¿Cómo estás?": escribe "como estas?". La dueña escribe PLANO e informal; esto es una
+    red de seguridad por si el modelo igual mete formato o puntuación de más (a veces la ignora)."""
     lineas = [re.sub(r"^[ \t]*[\*\-•]+[ \t]+", "", ln) for ln in texto.split("\n")]
     t = "\n".join(lineas)
     t = t.replace("*", "")  # negritas / asteriscos sueltos
     t = t.replace(" — ", ", ").replace("—", ", ")  # raya larga (em-dash) -> coma (suena a folleto)
+    # Fuera los signos de APERTURA: en WhatsApp nadie los usa. La pregunta queda "como estas?"
+    # (solo el cierre) y la exclamación "que rico" — más humano, menos acartonado.
+    t = t.replace("¿", "").replace("¡", "")
     t = re.sub(r"\$\s?(\d+)\.00(?!\d)", r"$\1", t)  # $18.00 -> $18
     return t
 
@@ -350,13 +354,46 @@ async def _guardar_entrante(telefono: str, nombre: str | None, texto: str) -> No
         logger.exception("No se pudo guardar el mensaje entrante de %s", telefono)
 
 
-def _numero_permitido(telefono: str) -> bool:
-    """LISTA BLANCA de pruebas: si settings.numeros_permitidos NO esta vacia, el bot
-    SOLO responde a esos numeros; a los demas les guarda el mensaje pero NO responde
-    (probar en produccion sin contestarle a clientes reales). Vacia = responde a todos.
-    Compara por la COLA de 10 digitos, asi tolera el codigo de pais (+57, 0058...)."""
+async def _numero_permitido(telefono: str) -> bool:
+    """LISTA BLANCA de pruebas: si la lista NO esta vacia, el bot SOLO responde a esos numeros;
+    a los demas les guarda el mensaje pero NO responde (probar en produccion sin contestarle a
+    clientes reales). Vacia = responde a todos. Compara por la COLA de 10 digitos, asi tolera el
+    codigo de pais (+57, 0058, +593...).
+
+    La lista sale de DOS sitios que se SUMAN:
+      · settings.numeros_permitidos (variable de entorno, la fija) y
+      · el config `numeros_permitidos_extra` (editable SIN redeploy: para añadir un numero de
+        prueba al vuelo sin tocar Coolify — que reiniciaria el contenedor).
+    """
+    from sqlalchemy import select
+
+    from app.models import Configuracion
+    from app.services.db import get_session_factory
+
+    # Los teléfonos INTERNOS (simulador del panel, bancos de prueba) empiezan por "__" y NUNCA
+    # son un WhatsApp real: pasan siempre, la lista blanca es solo para números de verdad. Sin
+    # esto, poner un número real en `numeros_permitidos_extra` volvía la lista NO vacía y de
+    # rebote bloqueaba a `__prueba_dinero__` / `__simulador__` (rompía los bancos).
+    if (telefono or "").startswith("__"):
+        return True
+
     permitidos = (settings.numeros_permitidos or "").strip()
-    if not permitidos:
+    extra = ""
+    try:
+        factory = get_session_factory()
+        async with factory() as s:
+            extra = (
+                await s.execute(
+                    select(Configuracion.valor).where(
+                        Configuracion.clave == "numeros_permitidos_extra"
+                    )
+                )
+            ).scalars().first() or ""
+    except Exception:  # noqa: BLE001 — si la BD falla, manda solo la lista de entorno
+        pass
+
+    juntos = ",".join(x for x in (permitidos, extra.strip()) if x)
+    if not juntos:
         return True  # sin lista blanca = responde a todos (produccion normal)
 
     def _cola(s: str) -> str:
@@ -364,7 +401,7 @@ def _numero_permitido(telefono: str) -> bool:
         return d[-10:] if len(d) >= 10 else d
 
     objetivo = _cola(telefono)
-    return any(_cola(n) == objetivo for n in permitidos.split(","))
+    return any(_cola(n) == objetivo for n in juntos.split(",") if n.strip())
 
 
 @celery_app.task(name="procesar_buffer")
@@ -384,7 +421,7 @@ async def _procesar(telefono: str, nombre: str | None) -> None:
 
         texto = "\n".join(mensajes)
 
-        if not await _bot_activo() or await _cliente_pausado(telefono) or not _numero_permitido(telefono):
+        if not await _bot_activo() or await _cliente_pausado(telefono) or not await _numero_permitido(telefono):
             # Bot apagado (global o solo en este chat): guarda lo que escribió el
             # cliente para que la dueña lo vea en Conversaciones y responda ella.
             await rc.guardar_historial(telefono, "user", texto)
@@ -577,7 +614,7 @@ async def _retomar(telefono: str, nombre: str | None, pausado_por: str | None = 
             logger.info("Retomar %s: ya se disparó hace un momento (doble click)", telefono)
             return
 
-        if not await _bot_activo() or not _numero_permitido(telefono):
+        if not await _bot_activo() or not await _numero_permitido(telefono):
             return
 
         # Entre el click y esta tarea, la dueña pudo volver a tomar el chat (o el bot pudo
@@ -709,7 +746,7 @@ async def _responder_situacion(
     panel, un cliente que mandaba su comprobante RECIBÍA respuesta igual. El pago se registra
     siempre (el dinero nunca se pierde), pero si la dueña apagó el bot, el bot NO habla.
     """
-    if not _numero_permitido(telefono) or not await _bot_activo():
+    if not await _numero_permitido(telefono) or not await _bot_activo():
         return []  # bot apagado o fuera de la lista blanca: se registra el pago, pero no se habla
     try:
         historial = await rc.obtener_historial(telefono)
@@ -1008,7 +1045,7 @@ async def _responder_y_enviar(telefono: str, texto: str, nombre: str | None) -> 
     if not await rc.adquirir_lock(telefono):
         return
     try:
-        if not await _bot_activo() or await _cliente_pausado(telefono) or not _numero_permitido(telefono):
+        if not await _bot_activo() or await _cliente_pausado(telefono) or not await _numero_permitido(telefono):
             await rc.guardar_historial(telefono, "user", texto)
             await _guardar_entrante(telefono, nombre, texto)
             return
@@ -1134,7 +1171,7 @@ async def _notificar_cliente_pago(telefono, situacion) -> None:
     Falla CERRADA: si no se le puede escribir, se le avisa a ELLA para que lo haga desde su
     teléfono. Un pago confirmado no se puede quedar sin avisar.
     """
-    if not _numero_permitido(telefono):
+    if not await _numero_permitido(telefono):
         return
     if not await _ventana_abierta(telefono):
         logger.warning("Aviso de pago a %s: ventana de 24h CERRADA → el bot NO escribe", telefono)

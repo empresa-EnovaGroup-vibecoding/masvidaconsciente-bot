@@ -23,6 +23,21 @@ def _headers() -> dict:
     return {"Authorization": f"Bearer {settings.meta_access_token}"}
 
 
+def wa_message_id(respuesta: dict | None) -> str | None:
+    """El id que Meta le pone al mensaje que acabamos de enviar ('wamid.XXX').
+
+    Viene en TODAS las respuestas de envío (`{"messages": [{"id": "wamid…"}]}`) y hasta ahora
+    se TIRABA en el camino de la media: `enviar_imagen`/`enviar_video`/`enviar_documento`
+    devolvían el JSON y quien las llamaba lo descartaba. Sin ese id no hay forma de casar los
+    acuses de Meta (entregado / leído / **FALLÓ**) con la foto que se mandó — así que una foto
+    que Meta rechaza se pierde en silencio, sin rastro en el panel.
+    """
+    try:
+        return ((respuesta or {}).get("messages") or [{}])[0].get("id") or None
+    except (AttributeError, IndexError, TypeError):
+        return None
+
+
 async def enviar_texto(telefono: str, texto: str) -> dict:
     payload = {
         "messaging_product": "whatsapp",

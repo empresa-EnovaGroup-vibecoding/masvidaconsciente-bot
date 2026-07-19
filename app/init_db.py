@@ -1,8 +1,24 @@
-"""Prepara la base de datos al desplegar:
-1. Crea las tablas (idempotente: CREATE TABLE IF NOT EXISTS).
-2. Carga el catálogo seed solo si la tabla de productos está vacía.
+"""Prepara la base de datos al desplegar.
 
-Se ejecuta al arrancar el contenedor web. Seguro de correr varias veces.
+🔴 LA DEUDA D1, CERRADA (fase 0). Antes este fichero era una LISTA ESCRITA A MANO que
+re-ejecutaba las 24 migraciones EN CADA ARRANQUE, y su propio comentario avisaba:
+*"Si una migración nueva no se agrega aquí, su archivo .sql NUNCA se ejecuta (y nadie se
+entera)"*. Peor: `main.py` se tragaba la excepción, así que el contenedor podía arrancar
+**VERDE con la base a medias**. Ya mordió: la 019 puso un CHECK estrecho, un cliente real
+mandó un `contacts` que no cabía, la 019 empezó a reventar en cada arranque, y las
+migraciones 020-023 **dejaron de aplicarse durante días**, en silencio.
+
+AHORA:
+1. Las migraciones se DESCUBREN SOLAS (`migrations/*.sql`, en orden). Olvidarse de
+   registrar una es imposible: no hay lista que actualizar.
+2. Cada una se aplica UNA VEZ y queda anotada en `schema_migrations`. No se re-ejecutan.
+3. Si algo falla, se LANZA. `main.py` ya no lo tapa: el contenedor NO arranca.
+   Un contenedor rojo es mucho mejor que uno verde con la base a medias.
+
+El ORDEN alfabético es el correcto y no es casualidad:
+    001_init → 002_seed → 003…022_variantes → 022b_variantes_datos → 023_zonas
+('_' < 'b' en ASCII, así que `022_` va antes que `022b`). La 022b es un backfill que
+necesita que el catálogo YA esté sembrado por la 002: en una BD nueva, ese orden se cumple.
 """
 import asyncio
 import json
@@ -18,184 +34,147 @@ logger = logging.getLogger("init_db")
 
 MIGRATIONS = Path(__file__).resolve().parent.parent / "migrations"
 
+# ⚠️ LA ÚNICA MIGRACIÓN QUE NO ES IDEMPOTENTE. Su `INSERT INTO productos` NO lleva
+# `ON CONFLICT`: correrla dos veces DUPLICA el catálogo entero. Por eso el código viejo la
+# protegía con un contador ("siembra solo si `productos` está vacía") en vez de dejarla en la
+# lista con las demás. Ese candado se conserva aquí — es lo que hace seguro estrenar
+# `schema_migrations` contra una base que YA tiene datos (producción).
+SEED = "002_seed_catalogo.sql"
+
 
 def _statements(archivo: Path) -> list[str]:
     sql = archivo.read_text(encoding="utf-8")
-    # quita comentarios de línea y separa por ';'
+    # Quita comentarios de línea y separa por ';'.
+    # ⚠️ Es un partidor INGENUO: un ';' dentro de un literal o de un bloque `DO $$ … $$` lo
+    # rompería. Hoy ninguna migración los usa (las que necesitaban un DO dinámico lo esquivan
+    # a mano; ver el comentario de 019_bandeja.sql). Toda migración nueva debe seguir
+    # evitándolos, o hay que endurecer esto primero.
     lineas = [ln for ln in sql.splitlines() if not ln.strip().startswith("--")]
     return [s.strip() for s in "\n".join(lineas).split(";") if s.strip()]
 
 
+async def _asegurar_tabla_migraciones(session) -> None:
+    """La tabla que recuerda qué ya se aplicó. Se crea sola, es idempotente."""
+    await session.execute(
+        text(
+            "CREATE TABLE IF NOT EXISTS schema_migrations ("
+            "  nombre TEXT PRIMARY KEY,"
+            "  aplicada_en TIMESTAMPTZ NOT NULL DEFAULT now()"
+            ")"
+        )
+    )
+    await session.commit()
+
+
+async def _ya_aplicadas(session) -> set[str]:
+    filas = (await session.execute(text("SELECT nombre FROM schema_migrations"))).scalars().all()
+    return set(filas)
+
+
+async def _catalogo_vacio(session) -> bool:
+    """¿La tabla de productos está vacía? Decide si la 002 siembra o solo se anota.
+
+    En una BD NUEVA: vacía ⇒ se siembra.
+    En producción (ya tiene 32 productos): NO se siembra, pero SÍ se anota como aplicada —
+    que es la verdad: se sembró hace meses. Sin esto, estrenar `schema_migrations` contra
+    producción volvería a correr el seed y duplicaría el catálogo entero.
+    """
+    try:
+        total = (await session.execute(text("SELECT COUNT(*) FROM productos"))).scalar()
+    except Exception:  # noqa: BLE001 — si `productos` aún no existe, la BD está vacía
+        await session.rollback()
+        return True
+    return not total
+
+
+async def _aplicar(session, archivo: Path) -> None:
+    for stmt in _statements(archivo):
+        await session.execute(text(stmt))
+    await session.execute(
+        text("INSERT INTO schema_migrations (nombre) VALUES (:n) ON CONFLICT DO NOTHING"),
+        {"n": archivo.name},
+    )
+    await session.commit()
+
+
 async def main() -> None:
+    """Aplica las migraciones que falten y sincroniza el admin. LANZA si algo falla."""
     factory = get_session_factory()
     async with factory() as session:
-        for stmt in _statements(MIGRATIONS / "001_init.sql"):
-            await session.execute(text(stmt))
-        await session.commit()
-        logger.info("Tablas listas")
+        await _asegurar_tabla_migraciones(session)
+        aplicadas = await _ya_aplicadas(session)
 
-        # 003: capa de cobro (tabla pagos + estados nuevos de pedido + datos de cobro).
-        # Aditiva e idempotente: no toca 001 ni 002, segura de correr en cada arranque.
-        for stmt in _statements(MIGRATIONS / "003_pagos.sql"):
-            await session.execute(text(stmt))
-        await session.commit()
-        logger.info("Migracion 003 (pagos) aplicada")
+        # Descubrimiento AUTOMÁTICO. Adiós a la lista escrita a mano: un .sql nuevo en
+        # `migrations/` se aplica solo. Ya no se puede "olvidar registrar" una migración.
+        #
+        # ⚠️ SE IGNORAN LOS OCULTOS (los que empiezan por '.'). Esto NO es paranoia: al desplegar
+        # esto la primera vez, un `tar` hecho en macOS coló ficheros AppleDouble
+        # (`._001_init.sql`) — que CALZAN con el glob `*.sql`, son binarios, y al intentar leerlos
+        # como UTF-8 reventaban el arranque. El fallo ruidoso hizo su trabajo (el contenedor se
+        # negó a arrancar en vez de correr con la base a medias), pero una migración nunca empieza
+        # por un punto: `.DS_Store`, `._x.sql` y compañía son basura, no esquema.
+        archivos = sorted(
+            (f for f in MIGRATIONS.glob("*.sql") if not f.name.startswith(".")),
+            key=lambda f: f.name,
+        )
+        if not archivos:
+            raise RuntimeError(f"No hay migraciones en {MIGRATIONS} — ¿falta el COPY del Dockerfile?")
 
-        # 004: pago que no calza (estado 'parcial' + monto_recibido). Aditiva e idempotente.
-        for stmt in _statements(MIGRATIONS / "004_pago_parcial.sql"):
-            await session.execute(text(stmt))
-        await session.commit()
-        logger.info("Migracion 004 (pago parcial) aplicada")
+        pendientes = [f for f in archivos if f.name not in aplicadas]
+        logger.info(
+            "Migraciones: %d en disco, %d ya aplicadas, %d pendientes",
+            len(archivos), len(aplicadas), len(pendientes),
+        )
 
-        # 005: notas internas del cliente (CRM). Aditiva e idempotente.
-        for stmt in _statements(MIGRATIONS / "005_cliente_notas.sql"):
-            await session.execute(text(stmt))
-        await session.commit()
-        logger.info("Migracion 005 (notas cliente) aplicada")
-
-        # 006: base de conocimiento del negocio (FAQ + info). Aditiva e idempotente.
-        for stmt in _statements(MIGRATIONS / "006_conocimiento.sql"):
-            await session.execute(text(stmt))
-        await session.commit()
-        logger.info("Migracion 006 (conocimiento) aplicada")
-
-        # 007: pausar el bot por cliente. Aditiva e idempotente.
-        for stmt in _statements(MIGRATIONS / "007_cliente_bot_pausado.sql"):
-            await session.execute(text(stmt))
-        await session.commit()
-        logger.info("Migracion 007 (bot pausado por cliente) aplicada")
-
-        # 008: catálogo PDF guardado en la BD (sobrevive redeploys). Aditiva e idempotente.
-        for stmt in _statements(MIGRATIONS / "008_catalogo_pdf.sql"):
-            await session.execute(text(stmt))
-        await session.commit()
-        logger.info("Migracion 008 (catalogo pdf en BD) aplicada")
-
-        # 009: metodos de pago (varias cuentas: Pago Movil, Banesco, Binance, Zelle...).
-        for stmt in _statements(MIGRATIONS / "009_metodos_pago.sql"):
-            await session.execute(text(stmt))
-        await session.commit()
-        logger.info("Migracion 009 (metodos de pago) aplicada")
-
-        # 010: numero de cuenta bancaria en metodos de pago (transferencias).
-        for stmt in _statements(MIGRATIONS / "010_metodo_cuenta.sql"):
-            await session.execute(text(stmt))
-        await session.commit()
-        logger.info("Migracion 010 (cuenta en metodos de pago) aplicada")
-
-        # 011: busqueda difusa (pg_trgm + unaccent) para tolerar typos y acentos.
-        # Cada extension/indice va en su PROPIA transaccion: si una falla (p.ej. la
-        # imagen no trae la extension), no tumba las demas ni el arranque del bot.
-        for stmt in _statements(MIGRATIONS / "011_busqueda_difusa.sql"):
-            try:
-                await session.execute(text(stmt))
+        for archivo in pendientes:
+            # EL SEED es el único caso especial: no es idempotente (ver la constante SEED).
+            # Si el catálogo YA tiene productos, NO se siembra — pero SÍ se anota, porque
+            # se sembró hace meses. Así producción estrena `schema_migrations` sin duplicar nada.
+            if archivo.name == SEED and not await _catalogo_vacio(session):
+                await session.execute(
+                    text(
+                        "INSERT INTO schema_migrations (nombre) VALUES (:n) "
+                        "ON CONFLICT DO NOTHING"
+                    ),
+                    {"n": archivo.name},
+                )
                 await session.commit()
-            except Exception as e:  # noqa: BLE001 — la busqueda difusa es mejora, no debe romper el deploy
+                logger.info("%s: el catálogo YA estaba sembrado, se anota sin re-sembrar", SEED)
+                continue
+
+            try:
+                await _aplicar(session, archivo)
+            except Exception:
                 await session.rollback()
-                logger.warning("Migracion 011: '%s...' no aplico (%s)", stmt[:40], e)
-        logger.info("Migracion 011 (busqueda difusa) aplicada")
+                # 🔴 SE LANZA A PROPÓSITO. `main.py` ya NO lo tapa: si una migración falla, el
+                # contenedor NO arranca. Antes se tragaba la excepción y la app quedaba viva con
+                # la base a medias — verde por fuera, rota por dentro, durante días.
+                logger.error("🔴 MIGRACIÓN FALLIDA: %s — el arranque se aborta", archivo.name)
+                raise
+            logger.info("Migración aplicada: %s", archivo.name)
 
-        # 012: columna embedding (busqueda semantica del Conocimiento). Aditiva e idempotente.
-        for stmt in _statements(MIGRATIONS / "012_conocimiento_embedding.sql"):
-            await session.execute(text(stmt))
-        await session.commit()
-        logger.info("Migracion 012 (embedding conocimiento) aplicada")
+        if not pendientes:
+            logger.info("Base de datos al día: nada que migrar")
 
-        # 013: ficha del producto (duracion, se_congela, apto_diabeticos, info). Aditiva.
-        for stmt in _statements(MIGRATIONS / "013_producto_ficha.sql"):
-            await session.execute(text(stmt))
-        await session.commit()
-        logger.info("Migracion 013 (ficha de producto) aplicada")
-
-        # 014: fotos/videos de productos (media en R2; en la BD solo la ruta). Aditiva.
-        for stmt in _statements(MIGRATIONS / "014_producto_media.sql"):
-            await session.execute(text(stmt))
-        await session.commit()
-        logger.info("Migracion 014 (media de producto) aplicada")
-
-        # 015: "el bot te necesita" (intervenciones) + precio del día. Aditiva.
-        for stmt in _statements(MIGRATIONS / "015_intervenciones.sql"):
-            await session.execute(text(stmt))
-        await session.commit()
-        logger.info("Migracion 015 (intervenciones + precio del dia) aplicada")
-
-        # 016: la ENTREGA del pedido (para cuándo y cómo). Aditiva.
-        # OJO: esta lista está escrita A MANO. Si una migración nueva no se agrega aquí,
-        # su archivo .sql NUNCA se ejecuta (y nadie se entera).
-        for stmt in _statements(MIGRATIONS / "016_pedido_entrega.sql"):
-            await session.execute(text(stmt))
-        await session.commit()
-        logger.info("Migracion 016 (entrega del pedido) aplicada")
-
-        # 017: horario de entrega (días, feriados, anticipación por producto). Aditiva.
-        for stmt in _statements(MIGRATIONS / "017_horario_entrega.sql"):
-            await session.execute(text(stmt))
-        await session.commit()
-        logger.info("Migracion 017 (horario de entrega) aplicada")
-
-        # 018: las HORAS (atención + hora de corte para pedidos del mismo día). Aditiva.
-        for stmt in _statements(MIGRATIONS / "018_horas.sql"):
-            await session.execute(text(stmt))
-        await session.commit()
-        logger.info("Migracion 018 (horas) aplicada")
-
-        # 019: LA BANDEJA (rol 'owner', tipo/media, estado del envío, reloj de 24h, no leídos).
-        for stmt in _statements(MIGRATIONS / "019_bandeja.sql"):
-            await session.execute(text(stmt))
-        await session.commit()
-        logger.info("Migracion 019 (bandeja) aplicada")
-
-        # 020: QUIÉN pausó el chat (la dueña o el propio bot). Aditiva e idempotente.
-        for stmt in _statements(MIGRATIONS / "020_quien_paso.sql"):
-            await session.execute(text(stmt))
-        await session.commit()
-        logger.info("Migracion 020 (quien paso el chat) aplicada")
-
-        # 021: el hilo dice la verdad (media del cliente, tipos del eco, candado de estados).
-        for stmt in _statements(MIGRATIONS / "021_hilo_completo.sql"):
-            await session.execute(text(stmt))
-        await session.commit()
-        logger.info("Migracion 021 (hilo completo) aplicada")
-
-        # 022: PRODUCTO · TAMAÑO · OPCIÓN — solo la ESTRUCTURA (tablas e índices).
-        for stmt in _statements(MIGRATIONS / "022_variantes.sql"):
-            await session.execute(text(stmt))
-        await session.commit()
-        logger.info("Migracion 022 (tamaños: estructura) aplicada")
-
-        total = (await session.execute(text("SELECT COUNT(*) FROM productos"))).scalar()
-        if total and total > 0:
-            logger.info("Catálogo ya cargado (%s productos), no se vuelve a sembrar", total)
-        else:
-            for stmt in _statements(MIGRATIONS / "002_seed_catalogo.sql"):
-                await session.execute(text(stmt))
-            await session.commit()
-            logger.info("Catálogo sembrado")
-
-        # 022b: los DATOS de los tamaños. Va DESPUÉS del seed a propósito: en una BD NUEVA (un
-        # cliente nuevo) las migraciones corren ANTES de sembrar el catálogo, así que un
-        # backfill ahí vería `productos` VACÍA ⇒ CERO tamaños ⇒ el bot no podría vender NADA,
-        # y sin un solo error en el log. Es idempotente en DATOS (se re-ejecuta en cada arranque).
-        for stmt in _statements(MIGRATIONS / "022b_variantes_datos.sql"):
-            await session.execute(text(stmt))
-        await session.commit()
-        logger.info("Migracion 022b (tamaños: datos) aplicada")
-
-        # 023: EL DELIVERY — las zonas y su costo (el "código de barras" del envío).
-        for stmt in _statements(MIGRATIONS / "023_zonas_entrega.sql"):
-            await session.execute(text(stmt))
-        await session.commit()
-        logger.info("Migracion 023 (zonas de entrega) aplicada")
-
-        # El admin se crea/verifica siempre, exista o no el catálogo
+        # Esto NO son migraciones: se sincronizan en CADA arranque, a propósito.
         await _crear_admin(session)
-
-        # Indexa (embeddings) las entradas de Conocimiento que aún no lo tengan.
         await _backfill_embeddings(session)
 
 
+
 async def _crear_admin(session) -> None:
-    """Crea el usuario admin del dashboard si no existe."""
+    """Crea el usuario admin del dashboard si no existe, y lo mantiene como PROVEEDORA.
+
+    🔒 LA RED ANTI-BLOQUEO (migración 024). El rol de la cuenta ADMIN_EMAIL se fuerza a
+    'proveedora' EN CADA ARRANQUE. Da igual lo que pase por la API: si alguien se degrada a sí
+    mismo, si un `UPDATE` a mano se equivoca, o si la migración 024 le puso el default 'duena' a
+    la fila que ya existía — el siguiente arranque lo restaura. Sin esto, un error de un clic
+    podría dejar el sistema SIN NINGUNA proveedora y sin forma de recuperar el acceso a las
+    palancas (el modelo de IA, y desde la fase 4 las herramientas del agente).
+
+    Corolario: la cuenta ADMIN_EMAIL **no se puede degradar**. Es a propósito. Para darle acceso
+    a la clienta se crea OTRA cuenta con rol 'duena'.
+    """
     from app.api.security import hash_password
     from app.config import get_settings
     from app.models import Usuario
@@ -212,22 +191,27 @@ async def _crear_admin(session) -> None:
         # Sincroniza la contrasena del admin con ADMIN_PASSWORD en cada arranque.
         # Antes el admin se creaba UNA sola vez: cambiar ADMIN_PASSWORD no actualizaba
         # el login. Ahora cambiar la variable (+ redeploy) si cambia la contrasena real.
+        # Y de paso, el rol: la cuenta admin SIEMPRE es la proveedora.
         await session.execute(
-            text("UPDATE usuarios SET password_hash = :ph WHERE email = :email"),
+            text(
+                "UPDATE usuarios SET password_hash = :ph, rol = 'proveedora' "
+                "WHERE email = :email"
+            ),
             {"ph": nuevo_hash, "email": settings.admin_email},
         )
         await session.commit()
-        logger.info("Usuario admin: contrasena sincronizada con ADMIN_PASSWORD")
+        logger.info("Usuario admin: contrasena y rol (proveedora) sincronizados")
         return
     session.add(
         Usuario(
             email=settings.admin_email,
             password_hash=nuevo_hash,
             nombre="Administrador",
+            rol="proveedora",
         )
     )
     await session.commit()
-    logger.info("Usuario admin creado: %s", settings.admin_email)
+    logger.info("Usuario admin creado (proveedora): %s", settings.admin_email)
 
 
 async def _backfill_embeddings(session) -> None:
@@ -247,7 +231,7 @@ async def _backfill_embeddings(session) -> None:
         textos = [f"{f.titulo}. {f.contenido or ''}" for f in filas]
         vectores = await obtener_embeddings(textos)
         actualizados = 0
-        for fila, vec in zip(filas, vectores):
+        for fila, vec in zip(filas, vectores, strict=False):
             if vec is None:
                 continue
             await session.execute(

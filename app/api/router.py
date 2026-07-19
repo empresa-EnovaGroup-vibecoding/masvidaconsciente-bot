@@ -2,22 +2,25 @@
 excepto el propio login."""
 import logging
 import os
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Annotated
 from uuid import uuid4
 
+import httpx
 from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, StringConstraints
 from sqlalchemy import delete, func, select
 
-from app.config import get_settings
 from app.api.security import (
     crear_token,
+    leer_rol,
+    proveedora_actual,
     usuario_actual,
     verify_password,
 )
+from app.config import get_settings
 from app.models import (
     CatalogoPdf,
     Cliente,
@@ -33,6 +36,7 @@ from app.models import (
     Producto,
     ProductoMedia,
     ProductoVariante,
+    Usuario,
     ZonaEntrega,
     hoy_venezuela,
     inicio_dia_venezuela,
@@ -118,6 +122,18 @@ CLAVES_CONFIG = [
     # Modelo de IA conversacional, lo elige la PROVEEDORA (no la clienta). El bot
     # lo lee con leer_modelo_ia(). La voz (transcripción) va aparte y fija.
     "modelo_ia",
+    # SINÓNIMOS DEL BUSCADOR: lo que el cliente DICE no siempre es lo que está ESCRITO en el
+    # catálogo. Pide "bebidas" y en la base pone "Kombucha", "Kéfir", "Yogurt Kéfirado" —
+    # ninguna contiene esa palabra, así que el buscador devolvía CERO y el bot decía "de eso no
+    # tengo" sobre tres productos que SÍ vende. Formato: una línea por término,
+    # "termino: palabra1, palabra2". Vacío = se usa el default de tools.py (_SINONIMOS_DEFAULT).
+    "sinonimos_busqueda",
+    # LOS DOS AGENTES (fase 5, migración 025). Palancas de la PROVEEDORA.
+    # `agente_modo`: 'uno' (el agente único de siempre) | 'dos' (Operador + Voz).
+    # `modelo_operador` / `modelo_voz`: ausentes ⇒ caen a `modelo_ia` (compatibilidad).
+    "agente_modo",
+    "modelo_operador",
+    "modelo_voz",
 ]
 
 
@@ -970,21 +986,53 @@ async def servir_catalogo_pdf():
 
 # ─── Configuración del negocio (datos que el bot usa) ────────────────
 
+# Claves que SOLO puede ver y tocar la PROVEEDORA (Enova), nunca la clienta.
+# `modelo_ia` ya estaba documentado así en CLAUDE.md §5: *"palanca de PROVEEDOR, no de la
+# clienta; cuando la clienta tenga su propio rol/login se le esconde"*. Ese rol ya existe
+# (migración 024), así que aquí se esconde de verdad — hasta hoy la whitelist era plana y la
+# dueña podía cambiarle el modelo al bot desde la pantalla de Configuración.
+CLAVES_PROVEEDORA = {"modelo_ia", "agente_modo", "modelo_operador", "modelo_voz"}
+
+
 @router.get("/configuracion")
-async def obtener_configuracion(_: str = Depends(usuario_actual)):
+async def obtener_configuracion(email: str = Depends(usuario_actual)):
     """Devuelve los datos editables del negocio (nombre, ubicacion, Pago Movil,
-    WhatsApp de avisos...). Son las claves que el bot lee para atender y cobrar."""
+    WhatsApp de avisos...). Son las claves que el bot lee para atender y cobrar.
+
+    Las claves de PROVEEDORA se omiten si quien pregunta es la dueña.
+    """
+    es_proveedora = await leer_rol(email) == "proveedora"
     factory = get_session_factory()
     async with factory() as session:
         filas = (await session.execute(select(Configuracion))).scalars().all()
         actual = {f.clave: f.valor for f in filas}
-    return {clave: actual.get(clave) for clave in CLAVES_CONFIG}
+    return {
+        clave: actual.get(clave)
+        for clave in CLAVES_CONFIG
+        if es_proveedora or clave not in CLAVES_PROVEEDORA
+    }
 
 
 @router.put("/configuracion")
-async def guardar_configuracion(datos: ConfiguracionIn, _: str = Depends(usuario_actual)):
+async def guardar_configuracion(datos: ConfiguracionIn, email: str = Depends(usuario_actual)):
     """Guarda (upsert) los datos del negocio. Ignora claves desconocidas por
-    seguridad: solo se aceptan las de CLAVES_CONFIG."""
+    seguridad: solo se aceptan las de CLAVES_CONFIG.
+
+    Y las de PROVEEDORA se rechazan (403) si quien las manda es la dueña. Se RECHAZA en vez de
+    ignorarlas en silencio: si el panel manda una clave que no le toca, es un bug del panel y hay
+    que verlo, no taparlo.
+    """
+    es_proveedora = await leer_rol(email) == "proveedora"
+    if not es_proveedora:
+        prohibidas = CLAVES_PROVEEDORA & set(datos.valores)
+        if prohibidas:
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    f"Estas opciones solo las toca la proveedora (Enova): "
+                    f"{', '.join(sorted(prohibidas))}."
+                ),
+            )
     factory = get_session_factory()
     async with factory() as session:
         for clave, valor in datos.valores.items():
@@ -996,6 +1044,220 @@ async def guardar_configuracion(datos: ConfiguracionIn, _: str = Depends(usuario
             else:
                 fila.valor = valor
                 fila.updated_at = now_utc()
+        await session.commit()
+    return {"ok": True}
+
+
+# ─── Las HERRAMIENTAS del agente (fase 4) — solo la proveedora ────────
+#
+# ⚠️ `tools_activas` NO está en CLAVES_CONFIG, y es a propósito: así el `PUT /configuracion`
+# genérico —que descarta en silencio lo que no conoce— NO puede escribir esta clave NUNCA.
+# Endpoint propio = validación propia. Es la misma razón por la que `mensajes.py` tiene el suyo.
+
+class HerramientasIn(BaseModel):
+    activas: list[str]
+
+
+@router.get("/herramientas")
+async def obtener_herramientas(_: str = Depends(proveedora_actual)):
+    """Qué sabe hacer el bot, y qué se le puede apagar."""
+    from app.services.tools_config import BLINDADAS, TOOLS, leer_tools_activas
+
+    activas = await leer_tools_activas()
+    return {
+        "herramientas": [
+            {
+                "nombre": n,
+                "etiqueta": m["etiqueta"],
+                "descripcion": m["descripcion"],
+                "pierde": m["pierde"],
+                "activa": n in activas,
+                "blindada": n in BLINDADAS,
+                "motivo_blindaje": m.get("motivo_blindaje"),
+            }
+            for n, m in TOOLS.items()
+        ]
+    }
+
+
+@router.put("/herramientas")
+async def guardar_herramientas(datos: HerramientasIn, _: str = Depends(proveedora_actual)):
+    """Enciende y apaga capacidades del bot. Se manda la lista COMPLETA de activas (idempotente).
+
+    Se RECHAZA (400) el intento de apagar una BLINDADA en vez de ignorarlo en silencio: si el
+    panel manda algo que no puede, es un bug del panel y hay que verlo, no taparlo. Mismo criterio
+    que `PUT /tasa`, el otro sitio donde una validación protege el cobro.
+    """
+    from app.services.tools_config import BLINDADAS, CLAVE, TOOLS, serializar
+
+    pedidas = set(datos.activas)
+    if raras := pedidas - set(TOOLS):
+        raise HTTPException(
+            status_code=400, detail=f"Herramienta desconocida: {', '.join(sorted(raras))}"
+        )
+    if faltan := BLINDADAS - pedidas:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Estas no se pueden apagar (el cobro y las redes de seguridad dependen de ellas): "
+                + ", ".join(sorted(faltan))
+                + "."
+            ),
+        )
+    factory = get_session_factory()
+    async with factory() as session:
+        fila = await session.get(Configuracion, CLAVE)
+        valor = serializar(pedidas)
+        if fila is None:
+            session.add(Configuracion(clave=CLAVE, valor=valor, updated_at=now_utc()))
+        else:
+            fila.valor = valor
+            fila.updated_at = now_utc()
+        await session.commit()
+    return {"ok": True, "activas": sorted(pedidas)}
+
+
+# ─── Quién soy, y quiénes hay (roles — migración 024) ─────────────────
+
+@router.get("/yo")
+async def quien_soy(email: str = Depends(usuario_actual)):
+    """El usuario de la sesión y su ROL. El panel lo usa para esconder lo que no le toca.
+
+    Ojo: esconder en el frontend es COSMÉTICO. La puerta de verdad es `proveedora_actual` en el
+    backend — quien quiera saltarse el panel y llamar la API a mano se come un 403 igual.
+    """
+    return {"email": email, "rol": await leer_rol(email)}
+
+
+class UsuarioIn(BaseModel):
+    email: Annotated[str, StringConstraints(strip_whitespace=True, min_length=5, max_length=120)]
+    password: Annotated[str, StringConstraints(min_length=8, max_length=72)]
+    nombre: Annotated[str | None, StringConstraints(strip_whitespace=True, max_length=80)] = None
+    rol: str = "duena"
+
+
+class RolIn(BaseModel):
+    rol: str
+
+
+@router.get("/usuarios")
+async def listar_usuarios(_: str = Depends(proveedora_actual)):
+    """Los usuarios del panel. Solo la proveedora."""
+    factory = get_session_factory()
+    async with factory() as session:
+        filas = (
+            await session.execute(select(Usuario).order_by(Usuario.id))
+        ).scalars().all()
+    settings = get_settings()
+    return [
+        {
+            "id": u.id,
+            "email": u.email,
+            "nombre": u.nombre,
+            "rol": u.rol,
+            # La cuenta ADMIN_EMAIL no se puede degradar ni borrar: `_crear_admin` le fuerza
+            # rol='proveedora' en CADA arranque. Es la red anti-bloqueo. El panel la pinta en gris.
+            "protegido": u.email == settings.admin_email,
+        }
+        for u in filas
+    ]
+
+
+@router.post("/usuarios")
+async def crear_usuario(datos: UsuarioIn, _: str = Depends(proveedora_actual)):
+    """Crea un usuario del panel (p. ej. la cuenta de la DUEÑA). Solo la proveedora.
+
+    Aquí es donde la separación de roles se vuelve útil: hasta hoy había UNA sola cuenta que
+    compartían Enova y la clienta, así que el rol no podía servir de nada.
+    """
+    from app.api.security import hash_password
+
+    if datos.rol not in ("proveedora", "duena"):
+        raise HTTPException(status_code=400, detail="El rol debe ser 'proveedora' o 'duena'.")
+    email = datos.email.lower()
+    factory = get_session_factory()
+    async with factory() as session:
+        ya = (
+            await session.execute(select(Usuario).where(Usuario.email == email))
+        ).scalars().first()
+        if ya is not None:
+            raise HTTPException(status_code=400, detail="Ya existe un usuario con ese correo.")
+        u = Usuario(
+            email=email,
+            password_hash=hash_password(datos.password),
+            nombre=datos.nombre or None,
+            rol=datos.rol,
+        )
+        session.add(u)
+        await session.commit()
+        await session.refresh(u)
+    return {"id": u.id, "email": u.email, "nombre": u.nombre, "rol": u.rol}
+
+
+@router.patch("/usuarios/{usuario_id}/rol")
+async def cambiar_rol(usuario_id: int, datos: RolIn, _: str = Depends(proveedora_actual)):
+    """Cambia el rol de un usuario. Solo la proveedora.
+
+    🔒 DOS CANDADOS ANTI-BLOQUEO:
+      · La cuenta ADMIN_EMAIL no se toca (además, `_crear_admin` la restauraría al arrancar).
+      · No se puede dejar el sistema con CERO proveedoras: si esta es la última, se rechaza.
+        Sin esto, un clic podría dejar el sistema sin nadie que pueda tocar el modelo de IA ni
+        (desde la fase 4) las herramientas del agente.
+    """
+    if datos.rol not in ("proveedora", "duena"):
+        raise HTTPException(status_code=400, detail="El rol debe ser 'proveedora' o 'duena'.")
+    settings = get_settings()
+    factory = get_session_factory()
+    async with factory() as session:
+        u = await session.get(Usuario, usuario_id)
+        if u is None:
+            raise HTTPException(status_code=404, detail="Ese usuario no existe.")
+        if u.email == settings.admin_email:
+            raise HTTPException(
+                status_code=400,
+                detail="La cuenta principal siempre es la proveedora: no se puede degradar.",
+            )
+        if u.rol == "proveedora" and datos.rol != "proveedora":
+            cuantas = (
+                await session.execute(
+                    select(func.count()).select_from(Usuario).where(Usuario.rol == "proveedora")
+                )
+            ).scalar() or 0
+            if cuantas <= 1:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Es la única proveedora: si la degradas, nadie podría volver a entrar.",
+                )
+        u.rol = datos.rol
+        await session.commit()
+    return {"ok": True, "id": usuario_id, "rol": datos.rol}
+
+
+@router.delete("/usuarios/{usuario_id}")
+async def borrar_usuario(usuario_id: int, _: str = Depends(proveedora_actual)):
+    """Borra un usuario del panel. Solo la proveedora. Mismos candados anti-bloqueo."""
+    settings = get_settings()
+    factory = get_session_factory()
+    async with factory() as session:
+        u = await session.get(Usuario, usuario_id)
+        if u is None:
+            raise HTTPException(status_code=404, detail="Ese usuario no existe.")
+        if u.email == settings.admin_email:
+            raise HTTPException(
+                status_code=400, detail="La cuenta principal no se puede borrar."
+            )
+        if u.rol == "proveedora":
+            cuantas = (
+                await session.execute(
+                    select(func.count()).select_from(Usuario).where(Usuario.rol == "proveedora")
+                )
+            ).scalar() or 0
+            if cuantas <= 1:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Es la única proveedora: si la borras, nadie podría volver a entrar.",
+                )
+        await session.delete(u)
         await session.commit()
     return {"ok": True}
 
@@ -1102,6 +1364,38 @@ async def probar_bot(datos: ProbarIn, _: str = Depends(usuario_actual)):
         nombre_cliente="Prueba",
     )
     return {"respuesta": respuesta}
+
+
+# ─── Modelos de OpenRouter (para el selector del panel) ──────────────
+
+@router.get("/modelos-openrouter")
+async def modelos_openrouter(_: str = Depends(proveedora_actual)):
+    """Todos los modelos de OpenRouter, para el selector del panel. El panel los agrupa por
+    PROVEEDOR con el prefijo del id ('anthropic/…', 'google/…', 'x-ai/…'). Cacheado 1 h para no
+    pegarle a OpenRouter en cada carga. Solo la proveedora (Enova) lo ve."""
+    from app.services.redis_client import get_cache, set_cache
+
+    cache = await get_cache("cache:openrouter_modelos")
+    if cache:
+        return json.loads(cache)
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get("https://openrouter.ai/api/v1/models")
+            resp.raise_for_status()
+            data = resp.json().get("data", [])
+    except Exception:  # noqa: BLE001 — si OpenRouter no responde, el panel cae al modo "pegar ID"
+        logger.warning("No se pudo traer la lista de modelos de OpenRouter")
+        return {"modelos": []}
+    modelos = sorted(
+        ({"id": m["id"], "name": m.get("name") or m["id"]} for m in data if m.get("id")),
+        key=lambda m: m["id"],
+    )
+    salida = {"modelos": modelos}
+    try:
+        await set_cache("cache:openrouter_modelos", json.dumps(salida), 3600)
+    except Exception:  # noqa: BLE001
+        pass
+    return salida
 
 
 # ─── Interruptor del bot (encender / apagar) ─────────────────────────
@@ -1251,10 +1545,15 @@ async def detalle_conversacion(telefono: str, _: str = Depends(usuario_actual)):
             "fecha": m.created_at.isoformat(),
             "tipo": m.tipo,
             "media_id": m.media_id,
-            # ¿hay un archivo que se pueda VER? (el comprobante del cliente). El panel lo
-            # descarga con su token desde /api/mensajes/{id}/media — nunca una URL pública:
-            # un comprobante trae datos bancarios.
-            "tiene_media": bool(m.media_url),
+            # ¿hay un archivo que se pueda VER? El panel lo descarga con su token desde
+            # /api/mensajes/{id}/media — nunca una URL pública: un comprobante trae datos
+            # bancarios.
+            #
+            # Cuenta `media_id` además de `media_url`: las fotos que la dueña manda desde SU
+            # celular llegan por el eco de Meta con `media_id` pero SIN archivo descargado, así
+            # que con la condición vieja (`bool(m.media_url)`) su burbuja salía VACÍA. El
+            # endpoint ahora sabe bajarlas de Meta al vuelo.
+            "tiene_media": bool(m.media_url or m.media_id),
             "estado": m.estado,  # enviado|entregado|leido|fallido (None = no lo enviamos nosotros)
             "error": m.error,
         }
@@ -1264,20 +1563,78 @@ async def detalle_conversacion(telefono: str, _: str = Depends(usuario_actual)):
 
 @router.get("/mensajes/{mensaje_id}/media")
 async def ver_media_mensaje(mensaje_id: int, _: str = Depends(usuario_actual)):
-    """Sirve el archivo de UN mensaje del hilo (el comprobante que mandó el cliente).
+    """Sirve el archivo de UN mensaje del hilo, venga de donde venga.
 
     PROTEGIDO con login: un comprobante trae datos bancarios. Y se pide por el **id numérico
     del mensaje**, nunca por el nombre del archivo: si la ruta viniera en la URL, un
     `../../etc/passwd` dejaría leer cualquier archivo del servidor.
+
+    🔴 TRES ORÍGENES, Y HASTA HOY SOLO SERVÍA UNO:
+
+    1. **Disco local** — el comprobante que sube el cliente. Es lo único que funcionaba.
+    2. **URL http(s)** — las fotos de producto que manda el bot (viven en Cloudflare R2) y el
+       catálogo PDF. `os.path.exists("https://…")` da **False**, así que esto devolvía 404 y el
+       panel pintaba *"No se pudo cargar el archivo"*. Por eso arreglar la persistencia (que el
+       bot GUARDE la fila) no bastaba: sin esto, el dato existiría y **seguiría sin verse**.
+    3. **Solo `media_id`, sin archivo** — las fotos que la dueña manda desde SU celular. El eco
+       de Meta trae el `media_id` pero nadie descargaba el archivo, así que su burbuja salía
+       vacía. Ahora se baja de Meta al vuelo (los media_id de Meta duran ~30 días).
+
+    Se hace PROXY, no redirect: así el archivo sigue viajando con el token del panel, el mismo
+    origen y sin depender de que el bucket de R2 mande cabeceras CORS.
     """
     factory = get_session_factory()
     async with factory() as session:
         m = await session.get(Mensaje, mensaje_id)
-    if m is None or not m.media_url:
-        raise HTTPException(status_code=404, detail="Ese mensaje no tiene archivo")
-    if not os.path.exists(m.media_url):
-        raise HTTPException(status_code=404, detail="Archivo no disponible")
-    return FileResponse(m.media_url, media_type=m.media_mime or None)
+    if m is None:
+        raise HTTPException(status_code=404, detail="Ese mensaje no existe")
+
+    # 2) Remoto (R2 / el propio bot): se proxea en streaming — un video puede pesar.
+    if m.media_url and m.media_url.startswith(("http://", "https://")):
+        cliente = httpx.AsyncClient(timeout=30, follow_redirects=True)
+        try:
+            req = cliente.build_request("GET", m.media_url)
+            resp = await cliente.send(req, stream=True)
+            if resp.status_code >= 400:
+                await resp.aclose()
+                await cliente.aclose()
+                raise HTTPException(status_code=404, detail="Archivo no disponible")
+        except HTTPException:
+            raise
+        except Exception:  # noqa: BLE001
+            await cliente.aclose()
+            logger.exception("No se pudo traer el archivo remoto del mensaje %s", mensaje_id)
+            raise HTTPException(status_code=404, detail="Archivo no disponible") from None
+
+        async def _stream():
+            try:
+                async for trozo in resp.aiter_bytes():
+                    yield trozo
+            finally:
+                await resp.aclose()
+                await cliente.aclose()
+
+        return StreamingResponse(
+            _stream(),
+            media_type=resp.headers.get("content-type") or m.media_mime or "application/octet-stream",
+        )
+
+    # 1) Disco local (el comprobante del cliente).
+    if m.media_url and os.path.exists(m.media_url):
+        return FileResponse(m.media_url, media_type=m.media_mime or None)
+
+    # 3) Sin archivo pero CON media_id: se baja de Meta al vuelo (la foto de la dueña).
+    if m.media_id:
+        try:
+            from app.services.meta_client import descargar_media
+
+            contenido, mime = await descargar_media(m.media_id)
+        except Exception:  # noqa: BLE001
+            logger.exception("No se pudo bajar de Meta el media %s", m.media_id)
+            raise HTTPException(status_code=404, detail="Archivo no disponible") from None
+        return Response(content=contenido, media_type=mime or m.media_mime or None)
+
+    raise HTTPException(status_code=404, detail="Ese mensaje no tiene archivo")
 
 
 @router.post("/conversaciones/{telefono}/leido")
@@ -1445,12 +1802,16 @@ async def responder_como_dueña(
 
 @router.delete("/conversaciones/{telefono}")
 async def borrar_conversacion(telefono: str, _: str = Depends(usuario_actual)):
-    """Borra el historial de mensajes de un cliente + su memoria en Redis.
-    NO toca al cliente, ni sus pedidos, ni sus pagos: el registro de cobro queda
-    intacto. Solo limpia el chat del panel y la memoria del bot."""
+    """Borra TODA la conversación de un cliente: sus mensajes, los avisos de la bandeja
+    ('te necesita') y la caché del bot en Redis (historial, buffer, cobro en curso…).
+    NO toca al cliente, ni sus pedidos, ni sus pagos: el registro del cobro queda intacto
+    en Postgres. Solo limpia el chat del panel y el estado transitorio del bot."""
     factory = get_session_factory()
     async with factory() as session:
         await session.execute(delete(Mensaje).where(Mensaje.cliente_telefono == telefono))
+        await session.execute(
+            delete(Intervencion).where(Intervencion.cliente_telefono == telefono)
+        )
         await session.commit()
     await borrar_memoria(telefono)
     return {"ok": True}
@@ -2406,7 +2767,9 @@ async def crear_feriado(datos: FeriadoIn, _: str = Depends(usuario_actual)):
     try:
         fecha = date.fromisoformat(datos.fecha.strip()[:10])
     except ValueError:
-        raise HTTPException(status_code=400, detail="Fecha inválida (usa AAAA-MM-DD).")
+        raise HTTPException(
+            status_code=400, detail="Fecha inválida (usa AAAA-MM-DD)."
+        ) from None
     factory = get_session_factory()
     async with factory() as session:
         existe = await session.get(Feriado, fecha)
@@ -2423,7 +2786,9 @@ async def borrar_feriado(fecha: str, _: str = Depends(usuario_actual)):
     try:
         f = date.fromisoformat(fecha.strip()[:10])
     except ValueError:
-        raise HTTPException(status_code=400, detail="Fecha inválida (usa AAAA-MM-DD).")
+        raise HTTPException(
+            status_code=400, detail="Fecha inválida (usa AAAA-MM-DD)."
+        ) from None
     factory = get_session_factory()
     async with factory() as session:
         fila = await session.get(Feriado, f)

@@ -81,7 +81,7 @@ async def main() -> None:
     check("3 mensajes en un POST ⇒ 3 eventos (antes se perdían 2)",
           len([e for e in extraer_eventos(tres) if e["clase"] == "mensaje"]) == 3)
 
-    evs = extraer_eventos(_eco("wamid.E0", texto := "text", text={"body": "hola"}))
+    evs = extraer_eventos(_eco("wamid.E0", "text", text={"body": "hola"}))
     check("el ECO se reconoce y el cliente es 'to', NUNCA 'from' (si no, el bot se responde "
           "a sí mismo)",
           len(evs) == 1 and evs[0]["clase"] == "eco" and evs[0]["telefono"] == TEL,

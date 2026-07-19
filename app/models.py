@@ -1,4 +1,4 @@
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 
 from sqlalchemy import (
@@ -17,7 +17,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
 def now_utc() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 # Venezuela = UTC-4 (sin horario de verano). El servidor corre en UTC: a las 8 de la
@@ -28,7 +28,7 @@ def now_utc() -> datetime:
 # cobro tiene PROHIBIDO. Todo el carril del precio del día usa ESTA función, nunca date.today().
 def hoy_venezuela() -> date:
     """El día de HOY según el reloj de Venezuela (no el del servidor)."""
-    return (datetime.now(timezone.utc) - timedelta(hours=4)).date()
+    return (datetime.now(UTC) - timedelta(hours=4)).date()
 
 
 def inicio_dia_venezuela() -> datetime:
@@ -36,7 +36,7 @@ def inicio_dia_venezuela() -> datetime:
 
     Sin esto, el "hoy" del panel arranca a las 8 de la noche de Venezuela: las ventas de
     la noche se le mostraban a la dueña como si fueran de mañana."""
-    return datetime.combine(hoy_venezuela(), time.min, tzinfo=timezone.utc) + timedelta(hours=4)
+    return datetime.combine(hoy_venezuela(), time.min, tzinfo=UTC) + timedelta(hours=4)
 
 
 class Base(DeclarativeBase):
@@ -304,6 +304,11 @@ class Usuario(Base):
     email: Mapped[str] = mapped_column(Text, unique=True)
     password_hash: Mapped[str] = mapped_column(Text)
     nombre: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 'proveedora' (Enova) | 'duena' (la clienta). Migración 024.
+    # La PROVEEDORA tiene palancas que la clienta no debe tocar: el selector de modelo de IA
+    # (CLAUDE.md §5: "palanca de PROVEEDOR, no de la clienta") y, desde la fase 4, el interruptor
+    # de las herramientas del agente. Sin acentos a propósito: viaja por el JWT y la API.
+    rol: Mapped[str] = mapped_column(Text, default="duena")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 
 

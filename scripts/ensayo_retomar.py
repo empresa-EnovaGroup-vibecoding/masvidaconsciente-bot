@@ -295,7 +295,7 @@ async def main() -> None:
     tools.enviar_video = _falso_media
     tasks.settings.numeros_permitidos = ""
 
-    print(f"\n🎭 ENSAYO GENERAL DEL RETOMAR — 12 clientes falsos, un teléfono ÚNICO cada uno")
+    print("\n🎭 ENSAYO GENERAL DEL RETOMAR — 12 clientes falsos, un teléfono ÚNICO cada uno")
     print(f"   bot = {await leer_modelo_ia()}   ·   juez = {settings.openrouter_model_fallback} (otro modelo)\n")
 
     factory = get_session_factory()
