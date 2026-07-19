@@ -17,6 +17,28 @@
 
 ---
 
+## 2026-07-18 — 🧬 LA UNIFICACIÓN: todo el trabajo junto en GitHub (fin del 403 y de la bomba del Redeploy)
+
+**El problema que se cerró:** el trabajo vivía en 4 sitios distintos y ninguno completo. GitHub (viejo, `438ec23`), la PC de Maired (viejo + el banco del closer del 16-jul sin commitear), el taller (los 22 commits de Erwin metidos por `docker cp`, borrables con un Redeploy), y producción (más viejo que todo, `7e80b8a`). Erwin no pudo subir su trabajo porque su cuenta no tiene permiso de escritura en la org (403) — por eso sus 22 commits solo existían en su Mac y pegados a mano en los contenedores.
+
+**Lo que se hizo (con respaldo previo de las 2 BDs y las 2 personalidades):**
+1. Se commiteó el trabajo del 16-jul (banco del closer + red del recibo visible) → `6e1131e`.
+2. Se unieron los 22 commits de Erwin (traídos de su copia git, no del contenedor) → merge `5afbf34`. Dos conflictos triviales (`SESIONES.md` y `probar_cobro.py`), resueltos conservando ambos lados; verificado: cero líneas perdidas, cero duplicados (82 entradas únicas de diario, 17 bancos únicos, 0 funciones repetidas).
+3. **Tres arreglos que NADIE había podido ver** (los tres hijos del mismo 403):
+   - `import json` faltante en `app/api/router.py` (`4c7725c`): bug de la sesión del selector de modelos — fallaba en silencio (lo tragaba un `except`) y el caché de `/modelos-openrouter` nunca se escribía. La propia puerta del CI de Erwin lo habría cazado… pero la puerta corre en GitHub, y GitHub le rechazaba los push. Su alarma nunca pudo sonar.
+   - El doble de `construir_partes_prompt` en `probar_recibo_visible.py` ahora acepta `**kwargs` (`2ba7e29`): el test se escribió (Codex, 16-jul) contra la firma vieja del agente; el agente nuevo (fase 4) pasa `activas=` y el doble reventaba con TypeError. Codex nunca vio los 22 commits — trabajó a ciegas.
+   - Orden de imports en 2 scripts del closer (`ruff --fix`, automático).
+4. **Push de bot (`2ba7e29`) y panel (`b8651a0`)** con la cuenta de la org. El CI corrió COMPLETO por primera vez: la puerta `verificar` en verde, despliegue del taller, y **los 17 bancos en verde** (en la primera pasada el banco nuevo salió ROJO por el TypeError de arriba — la puerta bloqueó y el Vigilante avisó por WhatsApp: **el sistema de Erwin funcionó tal como lo diseñó**).
+
+**Estado final verificado:** taller corriendo imágenes construidas DESDE GitHub (`qlfrx`/`erzq5` = `2ba7e29`, panel = `b8651a0`), 17/17 bancos verdes corridos dentro del contenedor nuevo. **La bomba del Redeploy ya no existe**: un rebuild ahora reconstruye lo mismo.
+
+**⚠️ Pendientes que deja esta sesión:**
+- **Producción (netcup) sigue en `7e80b8a` (13-jul)**: promover coordinado con Whuilianny, en hora valle. **NO usar `promover_a_produccion.sh` tal cual** (su `TRUNCATE configuracion` borraría la personalidad viva de 11.8k chars, que no está en git). Aplicar migraciones 016→023+ (producción NO tiene `zonas_entrega` ni `pedidos.zona_id`) y verificar con `\d` después.
+- Erwin: `git pull` antes de trabajar (GitHub va 4 commits delante de tu Mac). El detalle de qué falta construir está en el documento `MASVIDA-PARA-ERWIN.txt` que tiene Maired.
+- Respaldos pre-cirugía en la PC de Maired: `respaldos-masvida/2026-07-18_antes-de-unificar/`.
+
+---
+
 ## 2026-07-16 — 🧪 BANCO MANUAL DEL CLOSER (Haiku vs. DeepSeek, sin tocar WhatsApp)
 
 **Por qué existe:** los 10 bancos automáticos prueban que el agente no inventa el cobro y que las paredes técnicas funcionan, pero no demuestran que sepa **conducir una venta**. Decir “responde bien” no basta: hay que medir si descubre, resuelve una objeción, respeta al indeciso y lleva una compra real hasta el pago correcto.
