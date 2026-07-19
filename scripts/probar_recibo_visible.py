@@ -111,7 +111,9 @@ async def main() -> None:
     original_prompt = ag.construir_partes_prompt
     original_modelo = ag.leer_modelo_ia
 
-    async def prompt(nombre: str | None, telefono: str) -> tuple[str, str]:
+    async def prompt(nombre: str | None, telefono: str, **kwargs: object) -> tuple[str, str]:
+        # **kwargs: el agente nuevo pasa `activas=` (herramientas apagables, fase 4);
+        # el doble las acepta y las ignora para sobrevivir a firmas futuras.
         return "reglas de prueba", "estado de prueba"
 
     async def modelo() -> str:
