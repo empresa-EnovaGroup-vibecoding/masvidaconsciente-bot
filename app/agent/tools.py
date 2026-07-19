@@ -886,6 +886,83 @@ async def _lista_de_zonas(session) -> list[dict]:
     ]
 
 
+def _firma_items(items: list[dict[str, object]]) -> list[tuple[int, int, str]]:
+    firma: list[tuple[int, int, str]] = []
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        firma.append(
+            (
+                int(item.get("variante_id") or 0),
+                int(item.get("cantidad") or 0),
+                str(item.get("opciones") or "").strip(),
+            )
+        )
+    return firma
+
+
+def _mismo_pedido_esperando(
+    pedido: Pedido,
+    items: list[dict[str, object]],
+    fecha_entrega: date | None,
+    zona_id: int | None,
+    notas: str | None,
+) -> bool:
+    if pedido.estado != "esperando_pago" or _firma_items(pedido.items or []) != _firma_items(items):
+        return False
+    if fecha_entrega is not None and pedido.entrega_fecha != fecha_entrega:
+        return False
+    if zona_id is not None and pedido.zona_id != zona_id:
+        return False
+    nota = str(notas or "").strip()
+    return not nota or nota == str(pedido.notas or "").strip()
+
+
+def _resumen_del_pedido(pedido: Pedido) -> str:
+    lineas: list[str] = []
+    for item in pedido.items or []:
+        precio = item["precio_unitario"]
+        subtotal = Decimal(str(precio)) * item["cantidad"] if precio is not None else None
+        linea = f"{item['producto']} x{item['cantidad']}"
+        if item.get("presentacion"):
+            linea += f" (paquete de {item['presentacion']})"
+        if item.get("opciones"):
+            linea += f" — {item['opciones']}"
+        lineas.append(f"{linea} = {_fmt_usd(subtotal)}")
+    if pedido.zona_nombre:
+        if pedido.costo_envio and Decimal(str(pedido.costo_envio)) > 0:
+            lineas.append(f"Envío a {pedido.zona_nombre} = {_fmt_usd(pedido.costo_envio)}")
+        else:
+            lineas.append(f"{pedido.zona_nombre} — sin costo")
+    resumen = "\n".join(lineas) + f"\nTotal: {_fmt_usd(pedido.total)}"
+    entrega = []
+    if pedido.entrega_fecha:
+        entrega.append(_fecha_larga(pedido.entrega_fecha))
+    if pedido.entrega:
+        entrega.append(pedido.entrega)
+    return resumen + ("\nEntrega: " + ", ".join(entrega) if entrega else "")
+
+
+def _respuesta_registro(
+    pedido: Pedido,
+    nuevo: bool,
+    sin_cambios: bool = False,
+) -> dict[str, object]:
+    estado = "SIN CAMBIOS: ya esperaba pago" if sin_cambios else ("NUEVO" if nuevo else "ACTUALIZADO")
+    return {
+        "ok": True,
+        "pedido_id": pedido.id,
+        "items": pedido.items,
+        "total_usd": float(pedido.total) if pedido.total is not None else None,
+        "resumen": _resumen_del_pedido(pedido),
+        "nota": (
+            f"pedido #{pedido.id} {estado}. "
+            "Dile al cliente EXACTAMENTE este `resumen` (cópialo, NO recalcules el total). "
+            "Para cobrar, llama a generar_datos_pago con este mismo `pedido_id`."
+        ),
+    }
+
+
 async def registrar_pedido(
     session, telefono, items, notas=None, entrega=None, entrega_fecha=None, zona_id=None
 ):
@@ -1086,6 +1163,17 @@ async def registrar_pedido(
                 ),
                 "primera_fecha_valida": problema["primera_fecha_valida"].isoformat(),
             }
+    zona_solicitada_id = zona.id if zona is not None else None
+    if abierto is not None and _mismo_pedido_esperando(
+        abierto,
+        items_pedido,
+        fecha_entrega,
+        zona_solicitada_id,
+        notas,
+    ):
+        # El cliente solo eligió cómo pagar y el modelo intentó registrar TODO otra vez.
+        # No reabrimos ni recalculamos: conserva el recibo y el precio que ya vio.
+        return _respuesta_registro(abierto, nuevo=False, sin_cambios=True)
     if abierto is not None:
         pedido = abierto
         pedido.items = items_pedido
@@ -1115,58 +1203,7 @@ async def registrar_pedido(
         nuevo = True
     await session.commit()
     await session.refresh(pedido)
-
-    # Recibo YA ARMADO (línea por línea + total) para que el bot lo copie tal cual.
-    # El total lo calculó el código (arriba), NO el modelo: cero sumas de cabeza.
-    #
-    # El recibo DICE LA PRESENTACIÓN ("2 paquetes de 8 unidades") a propósito: si el bot se
-    # confundió y registró PAQUETES cuando el cliente quería unidades sueltas, el propio
-    # cliente lo ve en el recibo y lo canta antes de pagar. Es la red visible del "x4".
-    lineas = []
-    for it in items_pedido:
-        pu = it["precio_unitario"]
-        subtotal = Decimal(str(pu)) * it["cantidad"] if pu is not None else None
-        linea = f"{it['producto']} x{it['cantidad']}"
-        if it.get("presentacion"):
-            linea += f" (paquete de {it['presentacion']})"
-        if it.get("opciones"):
-            linea += f" — {it['opciones']}"
-        linea += f" = {_fmt_usd(subtotal)}"
-        lineas.append(linea)
-
-    # EL ENVÍO VA EN EL RECIBO, EN SU PROPIA LÍNEA. Sin esto el total no cuadra con las líneas y
-    # el cliente NO puede cantar una zona mal elegida (cobrarle Barquisimeto $3 cuando vive en el
-    # oeste, que son $5). Es la misma red visible que el "paquete de 8 unidades".
-    if pedido.zona_nombre:
-        if pedido.costo_envio and Decimal(str(pedido.costo_envio)) > 0:
-            lineas.append(f"Envío a {pedido.zona_nombre} = {_fmt_usd(pedido.costo_envio)}")
-        else:
-            lineas.append(f"{pedido.zona_nombre} — sin costo")
-
-    resumen = "\n".join(lineas) + f"\nTotal: {_fmt_usd(total)}"
-    if pedido.entrega_fecha or pedido.entrega:
-        # La entrega va en el RECIBO a propósito: el cliente confirma el día ANTES de pagar.
-        # Si el bot entendió mal la fecha, el cliente lo canta ahí mismo (por eso la fecha va
-        # escrita como la diría una persona: "sábado 18 de julio", no "2026-07-18").
-        partes_entrega = []
-        if pedido.entrega_fecha:
-            partes_entrega.append(_fecha_larga(pedido.entrega_fecha))
-        if pedido.entrega:
-            partes_entrega.append(pedido.entrega)
-        resumen += "\nEntrega: " + ", ".join(partes_entrega)
-
-    return {
-        "ok": True,
-        "pedido_id": pedido.id,
-        "items": items_pedido,
-        "total_usd": float(total),
-        "resumen": resumen,
-        "nota": (
-            f"pedido #{pedido.id} {'NUEVO' if nuevo else 'ACTUALIZADO'} con SOLO estos items. "
-            "Dile al cliente EXACTAMENTE este `resumen` (cópialo, NO recalcules el total). "
-            "Para cobrar, llama a generar_datos_pago con este mismo `pedido_id`."
-        ),
-    }
+    return _respuesta_registro(pedido, nuevo=nuevo)
 
 
 async def info_negocio(session, telefono):

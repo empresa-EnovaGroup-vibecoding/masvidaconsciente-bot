@@ -299,7 +299,41 @@ async def _correr() -> None:
             await session.commit()
 
         # ═══════════════════════════════════════════════════════════════════════
-        print("\n6) EL RELOJ DE VENEZUELA (el precio del día no se pierde a las 8 pm)")
+        print("\n6) PEDIDO QUE YA ESPERA PAGO: repetir lo mismo NO lo reabre ni recalcula")
+        if len(vs) == 2:
+            respuesta, pedido = await pedir(session, vs[0].id, 1)
+            pedido.estado = "esperando_pago"
+            await session.commit()
+            total_congelado = pedido.total
+            repetido = await registrar_pedido(
+                session,
+                TELEFONO,
+                items=[{"variante_id": vs[0].id, "cantidad": 1}],
+            )
+            await session.refresh(pedido)
+            check(
+                repetido.get("ok") and "SIN CAMBIOS" in str(repetido.get("nota")),
+                "la repetición se reconoce como el MISMO pedido",
+                str(repetido),
+            )
+            check(
+                pedido.estado == "esperando_pago" and pedido.total == total_congelado,
+                "mantiene estado y precio congelados (no vuelve a pendiente)",
+                f"estado={pedido.estado} total={pedido.total}",
+            )
+            cambiado = await registrar_pedido(
+                session,
+                TELEFONO,
+                items=[{"variante_id": vs[0].id, "cantidad": 2}],
+            )
+            await session.refresh(pedido)
+            check(
+                cambiado.get("ok") and pedido.estado == "pendiente",
+                "un cambio REAL de cantidad sí reabre y recalcula",
+                f"estado={pedido.estado}",
+            )
+
+        print("\n7) EL RELOJ DE VENEZUELA (el precio del día no se pierde a las 8 pm)")
         from datetime import datetime, timezone
         esperado = (datetime.now(timezone.utc) - timedelta(hours=4)).date()
         check(hoy_venezuela() == esperado,

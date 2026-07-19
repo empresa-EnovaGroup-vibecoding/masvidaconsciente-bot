@@ -22,6 +22,7 @@ BANCOS = [
     "probar_datos_bancarios",
     "probar_delivery",
     "probar_carril_dinero",
+    "probar_recibo_visible",
     "probar_honestidad",
     "probar_retomar",
     "probar_bandeja",

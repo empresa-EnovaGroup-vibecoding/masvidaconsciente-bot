@@ -17,6 +17,26 @@
 
 ---
 
+## 2026-07-16 — 🧪 BANCO MANUAL DEL CLOSER (Haiku vs. DeepSeek, sin tocar WhatsApp)
+
+**Por qué existe:** los 10 bancos automáticos prueban que el agente no inventa el cobro y que las paredes técnicas funcionan, pero no demuestran que sepa **conducir una venta**. Decir “responde bien” no basta: hay que medir si descubre, resuelve una objeción, respeta al indeciso y lleva una compra real hasta el pago correcto.
+
+**Construido `scripts/ensayo_closer.py`**, separado en `ensayo_closer_dominio.py` y `ensayo_closer_evaluacion.py` para mantener una responsabilidad por pieza. Compara por defecto **Claude Haiku 4.5 vs. DeepSeek V4 Flash**, en la misma máquina, la misma BD y los mismos escenarios. Fija explícitamente el modelo de cada corrida y marca ROJO si entró el fallback (un A/B con dos modelos mezclados no vale).
+
+- **5 situaciones:** cierre con retiro, cierre con delivery, objeción + foto, cliente indeciso que quiere pensarlo y petición de datos bancarios sin pedido.
+- **La BD manda:** verifica que exista exactamente el pedido esperado, variante cerrada, zona, fecha, total positivo, estado `esperando_pago`, orden de las herramientas y copia exacta del `resumen_cobro`. También comprueba que entregue datos del método elegido.
+- **Meta amordazado:** catálogo, fotos, comprobante y relevo usan dobles; el ensayo no envía WhatsApp ni registra un comprobante. Si el modelo intenta inventar un comprobante o pedir ayuda humana en estas ventas normales, queda ROJO.
+- **Juez comercial separado y solo orientativo:** puntúa conducción al cierre, tono, momento, brevedad y presión indebida. Los datos de pago se redactan antes de enviárselos. El juez jamás puede volver verde un fallo duro y, si falla, el ensayo técnico sigue dando su veredicto. El comparativo agrega también costo real reportado y latencia por turno.
+- **Limpieza:** cada caso usa un teléfono único y borra sus clientes, mensajes, intervenciones, pedidos, pagos, memoria Redis y caché de cobro antes/después. Exige `--confirmar-taller` porque escribe datos temporales.
+
+**Validado localmente:** compilación de los 3 archivos, carga de `--help`, candado sin `--confirmar-taller`, límites de archivos/funciones y prueba del árbitro con un cierre correcto + tres conductas peligrosas. Admite `--repeticiones`: una sirve como prueba de humo y tres reducen el azar al decidir. **No se ejecutó aún el A/B vivo**: eso consume OpenRouter y escribe temporalmente en la BD del taller. Comando serio cuando se autorice:
+
+`docker exec -w /app -e PYTHONPATH=/app <bot-taller> python scripts/ensayo_closer.py --confirmar-taller --repeticiones 3`
+
+**Pendiente real:** correrlo en el taller, revisar las conversaciones con Maired y alinear la personalidad viva antes de promover un modelo. Este banco es manual —no entra al Vigilante de cada deploy— porque llama modelos reales, cuesta y su nota comercial es probabilística.
+
+---
+
 ## 2026-07-14 — 🎬 CUALQUIER FORMATO SIRVE + 🛡️ EL VIGILANTE (los bancos corren SOLOS — D2 CERRADA)
 
 **Las dos peticiones de Maired:** (1) *"que la clienta suba cualquier formato y funcione"* y (2) *"no quiero estar diciendo a cada rato 'se arregló o se dañó' — algo definitivo"*.

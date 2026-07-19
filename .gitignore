@@ -33,3 +33,12 @@ archivo/
 # Capturas de pruebas del navegador: pueden contener la pantalla de Coolify
 # (con las LLAVES a la vista). NUNCA subir a GitHub.
 .playwright-mcp/
+
+# Registros locales del asistente y config de MCP (telemetria y rutas locales,
+# no son parte del producto — el repo es publico, esto no se sube)
+.claude/
+.praxis/
+.mcp.json
+
+# Borradores de diseno locales (imagenes y HTML de trabajo)
+docs/design-pilot/

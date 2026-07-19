@@ -700,6 +700,35 @@ def _datos_sensibles_inventados(
     return malos
 
 
+def _texto_previo_del_agente(historial: list | None) -> str:
+    """Solo lo que el cliente ya vio; los mensajes internos no cuentan como recibo visible."""
+    return "\n".join(
+        str(item.get("content") or "")
+        for item in (historial or [])
+        if isinstance(item, dict) and item.get("role") == "assistant"
+    )
+
+
+def _asegurar_resumenes_exactos(
+    texto: str,
+    historial: list | None,
+    resumen_pedido: str | None,
+    resumen_cobro: str | None,
+) -> str:
+    """Pone delante los recibos que el modelo omitió o reescribió.
+
+    El dinero ya viene calculado por herramientas. Aquí no se redacta ni se recalcula:
+    se copia literalmente para que el cliente pueda revisar pedido, entrega y cobro.
+    """
+    visible = f"{_texto_previo_del_agente(historial)}\n{texto}"
+    faltantes: list[str] = []
+    for resumen in (resumen_pedido, resumen_cobro):
+        limpio = (resumen or "").strip()
+        if limpio and limpio not in visible and limpio not in faltantes:
+            faltantes.append(limpio)
+    return "\n\n".join([*faltantes, texto]) if faltantes else texto
+
+
 async def responder(
     telefono: str,
     mensaje_usuario: str,
@@ -780,6 +809,8 @@ async def responder(
     fotos_ok = False  # ¿enviar_fotos_producto ENVIÓ algo de verdad en este turno?
     reclamo_fotos = False  # ya se le llamó la atención por afirmar un envío de fotos falso
     pidio_fotos = _pide_fotos(pregunta_cliente)
+    resumen_pedido: str | None = None
+    resumen_cobro: str | None = None
 
     for _ in range(settings.max_iteraciones_agente):
         data = await _llamar_con_fallback(messages, llm, modelo)
@@ -789,6 +820,18 @@ async def responder(
         tool_calls = msg.get("tool_calls")
         if not tool_calls:
             texto = (msg.get("content") or "").strip() or RESPUESTA_SEGURA
+
+            texto_seguro = _asegurar_resumenes_exactos(
+                texto,
+                historial,
+                resumen_pedido,
+                resumen_cobro,
+            )
+            if texto_seguro != texto:
+                logger.warning(
+                    "RECIBO OMITIDO por %s: el código insertó los resúmenes exactos", telefono
+                )
+                texto = texto_seguro
 
             # RED DEL DINERO: ningún monto puede salir de la cabeza del modelo. Y ahora, además,
             # ninguna moneda puede salir cambiada: un dólar no puede presentarse como bolívar.
@@ -1076,6 +1119,17 @@ async def responder(
                 # El pedido existe DE VERDAD en la base. Sin esto, el bot podía decir
                 # "listo, te agendo" sin haber registrado nada (caso real del 2026-07-12).
                 registro_ok = True
+                resumen = str(resultado.get("resumen") or "").strip()
+                if resumen:
+                    resumen_pedido = resumen
+            if (
+                nombre_tool == "generar_datos_pago"
+                and isinstance(resultado, dict)
+                and resultado.get("ok")
+            ):
+                resumen = str(resultado.get("resumen_cobro") or "").strip()
+                if resumen:
+                    resumen_cobro = resumen
             if (
                 nombre_tool == "enviar_fotos_producto"
                 and isinstance(resultado, dict)

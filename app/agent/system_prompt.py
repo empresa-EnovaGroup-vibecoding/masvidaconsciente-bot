@@ -374,6 +374,10 @@ async def _estado_cliente_texto(telefono: str) -> str:
         lineas.append(
             f"- Pedido #{esperando.id} ESPERANDO PAGO: a ese se le pega el próximo comprobante."
         )
+        lineas.append(
+            f"- Si pide los datos o elige cómo pagar, NO registres el pedido otra vez: "
+            f"llama directamente a generar_datos_pago con pedido_id={esperando.id}."
+        )
     elif pendiente is not None:
         lineas.append(
             f"- Pedido #{pendiente.id} ARMADO pero SIN cobro presentado aún: para cobrarlo, llama a generar_datos_pago con ese pedido_id."
