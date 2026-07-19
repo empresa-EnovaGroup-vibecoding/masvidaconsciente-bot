@@ -1,5 +1,6 @@
 """API REST que alimenta el dashboard. Todo protegido con login (JWT),
 excepto el propio login."""
+import json
 import logging
 import os
 from datetime import date, datetime, timedelta

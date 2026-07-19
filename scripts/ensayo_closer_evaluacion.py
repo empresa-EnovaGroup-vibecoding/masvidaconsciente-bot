@@ -5,10 +5,10 @@ import json
 import re
 
 import httpx
+from ensayo_closer_dominio import Escenario, LlamadaTool, sin_acentos
 
 from app.agent.agent import _afirma_pedido_registrado, _datos_sensibles, _frase_prohibida
 from app.models import Pedido
-from ensayo_closer_dominio import Escenario, LlamadaTool, sin_acentos
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 

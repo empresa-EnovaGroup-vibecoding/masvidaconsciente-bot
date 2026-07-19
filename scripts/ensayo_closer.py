@@ -22,8 +22,6 @@ from collections.abc import Awaitable, Callable
 from dataclasses import asdict
 from pathlib import Path
 
-from app.agent import agent as ag
-from app.config import get_settings
 from ensayo_closer_dominio import (
     Escenario,
     LlamadaTool,
@@ -40,6 +38,9 @@ from ensayo_closer_evaluacion import (
     juzgar,
     redactar_para_juez,
 )
+
+from app.agent import agent as ag
+from app.config import get_settings
 
 settings = get_settings()
 CRITERIOS_JUEZ = (
@@ -66,7 +67,7 @@ def _normalizar_uso(data: dict[str, object]) -> tuple[int, int, float]:
 
 def _dialogo(escenario: Escenario, respuestas: list[str]) -> str:
     lineas: list[str] = []
-    for turno, respuesta in zip(escenario.turnos, respuestas):
+    for turno, respuesta in zip(escenario.turnos, respuestas, strict=False):
         lineas.extend([f"CLIENTE: {turno}", f"AGENTE: {respuesta}"])
     return "\n".join(lineas)
 
@@ -198,7 +199,7 @@ def _puntaje_juez(resultado: Resultado) -> float | None:
     valores: list[float] = []
     for criterio in CRITERIOS_JUEZ:
         valor = resultado.juez.get(criterio)
-        if isinstance(valor, (int, float)) and not isinstance(valor, bool):
+        if isinstance(valor, int | float) and not isinstance(valor, bool):
             valores.append(max(0.0, min(5.0, float(valor))))
     presion = resultado.juez.get("presion_indebida")
     if isinstance(presion, bool):
