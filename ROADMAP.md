@@ -15,6 +15,7 @@ Las **FASES 0 a 3 ya están hechas y desplegadas**:
 - **Clientes:** panel · ficha con historial · notas internas.
 - **Control del bot:** encender/apagar · datos editables · personalidad editable · simulador · pausar por chat · mensajes editables · conocimiento (FAQ).
 - **Otros:** reporte de ventas · tope de gasto / anti-abuso.
+- **Unificación del taller (18-jul):** buscador nuevo · multimedia visible en el chat interno · roles · herramientas configurables · selector de modelos · arquitectura opcional de dos agentes · **17 bancos automáticos**.
 
 ---
 
@@ -24,7 +25,36 @@ Las **FASES 0 a 3 ya están hechas y desplegadas**:
 
 ---
 
-# 🚦 ESTADO REAL A 2026-07-14 (verificado, no supuesto)
+# 🚦 ESTADO REAL A 2026-07-23 (fuente actual)
+
+> Este bloque reemplaza como fuente de verdad al estado del 14-jul que se conserva más abajo solo
+> como historial. Estado confirmado contra Git local/remoto, GitHub Actions, la API pública y la
+> configuración indicada por Maired.
+
+| Entorno | Estado actual |
+|---|---|
+| 🧪 **TALLER (Hostinger `2.25.139.106`)** | Tiene la unificación completa del trabajo de Maired/Haiku + los 22 commits de Erwin. Bot `2ba7e29` (el commit posterior `671503d` solo documenta) y panel `b8651a0`, construidos desde GitHub. |
+| 🤖 **Arquitectura activa en el taller** | **UN agente (`agente_modo = uno`)**, el comportamiento estable de siempre. El modo Operador + Voz existe en el código y en el panel, pero **NO está activo**. |
+| 🧠 **Modelo activo en el taller** | **Claude Haiku**, seleccionado desde Configuración. |
+| 📲 **Quién puede recibir respuesta en el taller** | El bot está **ENCENDIDO para todos los números**; el taller no tiene lista blanca activa. Vigilar las conversaciones porque cualquier número que escriba al número del taller puede recibir respuesta. |
+| 🛡️ **Calidad del taller** | Último flujo de código en verde y **17/17 bancos automáticos en verde** después del despliegue. `api-masvida.enovagroup.tech` apunta hoy al taller. |
+| 🏪 **PRODUCCIÓN REAL (netcup `152.53.89.118`)** | Atiende a las clientas reales. **NO se ha tocado ni promovido la unificación.** El último despliegue oficial del bot sigue en `7e80b8a` (14-jul). Tiene **lista blanca activa**. |
+| 🔒 **Decisión operativa** | Seguir trabajando y probando en el taller. Producción permanece intacta hasta una promoción coordinada y aprobada expresamente por Maired. |
+
+### 🔴 LO QUE FALTA AHORA (en orden)
+
+1. **Mantener el taller en modo UN agente + Haiku.** Es la base activa y estable; no cambiar la arquitectura durante las pruebas actuales.
+2. **Corregir el hueco del modo DOS antes de activarlo:** si el Operador inventa un monto, el reintento puede llamar una herramienta sin redactar un encargo nuevo; el código conserva el monto rechazado y después lo autoriza. Mientras no se arregle, **Operador + Voz queda DESACTIVADO**.
+3. **Completar la Hoja de Hechos del modo DOS:** `info_producto` debe entregar `precio_texto`, igual que `ver_catalogo`, para que la Voz reciba el precio marcado y verificable.
+4. **Crear una prueba de regresión end-to-end para ese caso exacto** (monto falso → reintento con tool call sin texto → precio real) y exigir que falle antes del arreglo y quede verde después. Luego correr de nuevo los **17 bancos**.
+5. **Probar Haiku en conversaciones reales controladas del taller:** cierre, delivery, fotos, datos de pago, comprobante y retomar chat. Revisar la BD/pedido y no solo el texto del chat.
+6. **Antes de promover a producción:** respaldar BD + personalidad viva de netcup; no usar `promover_a_produccion.sh` tal como está; revisar/aplicar las migraciones pendientes; desplegar manualmente en hora valle; conservar inicialmente la lista blanca y hacer pruebas de humo.
+7. **Pendientes de negocio que siguen abiertos:** ordenar Conocimiento y confirmar si el 20% de descuento en divisas aplica también al envío.
+8. **Mantener separados los entornos:** un push a `master` despliega solo el taller; producción se toca únicamente con aprobación humana explícita.
+
+---
+
+## 🗃️ ESTADO HISTÓRICO A 2026-07-14 (superado; no usar como estado actual)
 
 | | Estado |
 |---|---|
@@ -39,7 +69,7 @@ Las **FASES 0 a 3 ya están hechas y desplegadas**:
 | ✅ **🛡️ EL VIGILANTE (deuda D2 — CERRADA 14-jul)** | Los **10 bancos corren SOLOS** tras cada despliegue del taller (workflow → SSH → `correr_bancos.py` en el contenedor nuevo). Rojo ⇒ el flujo queda ROJO en GitHub **y WhatsApp a la dueña**. Ya no depende de que un humano se acuerde. Probado en vivo el primer push. |
 | ✅ **🎬 Cualquier formato de foto/video sirve** | Hecho 14-jul: `media_convert.py` + ffmpeg convierten **en la puerta** (al subir) a lo que WhatsApp exige (MP4 ≤16MB / JPEG ≤5MB). Había **5 videos .quicktime que WhatsApp rechazaba SIEMPRE** — migrados a .mp4 en el bucket y reparadas las referencias en LAS DOS bases (comparten bucket). El bot taller está **encendido con lista blanca** (Enova + Maired). |
 
-### 🔴 LO QUE FALTA (en orden)
+### Lo que faltaba al 14-jul (histórico)
 
 1. ✅ ~~EL CANDADO DE LOS DATOS BANCARIOS~~ — **HECHO 14-jul** (ver la tabla de arriba y SESIONES).
 2. **LA PERSONALIDAD ORDENA LA MENTIRA — y hay TRES versiones divergentes (verificado 14-jul).** El TALLER ya no dice "Eres humana" pero sí *"la dueña"* + el bloque *"si te preguntan si eres un bot… sin entrar en más detalle"*; **PRODUCCIÓN todavía dice "Eres humana"**; el BRIEF quedó en la versión del 10-jul. **Es el texto de Maired: NO se toca sin su OK.** Propuestas listas (SESIONES 14-jul): quitar "la dueña" y ese bloque · reescribir el ejemplo de la alulosa (ordena una frase que la red prohíbe) · alinear lo del médico · reparar la frase rota de QUÉ NO HACER · quitar "RESPUESTA COMPLETA OBLIGATORIA" (apunta a un mecanismo que NO existe en el código).

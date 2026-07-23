@@ -9,11 +9,46 @@
 
 ## ⏳ Pendientes importantes (no olvidar)
 
-> **⚠️ LEER ESTO PRIMERO (actualizado 2026-06-17):** las notas viejas de abajo que dicen *"Pendiente: redeploy"* están **DESACTUALIZADAS**. Esos redeploys YA SE HICIERON: todo eso está **EN PRODUCCIÓN y funcionando** (verificado en vivo contra `api-masvida.enovagroup.tech` — ver entrada del 2026-06-17 "Inventario verificado"). No las tomes como pendientes. Lo que SÍ sigue pendiente de verdad está listado en esa entrada.
+> **⚠️ LEER ESTO PRIMERO (actualizado 2026-07-23):** las notas viejas de abajo que dicen
+> *"Pendiente: redeploy"* o describen el estado del 14-jul son HISTÓRICAS. La fuente actual es
+> `ROADMAP.md` → **ESTADO REAL A 2026-07-23** + la entrada de esta fecha.
 
-- ✅ **Tasa BCV AUTOMÁTICA conectada (2026-06-10)**: fuente `https://ve.dolarapi.com/v1/dolares/oficial` (BCV oficial, campo `promedio`) puesta como default en `tasa.py` (`_FUENTE_BCV_DEFAULT`); `_parsear_tasa` ya la entiende (verificado: da 572,68 ≈ los 567,68 manuales). Se actualiza sola (cache 1h). El candado manual queda como freno de emergencia. OJO: para que use la automática, el candado manual debe estar DESACTIVADO en la pantalla Tasa.
-- 🔴 **Respaldo automático de datos (Blindaje 4)** — DIFERIDO a pedido de Maired (2026-06-09). Plan: capa 1 = respaldo **local** en Coolify (nada sale del servidor); protección REAL = **offsite cifrado** (privado, encriptado con llave que solo ella controla — el cifrado resuelve su preocupación de filtración). Honesto: el local NO salva si muere el servidor entero, y NO incluye las fotos de los comprobantes. **Montar el offsite cifrado ANTES del lanzamiento real con clientes** (cuando haya dato con valor). Recordárselo.
-- 🟡 **Afinar la personalidad como "closer de ventas nato" + ajustes finales de tono** — en la fase de PULIDO FINAL (cuando todo esté armado), escribir un guión de ventas potente en el editor de Personalidad (/bot): manejo de objeciones, cierre con cariño, terminar mensajes con pregunta, etc., y probarlo en el simulador. Maired lo difirió 2026-06-09 para hacerlo "cuando toque afinar todo para que quede perfecto".
+- 🧪 **Taller:** unificación completa, arquitectura de **UN agente**, modelo **Claude Haiku**, bot encendido para todos los números, 17 bancos verdes.
+- 🏪 **Producción real (netcup):** no se ha tocado; sigue en la versión anterior y con lista blanca.
+- 🔴 **Modo DOS (Operador + Voz):** NO activar hasta cerrar el hueco del reintento de dinero, completar `precio_texto` y añadir la prueba de regresión end-to-end.
+
+---
+
+## 2026-07-23 — 📍 NUEVA LÍNEA BASE: taller unificado; producción real intacta
+
+**Pedido de Maired:** después de coordinar durante la semana los cambios hechos con Haiku y el
+trabajo de Erwin, revisar dónde está realmente el proyecto y dejar escrita la base desde la que se
+seguirá trabajando. La revisión fue **de solo lectura**: Git, GitHub Actions, API pública,
+documentación y puntos críticos del modo de dos agentes.
+
+**Estado confirmado:**
+- Antes de esta actualización documental, los repos locales estaban limpios y coincidían con
+  GitHub: bot `671503d` y panel `b8651a0`. El código del bot desplegado es `2ba7e29`;
+  `671503d` solo modificó este diario.
+- El dominio `api-masvida.enovagroup.tech` resuelve al taller de Hostinger (`2.25.139.106`) y
+  publica las capacidades nuevas. El último flujo de código terminó verde y corrió los **17 bancos**.
+- En el taller está activo el modo **UN agente** (`agente_modo = uno`) con **Claude Haiku**.
+  El bot está encendido para **todos los números**; no usa lista blanca.
+- Producción real es netcup (`152.53.89.118`), con clientas reales. **No se ha tocado.** El último
+  despliegue oficial del bot allí sigue en `7e80b8a` y la lista blanca continúa activa.
+
+**Hallazgo que define el siguiente paso técnico:** el modo DOS existe, pero no debe activarse aún.
+Si el Operador escribe un monto inventado, el código lo detecta y reintenta; si ese reintento llama
+una herramienta sin devolver texto nuevo, conserva el encargo rechazado y luego incorpora sus
+montos a la lista blanca. Además, `info_producto` no entrega `precio_texto`, aunque la Hoja de
+Hechos lo espera. El modo activo de UN agente no pasa por ese camino.
+
+**Decisión:** seguir trabajando sobre la unificación actual del taller, con **UN agente + Haiku**.
+Antes de probar Operador + Voz: corregir los dos puntos, añadir una regresión end-to-end y volver a
+correr los 17 bancos. Producción queda intacta hasta una promoción coordinada y aprobada por Maired.
+
+**Cambio realizado en esta sesión:** solo documentación (`ROADMAP.md` y `SESIONES.md`). No se tocó
+código, configuración, base de datos, GitHub ni ningún despliegue.
 
 ---
 
