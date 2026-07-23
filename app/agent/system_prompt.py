@@ -320,8 +320,8 @@ _CATALOGO_INLINE_MAX = 60
 # Es una CONSTANTE: vive aquí y no dentro del bucle de productos (antes se reconstruía en
 # cada vuelta y la closure `_pre` la capturaba como variable de bucle).
 _SIN_PRECIO = (
-    "PRECIO DEL DÍA — TODAVÍA NO LO SABES. Este precio CAMBIA y hoy la dueña "
-    "aún no lo dio. Está PROHIBIDO inventarlo, estimarlo o usar uno viejo: si "
+    "PRECIO DEL DÍA — TODAVÍA NO ESTÁ REGISTRADO PARA HOY. Este precio CAMBIA. "
+    "Está PROHIBIDO inventarlo, estimarlo o usar uno viejo: si "
     "te lo preguntan o lo quieren comprar, llama a `pedir_ayuda` "
     "(motivo='precio_del_dia')"
 )
