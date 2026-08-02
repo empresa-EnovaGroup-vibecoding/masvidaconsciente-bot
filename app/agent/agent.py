@@ -346,11 +346,14 @@ def _dinero_inventado(
        $20 + $5 = **$25**… y $25 es el precio del Pan Keto. La red lo daba por bueno.
        Si el texto habla de un TOTAL, ese monto tiene que venir de `registrar_pedido` /
        `generar_datos_pago` — no del catálogo, no de su cabeza.
-    3. **TOTAL + BOLÍVARES ⇒ tiene que haber un monto en bolívares de verdad.** El caso real fue
-       "El total en bolívares es de $23 USD". La primera versión de esta red solo cazaba ESA
-       redacción; los atacantes la rompieron al instante dándole la vuelta ("el total es $23 en
-       bolívares", "Total en bolívares:\\n$23", "El total en bolívares. Son $23"). Ahora no se mira
-       la frase: se mira si en ese párrafo hay o no un monto en bolívares AUTORIZADO.
+    3. **BOLÍVARES + DÓLARES ⇒ tiene que haber un monto en bolívares de verdad.** El caso real fue
+       "El total en bolívares es de $23 USD". La primera versión solo cazaba ESA redacción; los
+       atacantes la rompieron dándole la vuelta ("el total es $23 en bolívares", "Total en
+       bolívares:\\n$23", "El total en bolívares. Son $23"). La segunda versión miraba el párrafo,
+       pero **solo si aparecía la palabra "total"** — y bastaba conjugar distinto para pasar:
+       *"En bolívares son $23 a la tasa del día"*, *"Son $23 en bolívares"*. Ahora no se exige esa
+       palabra ni ninguna otra: si un párrafo habla de bolívares y enseña dólares, tiene que
+       traer también el bolívar AUTORIZADO. (Auditoría 2026-08-02, DIN-2.)
     """
     malos: list[str] = []
 
@@ -359,23 +362,43 @@ def _dinero_inventado(
         if not _calza(lecturas, usd_ok if moneda == "USD" else bs_ok):
             malos.append(f"{crudo} ({moneda})")
 
-    for parrafo in re.split(r"\n\s*\n|(?<=[.!?])\s+", texto or ""):
+    # 🔴 EL PÁRRAFO ES LA UNIDAD, NO LA FRASE (auditoría 2026-08-02, DIN-2).
+    # Antes se partía por `\n\n` **y** por frase, y el bucle empezaba con
+    # `if not montos or not _DICE_TOTAL.search(parrafo): continue`. Dos agujeros:
+    #   a) El `continue` se saltaba los chequeos 2 Y 3 de golpe cuando no aparecía la palabra
+    #      "total". Y `_DICE_TOTAL` cubre "sería/serían" pero NO "son" ni "es", así que
+    #      **"En bolívares son $23 a la tasa del día" pasaba limpio** — la frase asesina otra vez,
+    #      solo que conjugada distinto.
+    #   b) Partir por FRASE deja la moneda en una y la cifra en la otra:
+    #      "El total en bolívares." + "Son $23." — cada mitad, por separado, parece inocente.
+    for parrafo in re.split(r"\n\s*\n", texto or ""):
         montos = _montos_del_mensaje(parrafo)
-        if not montos or not _DICE_TOTAL.search(parrafo):
+        if not montos:
             continue
 
-        # 2) un TOTAL en dólares tiene que venir de una herramienta
+        # 2) un TOTAL en dólares tiene que venir de una herramienta.
+        #    Va por FRASE porque "es un total" es una afirmación local: el catálogo autoriza
+        #    precios sueltos, y un párrafo que cita tres precios y luego da el total no debe
+        #    marcar los tres.
         if usd_de_herramienta is not None:
-            for moneda, crudo, lecturas in montos:
-                if moneda == "USD" and not _calza(lecturas, usd_de_herramienta):
-                    malos.append(f"{crudo} (dijo que es un TOTAL y NO lo calculó el sistema)")
+            for frase in re.split(r"(?<=[.!?])\s+", parrafo):
+                if not _DICE_TOTAL.search(frase):
+                    continue
+                for moneda, crudo, lecturas in _montos_del_mensaje(frase):
+                    if moneda == "USD" and not _calza(lecturas, usd_de_herramienta):
+                        malos.append(f"{crudo} (dijo que es un TOTAL y NO lo calculó el sistema)")
 
-        # 3) si dice que ese total está en BOLÍVARES, tiene que haber un bolívar de verdad
+        # 3) si el párrafo habla de BOLÍVARES y enseña DÓLARES, tiene que haber además un
+        #    bolívar de verdad. Ya NO exige la palabra "total": presentar un dólar como si fuera
+        #    el monto en bolívares es igual de grave lo llame como lo llame.
+        #    Se exige `hay_usd` a propósito: si el párrafo solo trae bolívares, el chequeo 1 ya
+        #    los validó contra `bs_ok` y volver a marcarlos sería frenar de más.
         if _DICE_BOLIVARES.search(parrafo):
+            hay_usd = any(moneda == "USD" for moneda, _c, _l in montos)
             hay_bs_bueno = any(
                 moneda == "BS" and _calza(lecturas, bs_ok) for moneda, _c, lecturas in montos
             )
-            if not hay_bs_bueno:
+            if hay_usd and not hay_bs_bueno:
                 malos.append(
                     f"{montos[0][1]} (lo llamó BOLÍVARES y no es el monto en bolívares del sistema)"
                 )

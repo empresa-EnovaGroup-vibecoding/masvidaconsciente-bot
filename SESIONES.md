@@ -19,6 +19,53 @@
 
 ---
 
+## 2026-08-02 — 🧱 LA GRIETA DE LA PARED DEL DINERO (bloque 1.2)
+
+Dos agujeros por los que se colaba dinero inventado. Los dos se **ejecutaron** contra el código
+real antes y después: no se leyeron, se probaron.
+
+### 1. La frase asesina, conjugada de otra forma (DIN-2)
+
+`_dinero_inventado` parte el texto y aplica tres redes. Los chequeos 2 y 3 empezaban con
+`if not montos or not _DICE_TOTAL.search(parrafo): continue`. **Dos agujeros a la vez:**
+
+- **`_DICE_TOTAL` cubre "sería/serían" pero NO "son" ni "es".** Así que *"En bolívares son $23 a
+  la tasa del día"* **pasaba limpia**. Es exactamente la frase que le costó $23 inventados a una
+  clienta real el 13-jul, solo que conjugada distinto. También pasaban *"Son $23 en bolívares"* y
+  *"Todo junto te sale en $25"*.
+- **Se partía por FRASE**, así que *"El total en bolívares. Son $23."* quedaba en dos mitades: la
+  moneda en una y la cifra en la otra. Cada mitad, por separado, parecía inocente.
+
+**Arreglado:** el párrafo pasa a ser la unidad del chequeo de moneda, y ese chequeo **ya no exige
+la palabra "total"** — presentar un dólar como si fuera el monto en bolívares es igual de grave lo
+llame como lo llame. El chequeo del TOTAL en dólares sigue yendo por frase (es una afirmación
+local: un párrafo que cita tres precios y luego da el total no debe marcar los tres). Y se exige
+que haya un monto en dólares en el párrafo, para no frenar de más cuando solo hay bolívares.
+
+*Medido:* las 5 variantes del ataque frenan; 4 frases legítimas siguen pasando. **9/9.**
+
+### 2. El prompt se autorizaba a sí mismo (PRM-11)
+
+`autorizados_por_moneda` construye la lista blanca leyendo el **TEXTO del prompt**. Los precios de
+EJEMPLO de `_REGLAS` entraban como montos buenos:
+
+- `$14` ← *"(Empanadas = paquete de 8 por $14…)"*. Si la dueña sube las empanadas a $16, el bot
+  podía seguir diciendo $14 y la red lo daba por bueno: **el mismo dato en dos sitios**, que es la
+  enfermedad que causó la fuga de la Kombucha.
+- `$25` y **`$2500`** ← del contraejemplo *"(ej. 'Pan keto 25$', no '* Pan Keto en $25.00')"*, una
+  línea escrita para enseñar cómo NO formatear. El `$25.00` se lee también como 2500.
+
+**Arreglado en la causa, no en el mecanismo:** se quitó el precio del ejemplo de las empanadas (el
+catálogo ya lo da) y el contraejemplo de formato pasa a usar `NN$` / `$NN.00`, que enseña lo mismo
+sin ser una cifra. *Medido:* el texto fijo del prompt pasa de autorizar `[14.0, 25.0, 2500.0]` a
+**no autorizar nada**.
+
+**Cobertura nueva** en `probar_carril_dinero.py`: secciones **1.c** (las 4 conjugaciones que
+pasaban + 3 frases legítimas que deben seguir pasando) y **1.d** (que `_REGLAS` no autorice ni un
+dólar ni un bolívar). **Los 18 bancos en verde.**
+
+---
+
 ## 2026-08-02 — 🔬 AUDITORÍA FORENSE + 🩹 EL FLETE NO SE PIERDE NUNCA (bloque 1.1)
 
 **Origen:** el documento `MASVIDA-PARA-ERWIN.txt` de Maired (18-jul). Se verificó afirmación por

@@ -36,6 +36,7 @@ from app.agent.agent import (
     autorizados_por_moneda,
     frase_prohibida_siempre,
 )
+from app.agent.system_prompt import _REGLAS
 from app.models import Cliente, Configuracion, Intervencion, Mensaje, now_utc
 from app.services import redis_client as rc
 from app.services.db import get_session_factory
@@ -105,6 +106,39 @@ async def main() -> None:
     check("🔴 el id (23) NO entra como dinero", 23.0 not in u,
           "el id se colaba como precio: por eso el bot dijo '$23'")
     check("y por eso '$23' AHORA se frena", bool(_dinero_inventado("El total es $23", u, b)))
+
+    print("\n1.c) 🗣️ LA FRASE ASESINA, CONJUGADA DE OTRA FORMA (auditoría 2026-08-02, DIN-2)")
+    # La red del punto 1 miraba el párrafo SOLO si aparecía la palabra "total", y `_DICE_TOTAL`
+    # cubre "sería/serían" pero NO "son" ni "es". Bastaba conjugar distinto para colar un dólar
+    # disfrazado de bolívar. Y partir por FRASE dejaba la moneda en una y la cifra en la otra.
+    for texto, esperado, nota in [
+        ("En bolívares son $28 a la tasa del día", True,
+         "🔴 sin la palabra 'total': antes PASABA"),
+        ("Son $28 en bolívares 💚", True, "🔴 ídem, más corto todavía"),
+        ("El total en bolívares. Son $28.", True,
+         "🔴 partido en dos frases: la moneda en una, la cifra en la otra"),
+        ("Todo junto te sale en $35", True, "inventado, sin decir 'total'"),
+        # Y lo legítimo tiene que seguir pasando: frenar de más mata la venta igual.
+        ("Son Bs 31.936,21 (precio completo)", False, "solo bolívares, el de verdad"),
+        ("El total es $28. En bolívares son Bs 31.936,21.", False,
+         "las DOS monedas, ambas autorizadas"),
+        ("El pan keto cuesta $14", False, "un precio suelto del catálogo"),
+    ]:
+        malos = _dinero_inventado(texto, usd_ok, bs_ok, {28.0})
+        check(f"{'FRENA ' if esperado else 'pasa  '} | {texto:<44} ({nota})",
+              bool(malos) == esperado, f"detectados={malos}")
+
+    print("\n1.d) 📋 EL TEXTO DEL PROMPT NO AUTORIZA DINERO (auditoría 2026-08-02, PRM-11)")
+    # `autorizados_por_moneda` construye la lista blanca leyendo el TEXTO del prompt. Los precios
+    # de EJEMPLO de las reglas entraban como montos buenos: el "$14" de las empanadas y —peor— el
+    # contraejemplo "$25.00" (escrito para enseñar cómo NO formatear), que autorizaba **$2500**.
+    # Las reglas son instrucciones, no datos: el dinero lo autoriza el catálogo y las herramientas.
+    u_reglas, b_reglas = autorizados_por_moneda(_REGLAS)
+    check("las reglas fijas NO autorizan ningún dólar", not u_reglas, str(sorted(u_reglas)))
+    check("las reglas fijas NO autorizan ningún bolívar", not b_reglas, str(sorted(b_reglas)))
+    check("🔴 y por eso '$2500' ya no se auto-autoriza",
+          bool(_dinero_inventado("Te sale en $2500", u_reglas, b_reglas)),
+          "salía del contraejemplo '$25.00' leído como 2500")
 
     print("\n2) 🧭 LAS DOS LISTAS: lo que es mentira SIEMPRE vs. lo que la situación SÍ le manda decir")
     for texto, siempre, charla in [
