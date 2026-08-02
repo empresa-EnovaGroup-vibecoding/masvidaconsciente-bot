@@ -90,6 +90,15 @@ async def borrar_memoria(telefono: str) -> None:
     )
 
 
+async def borrar_cobro(telefono: str) -> None:
+    """Tira la COTIZACIÓN en curso de un cliente (`cobro:`), sin tocar nada más de su memoria.
+
+    Se usa cuando el pedido cambia por detrás (la dueña corrige los items desde el panel): los
+    montos cacheados son los del pedido ANTERIOR y el próximo comprobante se validaría contra
+    ellos. NO toca el registro del dinero (pedidos y pagos viven en Postgres)."""
+    await _client().delete(f"cobro:{telefono}")
+
+
 # ─── Cache generico con TTL ──────────────────────────────────────────
 # Usar siempre claves con prefijo 'cache:' (ej. 'cache:tasa:bcv') para no
 # chocar con msg:/buffer:/lock:/hist: que comparten la misma base de Redis.

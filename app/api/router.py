@@ -438,7 +438,8 @@ async def editar_items_pedido(
     bot). La dueña manda: si el pedido ya tenía un pago, el panel le avisó que el monto puede
     no cuadrar con lo cobrado y ella confirmó."""
     # local: evita efectos de import al cargar
-    from app.agent.tools import _buscar_producto, _precio_efectivo
+    from app.agent.tools import _buscar_producto, _precio_efectivo, _validar_entrega
+    from app.services.redis_client import borrar_cobro
 
     if not datos.items:
         raise HTTPException(status_code=400, detail="El pedido debe tener al menos un producto.")
@@ -457,6 +458,21 @@ async def editar_items_pedido(
             variante = None
             if getattr(it, "variante_id", None):
                 variante = await session.get(ProductoVariante, int(it.variante_id))
+                # 🔴 SI LA DUEÑA CAMBIÓ EL PRODUCTO, MANDA EL NOMBRE — NO EL ID VIEJO.
+                # El <select> del panel solo reescribe `producto` y deja intacto el `variante_id`
+                # del ítem anterior. Como aquí ganaba SIEMPRE el id, elegir otro producto en el
+                # desplegable **no hacía absolutamente nada**: salía "Guardado", sin error, y al
+                # recargar reaparecía el producto de antes. No había forma de corregir un producto
+                # mal tomado por el bot. (Auditoría 2026-08-02, API-1.)
+                #
+                # Solo se descarta el id cuando el nombre resuelve a un producto que EXISTE y es
+                # OTRO: así un ítem viejo cuyo producto fue renombrado (el nombre ya no resuelve a
+                # nada) sigue cobrándose por su id, como hasta ahora.
+                if variante is not None and (it.producto or "").strip():
+                    prod_del_id = await session.get(Producto, variante.producto_id)
+                    otro = await _buscar_producto(session, it.producto, solo_disponibles=False)
+                    if otro is not None and prod_del_id is not None and otro.id != prod_del_id.id:
+                        variante = None  # cae al camino por nombre (que exige tamaño único)
             if variante is None:
                 prod = await _buscar_producto(session, it.producto, solo_disponibles=False)
                 if prod is None:
@@ -505,10 +521,49 @@ async def editar_items_pedido(
                     "opciones": (it.opciones or "").strip() or None,
                 }
             )
+        # ══ EL FLETE NO SE PIERDE AL CORREGIR LOS ITEMS ══
+        # `total` de arriba son SOLO los productos. El envío ya está congelado en la fila desde
+        # `registrar_pedido` y esta pantalla no lo edita, así que hay que volver a sumarlo. Sin
+        # esta línea, corregir una cantidad borraba el envío del total mientras `costo_envio`
+        # seguía con su valor: la dueña regalaba el flete en cada corrección, y
+        # `generar_datos_pago` calculaba el 20% de divisas restando un envío que ya no estaba
+        # sumado (($20−$3)×0,80+$3 = $16,60 en vez de $19,00).
+        envio = Decimal(str(pedido.costo_envio or 0))
+        total_final = total + envio
+
+        # Cambiar los productos puede volver IMPOSIBLE la fecha ya acordada (meterle una torta
+        # de 2 días de anticipación a un pedido para mañana). Se revalida con el MISMO calendario
+        # que usa el bot: el panel no puede dejar vendida una fecha que el bot rechazaría.
+        if pedido.entrega_fecha is not None:
+            problema = await _validar_entrega(session, pedido.entrega_fecha, items_pedido)
+            if problema is not None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Con esos productos ya no se puede entregar el "
+                        f"{pedido.entrega_fecha.isoformat()}: {problema['motivo']}. La primera "
+                        f"fecha posible es {problema['primera_fecha_valida'].isoformat()}. "
+                        "Cámbiala en el pedido y vuelve a guardar."
+                    ),
+                )
+
+        telefono_cliente = pedido.cliente_telefono
         pedido.items = items_pedido
-        pedido.total = total
+        pedido.total = total_final
         await session.commit()
-    return {"ok": True, "total_usd": float(total), "items": items_pedido}
+
+    # La COTIZACIÓN vieja ya no vale. Si ese cliente tenía un cobro en curso, los montos
+    # cacheados (`cobro:` en Redis) son los del pedido ANTERIOR, y `registrar_comprobante` los
+    # da por buenos porque el `pedido_id` sigue siendo el mismo: la corrección de la dueña se
+    # ignoraba en silencio justo en el carril del dinero. Se tira para que el bot re-cotice.
+    await borrar_cobro(telefono_cliente)
+    return {
+        "ok": True,
+        "total_usd": float(total_final),
+        "subtotal_productos": float(total),
+        "costo_envio": float(envio),
+        "items": items_pedido,
+    }
 
 
 # ─── Productos (catálogo) ────────────────────────────────────────────

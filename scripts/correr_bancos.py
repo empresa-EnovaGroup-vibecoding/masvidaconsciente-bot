@@ -48,6 +48,11 @@ BANCOS = [
     "probar_cobro",
     "probar_datos_bancarios",
     "probar_delivery",
+    # EL DINERO DESDE EL PANEL (auditoría 2026-08-02): los endpoints que la dueña toca con el
+    # ratón escriben en las MISMAS filas que el bot, por otra puerta — y esa puerta no la
+    # vigilaba nadie. Por ahí se coló que corregir los items BORRABA el flete del total, no
+    # invalidaba la cotización y no revalidaba la fecha. Habla HTTP de verdad (ASGI + JWT).
+    "probar_cobro_panel",
     "probar_carril_dinero",
     "probar_recibo_visible",
     "probar_honestidad",

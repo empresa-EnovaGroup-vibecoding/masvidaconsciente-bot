@@ -1409,8 +1409,23 @@ async def registrar_pedido(
     # BD (nunca del modelo). Se guarda `subtotal_productos` porque el 20% de descuento en divisas
     # se aplica SOLO a los productos: el flete se cobra completo, o la dueña estaría pagando el
     # delivery de su bolsillo en cada venta pagada en dólares.
+    #
+    # 🔴 SI EL MODELO NO REENVÍA LA ZONA, SE CONSERVA LA QUE EL PEDIDO YA TENÍA — igual que se
+    # conservan `notas`, `entrega` y la fecha unas líneas más abajo. El prompt le ordena "vuelve a
+    # registrar el pedido COMPLETO" cada vez que el cliente agrega algo, y omitir `zona_id` es
+    # facilísimo. Antes eso reescribía `total` SIN el flete mientras `zona_id` y `costo_envio`
+    # seguían congelados en la fila, y el daño era triple: (1) el envío desaparecía del cobro,
+    # (2) el candado de `generar_datos_pago` —que mira `zona_id`— no se enteraba de nada, y
+    # (3) el recibo se autocontradecía, imprimiendo "Envío a X = $3" debajo de "Total: $20".
+    # Encima `generar_datos_pago` resta el envío para el 20% de divisas: restaba un flete que
+    # ya no estaba sumado, así que el descuento salía sobre una base falsa.
     subtotal_productos = total
-    costo_envio = Decimal(str(zona.costo)) if zona is not None else Decimal("0")
+    if zona is not None:
+        costo_envio = Decimal(str(zona.costo))
+    elif abierto is not None and abierto.zona_id is not None:
+        costo_envio = Decimal(str(abierto.costo_envio or 0))
+    else:
+        costo_envio = Decimal("0")
     total = subtotal_productos + costo_envio
 
     # CANDADO DE LA ENTREGA (por FECHA REAL, no por palabras). El bot pasa la fecha que

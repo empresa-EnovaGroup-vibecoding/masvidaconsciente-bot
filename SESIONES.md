@@ -19,6 +19,69 @@
 
 ---
 
+## 2026-08-02 — 🔬 AUDITORÍA FORENSE + 🩹 EL FLETE NO SE PIERDE NUNCA (bloque 1.1)
+
+**Origen:** el documento `MASVIDA-PARA-ERWIN.txt` de Maired (18-jul). Se verificó afirmación por
+afirmación contra el código y se auditó el sistema completo con **8 lentes independientes**
+(dinero · fallos silenciosos · Meta/Tech Provider · concurrencia · contrato panel↔API · datos y
+migraciones · prompt vs. código · bancos de prueba). Resultado: **~110 hallazgos** con evidencia
+trazada, en `AUDITORIA_FORENSE_2026-08-02.md` (carpeta padre, fuera del repo).
+
+**🔴 LECCIÓN DE PROCESO (costó rehacer trabajo):** la auditoría se hizo sobre `04f2fc0` creyendo
+que era el HEAD. **El HEAD real era `bb7447a`** — 8 commits por delante, con 89 líneas cambiadas en
+`tools.py`. El repo local llevaba semanas sin `git fetch` y las notas decían que el push estaba
+bloqueado, cuando ya se había desbloqueado el 18-jul. **Regla nueva: `git fetch` y comparar con
+`origin/master` ANTES de leer código para auditarlo o editarlo.** Los dos bugs de abajo se
+re-verificaron sobre `bb7447a` antes de tocarlos: seguían vivos.
+
+### Lo arreglado — los tres bugs del flete tenían UNA raíz: el total se calcula en dos sitios y solo uno sabe del envío
+
+1. **`registrar_pedido` borraba el flete al re-registrar sin zona** (`tools.py`). El prompt le ordena
+   al bot *"vuelve a registrar el pedido COMPLETO"* cada vez que el cliente agrega algo, y omitir
+   `zona_id` es facilísimo. Cuando pasaba, `total` se reescribía **sin** el envío mientras `zona_id`
+   y `costo_envio` seguían congelados en la fila. Daño triple: el envío desaparecía del cobro, el
+   candado de `generar_datos_pago` —que mira `zona_id`— no se enteraba, y el recibo se
+   autocontradecía imprimiendo *"Envío a X = $3"* debajo de *"Total: $20"*. Encima el 20% de divisas
+   restaba un flete que ya no estaba sumado: **($20−$3)×0,80+$3 = $16,60** en vez de **$19,00**.
+   → Ahora **se conserva la zona del pedido abierto**, igual que ya se conservaban `notas`,
+   `entrega` y la fecha unas líneas más abajo.
+2. **`PUT /pedidos/{id}/items` borraba el flete del total** (`router.py`). El mismo agujero por el
+   botón "Editar" del panel. → Vuelve a sumar `pedido.costo_envio`, **revalida la fecha** con el
+   mismo calendario que usa el bot (meterle un producto de 2 días a un pedido para mañana pasaba
+   sin freno), y **devuelve el desglose** (`subtotal_productos` + `costo_envio`) para que la fuga
+   sea auditable desde el panel.
+3. **La cotización vieja sobrevivía a la corrección** → `borrar_cobro()` nueva en `redis_client.py`.
+   Sin esto, los montos cacheados eran los del pedido ANTERIOR y `registrar_comprobante` los daba
+   por buenos porque el `pedido_id` no cambia: la corrección de la dueña se ignoraba en silencio
+   justo en el carril del dinero.
+4. **Cambiar el PRODUCTO de un ítem desde el panel no hacía NADA** (`router.py`, API-1). El
+   `<select>` del panel solo reescribe `producto` y deja intacto el `variante_id` del ítem
+   anterior; el backend obedecía siempre el id y descartaba el nombre. La dueña elegía otro
+   producto, salía *"Guardado"* sin ningún error, y al recargar reaparecía el de antes: **corregir
+   un producto mal tomado por el bot era imposible desde el panel, y en silencio.**
+   → Ahora, si el nombre resuelve a un producto que EXISTE y es OTRO, **manda el nombre**. Solo en
+   ese caso se descarta el id: un ítem viejo cuyo producto fue renombrado (su nombre ya no resuelve
+   a nada) se sigue cobrando por su id, como hasta ahora. Si el producto nuevo tiene varios tamaños
+   se **rechaza pidiendo el tamaño** — no se adivina, pero tampoco se ignora.
+
+### Y la cobertura, porque esto no lo vigilaba nadie
+
+- **`probar_cobro_panel.py` (banco NUEVO, nº 18):** los endpoints del dinero **por HTTP real** con
+  JWT y `ASGITransport`. Había 17 bancos verdes y **ninguno llamaba a un endpoint HTTP del dinero**:
+  el panel escribe en las mismas filas por otra puerta, y esa puerta no la miraba nadie.
+- **`probar_delivery.py` §8 nueva:** re-registrar sin zona no borra el flete, con el cobro
+  verificado end-to-end.
+- **Se cambió una aserción débil del mismo banco.** Comprobaba el total con
+  `f"Total: ${esperado:g}" in resumen` — eso daba **VERDE** con "Total: $48.50", "$480" y "$48000"
+  cuando lo esperado eran $48 (probado ejecutándolo). Es el mismo veneno del `"pan" in "empanadas
+  keto"` del 12-jul. Ahora `_recibo_cuadra()` comprueba la **aritmética**: las líneas tienen que
+  sumar el total. Es además la red que ve el CLIENTE antes de pagar.
+
+**Verificado:** desplegado por `docker cp` a bot API + worker, y **los 18 bancos EN VERDE** contra la
+BD y Redis reales del taller. Sin regresiones.
+
+---
+
 ## 2026-07-23 — 📍 NUEVA LÍNEA BASE: taller unificado; producción real intacta
 
 **Pedido de Maired:** después de coordinar durante la semana los cambios hechos con Haiku y el
