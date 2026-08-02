@@ -67,7 +67,14 @@ async def main() -> None:
         else:
             check("existe la tabla schema_migrations", True)
 
-        en_disco = {f.name for f in MIGRATIONS.glob("*.sql")}
+        # El filtro de ocultos tiene que ser EL MISMO que el de `init_db.py`. Un `tar` hecho desde
+        # macOS cuela ficheros AppleDouble (`._026_algo.sql`) junto a los reales: `init_db` los
+        # ignora y arranca bien, pero este banco los contaba como "migración que nunca se aplicó"
+        # y ponía el vigilante en ROJO — con WhatsApp a la dueña incluido— por una base que estaba
+        # perfecta. Pasó de verdad el 2026-08-02 al desplegar la 026.
+        # Un detector con falsos positivos se acaba ignorando, que es la peor avería posible en un
+        # detector. (Auditoría 2026-08-02, DAT-10.)
+        en_disco = {f.name for f in MIGRATIONS.glob("*.sql") if not f.name.startswith(".")}
         sin_aplicar = sorted(en_disco - anotadas)
         check(
             f"las {len(en_disco)} migraciones de disco están aplicadas",

@@ -2627,6 +2627,56 @@ async def listar_pagos(estado: str | None = None, _: str = Depends(usuario_actua
     return salida
 
 
+async def _no_hay_otro_pago_confirmado(session, pago: Pago) -> None:
+    """🔴 UN PEDIDO SE COBRA UNA SOLA VEZ.
+
+    Sin esto la venta se contaba DOS veces en `/reporte` y en la ficha del cliente, y la
+    secuencia para llegar ahí era de lo más normal: el cliente paga de menos (pago1 queda
+    'parcial'), completa con un segundo comprobante (pago2, por el total), la dueña confirma
+    pago2 ⇒ el pedido queda 'pagado'… y pago1 sigue en la bandeja ofreciendo **Reabrir** y, ya
+    en 'reportado', **Confirmar**. Dos pagos confirmados sobre el mismo pedido, cada uno por el
+    total. Nada lo impedía. (Auditoría 2026-08-02, DIN-4.)
+    """
+    otro = (
+        await session.execute(
+            select(Pago.id)
+            .where(
+                Pago.pedido_id == pago.pedido_id,
+                Pago.estado == "confirmado",
+                Pago.id != pago.id,
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if otro is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"El pedido #{pago.pedido_id} ya tiene el pago #{otro} confirmado. Si aquel "
+                "estuvo mal, anúlalo primero (botón Anular) y vuelve a intentarlo."
+            ),
+        )
+
+
+def _pedido_admite_cobro(pedido: Pedido | None) -> None:
+    """Un pedido CANCELADO no resucita porque alguien confirme un pago viejo.
+
+    `confirmar` escribía `pedido.estado = "pagado"` desde CUALQUIER estado. El caso real: el
+    cliente se arrepiente, la dueña cancela el pedido, pero el comprobante sigue en "Por
+    verificar"; días después lo confirma por limpiar la bandeja ⇒ el pedido salta de 'cancelado'
+    a 'pagado', **vuelve a sumar en las métricas** y al cliente le llega un WhatsApp diciéndole
+    que su pago quedó confirmado. (Auditoría 2026-08-02, DIN-7.)
+    """
+    if pedido is not None and pedido.estado == "cancelado":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"El pedido #{pedido.id} está CANCELADO: no se le puede confirmar un pago. "
+                "Si la venta se retomó, cambia primero el estado del pedido."
+            ),
+        )
+
+
 @router.post("/pagos/{pago_id}/confirmar")
 async def confirmar_pago(pago_id: int, usuario: str = Depends(usuario_actual)):
     factory = get_session_factory()
@@ -2636,10 +2686,12 @@ async def confirmar_pago(pago_id: int, usuario: str = Depends(usuario_actual)):
             raise HTTPException(status_code=404, detail="Pago no encontrado")
         if pago.estado != "reportado":
             raise HTTPException(status_code=409, detail=f"El pago ya está {pago.estado}")
+        pedido = await session.get(Pedido, pago.pedido_id)
+        await _no_hay_otro_pago_confirmado(session, pago)
+        _pedido_admite_cobro(pedido)
         pago.estado = "confirmado"
         pago.confirmado_por = usuario
         pago.updated_at = now_utc()
-        pedido = await session.get(Pedido, pago.pedido_id)
         if pedido is not None:
             pedido.estado = "pagado"
         await session.commit()
@@ -2669,7 +2721,11 @@ async def rechazar_pago(
         pago.motivo_rechazo = datos.motivo if datos else None
         pago.updated_at = now_utc()
         pedido = await session.get(Pedido, pago.pedido_id)
-        if pedido is not None:
+        # Un pedido ya ENTREGADO (o cancelado) NO vuelve a "esperando_pago" porque se rechace un
+        # comprobante: el estado del pedido dice dónde está la MERCANCÍA, y esa ya salió. Antes se
+        # pisaba desde cualquier estado, así que rechazar un pago residual hacía desaparecer el
+        # pedido de la lista de entregados. (Auditoría 2026-08-02, DIN-7.)
+        if pedido is not None and pedido.estado not in ("entregado", "cancelado"):
             pedido.estado = "esperando_pago"
         await session.commit()
         telefono = pedido.cliente_telefono if pedido else None
@@ -2696,24 +2752,36 @@ async def verificar_monto(pago_id: int, datos: MontoIn, usuario: str = Depends(u
             raise HTTPException(status_code=404, detail="Pago no encontrado")
         if pago.estado not in ("reportado", "parcial"):
             raise HTTPException(status_code=409, detail=f"El pago ya está {pago.estado}")
-        if pago.monto_bs is None:
+        pedido = await session.get(Pedido, pago.pedido_id)
+        await _no_hay_otro_pago_confirmado(session, pago)
+        _pedido_admite_cobro(pedido)
+
+        # 💵 LA MONEDA LA PONE EL PAGO, NO LA PANTALLA. Bolívares si se cobró en bolívares; dólares
+        # si fue Zelle / Binance / efectivo (esos guardan `monto_bs = None`). Antes aquí había un
+        # 400 seco para TODO pago en divisas: el carril de parcial/sobrepago estaba construido solo
+        # sobre bolívares, así que a un Zelle de $18,40 pagado con $10 la dueña solo podía darle
+        # Confirmar (regalando la diferencia) o Rechazar (castigando un pago real), aunque el panel
+        # le ofreciera el botón igual. (Auditoría 2026-08-02, DIN-11.)
+        en_bs = pago.monto_bs is not None
+        total = pago.monto_bs if en_bs else pago.monto_usd
+        if total is None:
             raise HTTPException(
                 status_code=400,
-                detail="Este pago no tiene monto en Bs para comparar; usa Confirmar o Rechazar",
+                detail="Este pago no tiene monto registrado para comparar; usa Confirmar o Rechazar",
             )
+        moneda = "Bs" if en_bs else "$"
         recibido = Decimal(str(datos.monto_recibido))
-        total_bs = pago.monto_bs
         pago.monto_recibido = recibido
         pago.confirmado_por = usuario
         pago.updated_at = now_utc()
-        pedido = await session.get(Pedido, pago.pedido_id)
-        if recibido >= total_bs:
+        if recibido >= total:
             pago.estado = "confirmado"
             if pedido is not None:
                 pedido.estado = "pagado"
         else:
             pago.estado = "parcial"
-            if pedido is not None:
+            # Mismo criterio que en `rechazar`: si ya se entregó, el pedido no vuelve atrás.
+            if pedido is not None and pedido.estado != "entregado":
                 pedido.estado = "esperando_pago"
         await session.commit()
         telefono = pedido.cliente_telefono if pedido else None
@@ -2726,19 +2794,21 @@ async def verificar_monto(pago_id: int, datos: MontoIn, usuario: str = Depends(u
             situacion = (
                 "el pago del cliente quedo CONFIRMADO; cierra la venta con calidez y agradece la compra"
             )
-            if recibido > total_bs:
+            if recibido > total:
                 situacion += (
-                    f". Ademas pago Bs {(recibido - total_bs):.2f} de mas: dile con cariño que "
+                    f". Ademas pago {moneda} {(recibido - total):.2f} de mas: dile con cariño que "
                     f"le queda ese saldo a favor para su proxima compra"
                 )
         else:
             situacion = (
-                f"el cliente pago Bs {recibido:.2f} pero el total era Bs {total_bs:.2f}, asi que "
-                f"faltan Bs {(total_bs - recibido):.2f}. Pidele con suavidad y sin reclamar que "
-                f"complete ese monto restante para poder despachar su pedido"
+                f"el cliente pago {moneda} {recibido:.2f} pero el total era {moneda} {total:.2f}, "
+                f"asi que faltan {moneda} {(total - recibido):.2f}. Pidele con suavidad y sin "
+                f"reclamar que complete ese monto restante para poder despachar su pedido"
             )
         notificar_cliente_pago.apply_async((telefono, situacion))
-    return {"ok": True, "pago_id": pago_id, "estado": estado_final}
+    # `moneda` viaja al panel para que muestre la etiqueta correcta al pedir el monto recibido:
+    # hoy dice "Bs" siempre, y en un pago en divisas eso induce a escribir la cifra equivocada.
+    return {"ok": True, "pago_id": pago_id, "estado": estado_final, "moneda": moneda}
 
 
 @router.post("/pagos/{pago_id}/reabrir")

@@ -226,6 +226,75 @@ async def main() -> None:
                               resp3.status_code == 400, f"HTTP {resp3.status_code}")
                         check("y el motivo pide elegir el tamaño",
                               "tamaño" in resp3.text.lower(), resp3.text[:90])
+                print("\n6) 💳 LA MÁQUINA DE ESTADOS DE LOS PAGOS (auditoría 2026-08-02)")
+                # Un pedido de laboratorio con dos pagos, para reproducir las secuencias reales.
+                lab = Pedido(cliente_telefono=TEL, items=[], total=Decimal("50"),
+                             estado="esperando_pago")
+                s.add(lab); await s.commit(); await s.refresh(lab)
+                pa = Pago(pedido_id=lab.id, metodo="pago_movil", monto_usd=Decimal("50"),
+                          monto_bs=Decimal("36000"), estado="parcial")
+                pb = Pago(pedido_id=lab.id, metodo="pago_movil", monto_usd=Decimal("50"),
+                          monto_bs=Decimal("36000"), estado="reportado")
+                s.add_all([pa, pb]); await s.commit()
+                await s.refresh(pa); await s.refresh(pb)
+
+                # DIN-4: pagó parcial, completó con un 2º comprobante, la dueña confirma el bueno…
+                await c.post(f"/api/pagos/{pb.id}/confirmar", headers=_auth())
+                # …y luego reabre y confirma el parcial, que el panel le sigue ofreciendo.
+                await c.post(f"/api/pagos/{pa.id}/reabrir", headers=_auth())
+                dup = await c.post(f"/api/pagos/{pa.id}/confirmar", headers=_auth())
+                n_conf = len((await s.execute(select(Pago).where(
+                    Pago.pedido_id == lab.id, Pago.estado == "confirmado"))).scalars().all())
+                check("💰 no se pueden confirmar DOS pagos del mismo pedido (la venta se contaba doble)",
+                      dup.status_code == 409 and n_conf == 1,
+                      f"HTTP {dup.status_code} · confirmados={n_conf}")
+
+                # EST-2: dos comprobantes simultáneos ⇒ dos filas 'reportado'. Lo frena la BD
+                # (índice parcial de la migración 026), que es el único sitio donde comprobar y
+                # escribir son un mismo acto.
+                bloqueado = False
+                try:
+                    s.add(Pago(pedido_id=lab.id, metodo="pago_movil", monto_usd=Decimal("50"),
+                               estado="reportado", comprobante_media_id="__panel_dup_a"))
+                    await s.commit()
+                    s.add(Pago(pedido_id=lab.id, metodo="pago_movil", monto_usd=Decimal("50"),
+                               estado="reportado", comprobante_media_id="__panel_dup_b"))
+                    await s.commit()
+                except Exception:
+                    await s.rollback()
+                    bloqueado = True
+                check("🔒 la BD impide dos pagos 'reportado' en el mismo pedido (carrera de Meta)",
+                      bloqueado, "sin el índice ux_pago_reportado_por_pedido entran los dos")
+
+                # DIN-7a: un pedido CANCELADO no resucita porque alguien confirme un pago viejo.
+                canc = Pedido(cliente_telefono=TEL, items=[], total=Decimal("30"),
+                              estado="cancelado")
+                s.add(canc); await s.commit(); await s.refresh(canc)
+                pcan = Pago(pedido_id=canc.id, metodo="pago_movil", monto_usd=Decimal("30"),
+                            monto_bs=Decimal("21000"), estado="reportado")
+                s.add(pcan); await s.commit(); await s.refresh(pcan)
+                rc_ = await c.post(f"/api/pagos/{pcan.id}/confirmar", headers=_auth())
+                await s.refresh(canc)
+                check("🚫 un pedido CANCELADO no salta a 'pagado' al confirmar un pago",
+                      rc_.status_code == 409 and canc.estado == "cancelado",
+                      f"HTTP {rc_.status_code} · quedó en '{canc.estado}'")
+
+                # DIN-11: el carril de parcial/sobrepago existía SOLO en bolívares.
+                div = Pedido(cliente_telefono=TEL, items=[], total=Decimal("18.40"),
+                             estado="esperando_pago")
+                s.add(div); await s.commit(); await s.refresh(div)
+                pdiv = Pago(pedido_id=div.id, metodo="divisas", monto_usd=Decimal("18.40"),
+                            monto_bs=None, estado="reportado")
+                s.add(pdiv); await s.commit(); await s.refresh(pdiv)
+                rz = await c.post(f"/api/pagos/{pdiv.id}/verificar-monto", headers=_auth(),
+                                  json={"monto_recibido": 10})
+                await s.refresh(pdiv)
+                check("💵 'Monto distinto' también funciona con pagos en DIVISAS (Zelle/Binance)",
+                      rz.status_code == 200 and pdiv.estado == "parcial",
+                      f"HTTP {rz.status_code} · estado='{pdiv.estado}' (antes: 400 seco)")
+                check("y devuelve la moneda para que el panel no pida Bs por un pago en $",
+                      (rz.json() if rz.status_code == 200 else {}).get("moneda") == "$",
+                      str(rz.text[:70]))
         finally:
             await _limpiar(s, zonas=True)
 

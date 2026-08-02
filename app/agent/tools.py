@@ -2177,6 +2177,22 @@ async def registrar_comprobante(
             ).scalars().first()
             if existente is not None:
                 return {"ok": True, "pago_id": existente.id, "nota": "ese comprobante ya estaba registrado"}
+        # La OTRA carrera (migración 026): dos capturas seguidas del mismo cliente, procesadas en
+        # paralelo por dos workers. Ambas pasaron el `SELECT ... estado='reportado'` de arriba
+        # porque ninguna había commiteado todavía; el UNIQUE parcial `ux_pago_reportado_por_pedido`
+        # deja pasar a una sola. Aquí se recoge a la perdedora y se le devuelve el pago que SÍ
+        # quedó: el resultado es el mismo que si hubieran llegado en fila. (EST-2.)
+        vivo = (
+            await session.execute(
+                select(Pago).where(Pago.pedido_id == pedido.id, Pago.estado == "reportado")
+            )
+        ).scalars().first()
+        if vivo is not None:
+            logger.info(
+                "Comprobante de %s: otro worker registró el pago #%s primero (carrera); "
+                "se reutiliza en vez de duplicar", telefono, vivo.id,
+            )
+            return {"ok": True, "pago_id": vivo.id, "nota": "ya habia un pago reportado para este pedido"}
         raise
     await session.refresh(pago)
     # Aviso a la duena: DESACTIVADO por defecto (su banco ya le avisa de los pagos).

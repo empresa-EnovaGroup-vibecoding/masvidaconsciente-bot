@@ -19,6 +19,55 @@
 
 ---
 
+## 2026-08-02 — 💳 LA MÁQUINA DE ESTADOS DE LOS PAGOS (bloque 1.3)
+
+Cinco formas de descuadrar el dinero desde la bandeja de pagos. Todas reproducidas contra la BD
+real antes y después.
+
+- **La venta se contaba DOS veces** (DIN-4). `confirmar` solo miraba el estado de ESE pago, nunca
+  si el pedido ya tenía otro confirmado. Y la secuencia para llegar ahí es de lo más normal: el
+  cliente paga de menos (pago1 → 'parcial'), completa con un segundo comprobante (pago2, por el
+  total), la dueña confirma pago2 ⇒ pedido 'pagado'… y pago1 sigue en la bandeja ofreciendo
+  **Reabrir** y, ya en 'reportado', **Confirmar**. Dos pagos confirmados por el total sobre el
+  mismo pedido, sumando los dos en `/reporte` y en la ficha del cliente.
+  → Guard `_no_hay_otro_pago_confirmado`, en `confirmar` **y** en `verificar-monto`.
+- **Un pedido CANCELADO resucitaba** (DIN-7a). `pedido.estado = "pagado"` se escribía desde
+  cualquier estado. Caso real: el cliente se arrepiente, la dueña cancela, pero el comprobante
+  sigue en "Por verificar"; días después lo confirma por limpiar la bandeja ⇒ el pedido salta a
+  'pagado', **vuelve a sumar en las métricas** y al cliente le llega un WhatsApp diciéndole que su
+  pago quedó confirmado. → Guard `_pedido_admite_cobro`.
+- **Rechazar un pago tumbaba un pedido ENTREGADO** a 'esperando_pago' (DIN-7b). El estado del
+  pedido dice dónde está la MERCANCÍA, y esa ya salió. → No se toca si está entregado o cancelado.
+- **Los pagos en DIVISAS no admitían parcial ni sobrepago** (DIN-11). `verificar-monto` exigía
+  `monto_bs`, y Zelle/Binance/efectivo guardan `monto_bs = None`: devolvía un **400 seco** aunque
+  el panel ofreciera el botón. A un Zelle de $18,40 pagado con $10 solo se le podía dar Confirmar
+  (regalando la diferencia) o Rechazar (castigando un pago real). → La moneda la pone el pago, no
+  la pantalla; y el endpoint devuelve `moneda` para que el panel deje de pedir Bs por un pago en $.
+- **Dos comprobantes seguidos creaban dos pagos** (EST-2). El check "¿ya hay uno reportado?" era un
+  SELECT seguido de un INSERT, en Python. Entre esos dos pasos cabe otra tarea entera: el cliente
+  manda dos capturas (la del banco + la del SMS), `_encolar_comprobante` las encola sin countdown y
+  el worker corre con `--concurrency=2`. Ninguna ve a la otra. → **Migración 026**: índice único
+  PARCIAL sobre `pagos(pedido_id) WHERE estado='reportado'`. Es el único sitio donde comprobar y
+  escribir son un mismo acto. `registrar_comprobante` recoge la `IntegrityError` y devuelve el pago
+  que sí quedó, así que el resultado es idéntico a si hubieran llegado en fila.
+
+### 🔴 Y una lección que se cobró sola: el detector que grita en falso
+
+Al desplegar la 026, `probar_drift` se puso **ROJO** y el vigilante le mandó **un WhatsApp a la
+dueña**. La base estaba perfecta: el `tar` de macOS había colado un fichero AppleDouble
+(`._026_pago_reportado_unico.sql`) junto al real. `init_db.py` filtra los ocultos y arrancó bien;
+`probar_drift` **no los filtraba** y lo contó como "migración que nunca se aplicó".
+
+Era exactamente el hallazgo DAT-10 de la auditoría de esta misma mañana, ocurriendo de verdad tres
+horas después de escribirlo. Arreglado: `probar_drift` filtra igual que `init_db`. Y los despliegues
+por `docker cp` pasan a hacerse con `COPYFILE_DISABLE=1` para no colar la basura de entrada.
+*Un detector con falsos positivos se acaba ignorando — que es la peor avería posible en un detector.*
+
+**Cobertura nueva:** sección 6 de `probar_cobro_panel.py`, con las cinco secuencias por HTTP real.
+**Los 18 bancos en verde.**
+
+---
+
 ## 2026-08-02 — 🧱 LA GRIETA DE LA PARED DEL DINERO (bloque 1.2)
 
 Dos agujeros por los que se colaba dinero inventado. Los dos se **ejecutaron** contra el código
