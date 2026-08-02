@@ -383,6 +383,19 @@ async def listar_pedidos(_: str = Depends(usuario_actual)):
             "items": p.items,
             "total_usd": float(p.total) if p.total else 0,
             "notas": p.notas,
+            # ══ LA ENTREGA Y EL FLETE, QUE ESTABAN EN LA BD Y NO SALÍAN POR NINGÚN ENDPOINT ══
+            # `entrega` se guarda desde la migración 016 y el envío desde la 023, pero este dict
+            # nunca los devolvió. Consecuencias: el bloque del calendario del panel NUNCA llegó a
+            # pintarse (el campo era opcional en TypeScript, así que compilaba sin una queja), y un
+            # pedido de $23 mostraba ítems por $20 sin una sola línea que explicara los otros $3.
+            # El flete es DINERO: si no se ve, su fuga no se puede auditar desde el panel.
+            # (Auditoría 2026-08-02, API-4.)
+            "entrega": p.entrega,
+            "entrega_fecha": p.entrega_fecha.isoformat() if p.entrega_fecha else None,
+            "zona_nombre": p.zona_nombre,
+            "costo_envio": float(p.costo_envio or 0),
+            # Lo que el panel necesita para cuadrar a ojo: ítems + envío = total.
+            "subtotal_productos": float(p.total or 0) - float(p.costo_envio or 0),
             "fecha": p.created_at.isoformat(),
             "pago_bloqueante": bloqueo.get(p.id),  # confirmado|parcial|reportado|None
         }
@@ -2605,6 +2618,27 @@ async def listar_pagos(estado: str | None = None, _: str = Depends(usuario_actua
         for p in pagos:
             if p.pedido_id not in pedidos:
                 pedidos[p.pedido_id] = await session.get(Pedido, p.pedido_id)
+        # 🔴 EL PANEL NO PUEDE OFRECER LO QUE EL BACKEND YA RECHAZA. `confirmar` y
+        # `verificar-monto` devuelven 409 si el pedido está CANCELADO (`_pedido_admite_cobro`) o si
+        # ese pedido ya tiene OTRO pago confirmado (`_no_hay_otro_pago_confirmado`). Sin estos dos
+        # campos la bandeja sigue pintando «Confirmar pago» sobre pagos que solo pueden acabar en
+        # error. (Auditoría 2026-08-02, DIN-4/DIN-7.)
+        #
+        # Se guarda una LISTA por pedido, no un solo id: con dos confirmados sobre el mismo pedido
+        # —dato histórico anterior al guard— un dict se quedaba con el último, que podía ser el
+        # propio pago que se está pintando, y entonces el aviso desaparecía justo donde hace falta.
+        confirmados: dict[int, list[int]] = {}
+        if pagos:
+            filas_conf = (
+                await session.execute(
+                    select(Pago.pedido_id, Pago.id).where(
+                        Pago.pedido_id.in_({p.pedido_id for p in pagos}),
+                        Pago.estado == "confirmado",
+                    )
+                )
+            ).all()
+            for ped_id, pago_id in filas_conf:
+                confirmados.setdefault(ped_id, []).append(pago_id)
     salida = []
     for p in pagos:
         ped = pedidos.get(p.pedido_id)
@@ -2622,6 +2656,11 @@ async def listar_pagos(estado: str | None = None, _: str = Depends(usuario_actua
             "referencia": p.referencia,
             "tiene_comprobante": bool(p.comprobante_media_id or p.comprobante_url),
             "confirmado_por": p.confirmado_por,
+            # Lo que el panel necesita para NO ofrecer un botón que va a devolver 409:
+            "pedido_estado": ped.estado if ped else None,
+            "otro_pago_confirmado": next(
+                (x for x in confirmados.get(p.pedido_id, []) if x != p.id), None
+            ),
             "fecha": p.created_at.isoformat(),
         })
     return salida

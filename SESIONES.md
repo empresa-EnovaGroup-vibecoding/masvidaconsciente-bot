@@ -19,6 +19,59 @@
 
 ---
 
+## 2026-08-02 — 🖥️ EL PANEL DEL DINERO (bloque 1.5 — cierra el bloque 1)
+
+Lo que la dueña VE y TOCA. 24 defectos mapeados, 21 aplicados, 3 descartados por duplicados. El
+método importó tanto como el resultado: **primero se mapeó cada cambio, después una revisión
+cruzada los contrastó entre sí, y solo entonces se escribió código.** Esa revisión encontró
+**7 colisiones** y **corrigió 7 propuestas que habrían roto cosas**. Tres que valen la pena:
+
+- **`formatFecha("2026-08-05")` pinta "04 ago." en Venezuela.** `new Date` con una fecha pelada la
+  parsea como medianoche UTC, y aquí son UTC-4. Iba a usarse justo para la FECHA DE ENTREGA
+  prometida: el bot la tiene bien y el panel habría mentido un día. → `formatFechaSola()`, que
+  construye la fecha con sus componentes (medianoche local).
+- **Una propuesta empujaba a mandarle un WhatsApp FALSO a un cliente que pagó bien.**
+  `monto_recibido` se guarda SIN unidad; un pago en dólares por el monto completo no entra por la
+  rama de divisas, así que queda como `pago_movil` con `monto_bs` lleno y `monto_recibido` en
+  dólares. Comparar 18,40 contra 16.591 gritaba "faltan Bs 16.572" sobre un pago correcto — y el
+  panel invertía los botones para empujar a «Monto distinto», que deja el pago en parcial y le
+  reclama al cliente plata que no debe. → helper `mismaMoneda()`.
+- **Otra escondía «Rechazar»**, que sí funciona (`rechazar_pago` no tiene ninguno de los dos guards
+  nuevos y es justo lo que hay que hacer con un comprobante viejo de un pedido cancelado). Habría
+  dejado tarjetas sin ninguna acción posible.
+
+### Lo aplicado
+
+**Backend** — `GET /api/pedidos` devuelve `entrega`, `entrega_fecha`, `zona_nombre`, `costo_envio` y
+`subtotal_productos`; `GET /api/pagos` devuelve `pedido_estado` y `otro_pago_confirmado`, para que
+el panel **no ofrezca botones que el backend va a rechazar con 409**.
+
+**Pedidos** — selector de **TAMAÑO** (sin él, añadir un producto multi-tamaño era un callejón sin
+salida: 400 correcto que la pantalla no dejaba resolver) · cambiar de producto resetea el
+`variante_id` viejo · los precios salen de la VARIANTE, no del campo legado (mostraba $4 donde se
+cobra $7, y **$0** en precio del día) · se pintan la entrega, su fecha y **la línea del envío**, con
+el desglose productos + envío = total, para que la fuga del flete sea auditable a ojo.
+
+**Pagos** — la diferencia entre lo COBRADO y lo RECIBIDO salta a la vista antes de confirmar · la
+etiqueta de moneda sale del pago (decir "Bs" en un Zelle inducía a teclear la cifra equivocada) ·
+los errores se pintan EN SU TARJETA, no en un banner lejano · «Confirmar» y «Monto distinto» se
+esconden cuando el backend los rechazaría, **«Rechazar» y «Anular» nunca**.
+
+**Sueltas** — el switch de método de pago **nunca funcionó** (mandaba un cuerpo parcial ⇒ 422 ⇒ la
+dueña leía "[object Object]"): ahora hace round-trip completo, y `mensajeDeError()` traduce un
+`detail` de Pydantic a una frase legible. *(Se descartó ponerle un default a `titulo` en el backend:
+convertiría el 422 en **borrado silencioso** de banco, teléfono y cédula.)* · "Cobrado este mes" son
+30 días corridos y ahora lo dice · las tarjetas del Resumen ya no se quedan en esqueleto eterno si
+un endpoint falla (y «Pagos por verificar» ya no inventa un **0**) · el menú «Entregas» pasa a
+**«Zonas de envío»**, que es lo que es.
+
+**Verificado:** `tsc --noEmit` limpio · build de las 19 rutas · **18 bancos en verde** · los campos
+nuevos comprobados con datos reales (20 + 3 = 23; cobrado Bs 16.591 vs recibido Bs 5.000) · panel
+sirviendo en 60 ms. Y la trampa del 15-jul esquivada: `api-masvida` en 9 chunks, `localhost:8000`
+en **0**.
+
+---
+
 ## 2026-08-02 — 🧾 LOS DATOS DEL COBRO QUE SE TIRABAN (bloque 1.4)
 
 - **El monto que la visión LEYÓ no se guardaba** (DIN-3). `monto_usd`/`monto_bs` del pago son lo
