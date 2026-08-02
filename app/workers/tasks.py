@@ -830,7 +830,59 @@ async def _montos_cobrados(telefono: str):
             )
     except Exception:  # noqa: BLE001
         pass
+    # 🔁 RESPALDO DURADERO (migración 027). La clave de Redis dura 24h, y aquí cotizar un día y
+    # pagar al siguiente es lo NORMAL: los pedidos van con días de anticipación. Sin este respaldo
+    # no había NADA con que comparar el comprobante, y eso —con el fail-open que también se corrigió
+    # hoy— hacía que un pago de Bs 5.000 sobre una venta de Bs 16.591 disparara el mensaje feliz.
+    try:
+        from sqlalchemy import select
+
+        from app.models import Pedido
+
+        factory = get_session_factory()
+        async with factory() as s:
+            ped = (
+                await s.execute(
+                    select(Pedido)
+                    .where(
+                        Pedido.cliente_telefono == telefono,
+                        Pedido.cotizado_at.is_not(None),
+                    )
+                    .order_by(Pedido.cotizado_at.desc())
+                )
+            ).scalars().first()
+            if ped is not None:
+                return (
+                    _a_float(ped.cotizado_bs),
+                    _a_float(ped.cotizado_usd),
+                    _a_float(ped.cotizado_usd_divisas),
+                )
+    except Exception:  # noqa: BLE001 — nunca tumbar el carril del comprobante por el respaldo
+        logger.exception("No se pudo leer la cotización de respaldo de %s", telefono)
     return None, None, None
+
+
+def _monto_cuadra(leido: float | None, esperados) -> bool:
+    """¿El monto que la visión leyó en el comprobante calza con ALGUNO de los que se le cobraron?
+
+    🔴 FAIL-CLOSED, y esa es toda la gracia (auditoría 2026-08-02, DIN-5). Antes esta decisión
+    vivía inline y arrancaba en `True`, reevaluándose solo `if leido is not None and candidatos`.
+    O sea: **cuando no había con qué comparar, el sistema daba el monto por bueno**. Y quedarse sin
+    comparación es lo normal, no una rareza — la cotización vivía solo en Redis con TTL de 24h y
+    aquí los pedidos van con días de anticipación. Ante un comprobante de Bs 5.000 sobre una venta
+    de Bs 16.591, el bot soltaba "recibí tu pago y coordino la entrega".
+
+    **No poder comprobar no es comprobar bien.** Si no hay monto leído, o no hay cotización con que
+    contrastarlo, la respuesta es NO: el pago se registra igual (esa red no se toca) pero el bot no
+    afirma que esté completo y la dueña lo ve en la bandeja.
+
+    Vive aparte para que se pueda probar: era un `if` enterrado en 200 líneas de carril de
+    comprobante, imposible de cubrir sin montar media visión.
+    """
+    candidatos = [c for c in esperados if c is not None]
+    if leido is None or not candidatos:
+        return False
+    return any(abs(leido - c) <= max(1.0, c * 0.02) for c in candidatos)
 
 
 @celery_app.task(name="procesar_comprobante")
@@ -925,16 +977,26 @@ async def _procesar_comprobante(telefono, message_id, media_id, caption, nombre,
 
     # ¿El MONTO del comprobante cuadra con lo cobrado? Comparamos contra el monto en
     # Bs (Pago Móvil/Transferencia) Y en USD (Binance/Zelle): basta que coincida con UNO.
-    monto_cuadra = True
+    #
+    # 🔴 FAIL-CLOSED: NO PODER COMPROBAR NO ES COMPROBAR BIEN (auditoría 2026-08-02, DIN-5).
+    # Antes esto arrancaba en `True` y solo se reevaluaba `if leido_monto is not None and
+    # candidatos`. O sea: cuando NO había con qué comparar, el sistema daba el monto por bueno.
+    # Y quedarse sin comparación es facilísimo — la cotización vive SOLO en Redis con TTL de 24h
+    # (`cobro:{telefono}`), así que basta con que el cliente cotice el viernes y pague el domingo.
+    # Resultado: ante un comprobante de Bs 5.000 sobre una venta de Bs 16.591, el bot soltaba
+    # "recibí tu pago y coordino la entrega". El pago se registra igual (eso está bien: es la red
+    # de seguridad), pero el bot ya NO afirma que está completo y la dueña lo ve en la bandeja.
+    monto_cuadra = True  # los que no son imagen (PDF/doc) no se comprueban: van a la bandeja igual
     if es_imagen:
         esperado_bs, esperado_usd, esperado_div = await _montos_cobrados(telefono)
         leido_monto = _a_float(monto)
-        candidatos = [c for c in (esperado_bs, esperado_usd, esperado_div) if c is not None]
-        if leido_monto is not None and candidatos:
-            monto_cuadra = any(abs(leido_monto - c) <= max(1.0, c * 0.02) for c in candidatos)
+        esperados = (esperado_bs, esperado_usd, esperado_div)
+        monto_cuadra = _monto_cuadra(leido_monto, esperados)
         logger.info(
-            "Monto comprobante de %s: leido=%s bs=%s usd=%s divisa=%s cuadra=%s",
+            "Monto comprobante de %s: leido=%s bs=%s usd=%s divisa=%s cuadra=%s%s",
             telefono, leido_monto, esperado_bs, esperado_usd, esperado_div, monto_cuadra,
+            "" if any(e is not None for e in esperados)
+            else "  ← SIN COTIZACIÓN con la que comparar (¿caché vencida?)",
         )
 
     # Aquí: la visión reconoció el comprobante (imagen), O es un PDF/otro -> red de

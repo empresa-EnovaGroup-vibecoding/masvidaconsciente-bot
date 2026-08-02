@@ -31,6 +31,7 @@ from app.models import (
     ProductoMedia,
     ProductoVariante,
     hoy_venezuela,
+    now_utc,
 )
 from app.services.db import get_session_factory
 from app.services.meta_client import enviar_imagen, enviar_texto, enviar_video
@@ -1828,6 +1829,18 @@ async def generar_datos_pago(session, telefono, pedido_id=None):
     )
 
     # Guarda la cotizacion para amarrarla al comprobante cuando llegue.
+    #
+    # 🔴 EN LOS DOS SITIOS, Y A PROPÓSITO (migración 027). Redis es la vía rápida, pero su TTL es
+    # de 24h y aquí cotizar un día y pagar al siguiente es lo NORMAL: los pedidos van con días de
+    # anticipación. Cuando la clave expiraba, el comprobante se recalculaba con la tasa de HOY y
+    # "Monto distinto" le reclamaba al cliente una diferencia que no debía. Un dato del que depende
+    # el dinero no puede vivir solo en una caché con caducidad.
+    pedido.cotizado_bs = monto_bs
+    pedido.cotizado_usd = monto_usd
+    pedido.cotizado_usd_divisas = monto_usd_divisas
+    pedido.tasa_cotizada = tasa
+    pedido.cotizado_at = now_utc()
+    await session.commit()
     try:
         await set_cache(
             f"cobro:{telefono}",
@@ -2110,6 +2123,21 @@ async def registrar_comprobante(
                     "comprobante es del %s → se recalcula desde el pedido",
                     d.get("pedido_id"), pedido.id,
                 )
+        # 🔁 RESPALDO DURADERO (migración 027): si Redis no tenía la cotización —lo normal cuando
+        # el cliente cotiza un día y paga al siguiente, con TTL de 24h— se usa la que quedó grabada
+        # en el PEDIDO. Sin esto, abajo se recalculaba `monto_bs` con la tasa de HOY: el cliente
+        # pagaba los Bs que se le pidieron el viernes y el pago se grababa contra la tasa del
+        # domingo, así que "Monto distinto" le reclamaba una diferencia que no debía.
+        if tasa is None and pedido.tasa_cotizada is not None:
+            tasa = Decimal(str(pedido.tasa_cotizada))
+            if pedido.cotizado_bs is not None:
+                monto_bs = Decimal(str(pedido.cotizado_bs))
+            if pedido.cotizado_usd is not None:
+                monto_usd = Decimal(str(pedido.cotizado_usd))
+            logger.info(
+                "registrar_comprobante: sin caché en Redis; se usa la cotización grabada en el "
+                "pedido %s (tasa %s del %s)", pedido.id, tasa, pedido.cotizado_at,
+            )
     except Exception:  # noqa: BLE001
         pass
 
@@ -2156,6 +2184,13 @@ async def registrar_comprobante(
         metodo=metodo,
         monto_usd=monto_usd,
         monto_bs=monto_bs,
+        # 💡 LO QUE EL CLIENTE MANDÓ, ADEMÁS DE LO QUE SE LE COBRÓ (auditoría 2026-08-02, DIN-3).
+        # `monto_usd`/`monto_bs` son lo COBRADO. Sin esta línea, el monto que la visión leyó en la
+        # captura se usaba solo para detectar si pagó en divisas y después SE TIRABA: el panel le
+        # enseñaba a la dueña Bs 16.591 (lo cobrado) en grande, con "Confirmar pago" al lado, para
+        # un comprobante que decía Bs 5.000. Un clic y el pedido quedaba pagado con Bs 11.591 sin
+        # cobrar. La señal existía; solo había que guardarla.
+        monto_recibido=(Decimal(str(monto_leido)) if monto_leido is not None else None),
         tasa_usada=tasa,
         referencia=referencia,
         comprobante_media_id=comprobante_media_id,

@@ -19,6 +19,34 @@
 
 ---
 
+## 2026-08-02 — 🧾 LOS DATOS DEL COBRO QUE SE TIRABAN (bloque 1.4)
+
+- **El monto que la visión LEYÓ no se guardaba** (DIN-3). `monto_usd`/`monto_bs` del pago son lo
+  **cobrado**; lo que el cliente realmente mandó se usaba solo para detectar si pagó en divisas y
+  después se descartaba. Consecuencia: se le cobran Bs 16.591, el cliente transfiere Bs 5.000, la
+  visión lo lee bien… y el panel le enseña a la dueña **Bs 16.591 en grande, con "Confirmar pago"
+  al lado**. Un clic y el pedido queda pagado con Bs 11.591 sin cobrar. La señal existía y se
+  tiraba. → Ahora se guarda en `monto_recibido` (la columna ya existía; solo había que llenarla).
+- **`monto_cuadra` fallaba ABIERTO** (DIN-5a). Arrancaba en `True` y solo se reevaluaba *si había
+  con qué comparar*. O sea: **cuando no se podía comprobar, se daba por bueno.** Ante un
+  comprobante de Bs 5.000 sobre una venta de Bs 16.591, el bot soltaba *"recibí tu pago y coordino
+  la entrega"*. → Fail-closed, y la decisión se extrajo a `_monto_cuadra()`: era un `if` enterrado
+  en 200 líneas del carril del comprobante, imposible de cubrir con un test sin montar media visión.
+- **La cotización vivía SOLO en Redis, con TTL de 24h** (DIN-5b/c). Y quedarse sin ella no es una
+  rareza: aquí los pedidos van con días de anticipación, así que **cotizar el viernes y pagar el
+  domingo es el caso corriente**. Cuando expiraba, `registrar_comprobante` recalculaba el monto en
+  Bs **con la tasa de HOY**: el cliente pagaba los Bs 16.591 que se le pidieron el viernes, el pago
+  se grababa contra los Bs 17.135 del domingo, y "Monto distinto" le reclamaba Bs 544 que no debía.
+  → **Migración 027**: la cotización completa (las tres monedas + la tasa + cuándo) queda grabada en
+  el pedido. Redis sigue siendo la vía rápida; esto es el respaldo duradero. *Un dato del que
+  depende el dinero no puede vivir solo en una caché con caducidad.*
+
+*Medido contra la BD real:* cotización grabada (`cotizado_bs=33598.34`, `tasa=746.6297`) y
+recuperada intacta tras borrar la clave de Redis. **Los 18 bancos en verde**, con la sección **1.e**
+nueva en `probar_carril_dinero.py`.
+
+---
+
 ## 2026-08-02 — 💳 LA MÁQUINA DE ESTADOS DE LOS PAGOS (bloque 1.3)
 
 Cinco formas de descuadrar el dinero desde la bandeja de pagos. Todas reproducidas contra la BD

@@ -140,6 +140,25 @@ async def main() -> None:
           bool(_dinero_inventado("Te sale en $2500", u_reglas, b_reglas)),
           "salía del contraejemplo '$25.00' leído como 2500")
 
+    print("\n1.e) 🔒 NO PODER COMPROBAR NO ES COMPROBAR BIEN (auditoría 2026-08-02, DIN-5)")
+    # `monto_cuadra` arrancaba en True y solo se reevaluaba si HABÍA con qué comparar. Y quedarse
+    # sin comparación es lo normal, no una rareza: la cotización vivía solo en Redis con TTL de 24h
+    # y aquí los pedidos van con días de anticipación. Ante un comprobante de Bs 5.000 sobre una
+    # venta de Bs 16.591, el bot soltaba "recibí tu pago y coordino la entrega".
+    from app.workers.tasks import _monto_cuadra
+
+    COBRADO = (16591.05, 23.0, 19.0)   # (bolívares, dólares, dólares con el 20% de descuento)
+    for nombre, leido, esperados, debe in [
+        ("🔴 SIN cotización con que comparar (caché vencida)", 5000.0, (None, None, None), False),
+        ("sin monto leído por la visión", None, COBRADO, False),
+        ("el monto correcto en bolívares", 16591.05, COBRADO, True),
+        ("pagó de MENOS", 5000.0, COBRADO, False),
+        ("pagó en divisas, con su 20% de descuento", 19.0, COBRADO, True),
+        ("pagó el precio pleno en dólares", 23.0, COBRADO, True),
+    ]:
+        check(f"cuadra={str(debe):5} | {nombre}", _monto_cuadra(leido, esperados) is debe,
+              f"dio {_monto_cuadra(leido, esperados)}")
+
     print("\n2) 🧭 LAS DOS LISTAS: lo que es mentira SIEMPRE vs. lo que la situación SÍ le manda decir")
     for texto, siempre, charla in [
         ("Ya revisé en mi banco y no me aparece", True, True),

@@ -252,6 +252,16 @@ class Pedido(Base):
     )
     zona_nombre: Mapped[str | None] = mapped_column(Text, nullable=True)
     costo_envio: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0"))
+    # LA COTIZACIÓN QUE SE LE DIO AL CLIENTE (migración 027). Antes vivía SOLO en la clave
+    # `cobro:{telefono}` de Redis, con TTL de 24h — y aquí cotizar un día y pagar al siguiente es
+    # lo normal, porque los pedidos van con días de anticipación. Al expirar, el comprobante se
+    # recalculaba con la tasa de HOY y se le reclamaba al cliente una diferencia que no debía.
+    # Redis sigue siendo la vía rápida; esto es el respaldo duradero.
+    cotizado_bs: Mapped[Decimal | None] = mapped_column(Numeric(14, 2), nullable=True)
+    cotizado_usd: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
+    cotizado_usd_divisas: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
+    tasa_cotizada: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)
+    cotizado_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 
