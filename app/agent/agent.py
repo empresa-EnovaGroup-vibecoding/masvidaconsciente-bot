@@ -18,7 +18,12 @@ from app.agent.system_prompt import (
     leer_config_agente,
     leer_modelo_ia,
 )
-from app.agent.tools import TOOL_SCHEMAS, ejecutar_tool, schemas_para
+from app.agent.tools import (
+    TOOL_SCHEMAS,
+    avisar_relevo_caido,
+    ejecutar_tool,
+    schemas_para,
+)
 from app.config import get_settings
 from app.services.tools_config import leer_tools_activas
 
@@ -74,11 +79,70 @@ async def _asegurar_catalogo(
     try:
         resultado = await ejecutar("enviar_catalogo", {}, telefono)
     except Exception:  # noqa: BLE001
+        logger.exception("RED DEL CATÁLOGO: `enviar_catalogo` lanzó para %s", telefono)
         resultado = {"ok": False}
     if isinstance(resultado, dict) and resultado.get("ok"):
         return texto  # ahora SÍ se envió: la afirmación es verdad
     # No se pudo enviar (no hay PDF): no dejar una afirmación falsa.
+    # 🔴 Y QUE QUEDE ESCRITO. Esta rama TIRA el mensaje que el modelo había redactado y le manda
+    # al cliente un cambio de tema; si eso pasa a menudo (PDF sin cargar, Meta rechazando el
+    # documento), la dueña tiene que poder VERLO en el log en vez de adivinar por qué el bot
+    # contesta raro. Dos capas mudas encadenadas eran dos sitios donde mirar y no encontrar nada.
+    logger.error(
+        "RED DEL CATÁLOGO: el bot dijo que envió el catálogo a %s y NO se pudo enviar "
+        "(resultado=%r) — se le manda el texto de reemplazo", telefono, resultado,
+    )
     return "Déjame mostrarte lo que tenemos 😊 ¿Qué estás buscando?"
+
+
+async def _escalar(
+    ejecutar, telefono: str, motivo: str, detalle: str, *, ya_fallo: bool = False
+) -> bool:
+    """Escala a la dueña Y DICE SI LO LOGRÓ. True solo si el aviso quedó registrado de verdad.
+
+    🔴 POR QUÉ EXISTE (auditoría 2026-08-02). Había SEIS `try/except` idénticos alrededor de los
+    `return RESPUESTA_SEGURA` del modo uno, y otro más en el modo dos, y ninguno servía para lo
+    que parecía servir: `ejecutar_tool` atrapa TODA excepción y devuelve `{"error": ...}`, así que
+    ese `except` NO podía dispararse por un fallo de BD DENTRO de `pedir_ayuda` — pero el
+    `return RESPUESTA_SEGURA` de abajo salía IGUAL, con el aviso sin crear. El bot le decía al
+    cliente "eso te lo confirmo enseguida" y NADIE tenía encargo de contestarle: ni Intervencion,
+    ni WhatsApp, ni una línea de log.
+
+    El `try` SE QUEDA (`ejecutar` es INYECTABLE y los bancos pasan dobles que sí lanzan:
+    `probar_recibo_visible.py` hace `raise AssertionError` ante una tool inesperada). Lo que se
+    AÑADE es (1) mirar el resultado, (2) REINTENTAR una vez —`ejecutar_tool` abre una sesión NUEVA
+    en cada llamada, así que un timeout o un pool agotado suele pasar al segundo intento— y (3) si
+    tampoco, avisar por la ÚNICA vía que no depende de la base (`avisar_relevo_caido`).
+
+    `ya_fallo`: en ESTE turno la escalada ya fracasó contra la base. No se vuelve a intentar. Con
+    Postgres caído, un turno hacía 1 llamada del bucle + 2 de aquí + 2 más de la red del relevo =
+    5 aperturas de sesión y 2 WhatsApps POR TURNO Y POR CLIENTE. El aviso ya salió por
+    `avisar_relevo_caido` (que tiene su propio candado de 30 min por chat): insistir no salva a
+    nadie, solo hunde más la base que ya se está ahogando.
+    """
+    if ya_fallo:
+        logger.error(
+            "RELEVO YA CAÍDO en este turno: NO se reintenta la escalada (%s) de %s — %s",
+            motivo, telefono, (detalle or "")[:120],
+        )
+        return False
+    args = {"motivo": motivo, "detalle": detalle}
+    for intento in (1, 2):
+        try:
+            resultado = await ejecutar("pedir_ayuda", args, telefono)
+        except Exception:  # noqa: BLE001 — el aviso no puede tumbar el turno
+            logger.exception(
+                "No se pudo escalar (%s) para %s [intento %d]", motivo, telefono, intento
+            )
+            resultado = None
+        if isinstance(resultado, dict) and resultado.get("ok"):
+            return True
+        logger.error(
+            "RELEVO CAÍDO: la escalada (%s) de %s NO quedó registrada [intento %d] — resultado=%r",
+            motivo, telefono, intento, resultado,
+        )
+    await avisar_relevo_caido(telefono, motivo, detalle)
+    return False
 
 
 async def _llamar_openrouter(messages: list, tools: list, model: str) -> dict:
@@ -866,6 +930,9 @@ async def responder(
     usd_de_herramienta: set[float] = set()
     corregido = False
     pidio_ayuda = False  # ¿el bot llamó a pedir_ayuda en este turno?
+    # ¿la escalada YA falló contra la base en ESTE turno? Con Postgres caído, sin este flag un
+    # solo turno abría 5 sesiones y mandaba 2 WhatsApps — por cliente, cada pocos segundos.
+    relevo_imposible = False
     reescrito = False    # ya se le pidió una vez que no hable como un sistema
     registro_ok = False  # ¿registrar_pedido devolvió OK en este turno? (red del pedido fantasma)
     reclamo_pedido = False  # ya se le llamó la atención una vez por decir que agendó sin agendar
@@ -927,20 +994,12 @@ async def responder(
                 # Se le dio una oportunidad y volvió a inventar: NO se le manda al cliente un
                 # número falso. Se escala a la dueña y se responde sin cifras.
                 logger.error("DINERO INVENTADO 2 veces para %s: se escala a la dueña", telefono)
-                try:
-                    await ejecutar(
-                        "pedir_ayuda",
-                        {
-                            "motivo": "no_se",
-                            "detalle": (
-                                "el bot iba a decir un monto que no salió del sistema "
-                                f"({inventados}); NO se le envió al cliente"
-                            ),
-                        },
-                        telefono,
-                    )
-                except Exception:  # noqa: BLE001 — si el aviso falla, igual NO mandamos el monto
-                    logger.exception("No se pudo escalar el dinero inventado de %s", telefono)
+                await _escalar(
+                    ejecutar, telefono, "no_se",
+                    "el bot iba a decir un monto que no salió del sistema "
+                    f"({inventados}); NO se le envió al cliente",
+                    ya_fallo=relevo_imposible,
+                )
                 return RESPUESTA_SEGURA
 
             # 🔴 RED DE LOS DATOS BANCARIOS: una cédula, cuenta, teléfono o correo solo puede
@@ -970,20 +1029,12 @@ async def responder(
                     continue
                 # Insistió: NO se le mandan al cliente datos que el sistema no dio.
                 logger.error("DATOS SENSIBLES 2 veces para %s: se escala a la dueña", telefono)
-                try:
-                    await ejecutar(
-                        "pedir_ayuda",
-                        {
-                            "motivo": "no_se",
-                            "detalle": (
-                                "el bot iba a mandar datos de pago/números que NO salieron del "
-                                f"sistema ({sensibles}); NO se le enviaron al cliente"
-                            ),
-                        },
-                        telefono,
-                    )
-                except Exception:  # noqa: BLE001 — si el aviso falla, igual NO se mandan
-                    logger.exception("No se pudo escalar los datos sensibles de %s", telefono)
+                await _escalar(
+                    ejecutar, telefono, "no_se",
+                    "el bot iba a mandar datos de pago/números que NO salieron del "
+                    f"sistema ({sensibles}); NO se le enviaron al cliente",
+                    ya_fallo=relevo_imposible,
+                )
                 return RESPUESTA_SEGURA
 
             # RED DE LA HONESTIDAD: hay frases que NO pueden salir nunca.
@@ -1009,20 +1060,12 @@ async def responder(
                     })
                     continue
                 # Insistió: NO se le manda al cliente. Se escala.
-                try:
-                    await ejecutar(
-                        "pedir_ayuda",
-                        {
-                            "motivo": "reclamo",
-                            "detalle": (
-                                f"el bot iba a decir algo que tiene PROHIBIDO ({prohibida}); "
-                                "NO se le envió al cliente. Entra tú al chat."
-                            ),
-                        },
-                        telefono,
-                    )
-                except Exception:  # noqa: BLE001
-                    logger.exception("No se pudo escalar la frase prohibida de %s", telefono)
+                await _escalar(
+                    ejecutar, telefono, "reclamo",
+                    f"el bot iba a decir algo que tiene PROHIBIDO ({prohibida}); "
+                    "NO se le envió al cliente. Entra tú al chat.",
+                    ya_fallo=relevo_imposible,
+                )
                 return RESPUESTA_SEGURA
 
             # RED DE LA VOZ: si habla como un sistema ("lo que tengo cargado"), que lo reescriba.
@@ -1070,21 +1113,13 @@ async def responder(
                     })
                     continue
                 # Insistió: NO se le manda al cliente una confirmación falsa. Se escala.
-                try:
-                    await ejecutar(
-                        "pedir_ayuda",
-                        {
-                            "motivo": "reclamo",
-                            "detalle": (
-                                "el bot le dijo al cliente que le AGENDÓ el pedido pero NO lo "
-                                "registró (no existe en el sistema). NO se le envió esa "
-                                "confirmación falsa. Entra tú al chat y agéndalo."
-                            ),
-                        },
-                        telefono,
-                    )
-                except Exception:  # noqa: BLE001 — igual NO se manda la confirmación falsa
-                    logger.exception("No se pudo escalar el pedido fantasma de %s", telefono)
+                await _escalar(
+                    ejecutar, telefono, "reclamo",
+                    "el bot le dijo al cliente que le AGENDÓ el pedido pero NO lo "
+                    "registró (no existe en el sistema). NO se le envió esa "
+                    "confirmación falsa. Entra tú al chat y agéndalo.",
+                    ya_fallo=relevo_imposible,
+                )
                 return RESPUESTA_SEGURA
 
             # 🔴 RED DEL ENVÍO FANTASMA DE FOTOS: "ya te la envié" sin haberla enviado NO SALE.
@@ -1133,21 +1168,13 @@ async def responder(
                     })
                     continue
                 # Insistió: NO se le manda al cliente la afirmación falsa. Se escala.
-                try:
-                    await ejecutar(
-                        "pedir_ayuda",
-                        {
-                            "motivo": "no_se",
-                            "detalle": (
-                                "el cliente pidió FOTOS y el bot iba a decirle que ya se las "
-                                "envió SIN haberlas enviado. NO se le mandó esa mentira. "
-                                "Mándale tú las fotos desde el WhatsApp del negocio."
-                            ),
-                        },
-                        telefono,
-                    )
-                except Exception:  # noqa: BLE001 — igual NO se manda la afirmación falsa
-                    logger.exception("No se pudo escalar el envío fantasma de fotos de %s", telefono)
+                await _escalar(
+                    ejecutar, telefono, "no_se",
+                    "el cliente pidió FOTOS y el bot iba a decirle que ya se las "
+                    "envió SIN haberlas enviado. NO se le mandó esa mentira. "
+                    "Mándale tú las fotos desde el WhatsApp del negocio.",
+                    ya_fallo=relevo_imposible,
+                )
                 return RESPUESTA_SEGURA
 
             # RED DEL RELEVO: si PROMETE averiguar algo y no avisó a nadie, el aviso lo crea
@@ -1157,21 +1184,13 @@ async def responder(
                     "PROMESA SIN AVISO de %s: %r — se crea el aviso automáticamente",
                     telefono, texto[:120],
                 )
-                try:
-                    await ejecutar(
-                        "pedir_ayuda",
-                        {
-                            "motivo": "no_se",
-                            "detalle": (
-                                f'el bot le prometió al cliente que le confirma algo que NO sabe. '
-                                f'El cliente preguntó: "{(pregunta_cliente or "")[:160]}"'
-                            ),
-                        },
-                        telefono,
-                    )
-                    pidio_ayuda = True
-                except Exception:  # noqa: BLE001 — el aviso no puede tumbar el turno
-                    logger.exception("No se pudo crear el aviso automático de %s", telefono)
+                pidio_ayuda = await _escalar(
+                    ejecutar, telefono, "no_se",
+                    'el bot le prometió al cliente que le confirma algo que NO sabe. '
+                    f'El cliente preguntó: "{(pregunta_cliente or "")[:160]}"',
+                    ya_fallo=relevo_imposible,
+                )
+                relevo_imposible = relevo_imposible or not pidio_ayuda
 
             texto = await _asegurar_catalogo(
                 texto, catalogo_ok, telefono, ejecutar,
@@ -1220,10 +1239,42 @@ async def responder(
             except json.JSONDecodeError:
                 args = {}
             resultado = await ejecutar(nombre_tool, args, telefono)
+            if isinstance(resultado, dict) and resultado.get("error"):
+                # 🔴 Hasta hoy este error viajaba SOLO dentro del mensaje `role=tool`: lo veía el
+                # modelo y NADIE más. `{"error": ...}` es un shape exclusivo del `except` de
+                # `ejecutar_tool` (ninguna herramienta lo devuelve como 'no encontrado'), así que
+                # aquí SIEMPRE significa "la tool REVENTÓ". El caso que más duele es
+                # `registrar_comprobante` por ESTA puerta (el cliente escribe "ya pagué, ref
+                # 004512"): el mismo `registrar_comprobante` llamado por el worker de visión sí se
+                # loguea (tasks.py), y por aquí se perdía mudo — y es dinero.
+                logger.error(
+                    "TOOL CON ERROR: %s para %s → %s",
+                    nombre_tool, telefono, str(resultado["error"])[:200],
+                )
             if nombre_tool == "enviar_catalogo" and isinstance(resultado, dict) and resultado.get("ok"):
                 catalogo_ok = True
             if nombre_tool == "pedir_ayuda":
-                pidio_ayuda = True  # ya avisó: la red del relevo no tiene que hacer nada
+                # 🔴 SE MIRA EL RESULTADO, NO EL NOMBRE. Hasta hoy bastaba con que el modelo
+                # LLAMARA a la tool para dar el relevo por hecho: si `pedir_ayuda` reventaba a
+                # mitad (timeout de BD, FK, pool agotado), `ejecutar_tool` devolvía
+                # `{"error": ...}` en silencio, el flag se encendía igual, y la RED DEL RELEVO de
+                # abajo no volvía a intentarlo. Resultado: cero Intervencion, cero WhatsApp, el
+                # chat SIN pausar, y el bot despidiéndose con un "te confirmo enseguida" que nadie
+                # tenía encargo de cumplir. Es el mismo patrón que ya se arregló en
+                # `registrar_pedido` (la red del pedido fantasma); aquí faltaba.
+                if isinstance(resultado, dict) and resultado.get("ok"):
+                    pidio_ayuda = True  # ya avisó: la red del relevo no tiene que hacer nada
+                elif not pidio_ayuda:
+                    # El `elif not pidio_ayuda` evita que una SEGUNDA llamada fallida en el mismo
+                    # turno APAGUE un relevo que ya se había registrado bien.
+                    pidio_ayuda = await _escalar(
+                        ejecutar, telefono,
+                        str(args.get("motivo") or "no_se"),
+                        str(args.get("detalle") or "").strip()
+                        or "el bot pidió ayuda y el aviso NO llegó a registrarse",
+                        ya_fallo=relevo_imposible,
+                    )
+                    relevo_imposible = relevo_imposible or not pidio_ayuda
             if (
                 nombre_tool == "registrar_pedido"
                 and isinstance(resultado, dict)
@@ -1375,6 +1426,16 @@ async def _responder_dos_agentes(
             except json.JSONDecodeError:
                 args = {}
             resultado = await ejecutar(nombre_tool, args, telefono)
+            if isinstance(resultado, dict) and resultado.get("error"):
+                # Doble descarte hasta hoy: aquí no se logueaba, y `_renderizar` (hoja.py) hace
+                # `if r.get("error"): return ""`. La Voz recibía una hoja que decía "NO
+                # consultaste nada" y escribía tan tranquila, como si la herramienta nunca se
+                # hubiera llamado. Que el CLIENTE no se entere está bien; que no se entere NADIE,
+                # no.
+                logger.error(
+                    "TOOL CON ERROR (Operador): %s para %s → %s",
+                    nombre_tool, telefono, str(resultado["error"])[:200],
+                )
             hoja.anotar_tool(nombre_tool, resultado)   # ← el CÓDIGO anota, no el modelo
             messages.append({
                 "role": "tool", "tool_call_id": tc["id"],
@@ -1434,7 +1495,16 @@ async def _responder_dos_agentes(
                 args = json.loads(tc["function"]["arguments"] or "{}")
             except json.JSONDecodeError:
                 args = {}
-            hoja.anotar_tool(n, await ejecutar(n, args, telefono))
+            r_tool = await ejecutar(n, args, telefono)
+            if isinstance(r_tool, dict) and r_tool.get("error"):
+                # El re-prompt del dinero es el ÚLTIMO cartucho del Operador: si la tool que
+                # tenía que darle el monto bueno revienta AQUÍ, el encargo se queda igual de
+                # inventado y la Voz lo hereda. Sin esta línea no quedaba rastro de nada.
+                logger.error(
+                    "RE-PROMPT DEL DINERO: %s reventó para %s → %s",
+                    n, telefono, str(r_tool["error"])[:200],
+                )
+            hoja.anotar_tool(n, r_tool)   # ← el CÓDIGO anota, no el modelo
         hoja.encargo = (msg.get("content") or "").strip() or hoja.encargo
         usd_ok, bs_ok, totales_ok, datos_ok = hoja.listas_blancas()
 
@@ -1467,22 +1537,33 @@ async def _responder_dos_agentes(
     # ── LAS REDES, sobre lo que de verdad le llega al cliente ───────────────────────────
     #
     # NINGUNA se retira. Lo que cambia es su lista blanca: ya no es "todo el prompt", es la HOJA.
-    async def _escalar(motivo: str, detalle: str) -> None:
-        try:
-            await ejecutar("pedir_ayuda", {"motivo": motivo, "detalle": detalle}, telefono)
-        except Exception:  # noqa: BLE001
-            logger.exception("No se pudo escalar (%s) para %s", motivo, telefono)
+    #
+    # 🔴 LA CLAUSURA `_escalar` DE AQUÍ SE BORRÓ. Llamaba a la tool del relevo a pelo, dentro de
+    # un `try`, y NO MIRABA NADA: si la escalada reventaba contra la base, las cinco redes de
+    # abajo devolvían RESPUESTA_SEGURA con el aviso sin crear, y la del relevo ni siquiera
+    # actualizaba `hoja.escalado`. Ahora usan el `_escalar` de MÓDULO (arriba del archivo), que
+    # mira el resultado, reintenta con una sesión nueva y, si tampoco, avisa fuera de la base.
+    # Un solo sitio que escala en TODO el archivo: modo uno y modo dos comparten la red.
+    relevo_imposible = False  # ¿ya falló la escalada contra la base en ESTE turno?
 
     inventados = _dinero_inventado(texto, usd_ok, bs_ok, totales_ok)
     if inventados:
         logger.error("VOZ: dinero inventado %s para %s — NO sale", inventados, telefono)
-        await _escalar("no_se", f"la Voz iba a decir un monto que no salió del sistema ({inventados})")
+        await _escalar(
+            ejecutar, telefono, "no_se",
+            f"la Voz iba a decir un monto que no salió del sistema ({inventados})",
+            ya_fallo=relevo_imposible,
+        )
         return RESPUESTA_SEGURA
 
     sensibles = _datos_sensibles_inventados(texto, datos_ok, usd_ok, bs_ok)
     if sensibles:
         logger.error("VOZ: datos sensibles %s para %s — NO sale", sensibles, telefono)
-        await _escalar("no_se", f"la Voz iba a mandar datos que no salieron del sistema ({sensibles})")
+        await _escalar(
+            ejecutar, telefono, "no_se",
+            f"la Voz iba a mandar datos que no salieron del sistema ({sensibles})",
+            ya_fallo=relevo_imposible,
+        )
         return RESPUESTA_SEGURA
 
     # En el carril del PAGO, "recibí tu pago" es lo que el código ORDENA decir: ahí solo se aplican
@@ -1492,35 +1573,45 @@ async def _responder_dos_agentes(
     )
     if prohibida:
         logger.error("VOZ: frase prohibida (%s) para %s — NO sale", prohibida, telefono)
-        await _escalar("reclamo", f"la Voz iba a decir algo que tiene PROHIBIDO ({prohibida})")
+        await _escalar(
+            ejecutar, telefono, "reclamo",
+            f"la Voz iba a decir algo que tiene PROHIBIDO ({prohibida})",
+            ya_fallo=relevo_imposible,
+        )
         return RESPUESTA_SEGURA
 
     # El PEDIDO FANTASMA y el ENVÍO FANTASMA, re-anclados a la HOJA (no a unos flags sueltos).
     if _afirma_pedido_registrado(texto) and hoja.pedido_id is None:
         logger.error("VOZ: pedido fantasma para %s — NO sale", telefono)
         await _escalar(
-            "reclamo",
+            ejecutar, telefono, "reclamo",
             "la Voz le dijo al cliente que le AGENDÓ el pedido pero NO existe. Entra tú y agéndalo.",
+            ya_fallo=relevo_imposible,
         )
         return RESPUESTA_SEGURA
 
     if _afirma_envio_fotos(texto, _pide_fotos(pregunta_cliente)) and hoja.fotos_enviadas == 0:
         logger.error("VOZ: envío fantasma de fotos para %s — NO sale", telefono)
         await _escalar(
-            "no_se",
+            ejecutar, telefono, "no_se",
             "el cliente pidió FOTOS y la Voz iba a decir que se las envió SIN haberlas enviado."
             + ("" if puede_fotos else " (las fotos están DESACTIVADAS: mándaselas tú)"),
+            ya_fallo=relevo_imposible,
         )
         return RESPUESTA_SEGURA
 
     # La RED DEL RELEVO: una promesa sin aviso deja al cliente esperando para siempre.
     if _promete_averiguar(texto) and not hoja.escalado:
         logger.warning("VOZ: promesa sin aviso de %s — el aviso lo crea el código", telefono)
-        await _escalar(
-            "no_se",
-            f'la Voz le prometió al cliente confirmarle algo. El cliente preguntó: '
+        # 🔴 EL RESULTADO SE APUNTA EN LA HOJA. Hasta hoy esta red ni siquiera tocaba
+        # `hoja.escalado`: si el aviso fallaba, la hoja seguía mintiendo el resto del turno.
+        hoja.escalado = await _escalar(
+            ejecutar, telefono, "no_se",
+            'la Voz le prometió al cliente confirmarle algo. El cliente preguntó: '
             f'"{(pregunta_cliente or "")[:160]}"',
+            ya_fallo=relevo_imposible,
         )
+        relevo_imposible = relevo_imposible or not hoja.escalado
 
     # La RED DE LA VOZ. Casi sin trabajo ahora: la Voz NO TIENE sistema del que hablar (no ve el
     # catálogo, ni las notas de las tools, ni un solo `"ok": false`). Si dispara, es que la HOJA

@@ -1983,39 +1983,135 @@ async def pedir_ayuda(session, telefono, motivo: str, detalle: str = ""):
     }
 
 
+# La COPIA DE SEGURIDAD del teléfono de la dueña, fuera de Postgres. Se reescribe cada vez que
+# la base SÍ respondió, para que `avisar_relevo_caido` (abajo) tenga a quién escribirle el día
+# que no responda. Prefijo `cache:` por la convención de `redis_client.py:102-104`.
+_CLAVE_DUENO = "cache:dueno_telefono_ultimo_bueno"
+
+
+async def _recordar_dueno(destino: str) -> None:
+    """Deja el número de la dueña en Redis. Nunca lanza: es una copia de cortesía."""
+    try:
+        await set_cache(_CLAVE_DUENO, destino, 30 * 86400)
+    except Exception:  # noqa: BLE001 — sin Redis se sigue avisando por la vía normal
+        pass
+
+
 async def _avisar_intervencion(session, telefono, motivo, detalle, mensaje_cliente) -> None:
     """Le manda a la dueña el 'el bot te necesita' por WhatsApp. Best-effort: si no hay
     número configurado o Meta rechaza (ventana de 24h), se loguea y ya — el aviso vive
-    en la bandeja del panel, que nunca falla."""
-    config = {
-        f.clave: f.valor
-        for f in (await session.execute(select(Configuracion))).scalars().all()
-    }
-    destino = config.get("dueno_telefono") or get_settings().dueno_telefono
-    if not destino:
-        logger.warning(
-            "pedir_ayuda: no hay dueno_telefono configurado; el aviso queda SOLO en el panel"
-        )
-        return
+    en la bandeja del panel, que nunca falla.
 
-    nombre = (
-        await session.execute(select(Cliente.nombre).where(Cliente.telefono == telefono))
-    ).scalar_one_or_none()
-    quien = f"{nombre} ({telefono})" if nombre else telefono
-    cuerpo = f"🔔 *EL BOT TE NECESITA*\n\n{_MOTIVO_TITULO[motivo]}\nCliente: {quien}"
-    if detalle:
-        cuerpo += f"\n\n👉 {detalle}"
-    if mensaje_cliente:
-        cuerpo += f'\n\nÉl escribió: "{mensaje_cliente[:180]}"'
-    cuerpo += (
-        "\n\nEl bot ya le dijo que le confirmas enseguida y *se quedó callado* en ese chat."
-        "\nEntra al WhatsApp del negocio y respóndele tú."
-        "\nCuando termines, reactiva el bot desde el panel."
-    )
+    🔴 EL `try` ABRAZA TODO, INCLUIDAS LAS DOS LECTURAS A LA BASE. Hasta hoy solo protegía el
+    `enviar_texto`: si la base moría en el `select(Configuracion)` o en el `select(Cliente.nombre)`,
+    la excepción subía, mataba a `pedir_ayuda` DESPUÉS del commit (la Intervencion YA escrita), y
+    `ejecutar_tool` la volvía un `{"error": ...}` mudo. El reintento encontraba `ya_hay`, no
+    recreaba nada, no reenviaba el aviso, devolvía ok — y la dueña se quedaba con un chat pausado
+    del que nadie le avisó. 'Best-effort' tiene que serlo de verdad: este aviso NO puede tumbar el
+    turno por ninguna puerta. De eso depende que el `{"ok": True}` de `pedir_ayuda` sea fiable, que
+    es justo lo que el bucle del agente se cree para no volver a escalar.
+    """
     try:
+        config = {
+            f.clave: f.valor
+            for f in (await session.execute(select(Configuracion))).scalars().all()
+        }
+        destino = config.get("dueno_telefono") or get_settings().dueno_telefono
+        if not destino:
+            logger.warning(
+                "pedir_ayuda: no hay dueno_telefono configurado; el aviso queda SOLO en el panel"
+            )
+            return
+        await _recordar_dueno(destino)
+
+        nombre = (
+            await session.execute(select(Cliente.nombre).where(Cliente.telefono == telefono))
+        ).scalar_one_or_none()
+        quien = f"{nombre} ({telefono})" if nombre else telefono
+        cuerpo = f"🔔 *EL BOT TE NECESITA*\n\n{_MOTIVO_TITULO[motivo]}\nCliente: {quien}"
+        if detalle:
+            cuerpo += f"\n\n👉 {detalle}"
+        if mensaje_cliente:
+            cuerpo += f'\n\nÉl escribió: "{mensaje_cliente[:180]}"'
+        cuerpo += (
+            "\n\nEl bot ya le dijo que le confirmas enseguida y *se quedó callado* en ese chat."
+            "\nEntra al WhatsApp del negocio y respóndele tú."
+            "\nCuando termines, reactiva el bot desde el panel."
+        )
         await enviar_texto(destino, cuerpo)
     except Exception:  # noqa: BLE001 — un aviso que falla no puede tumbar el turno
         logger.exception("pedir_ayuda: no se pudo avisar por WhatsApp; queda en el panel")
+
+
+# ── EL ÚLTIMO TESTIGO ───────────────────────────────────────────────────────────────────
+#
+# 🔴 `pedir_ayuda` escribe TODO en Postgres: la pausa del chat, la fila de la bandeja y (desde
+# ahí) el WhatsApp a la dueña — que además necesita la base para saber A QUIÉN escribir. Si lo
+# que falla ES Postgres, los tres se caen JUNTOS y no queda nadie que sepa que hay un cliente
+# esperando. Eso es, literalmente, la semana de mensajes mudos.
+#
+# Esta es la única vía que NO toca la base: el número sale del ENTORNO, o de la copia que dejó
+# `_recordar_dueno` la última vez que la base sí respondió. Redis y Postgres son procesos
+# distintos: cuando uno se cae, el otro suele seguir en pie.
+#
+# ⚠️ NO es un envío proactivo a un CLIENTE (la regla dura de Meta, CLAUDE.md §3): va a la DUEÑA,
+# igual que `_avisar_intervencion`, `_avisar_duena` y el aviso de los bancos rojos.
+
+async def avisar_relevo_caido(telefono: str, motivo: str, detalle: str) -> bool:
+    """El aviso de emergencia cuando `pedir_ayuda` no pudo dejar rastro. True si salió."""
+    if (telefono or "").startswith("__"):
+        # Simulador del panel y bancos de prueba: no hay WhatsApp real del otro lado. Mismo
+        # candado que ya usan `enviar_catalogo` y `enviar_fotos_producto`.
+        return False
+
+    destino = get_settings().dueno_telefono
+    if not destino:
+        try:
+            destino = await get_cache(_CLAVE_DUENO)
+        except Exception:  # noqa: BLE001 — si Redis tampoco está, queda el log de abajo
+            destino = None
+    if not destino:
+        logger.error(
+            "RELEVO CAÍDO y SIN a quién avisar (ni DUENO_TELEFONO ni caché): cliente=%s "
+            "motivo=%s detalle=%s", telefono, motivo, detalle,
+        )
+        return False
+
+    # ANTI-INUNDACIÓN. Si la base está caída, CADA turno de CADA cliente pasa por aquí. Un
+    # WhatsApp por turno le quema la calidad al número — y eso arriesga la cuenta de Meta de
+    # TODOS los clientes (regla dura). Uno por chat cada 30 min basta: el aviso dice "entra al
+    # chat", y ella solo tiene que entrar una vez.
+    clave_candado = f"cache:relevo_caido:{telefono}"
+    try:
+        if await get_cache(clave_candado):
+            logger.error(
+                "RELEVO CAÍDO otra vez para %s (motivo=%s) — no se reenvía el WhatsApp (anti-spam)",
+                telefono, motivo,
+            )
+            return False
+        await set_cache(clave_candado, "1", 1800)
+    except Exception:  # noqa: BLE001 — sin Redis se avisa igual: un aviso de más > ninguno
+        pass
+
+    cuerpo = (
+        "🔴 *EL BOT NO PUDO DEJARTE EL AVISO EN EL PANEL*\n\n"
+        f"Cliente: {telefono}\n"
+        f"{_MOTIVO_TITULO.get(motivo, _MOTIVO_TITULO['no_se'])}\n"
+        + (f"\n👉 {detalle[:300]}\n" if detalle else "")
+        + "\nLa bandeja NO tiene esta fila y el chat NO quedó pausado (falló la base de datos). "
+        "Entra al WhatsApp del negocio y respóndele tú."
+    )
+    try:
+        await enviar_texto(destino, cuerpo)
+        logger.error(
+            "RELEVO CAÍDO para %s: se avisó a la dueña por WhatsApp, fuera de la base", telefono
+        )
+        return True
+    except Exception:  # noqa: BLE001 — si esto tampoco sale, al menos queda el log
+        logger.exception(
+            "RELEVO CAÍDO para %s y el WhatsApp de emergencia TAMPOCO salió", telefono
+        )
+        return False
 
 
 async def _avisar_duena(session, pedido, pago) -> None:
@@ -2033,6 +2129,9 @@ async def _avisar_duena(session, pedido, pago) -> None:
     if not destino:
         logger.warning("No hay dueno_telefono configurado; no se envia aviso del pago")
         return
+    # Cada aviso que SÍ sale deja el número guardado fuera de Postgres, para el día que la base
+    # no responda y el ÚLTIMO TESTIGO tenga que escribir sin poder consultarla.
+    await _recordar_dueno(destino)
     monto_usd = f"${pago.monto_usd}" if pago.monto_usd is not None else "?"
     monto_bs = f"Bs {pago.monto_bs}" if pago.monto_bs is not None else "?"
     detalle = (
@@ -2312,6 +2411,11 @@ async def enviar_catalogo(session, telefono):
     try:
         resp = await enviar_documento(telefono, link, "Catalogo.pdf")
     except Exception:  # noqa: BLE001
+        # El PDF EXISTE (el flag de BD lo dice) y Meta lo rechazó: el cliente NO lo recibió, y
+        # hasta hoy eso no dejaba rastro en ningún sitio — ni aquí, ni en la red de arriba.
+        logger.exception(
+            "enviar_catalogo: Meta rechazó el PDF de %s; el cliente NO lo recibió", telefono
+        )
         return {"ok": False, "nota": "no se pudo enviar el catalogo PDF; usa ver_catalogo (texto)"}
     # El catálogo que el cliente recibió ahora SÍ aparece en el chat interno de la dueña.
     await _guardar_media_saliente(
@@ -2483,9 +2587,28 @@ _DISPATCH = {
 }
 
 
+# Herramientas cuyo fallo NO es "un tropiezo del que el modelo se recupera", sino una PÉRDIDA:
+# `pedir_ayuda` es la RED DEL RELEVO (si revienta no hay Intervencion, no sale el WhatsApp y NADIE
+# sabe que hay un cliente esperando) y las tres del cobro escriben el dinero. Van en ERROR; las
+# demás en WARNING. La diferencia no es cosmética: es lo que se busca en el log.
+_TOOLS_CRITICAS = frozenset(
+    {"pedir_ayuda", "registrar_pedido", "generar_datos_pago", "registrar_comprobante"}
+)
+
+
+def _args_para_log(args: dict) -> str:
+    """Los args en UNA línea y CORTOS: un `detalle` largo o la URL de un comprobante llenan el
+    log justo el día que hay que leerlo."""
+    try:
+        return json.dumps(args or {}, ensure_ascii=False, default=str)[:200]
+    except Exception:  # noqa: BLE001
+        return repr(args)[:200]
+
+
 async def ejecutar_tool(nombre: str, args: dict, telefono: str, session_factory=None):
     fn = _DISPATCH.get(nombre)
     if fn is None:
+        logger.warning("TOOL DESCONOCIDA: el modelo llamó a %r para %s", nombre, telefono)
         return {"error": f"herramienta desconocida: {nombre}"}
     if session_factory is None:
         session_factory = get_session_factory()
@@ -2493,4 +2616,19 @@ async def ejecutar_tool(nombre: str, args: dict, telefono: str, session_factory=
         try:
             return await fn(session, telefono, **args)
         except Exception as e:  # noqa: BLE001 — devolver el error al LLM para que se recupere
+            # 🔴 ESTE `except` NO ESCRIBÍA NI UNA LÍNEA, y por eso el sistema podía fallar MUDO.
+            # Un timeout de BD dentro de `pedir_ayuda` salía por aquí como un `{"error": ...}`
+            # que SOLO VEÍA EL MODELO: no había Intervencion, no salía el WhatsApp a la dueña, el
+            # chat no quedaba pausado, y el bot igual le decía al cliente "eso te lo confirmo
+            # enseguida". Una semana de mensajes mudos empezó así.
+            # El `{"error": ...}` SE QUEDA (el modelo tiene que poder recuperarse: un TypeError
+            # por args mal formados es justo el caso en que devolvérselo es lo correcto). Y como
+            # NINGUNA herramienta devuelve `error` como resultado normal (los 'no encontrado' usan
+            # `{"enviadas": 0, …}` o `{"ok": False, …}`), ese shape es señal 100% fiable de que la
+            # tool REVENTÓ — de ahí se cuelgan las redes de arriba. Lo que se SUMA es el testigo.
+            (logger.error if nombre in _TOOLS_CRITICAS else logger.warning)(
+                "TOOL REVENTÓ: %s(%s) para %s → %s: %s",
+                nombre, _args_para_log(args), telefono, type(e).__name__, e,
+                exc_info=True,
+            )
             return {"error": str(e)}

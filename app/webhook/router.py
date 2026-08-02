@@ -3,6 +3,7 @@ import logging
 from datetime import UTC
 
 from fastapi import APIRouter, Query, Request, Response
+from fastapi.responses import JSONResponse
 
 from app.config import get_settings
 from app.webhook.parser import extraer_eventos
@@ -68,6 +69,24 @@ async def recibir(request: Request):
         except Exception:  # noqa: BLE001 — un evento roto NUNCA tumba el webhook entero
             logger.exception("Fallo procesando un evento del webhook: %s", ev.get("clase"))
             resultados.append("error")
+    # 🔴 SI ALGO SE ROMPIÓ, META TIENE QUE VOLVER A MANDARLO.
+    #
+    # Este `return` decía 200 SIEMPRE, y ahí empieza la semana muda del 10-17 de julio: con Redis
+    # caído, `ya_procesado` (más abajo) revienta, el `except` de arriba lo atrapa —correcto, un
+    # evento roto no puede tumbar el webhook entero— y Meta se lleva un **200 = "entregado y
+    # cerrado"**. Meta no reintenta jamás. El mensaje del cliente desaparece sin dejar rastro: no
+    # llega al buffer, no llega a la tabla `mensajes`, y el contenedor sigue en verde.
+    #
+    # Un 5xx hace que Meta lo reenvíe. Reenviarlo es SEGURO porque todo lo que sí pasó es
+    # idempotente: `ya_procesado` (msg:), `comprobante_procesado` (comprob:), el UNIQUE de
+    # `mensajes.message_id` y el candado del eco. Se repite el trabajo, no el efecto.
+    #
+    # Se devuelve 503 (no 500) a propósito: es "no pude ahora, vuelve", que es exactamente lo que
+    # pasó, y los reintentos de Meta tienen backoff. (Auditoría 2026-08-02, F1.)
+    if "error" in resultados:
+        return JSONResponse(
+            {"status": "parcial", "eventos": resultados}, status_code=503
+        )
     return {"status": "ok", "eventos": resultados}
 
 

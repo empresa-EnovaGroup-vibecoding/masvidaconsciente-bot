@@ -2130,6 +2130,12 @@ _MOTIVO_TEXTO = {
     "no_se": "El bot no sabe algo",
     "pide_persona": "El cliente pide hablar con una persona",
     "reclamo": "El cliente está reclamando",
+    # 🔴 EL VIGILANTE. Un cliente escribió y NADIE le contestó — ni el bot ni tú. Este aviso no lo
+    # crea el agente: lo crea un barredor que compara `clientes.ultimo_entrante_at` (que escribe el
+    # WEBHOOK, antes de que el worker pueda fallar) contra la tabla `mensajes`. Por eso caza incluso
+    # los mensajes que nunca llegaron a guardarse — que son justo los de la semana muda del 10-17
+    # de julio, cuando el bot llevaba días sin responder y la bandeja estaba vacía.
+    "bot_callado": "Un cliente escribió y el bot NO le respondió",
     # Le devolviste el chat al bot, pero pasaron +24h desde el último mensaje del cliente:
     # WhatsApp no deja escribirle. El bot NO le escribió (lado seguro) y te lo avisa a ti.
     "ventana_cerrada": "Pasaron 24h: el bot no puede escribirle",

@@ -58,6 +58,15 @@ BANCOS = [
     "probar_honestidad",
     "probar_retomar",
     "probar_bandeja",
+    # EL RELEVO (auditoría 2026-08-02): que una escalada FALLIDA no se dé por buena. `ejecutar_tool`
+    # se tragaba toda excepción sin loguear y el bucle marcaba `pidio_ayuda=True` mirando el NOMBRE
+    # de la tool, no el resultado: si `pedir_ayuda` reventaba, no había Intervencion, no salía el
+    # WhatsApp, el chat no se pausaba, y el bot igual se despedía con un "te confirmo enseguida".
+    "probar_relevo",
+    # EL VIGILANTE (auditoría 2026-08-02): que un cliente sin respuesta no se quede en silencio.
+    # Se ancla en `clientes.ultimo_entrante_at` —que escribe el webhook, antes de que el worker
+    # pueda fallar— así que caza incluso los mensajes que nunca llegaron a la tabla `mensajes`.
+    "probar_vigilante",
     "probar_fase2",
     "probar_panel_tamanos",
 ]

@@ -19,6 +19,70 @@
 
 ---
 
+## 2026-08-02 — 🔇 EL SISTEMA DEJA DE FALLAR MUDO (bloque 2, tandas 1 y 2)
+
+41 hallazgos mapeados sobre el corazón del bot, con revisión cruzada. **Lo más valioso de la
+revisión fue lo que mandó NO hacer.**
+
+### F1 — la causa raíz de la semana muda, y era UNA LÍNEA
+
+Ningún grupo la había cubierto. `webhook/router.py` devolvía **200 SIEMPRE**, incluso cuando un
+evento reventaba y el `except` lo atrapaba. Con Redis caído, `ya_procesado` revienta → el except lo
+traga → **Meta se lleva un 200 = "entregado y cerrado"** → no reintenta jamás → el mensaje del
+cliente desaparece sin dejar rastro, y el contenedor sigue en verde. Ahora devuelve **503** si algo
+falló: Meta lo reenvía, y reenviarlo es seguro porque todo lo que sí pasó es idempotente.
+
+### Las redes vuelven a existir (SIL-2)
+
+`ejecutar_tool` se tragaba TODA excepción **sin una sola línea de log**, y el bucle marcaba
+`pidio_ayuda = True` mirando el NOMBRE de la tool, no el resultado. Si `pedir_ayuda` reventaba
+(timeout de BD, pool agotado), el flag se encendía igual: **cero Intervencion, cero WhatsApp, el
+chat sin pausar** — y el bot igual se despedía con un *"eso te lo confirmo enseguida"* que nadie
+tenía encargo de cumplir. Ahora: `_escalar` a nivel de módulo mira el resultado, reintenta con
+sesión nueva y, si tampoco, avisa por **una vía que no depende de Postgres**. Con un flag por turno
+para que una base caída cueste 2 intentos y 1 WhatsApp cada 30 min, no una avalancha.
+
+### Que el sistema sepa que está roto
+
+**`/salud`** nuevo (aparte de `GET /`, que no se toca), con cinco sondas. La que más importa **no
+la había pedido nadie**: el **SALDO de OpenRouter**. El incidente del 15-jul fue exactamente eso —
+$0.04 → 402 → el bot mudo días — y `/salud` lo habría cantado *antes*. De regalo, la calidad del
+número ante Meta, que para un Tech Provider vale oro. Hoy devuelve: postgres 2 ms · redis 2 ms ·
+meta **GREEN** · saldo **$7,10** · barredor vivo.
+
+**El vigilante del bot callado** (migración 028): compara `clientes.ultimo_entrante_at` —que
+escribe el WEBHOOK, antes de que el worker pueda fallar— contra `mensajes`, así que **caza incluso
+los mensajes que nunca llegaron a guardarse**, que son justo los de la semana muda. Sin LLM: solo
+SQL. Con seis anti-inundaciones y un testigo propio (`/salud` avisa si el barredor lleva 15 min sin
+cumplir turno: *el vigilante también necesita quien lo vigile*).
+Vive **dentro del proceso de uvicorn**, no en un `celery beat`, porque Coolify está desconectado y
+no se pueden crear contenedores. Primera corrida en **modo seco**: 0 clientes sin respuesta.
+
+### 🔴 Lo que la revisión mandó NO hacer: la config de Celery (SIL-3)
+
+`acks_late` + reintentos parecían obvios. Se descartaron con seis razones, y estas tres bastan:
+1. **El beneficio es menor del anunciado.** Solo salva la ventana de 15 s de ETA; la muerte a mitad
+   de turno (el caso del `docker restart`) sigue perdiéndose, porque el buffer ya se vació.
+2. **Introduce un modo de fallo que hoy NO existe:** `task_time_limit` mata turnos que hoy terminan,
+   y el `SoftTimeLimitExceeded` llega por señal en medio del loop reusado — si el blindaje falla,
+   **envenena todas las tareas siguientes de ese worker**. Eso es un bot mudo: lo que se vino a arreglar.
+3. **En el carril de voz abría una ventana de respuesta DUPLICADA al cliente** (el candado se
+   marcaba al final, no se reclamaba al principio).
+Además se midió la interacción de reintentos: 15 reintentos × 10 clientes = ~150 mensajes con ETA
+reservados contra una ventana QoS de 8 ⇒ **el carril del comprobante haría cola detrás de la basura
+de reintentos**. Se reevalúa cuando vuelva Coolify y se pueda probar con reinicios reales.
+
+### Y una lección sobre mis propias herramientas
+
+`probar_cobro_panel` dejó **16 avisos de prueba en la bandeja REAL** de la dueña. Es el defecto que
+esta misma auditoría le criticó a otros bancos (TST-20). Arreglado: la limpieza se hace al principio
+**y** al final. Al final no siempre alcanza —confirmar un pago ENCOLA una tarea que corre después de
+que el banco terminó—, pero la del principio pone el techo en 2 en vez de infinito.
+
+**Bancos 18 → 20** (`probar_relevo`, `probar_vigilante`). **Los 20 en verde.**
+
+---
+
 ## 2026-08-02 — 🖥️ EL PANEL DEL DINERO (bloque 1.5 — cierra el bloque 1)
 
 Lo que la dueña VE y TOCA. 24 defectos mapeados, 21 aplicados, 3 descartados por duplicados. El

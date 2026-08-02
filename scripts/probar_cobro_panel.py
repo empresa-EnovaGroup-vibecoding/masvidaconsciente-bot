@@ -42,7 +42,9 @@ from app.agent.tools import generar_datos_pago, registrar_pedido
 from app.api.security import crear_token
 from app.config import get_settings
 from app.main import app
-from app.models import Cliente, Pago, Pedido, Producto, ProductoVariante, ZonaEntrega, now_utc
+from app.models import (
+    Cliente, Intervencion, Pago, Pedido, Producto, ProductoVariante, ZonaEntrega, now_utc,
+)
 from app.services import redis_client as rc
 from app.services.db import get_session_factory
 
@@ -68,6 +70,18 @@ async def _limpiar(s, zonas: bool = False) -> None:
         await s.execute(delete(Pago).where(Pago.pedido_id == p.id))
     for p in peds:
         await s.delete(p)
+    # 🔴 LAS INTERVENCIONES TAMBIÉN. Este banco dispara avisos ('ventana_cerrada' al notificar un
+    # pago, entre otros) y NO los borraba: el 2026-08-02 dejó 16 avisos de prueba en la bandeja
+    # REAL de la dueña, mezclados con los suyos. Un banco que ensucia el panel se acaba
+    # desactivando — y con él se va la red que vigila el cobro.
+    #
+    # ⚠️ La limpieza del FINAL no siempre alcanza, y no es un descuido: confirmar un pago ENCOLA
+    # `notificar_cliente_pago` en Celery, y esa tarea corre en el worker DESPUÉS de que el banco
+    # terminó — el aviso nace cuando ya no hay nadie para borrarlo. Por eso lo que de verdad
+    # mantiene limpia la bandeja es esta misma llamada al PRINCIPIO: cada corrida se lleva lo que
+    # dejó la anterior. El techo pasa de "se acumulan para siempre" a "como mucho 2, hasta la
+    # próxima corrida".
+    await s.execute(delete(Intervencion).where(Intervencion.cliente_telefono == TEL))
     await s.execute(delete(Cliente).where(Cliente.telefono == TEL))
     if zonas:
         await s.execute(delete(ZonaEntrega).where(ZonaEntrega.nombre == ZONA))

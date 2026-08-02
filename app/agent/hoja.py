@@ -47,7 +47,10 @@ Corolario: **el JSON crudo de las tools NO se vuelca aquí.** Sus campos `nota` 
 PARA EL OPERADOR y están llenos de vocabulario de sistema. Lo que sí entra son los strings que el
 código YA construye para que un humano los lea: `resumen` y `resumen_cobro`.
 """
+import logging
 from dataclasses import dataclass, field
+
+logger = logging.getLogger(__name__)
 
 
 def _fmt(x) -> str:
@@ -109,8 +112,25 @@ class HojaDeHechos:
             self.catalogo_enviado = True
         if nombre == "enviar_fotos_producto":
             self.fotos_enviadas += int(resultado.get("enviadas") or 0)
-        if nombre == "pedir_ayuda":
+        if nombre == "pedir_ayuda" and resultado.get("ok"):
+            # 🔴 EL RESULTADO, NO EL NOMBRE. Si `pedir_ayuda` reventó (timeout de BD, pool
+            # agotado), `ejecutar_tool` devuelve `{"error": ...}` y aquí se encendía IGUAL: la
+            # hoja juraba que la dueña estaba avisada, la red del relevo de `_responder_dos_agentes`
+            # (`if _promete_averiguar(texto) and not hoja.escalado`) no volvía a intentarlo, y no
+            # había ni Intervencion ni WhatsApp. Con `ok`, el flag queda en False y la red del
+            # relevo vuelve a escalar — que ES el reintento. Los cinco vecinos de arriba ya
+            # comprobaban el resultado; solo este iba a pelo.
             self.escalado = True
+
+        if resultado.get("error"):
+            # La hoja NO lleva errores a propósito (`_renderizar` los descarta: un fallo de
+            # herramienta no es un HECHO que contarle al cliente). Pero que la VOZ no lo sepa no
+            # significa que no tenga que saberlo NADIE: hasta hoy ese fallo se descartaba dos
+            # veces —ni log, ni bloque— y la Voz escribía como si la tool nunca se hubiera llamado.
+            logger.warning(
+                "HOJA: `%s` devolvió error y NO entra en la hoja: %s",
+                nombre, str(resultado["error"])[:160],
+            )
 
         bloque = _renderizar(nombre, resultado)
         if bloque:
