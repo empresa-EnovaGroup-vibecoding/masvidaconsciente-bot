@@ -1,26 +1,38 @@
-name: Desplegar el bot (taller en cada push · producción a mano)
+name: Bot — verificar en cada push · desplegar SOLO a mano
 
-# ANTES: cada push a master reconstruía el bot en LOS DOS servidores a la vez, así que no se
-# podía probar en el taller sin tocar producción. (Deuda A1 de la auditoría 2026-07-13.)
+# 🔴 NINGÚN PUSH DESPLIEGA NADA. Decisión del 2026-08-02.
+#
+# ANTES (hasta el 2026-08-02): un push a master disparaba el despliegue del taller solo. Eso
+# tenía dos costos que se pagaron de verdad:
+#   1. **Se perdía la certeza de qué corre.** El 23-jul un despliegue automático recreó los
+#      contenedores del taller; los nombres cambiaron y nadie supo, hasta la auditoría del
+#      2026-08-02, qué versión estaba viva ni si el trabajo desplegado a mano había sobrevivido.
+#   2. **Publicar y desplegar eran el mismo acto.** No se podía guardar el trabajo en GitHub
+#      (respaldo, trazabilidad, revisión) sin tocar de inmediato un sistema con clientes.
 #
 # AHORA:
-#   • Un push a master  ->  despliega SOLO el TALLER (Hostinger viejo, el número de pruebas):
-#     bot + worker.
-#   • Producción (netcup, clientes reales)  ->  SOLO a mano: se lanza este flujo desde la pestaña
-#     "Actions" con la casilla "produccion" marcada (o con `gh workflow run deploy.yml
-#     -f produccion=true`). Así producción NUNCA se toca sin que un humano lo decida.
+#   • `git push`  ->  SOLO VERIFICA (ruff · compileall · pytest). No llama a Coolify. Es gratis,
+#     no toca ni la BD, ni Redis, ni OpenRouter, ni WhatsApp — y te dice si rompiste algo.
+#   • Desplegar   ->  SIEMPRE a mano: pestaña "Actions" -> "Run workflow" -> elegir destino
+#     (o `gh workflow run deploy.yml -f destino=taller`).
+#
+# El flujo recomendado sigue siendo el que dio certeza del 100%: probar por `docker cp` en el
+# taller, correr los bancos, y solo entonces publicar. Ver `SESIONES.md` 2026-08-02.
 #
 # Los tokens viven en los "Secrets" del repositorio (Settings -> Secrets and variables -> Actions).
 
 on:
   push:
-    branches: [master]
+    branches: [master]      # ← solo dispara el job `verificar`; NUNCA `desplegar`
   workflow_dispatch:
     inputs:
-      produccion:
-        description: 'Marca esta casilla para desplegar TAMBIÉN a producción (netcup, clientes reales). Sin marcar = solo el taller.'
-        type: boolean
-        default: false
+      destino:
+        description: '¿Dónde desplegar? "taller" = pruebas (y corre los 18 bancos). "produccion" = CLIENTES REALES.'
+        type: choice
+        options:
+          - taller
+          - produccion
+        default: taller
 
 jobs:
   # ✅ EL PORTERO (fase 0). ANTES este flujo no hacía ni `checkout`: mandaba el `curl` a Coolify
@@ -62,9 +74,13 @@ jobs:
 
   desplegar:
     needs: verificar   # 🔒 sin la puerta en verde, no se despliega nada
+    # 🔴 EL CANDADO: este job SOLO corre si un humano lanzó el flujo a mano. En un `push` la
+    # condición es falsa y el job se salta entero — el `curl` a Coolify no llega a existir.
+    if: ${{ github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     steps:
-      - name: TALLER (siempre — bot + worker, Hostinger viejo, tu número de pruebas)
+      - name: TALLER (bot + worker, Hostinger viejo, tu número de pruebas)
+        if: ${{ inputs.destino == 'taller' }}
         run: |
           curl -fsS --connect-timeout 20 --max-time 120 --retry 3 --retry-all-errors --retry-delay 5 \
             -H "Authorization: Bearer ${{ secrets.COOLIFY_OLD_TOKEN }}" \
@@ -76,6 +92,7 @@ jobs:
       # (scripts/correr_bancos.py). La regla "si sale rojo, no se despliega a producción" ya
       # no depende de que un humano se acuerde de correrlos por SSH.
       - name: LOS BANCOS (el taller se prueba SOLO — si algo se rompió, esto queda ROJO)
+        if: ${{ inputs.destino == 'taller' }}
         run: |
           mkdir -p ~/.ssh
           printf '%s\n' "${{ secrets.TALLER_SSH_KEY }}" > ~/.ssh/id_ed25519
@@ -100,8 +117,8 @@ jobs:
           docker exec -w /app -e PYTHONPATH=/app "$BOT" python scripts/correr_bancos.py
           SCRIPT
 
-      - name: PRODUCCIÓN (solo a mano y con la casilla marcada — bot + worker, netcup, clientes reales)
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.produccion }}
+      - name: PRODUCCIÓN (bot + worker, netcup, CLIENTES REALES)
+        if: ${{ inputs.destino == 'produccion' }}
         run: |
           curl -fsS --connect-timeout 20 --max-time 120 --retry 3 --retry-all-errors --retry-delay 5 \
             -H "Authorization: Bearer ${{ secrets.COOLIFY_NEW_TOKEN }}" \
