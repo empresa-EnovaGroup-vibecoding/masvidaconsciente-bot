@@ -249,9 +249,20 @@ def _renderizar(nombre: str, r: dict) -> str:
     if nombre == "buscar_info":
         temas = r.get("resultados") or r.get("temas") or []
         if isinstance(temas, list) and temas:
-            return "Lo que sabes de eso: " + " · ".join(
-                str(t.get("contenido") or t.get("titulo") or t) for t in temas[:3]
-            )
+            # 🔴 LAS CLAVES SON `tema`/`info`, NO `contenido`/`titulo` (tools.py:1691). Con los
+            # nombres viejos los dos `.get` daban None y el `or t` final le pasaba a la Voz el
+            # REPR DE UN DICCIONARIO DE PYTHON — justo el vocabulario de sistema que la cabecera
+            # de este archivo PROHÍBE. Estaba dormido porque `agente_modo` es 'uno'; se despertaba
+            # con un clic en el panel (CLAVES_PROVEEDORA, router.py:1125), sin desplegar nada.
+            # Y sin el `or t`: una entrada sin texto se cae del render en vez de volverse ruido.
+            textos = [
+                str(t.get("info") or t.get("contenido") or "").strip()
+                for t in temas[:3]
+                if isinstance(t, dict)
+            ]
+            textos = [x for x in textos if x]
+            if textos:
+                return "Lo que sabes de eso: " + " · ".join(textos)
         return ""
 
     if nombre == "info_negocio":

@@ -19,6 +19,110 @@
 
 ---
 
+## 2026-08-03 — 🧹 CONOCIMIENTO DEJA DE DARLE ÓRDENES AL BOT (migración 030)
+
+**Lo pidió Erwin:** *"en la db de conocimiento está lo que es cosas de ingredientes, lo cual eso no
+debe estar ahí y eso pertenece como parte de cada descripción de cada producto"*.
+
+### La conclusión que cambió el trabajo: no hacía falta ningún campo nuevo
+
+Los ingredientes **ya viven en `productos.descripcion`** (32/32 cargados), y ese es el **único** texto
+que el buscador por ingrediente mira (`_tokens_producto`: nombre + descripción + sabores). Un campo
+`ingredientes` nuevo **ni siquiera se buscaría**. Lo que estaba mal no era dónde faltaban: era lo que
+sobraba en Conocimiento.
+
+### Lo que la refutación empírica encontró y nadie había visto
+
+Se corrió `buscar_info` de verdad contra el taller y se volcó el `content` EXACTO que recibe el
+modelo. **Las instrucciones disfrazadas de FAQ no esperan a que les pregunten: se cuelan de polizón
+en casi cualquier consulta.** Con 9 filas, top-4 y umbral 0.30:
+
+| Consulta | Lo que le llegaba al modelo |
+|---|---|
+| "sabores de torta" | *"Di algo como que permíteme verificar y ya te confirmo"* |
+| "descuento pagando en dólares" | *"No des detalles, ve al grano"* |
+| "cuál es el horario de atención" | ubicación + masa madre. **Cero horario.** |
+
+Y la orden le llega **en segunda persona, dentro de un campo llamado `info`** — o sea presentada
+como si fuera un dato.
+
+### 🔴 EL HALLAZGO QUE PARÓ LA LIMPIEZA: UN ALÉRGENO SIN DECLARAR
+
+La fila 4 dice que la masa madre es *"almeldra con harina de yuca desalmidonada y con harina de
+garbanzo"*. Si "almeldra" es **almendra**, los **5 productos que la llevan** tienen un fruto seco
+**sin declarar en su ficha**:
+
+| id | Producto | Lo que declara |
+|---|---|---|
+| 1 | Pan de Sándwich | "intolerante al huevo y cerdo" |
+| 2 | Pan de Hamburguesa | "plátano o yuca" |
+| 13 · 14 · 20 | Empanadas Horneadas · Tequeños · Arepas Andinas | *(vacío)* |
+
+Los 9 productos que sí declaran almendra son **otros**. O sea: **esa fila es hoy lo único que impide
+que el bot le diga a alguien que un Pan de Sándwich no lleva almendra** — en un negocio que vende
+explícitamente a celíacos y diabéticos, gente que pregunta por ingredientes en serio.
+
+**La fila queda ACTIVA e INTACTA.** El diseño previo proponía un `replace('almeldra','almendra')`:
+descartado. No es un typo, es una pregunta de alérgenos.
+🔴 **PARA MAIRED Y WHUILIANNY: ¿la masa madre lleva almendra?** Si la lleva, hay que declararla en
+las fichas de los ids 1, 2, 13, 14 y 20.
+
+### Lo aplicado
+
+**Migración 030**: columna `activo`. **Retirar ≠ borrar** — hasta hoy lo único que ofrecía el panel
+era DELETE, o sea que "limpiar" significaba **borrar para siempre**, contra la regla ADITIVA. Ahora
+el texto queda, gris en el panel, a un clic de volver.
+
+**8 filas retiradas** (las 3 órdenes, la que inventa el "ponque" y la "torta de piña y pistacho", y 4
+que duplican lo que ya dice la personalidad). **Cero UPDATE de contenido**: reescribir el texto de la
+dueña por SQL es irreversible y es la enfermedad que veníamos a curar.
+
+**Una sola fila nueva**, no tres. Se perdían tres hechos y la tentación era salvarlos todos — salvar
+los tres **recrea la enfermedad**. Criterio: *una fila nueva solo si el bot se queda MUDO hoy y el
+hecho no tiene otra casa*. Solo califica la alulosa (no vive en ningún lado, y la personalidad
+**empuja** al cliente a preguntarlo: "si es diabético ofrécele la versión con alulosa"). El
+descongelado ya vive en `productos.se_congela`; "tienda online" ya vive en cinco sitios.
+
+### Las trampas que el plan cruzado evitó
+
+- 🔴 **El paréntesis del WHERE.** `AND activo IS TRUE` al final NO funciona: por precedencia AND>OR
+  quedan ramas colando filas retiradas. **Rompe en silencio** — nadie ve un error, el bot sigue
+  diciendo lo retirado.
+- 🔴 **Son TRES caminos** que leen la tabla, no uno: el léxico, el semántico y el índice de títulos
+  que viaja en el prompt de CADA turno.
+- 🔴 **El toggle va por endpoint PROPIO.** El de edición recalcula el embedding en cada guardado, así
+  que con OpenRouter sin saldo la fila **perdería su vector** por tocar un interruptor.
+- 🔴 **`ConocimientoInput` es `Omit<Conocimiento,"id">`**: un campo obligatorio nuevo rompe el build
+  del panel.
+- 🔴 **`ON CONFLICT DO NOTHING` no habría sido idempotente**: `conocimiento` no tiene UNIQUE sobre
+  `titulo`, así que correr el `.sql` dos veces **duplicaría** la fila. Va con `WHERE NOT EXISTS`.
+- **Y se dejó de mandar al bot a buscar ingredientes ahí** (la `description` de la tool y el
+  encabezado del prompt). Sin eso la limpieza **se deshace sola**: el bot los sigue pidiendo en
+  Conocimiento y la dueña se los vuelve a cargar ahí.
+
+### El bug dormido de `hoja.py`
+
+Leía `t.get("contenido")` cuando las claves reales son `tema`/`info`, así que caía a `or t` y le
+pasaba a la Voz **el repr de un diccionario de Python**. Dormido por `agente_modo='uno'`, pero se
+despertaba con un cambio de panel, sin desplegar. Arreglado.
+
+### Medido, antes y después
+
+| Consulta | Antes | Ahora |
+|---|---|---|
+| "sabores de torta" | *"Di algo como que permíteme verificar"* | solo la fila del alérgeno |
+| "descuento pagando en dólares" | *"No des detalles, ve al grano"* | nada (el 20% vive en la personalidad) |
+| "la alulosa cuesta más" | *"Di algo como que no… ve al grano"* | **"La alulosa no cambia el precio"** |
+| "de qué está hecha la masa madre" | el dato | el dato (preservado) |
+
+**Verificado:** ensayo con `BEGIN`/`ROLLBACK` antes de aplicar (ALTER 1 · INSERT 1 · **UPDATE 8** ·
+UPDATE 1, y la fila 4 intacta) · ruff limpio · 111 tests del CI · **los 24 bancos en verde**
+(`probar_conocimiento_activo` nuevo) · migración ANTES del código · desplegado a los DOS contenedores
+por checksum · panel recompilado con `localhost:8000` en 0 chunks · `PATCH
+/api/conocimiento/{id}/activo` responde 401.
+
+---
+
 ## 2026-08-03 — 🏷️ CADA FOTO DICE QUÉ ES (migración 029)
 
 **Lo pidió Erwin:** *"si en el mismo producto hay tortilla de pollo una a base de plátano y otra a

@@ -347,6 +347,10 @@ class Conocimiento(Base):
     # Embedding (vector de significado) para la búsqueda semántica. Lista de floats en
     # JSONB. Nullable: si no se pudo calcular, la entrada igual sirve por búsqueda léxica.
     embedding: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    # Retirada por la dueña desde el panel: la fila QUEDA (su texto es de ella) pero el bot deja
+    # de verla. Mismo patrón que `productos.disponible` (:65). Reversible con un clic — a
+    # diferencia del DELETE, que es lo único que el panel ofrecía hasta la 030.
+    activo: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 

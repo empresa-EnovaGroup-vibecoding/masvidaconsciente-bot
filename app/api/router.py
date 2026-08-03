@@ -192,6 +192,12 @@ class ConocimientoIn(BaseModel):
     contenido: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
 
+class ConocimientoActivoIn(BaseModel):
+    # A propósito FUERA de `ConocimientoIn`: el interruptor tiene su propio endpoint, que no
+    # recalcula el embedding. Metido ahí con un default, editar una fila retirada la reactivaría.
+    activo: bool
+
+
 class BotEstadoIn(BaseModel):
     activo: bool
 
@@ -2423,7 +2429,15 @@ async def listar_conocimiento(_: str = Depends(usuario_actual)):
             )
         ).scalars().all()
     return [
-        {"id": c.id, "categoria": c.categoria, "titulo": c.titulo, "contenido": c.contenido}
+        {
+            "id": c.id,
+            "categoria": c.categoria,
+            "titulo": c.titulo,
+            "contenido": c.contenido,
+            # Las RETIRADAS se listan igual que las activas: el panel las pinta en gris y ella
+            # las reenciende con un clic. Esconderlas sería un DELETE con otro nombre.
+            "activo": c.activo,
+        }
         for c in filas
     ]
 
@@ -2463,6 +2477,29 @@ async def editar_conocimiento(cid: int, datos: ConocimientoIn, _: str = Depends(
         c.updated_at = now_utc()
         await session.commit()
     return {"ok": True}
+
+
+@router.patch("/conocimiento/{cid}/activo")
+async def activar_conocimiento(
+    cid: int, datos: ConocimientoActivoIn, _: str = Depends(usuario_actual)
+):
+    """El interruptor "el bot la usa / retirada". Endpoint PROPIO a propósito.
+
+    Por el de edición NO puede ir: `editar_conocimiento` recalcula el embedding en CADA guardado
+    (:2462) y, sin saldo en OpenRouter, `obtener_embedding` devuelve None ⇒ la fila PERDERÍA su
+    vector por haber tocado un interruptor. Aquí solo se toca lo que se pidió.
+
+    Retirar NO borra: el texto es de la dueña y queda intacto. Se reenciende con otro clic.
+    """
+    factory = get_session_factory()
+    async with factory() as session:
+        c = await session.get(Conocimiento, cid)
+        if c is None:
+            raise HTTPException(status_code=404, detail="Entrada no encontrada")
+        c.activo = datos.activo
+        c.updated_at = now_utc()
+        await session.commit()
+    return {"ok": True, "activo": datos.activo}
 
 
 @router.delete("/conocimiento/{cid}")

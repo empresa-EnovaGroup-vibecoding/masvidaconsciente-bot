@@ -44,6 +44,7 @@ COLUMNAS = [
     ("precio_dia", "variante_id", "022 · el precio del día es POR TAMAÑO"),
     ("pedidos", "entrega_fecha", "016 · sin fecha no se cobra"),
     ("producto_media", "etiqueta", "029 · cada foto dice qué es"),
+    ("conocimiento", "activo", "030 · retirar sin borrar"),
 ]
 
 # Índices que TIENEN que estar… y el que NO puede estar.

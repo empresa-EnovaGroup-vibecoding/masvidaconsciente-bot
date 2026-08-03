@@ -542,7 +542,11 @@ async def _conocimiento_indice() -> str:
         async with factory() as session:
             filas = (
                 await session.execute(
+                    # Solo las ACTIVAS (030). Sin este filtro el TÍTULO de una fila retirada
+                    # sigue viajando en el prompt de CADA turno dentro de un bloque que se llama
+                    # "TEMAS QUE SÍ SABES", aunque `buscar_info` ya no devuelva su contenido.
                     select(Conocimiento.titulo)
+                    .where(Conocimiento.activo.is_(True))
                     .order_by(Conocimiento.categoria, Conocimiento.titulo)
                     .limit(200)
                 )
@@ -872,12 +876,17 @@ async def construir_partes_prompt(
     # ella, es una lista de temas que el bot NO puede consultar: una invitación a inventarlos.
     indice = await _conocimiento_indice() if "buscar_info" in activas else ""
     if indice:
+        # 🔴 ESTE ENCABEZADO MANDABA AL BOT A BUSCAR INGREDIENTES Y DURACIÓN AQUÍ, y contradecía a
+        # la regla @buscar_info de arriba ("dudas GENERALES que no son de un producto puntual"),
+        # que sí estaba bien redactada. Los datos de UN producto salen de su FICHA: si el mismo
+        # dato vive en dos sitios, un día se cambia uno y el bot lee el otro.
         estable += (
-            "\n\nTEMAS QUE SÍ SABES (la dueña los cargó en Conocimiento). Para CUALQUIER duda "
-            "general (ingredientes, alergias, si algo lleva huevo/azúcar, conservación, cuánto "
-            "dura, envíos, políticas...) llama a buscar_info con palabras clave y responde SOLO "
-            "con lo que devuelva; si no trae nada, dilo con sinceridad. NUNCA inventes. "
-            "Temas disponibles:\n" + indice
+            "\n\nTEMAS QUE SÍ SABES (la dueña los cargó en Conocimiento). Para dudas del NEGOCIO "
+            "(envíos y entrega, pagos y descuentos, ubicación, horarios, políticas) llama a "
+            "buscar_info con palabras clave y responde SOLO con lo que devuelva; si no trae nada, "
+            "dilo con sinceridad. NUNCA inventes. 🔴 Los datos de UN PRODUCTO (de qué está hecho, "
+            "cuánto dura, si se congela, si es apto para diabéticos) NO están aquí: salen de "
+            "info_producto. Temas disponibles:\n" + indice
         )
 
     # El CALENDARIO va en la parte dinámica (no cacheada) a propósito: cambia cada día, y si

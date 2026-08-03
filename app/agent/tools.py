@@ -186,7 +186,12 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "buscar_info",
-            "description": "Busca en la base de conocimiento del negocio (lo que la dueña cargó: ingredientes, alergias, conservación/duración, envíos, garantías, dudas frecuentes...). Úsala SIEMPRE que el cliente haga una pregunta general que no sea precio/pedido (ej. '¿tiene huevo?', '¿cuánto dura?', '¿es apto para diabéticos?', '¿hacen envíos?'). Responde SOLO con lo que devuelva; si no trae nada, dilo con sinceridad y no inventes.",
+            # 🔴 ESTE TEXTO ES EL QUE EL MODELO LEE PARA DECIDIR A QUIÉN LLAMAR. Antes decía
+            # literalmente "ingredientes" y "¿cuánto dura?", que es trabajo de `info_producto`:
+            # por eso una fila de Conocimiento le ganaba la carrera a la ficha del producto. Y si
+            # el bot sigue pidiendo datos de producto aquí, la dueña se los vuelve a cargar aquí
+            # — la limpieza de la 030 se desharía sola. UN dato, UN sitio.
+            "description": "Busca lo que la dueña cargó SOBRE EL NEGOCIO: envíos y entrega, formas de pago y descuentos, ubicación, horarios, políticas e insumos compartidos (ej. la masa madre). Úsala para dudas GENERALES que no sean de precio/pedido (ej. '¿hacen envíos?', '¿hay descuento pagando en dólares?', '¿dónde están?'). 🔴 NO la uses para datos de UN producto —de qué está hecho, cuánto dura, si se congela, si es apto para diabéticos—: eso SIEMPRE sale de info_producto o del catálogo. Responde SOLO con lo que devuelva; si no trae nada, dilo con sinceridad y no inventes.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1607,6 +1612,11 @@ def _coseno(a, b) -> float:
 async def _buscar_info_lexical(session, q: str):
     """Búsqueda por PALABRAS (tolerante a typos/acentos, pg_trgm). Filas (id, titulo,
     contenido). Si pg_trgm no está, cae a un LIKE simple. Nunca rompe."""
+    # 🔴 EL PARÉNTESIS NO ES ESTILO, ES EL FILTRO. `activo IS TRUE` va DELANTE y las tres ramas
+    # del OR van ENTRE PARÉNTESIS. Pegado al final (`… OR C >= :umbral AND activo IS TRUE`) la
+    # precedencia AND > OR lo leería como `A OR B OR (C AND activo)`: las dos primeras ramas
+    # seguirían devolviendo lo que la dueña RETIRÓ, sin error y sin log. Comprobado contra la base
+    # del taller (030). `IS TRUE` y no `= TRUE`: inmune a NULL si alguien afloja el NOT NULL.
     sql = text(
         """
         SELECT id, titulo, contenido,
@@ -1618,13 +1628,16 @@ async def _buscar_info_lexical(session, q: str):
                  )
                ) AS sim
         FROM conocimiento
-        WHERE unaccent(lower(coalesce(titulo, '') || ' ' || coalesce(contenido, '')))
-                  LIKE '%' || unaccent(lower(:q)) || '%'
-           OR word_similarity(
-                  unaccent(lower(:q)),
+        WHERE activo IS TRUE
+          AND (
                   unaccent(lower(coalesce(titulo, '') || ' ' || coalesce(contenido, '')))
-              ) >= :umbral
-           OR similarity(unaccent(lower(coalesce(titulo, ''))), unaccent(lower(:q))) >= :umbral
+                      LIKE '%' || unaccent(lower(:q)) || '%'
+               OR word_similarity(
+                      unaccent(lower(:q)),
+                      unaccent(lower(coalesce(titulo, '') || ' ' || coalesce(contenido, '')))
+                  ) >= :umbral
+               OR similarity(unaccent(lower(coalesce(titulo, ''))), unaccent(lower(:q))) >= :umbral
+              )
         ORDER BY sim DESC
         LIMIT 4
         """
@@ -1634,7 +1647,11 @@ async def _buscar_info_lexical(session, q: str):
     except Exception:  # noqa: BLE001 — sin pg_trgm: respaldo por substring simple
         return (
             await session.execute(
+                # El filtro va en un `.where()` APARTE del `|`: dos `.where()` encadenados son un
+                # AND, así que el OR de adentro queda solo. Metido dentro del mismo `.where` junto
+                # al `|` vuelve el bug del paréntesis con otra cara.
                 select(Conocimiento.id, Conocimiento.titulo, Conocimiento.contenido)
+                .where(Conocimiento.activo.is_(True))
                 .where(Conocimiento.titulo.ilike(f"%{q}%") | Conocimiento.contenido.ilike(f"%{q}%"))
                 .limit(4)
             )
@@ -1659,7 +1676,9 @@ async def _buscar_info_semantico(session, q: str):
                     Conocimiento.contenido,
                     Conocimiento.embedding,
                 )
-                .where(Conocimiento.embedding.isnot(None))
+                # Retirada = fuera también por SIGNIFICADO. Sin esto una fila apagada seguiría
+                # ganando por coseno aunque el camino léxico ya no la devuelva.
+                .where(Conocimiento.activo.is_(True), Conocimiento.embedding.isnot(None))
                 .limit(500)
             )
         ).all()

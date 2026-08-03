@@ -217,7 +217,11 @@ async def _crear_admin(session) -> None:
 async def _backfill_embeddings(session) -> None:
     """Calcula el embedding de las entradas de Conocimiento que aún no lo tienen
     (las creadas antes de la búsqueda semántica). Una sola llamada en lote. Fail-safe:
-    si los embeddings fallan (sin saldo, etc.) no pasa nada — la búsqueda léxica sigue."""
+    si los embeddings fallan (sin saldo, etc.) no pasa nada — la búsqueda léxica sigue.
+
+    ⚠️ NO se filtra por `activo` A PROPÓSITO (030). Una fila retirada también necesita su vector:
+    si la dueña la reenciende mañana, tiene que funcionar por significado desde el primer mensaje.
+    Que nadie lo "arregle" agregándole un WHERE activo."""
     try:
         filas = (
             await session.execute(

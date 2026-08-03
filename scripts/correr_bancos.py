@@ -27,6 +27,12 @@ BANCOS = [
     # que la ASESORÍA encuentre ("bebidas", "postres", "pan sin gluten"…) y que arreglarla NO
     # haya aflojado el COBRO (ambos carriles comparten `_coincide_texto` y la difusa).
     "probar_buscador",
+    # LO RETIRADO NO LE LLEGA AL BOT (030): el OTRO buscador, el de Conocimiento —lo que la dueña
+    # escribe y el bot REPITE—, que no vigilaba ningún banco. Va pegado a `probar_buscador` porque
+    # es su hermano. Caza el bug que rompe EN SILENCIO: si el `activo IS TRUE` se pega al final del
+    # WHERE sin paréntesis, la precedencia AND > OR deja dos ramas colando filas retiradas, sin
+    # error y sin log — el bot simplemente sigue diciendo lo que ella apagó.
+    "probar_conocimiento_activo",
     # LA MULTIMEDIA (fase 2): lo que el bot manda por WhatsApp, la dueña lo ve en el panel.
     # Vigila LAS DOS mitades del arreglo: que el bot GUARDE la fila, y que el endpoint SEPA
     # servirla (las fotos viven en R2: `os.path.exists("https://…")` daba 404).
