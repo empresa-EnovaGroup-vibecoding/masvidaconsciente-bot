@@ -162,7 +162,7 @@ async def _enviar(payload: dict, *, que: str, timeout: float) -> dict:
                     "y ya.", codigo, que,
                 )
             destino = str(payload.get("to") or "")
-            if es_numero_de_la_duena(destino):
+            if await es_numero_de_la_duena(destino):
                 # Aquí es donde el sistema APRENDE que la ventana de la dueña está cerrada. Se
                 # aprende UNA vez y se ahorran todos los intentos de la hora siguiente.
                 await _cerrar_ventana_de_la_duena(destino, codigo)
@@ -212,21 +212,30 @@ _TTL_CERRADA = 3600   # si nos equivocamos, el error se cura solo en una hora
 _TTL_ABIERTA = 86400  # exactamente la ventana de Meta
 
 
-def _cola(s: str | None) -> str:
-    """Los últimos 10 dígitos: 58412…, +58412… y 0412… son el MISMO número."""
-    d = "".join(c for c in (s or "") if c.isdigit())
-    return d[-10:] if len(d) >= 10 else d
-
-
-def es_numero_de_la_duena(destino: str) -> bool:
+async def es_numero_de_la_duena(destino: str) -> bool:
     """¿Este envío va al teléfono de la DUEÑA? (y no a un cliente).
 
-    Se mira `DUENO_TELEFONO` del entorno. Si en la tabla `configuracion` hubiera otro número, el
-    envío no se reconoce como suyo y se comporta como hasta hoy (se intenta): degradar hacia el
-    comportamiento viejo es siempre el lado seguro de esta comprobación.
+    🔴 YA NO SE MIRA SOLO EL ENTORNO (arreglo del cerebro partido, 2026-08-03). Antes decía: "se
+    mira `DUENO_TELEFONO` del entorno; si en la tabla `configuracion` hubiera OTRO número, el
+    envío no se reconoce como suyo y se comporta como hasta hoy". El fallo del razonamiento es
+    que en el taller no hay "otro" número: hay EL ÚNICO número, y está en la tabla — el entorno
+    está VACÍO. Así que esto devolvía False para TODOS los avisos a la dueña, y el portón de la
+    ventana de 24h (META-15) no llegaba a aprender NUNCA que Meta la había cerrado: el 131047 de
+    la línea 165 no se reconocía como suyo y `_cerrar_ventana_de_la_duena` jamás se llamaba.
+
+    Ahora resuelve `services/dueno.py`, que es la ÚNICA forma que usa todo el sistema (avisos,
+    identificación y el último testigo) y que memoriza el valor en el proceso: esto corre dentro
+    del manejo de un RECHAZO de Meta y no puede pagar una consulta por rechazo.
+
+    Sigue degradando hacia el lado seguro, exactamente igual que antes: sin número resuelto
+    devuelve False y el envío se comporta como siempre (se intenta).
+
+    El import va DENTRO a propósito, igual que el de `redis_client` en las funciones de abajo:
+    este módulo es la puerta a Meta y no puede arrastrar `app.models` en su import.
     """
-    mio = _cola(settings.dueno_telefono)
-    return bool(mio) and _cola(destino) == mio
+    from app.services.dueno import es_la_duena
+
+    return await es_la_duena(destino)
 
 
 async def abrir_ventana_de_la_duena() -> None:
@@ -332,7 +341,7 @@ def wa_message_id(respuesta: dict | None) -> str | None:
         return None
 
 
-async def enviar_texto(telefono: str, texto: str) -> dict:
+async def enviar_texto(telefono: str, texto: str, *, forzar: bool = False) -> dict:
     # 🔴 EL PORTÓN DE LOS AVISOS A LA DUEÑA (auditoría 2026-08-02, META-15). La comprobación vive
     # AQUÍ, en la única puerta, y no repartida por los seis carriles que le avisan a ella: esos
     # seis eran seis sitios donde olvidarla —y de hecho estaba olvidada en los seis—. Cualquier
@@ -342,12 +351,40 @@ async def enviar_texto(telefono: str, texto: str) -> dict:
     # de una hora). Y se LANZA en vez de devolver un dict vacío: todos los carriles de aviso ya
     # traen su `except`, así que ninguno se rompe, pero ninguno se cree tampoco que el mensaje
     # salió. Un envío que no ocurrió no puede parecer un éxito.
-    if es_numero_de_la_duena(telefono) and not await puede_escribirle_a_la_duena(telefono):
-        raise MetaRechazo(
-            0, CODIGO_FUERA_DE_VENTANA,
-            "no se intentó: consta que la ventana de 24h de la dueña está CERRADA (Meta rechazó "
-            "un aviso hace menos de una hora). El aviso queda en la bandeja del panel.",
-        )
+    #
+    # ⚠️ EL `await` NO ES DECORATIVO (arreglo del cerebro partido, 2026-08-03). Desde que
+    # `es_numero_de_la_duena` resuelve el número de verdad (tabla → copia → entorno) es una
+    # corrutina, y una corrutina SIN await es TRUTHY, no falsy: sin él, el portón de la dueña se
+    # cerraría sobre los CLIENTES y frenaría ventas. Es el único sitio de todo el arreglo donde
+    # un olvido rompe el negocio.
+    #
+    # ── `forzar`: LA PUERTA DE EMERGENCIA (2026-08-03) ──
+    #
+    # `avisar_relevo_caido` (agent/tools.py) existe PORQUE LA BASE SE CAYÓ: por definición NO
+    # tiene fila en la bandeja —la bandeja es justo lo que falló—, así que el WhatsApp es su
+    # ÚNICO canal. El portón, puesto para ahorrar intentos de avisos RUTINARIOS, lo estaba
+    # enmudeciendo por herencia: un 131047 de hace 50 minutos por un aviso cualquiera dejaba el
+    # aviso de emergencia SIN INTENTAR. Ahorrar el intento vale cuando el aviso queda en la
+    # bandeja; aquí no queda en ningún lado.
+    #
+    # ⚠️ NO PUEDE USARSE EN UN CARRIL DE CLIENTE, Y EL BLINDAJE ES ESTRUCTURAL, no una promesa:
+    # `forzar` SOLO se lee DENTRO del `if await es_numero_de_la_duena(...)`. Hacia un cliente el
+    # portón NUNCA existió (su ventana la miran otros sitios, no este), así que la bandera no se
+    # salta NADA — no hay nada que saltar. Un descuido o un copiar-pegar no la puede convertir en
+    # un envío proactivo a un cliente, que es la regla dura de Meta (CLAUDE.md §3).
+    if await es_numero_de_la_duena(telefono):
+        if not await puede_escribirle_a_la_duena(telefono):
+            if not forzar:
+                raise MetaRechazo(
+                    0, CODIGO_FUERA_DE_VENTANA,
+                    "no se intentó: consta que la ventana de 24h de la dueña está CERRADA (Meta "
+                    "rechazó un aviso hace menos de una hora). El aviso queda en la bandeja del "
+                    "panel.",
+                )
+            logger.error(
+                "PORTÓN SALTADO (forzar): consta que la ventana de la dueña está CERRADA, pero "
+                "este aviso NO tiene bandeja donde caer (se cayó la base). Se intenta igual."
+            )
     payload = {
         "messaging_product": "whatsapp",
         "to": telefono,

@@ -1865,6 +1865,71 @@ async def _avisar_turno_a_medias(telefono: str, nombre: str | None, partes: list
     )
 
 
+async def _avisar_pago_sin_confirmar(telefono: str, mensaje: str, *, tomado: bool) -> None:
+    """La dueña tocó confirmar/rechazar un pago y al cliente NO le llegó NADA. Que se entere.
+
+    Son DOS finales distintos y le piden cosas distintas, por eso no es un aviso solo:
+      · `tomado=True` → ella tiene ESE chat en las manos (`pausado_por='dueña'`) y el bot se calló
+        para no hablarle encima. NO es una avería: es el caso NORMAL, porque si está confirmando
+        el pago es justo porque pidió el comprobante a mano o contestó desde el celular. Lo único
+        que falta es que escriba la confirmación en el chat que YA tiene abierto. Candado POR
+        CLIENTE (como `sin_respuesta`): cada cliente importa, pero el panel puede disparar esta
+        tarea dos veces por el mismo (verificar monto ⇒ parcial ⇒ confirmar) y eso no puede
+        costarle dos WhatsApp.
+      · `tomado=False` → Meta RECHAZÓ todos los globos. Eso sí es una avería, y es UNA sola (el
+        número, o Meta). Candado SIN teléfono, mismo criterio que `pago_con_bot_apagado`: si
+        confirma cinco pagos con Meta caído recibe CINCO filas en la bandeja —una por cliente,
+        que es lo que necesita para no dejarse a ninguno— y UN solo WhatsApp.
+
+    Es primo de `_avisar_pago_en_chat_pausado` (el carril del COMPROBANTE, más arriba), que cubre
+    el caso gemelo cuando entra la captura. Aquel no lleva candado; este sí.
+
+    ⚠️ NI UNA CIFRA PROPIA. Lo único con montos que se cita es `mensaje`, y se cita porque ES el
+    texto que YA pasó la red del dinero en ESTE mismo turno: `redactar_mensaje` devuelve "" si no
+    la pasa, y el que llama lo comprueba antes de llegar aquí. Sacar el monto de otro sitio (la
+    cotización de Redis, el pedido) sería decirle una cifra que esta vuelta no autorizó nadie — y
+    en un pago parcial esa cifra es OTRA que la que ella acaba de tocar en el panel. Mismo patrón
+    que `_avisar_turno_a_medias`: cita el texto que se perdió, nunca un número suyo.
+    """
+    logger.warning(
+        "Aviso de pago a %s: NO le llegó nada (%s) → lo pasa la dueña",
+        telefono, "la dueña tiene el chat tomado" if tomado else "Meta rechazó todos los globos",
+    )
+    recado = (mensaje or "").strip().replace("\n", " ")[:180]
+    if tomado:
+        motivo = "pago_en_chat_tomado"
+        candado = (f"pago_en_chat_tomado:{telefono}", 900)
+        detalle = (
+            f"Tocaste confirmar/rechazar el pago de {telefono}, pero ese chat lo tienes tomado "
+            "TÚ: el bot se calló para no hablarte encima y el cliente NO recibió nada. Sigue sin "
+            f"saber en qué quedó su pago — díselo tú. Le iba a decir: «{recado}»."
+        )
+        whatsapp = (
+            f"💰 Tocaste lo del pago de {telefono}, pero ese chat lo tienes tomado tú: el bot NO "
+            "le avisó nada. Entra al chat y díselo tú."
+        )
+    else:
+        motivo = "pago_no_entregado"
+        candado = ("pago_no_entregado", 900)
+        detalle = (
+            f"Tocaste confirmar/rechazar el pago de {telefono} y WhatsApp RECHAZÓ el mensaje: al "
+            "cliente NO le llegó nada (está en rojo en su chat). Escríbele tú desde tu teléfono, "
+            f"y si se repite avísale a Enova. Le iba a decir: «{recado}»."
+        )
+        whatsapp = (
+            f"⚠️ Tocaste lo del pago de {telefono} y WhatsApp rechazó el mensaje: al cliente NO le "
+            "llegó nada. Escríbele tú."
+        )
+    await _avisar_a_la_duena(
+        telefono,
+        motivo=motivo,
+        detalle=detalle,
+        mensaje_cliente="(esperando el resultado de su pago)",
+        whatsapp=whatsapp,
+        candado=candado,
+    )
+
+
 async def _notificar_cliente_pago(telefono, situacion) -> None:
     """La dueña confirmó o rechazó un pago desde el panel: hay que decírselo al cliente.
 
@@ -1954,3 +2019,21 @@ async def _notificar_cliente_pago(telefono, situacion) -> None:
         await rc.guardar_historial(telefono, "assistant", _lo_que_llego(partes, mensaje))
     if partes:
         await _guardar_en_panel(telefono, None, "", partes)
+    # 🔴 AQUÍ NO HABÍA `else`, Y ESE ES EL BUG 1 DEL REPORTE DE MAIRED. Los dos carriles de arriba
+    # (ventana cerrada, bot apagado) SÍ avisan; este se iba MUDO. Y no por un caso raro:
+    # `_enviar_en_partes` devuelve lista VACÍA cuando la dueña tiene el chat tomado — que es EL
+    # CASO NORMAL, porque si ella está confirmando el pago es justo porque pidió el comprobante a
+    # mano o contestó desde el celular. Resultado: el cliente pagó, NADIE le confirmó, y no quedaba
+    # ni un rastro de que el aviso no había salido: ni fila en la bandeja, ni WhatsApp, ni error.
+    #
+    # Los tres finales van SEPARADOS porque le piden cosas distintas: entrar al chat que ya tiene
+    # abierto (tomado), escribirle desde su teléfono porque Meta nos rechazó todo (no llegó nada),
+    # o completar lo que falta (a medias). El de a medias es el más caro de los tres —el cliente
+    # vio MEDIA confirmación de su pago y el bot ya no la repite, ver `_lo_que_llego`— y no
+    # estrena red: se reusa la MISMA que ya usa `_procesar`, que solo dispara si algo llegó.
+    if not partes:
+        await _avisar_pago_sin_confirmar(telefono, mensaje, tomado=True)
+    elif not _algo_llego(partes):
+        await _avisar_pago_sin_confirmar(telefono, mensaje, tomado=False)
+    else:
+        await _avisar_turno_a_medias(telefono, None, partes)

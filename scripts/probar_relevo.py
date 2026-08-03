@@ -39,6 +39,7 @@ from app.agent import agent as ag
 from app.agent import tools as tl
 from app.agent.hoja import HojaDeHechos
 from app.agent.tools import ejecutar_tool
+from app.services import dueno as dn
 
 TEL = "__prueba_relevo__"
 HISTORIAL = [
@@ -273,11 +274,46 @@ async def main() -> None:  # noqa: C901 — es un banco: son escenarios, no lóg
     check("UNA sola llamada a pedir_ayuda", llamadas.count("pedir_ayuda") == 1, str(llamadas))
     check("CERO avisos de emergencia", not testigos, str(testigos))
 
+    print("\n5b) EL SEXTO `return RESPUESTA_SEGURA`: las ITERACIONES AGOTADAS también avisan")
+    # 🔴 La única grieta que el BARREDOR no tapa: el texto SALE y se guarda con rol='assistant',
+    # así que el SQL del vigilante da ese chat por respondido. Si aquí no se escala, el cliente
+    # se queda con "dame un momentito" y NADIE tiene el encargo de contestarle.
+    llamadas.clear()
+    turnos = tuple(
+        _tool_call(f"i{n}", "ver_catalogo")
+        for n in range(ag.settings.max_iteraciones_agente)
+    )
+    texto = await ag.responder(
+        TEL, "¿me mandas el catálogo?", HISTORIAL, "Rosa",
+        llm=_guion(*turnos), ejecutar=_ejecutar_ok,
+    )
+    check("el cliente recibe la respuesta segura (eso no cambia)",
+          texto == ag.RESPUESTA_SEGURA, repr(texto))
+    check("🔴 y AHORA la dueña se entera: se escala UNA vez",
+          llamadas.count("pedir_ayuda") == 1, str(llamadas))
+
+    llamadas.clear()
+    turnos = (
+        _tool_call("a1", "pedir_ayuda", '{"motivo": "no_se", "detalle": "envíos"}'),
+    ) + tuple(
+        _tool_call(f"i{n}", "ver_catalogo")
+        for n in range(ag.settings.max_iteraciones_agente - 1)
+    )
+    await ag.responder(
+        TEL, "¿hacen envíos a Caracas?", HISTORIAL, "Rosa",
+        llm=_guion(*turnos), ejecutar=_ejecutar_ok,
+    )
+    check("y NO se duplica si el modelo ya había escalado bien dentro del bucle",
+          llamadas.count("pedir_ayuda") == 1, str(llamadas))
+
     print("\n6) EL ÚLTIMO TESTIGO: a quién avisa y cuántas veces (SIL-2.6)")
     enviados: list[tuple] = []
     memoria: dict[str, str] = {}
 
-    async def _enviar_falso(destino, cuerpo):
+    async def _enviar_falso(destino, cuerpo, **_):
+        # `**_`: `avisar_relevo_caido` fuerza el portón (`forzar=True`) porque su aviso no tiene
+        # bandeja donde caer. Si el doble no acepta la bandera, el TypeError se lo traga el
+        # `except` de la función y el banco se pone rojo por el motivo equivocado.
         enviados.append((destino, cuerpo))
         return {"ok": True}
 
@@ -287,9 +323,17 @@ async def main() -> None:  # noqa: C901 — es un banco: son escenarios, no lóg
     async def _set_cache(clave, valor, ttl):
         memoria[clave] = valor
 
-    orig = (tl.enviar_texto, tl.get_cache, tl.set_cache, tl.get_settings)
+    # 🔴 EL ESPÍA VA AHORA SOBRE `services/dueno.py`, NO SOBRE `tools`. Desde el arreglo del
+    # cerebro partido, `avisar_relevo_caido` no resuelve el número por su cuenta: se lo pide al
+    # resolvedor ÚNICO en modo `sin_base` (Postgres está caído — por eso existe el testigo). Si
+    # el espía se quedara en `tl`, el banco tocaría el Redis DE VERDAD y leería el número real
+    # del taller. `tl.get_cache`/`tl.set_cache` se siguen espiando: son los del candado
+    # antiinundación, que sí vive en `tools`.
+    orig = (tl.enviar_texto, tl.get_cache, tl.set_cache, dn.get_cache, dn.get_settings)
     tl.enviar_texto, tl.get_cache, tl.set_cache = _enviar_falso, _get_cache, _set_cache
-    tl.get_settings = lambda: SimpleNamespace(dueno_telefono="584140009999")
+    dn.get_cache = _get_cache
+    dn.get_settings = lambda: SimpleNamespace(dueno_telefono="584140009999")
+    dn._memo_valor, dn._memo_hasta = "", 0.0  # el memo del proceso no puede tapar al espía
     try:
         salio = await tl.avisar_relevo_caido(TEL, "no_se", "prueba")
         check("un teléfono de prueba (__) NO manda WhatsApp", salio is False and not enviados)
@@ -307,7 +351,7 @@ async def main() -> None:  # noqa: C901 — es un banco: son escenarios, no lóg
               salio is False and len(enviados) == 1, str(len(enviados)))
 
         # Sin DUENO_TELEFONO en el entorno tira de la copia que dejó la base cuando SÍ respondía.
-        tl.get_settings = lambda: SimpleNamespace(dueno_telefono="")
+        dn.get_settings = lambda: SimpleNamespace(dueno_telefono="")
         memoria[tl._CLAVE_DUENO] = "584140008888"
         salio = await tl.avisar_relevo_caido("584149999999", "no_se", "sin entorno")
         check("sin DUENO_TELEFONO, usa la copia de Redis (por eso existe la copia)",
@@ -315,7 +359,8 @@ async def main() -> None:  # noqa: C901 — es un banco: son escenarios, no lóg
         check("   ...y la copia vive con el prefijo `cache:` de la casa",
               tl._CLAVE_DUENO.startswith("cache:"), tl._CLAVE_DUENO)
     finally:
-        tl.enviar_texto, tl.get_cache, tl.set_cache, tl.get_settings = orig
+        tl.enviar_texto, tl.get_cache, tl.set_cache, dn.get_cache, dn.get_settings = orig
+        dn._memo_valor, dn._memo_hasta = "", 0.0
 
     print("\n7) EL CANDADO: ninguna escalada llama a la tool del relevo a pelo")
     # 🔴 Se cuenta lo QUE IMPORTA, no cuántas veces se escala. Añadir escaladas nuevas es sano

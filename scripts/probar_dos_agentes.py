@@ -110,7 +110,7 @@ async def main() -> None:
     prompt_op = e_op + d_op
     # Esto es lo que hace segura a la Voz. No es una prohibición: es una AUSENCIA.
     check("la Voz NO ve el catálogo (no puede inventar un producto)", "id_para_pedir" not in prompt_voz)
-    check("la Voz NO ve las zonas (no puede inventar un envío)", "id_zona" not in prompt_voz)
+    check("la Voz NO ve las zonas (no puede inventar un envío)", "zona_id" not in prompt_voz)
     check(
         "la Voz NO ve el calendario (no puede prometer una fecha)",
         "DÍAS DE ENTREGA" not in prompt_voz,

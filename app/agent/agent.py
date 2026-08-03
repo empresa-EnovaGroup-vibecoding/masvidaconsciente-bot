@@ -1474,7 +1474,30 @@ async def responder(
                 }
             )
 
+    # 🔴 EL SEXTO `return RESPUESTA_SEGURA`, EL ÚNICO QUE NO AVISABA A NADIE (2026-08-03).
+    # Los otros cinco de este bucle escalan antes de rendirse; este se rendía mudo. Y el cliente
+    # recibe EXACTAMENTE la misma promesa ("Dame un momentito y te confirmo") sin que nadie tenga
+    # el encargo de cumplirla.
+    #
+    # Peor: es la ÚNICA grieta que el BARREDOR no tapa. Su SQL da por respondido a todo cliente
+    # que tenga un mensaje 'assistant' posterior a su último entrante — y aquí el texto SÍ sale y
+    # SÍ se guarda con ese rol. El vigilante lo ve atendido. La bandeja es la única red que le
+    # queda a este cliente.
+    #
+    # `not pidio_ayuda`: si el modelo YA escaló bien dentro del bucle, no se abre una segunda fila
+    # por lo mismo — el mismo criterio que la RED DEL RELEVO de arriba. Y el motivo es 'no_se' y
+    # no 'reclamo': el bot no mintió, se quedó sin intentos. Además 'no_se' NO está en
+    # `_MOTIVOS_DE_PAUSA` (tools.py), así que un tropiezo del bucle deja el aviso en la bandeja
+    # pero no le quita el chat al bot para siempre.
     logger.warning("Agente excedió max iteraciones para %s", telefono)
+    if not pidio_ayuda:
+        await _escalar(
+            ejecutar, telefono, "no_se",
+            "el bot se quedó sin intentos para resolver este mensaje y solo le contestó "
+            '"dame un momentito y te confirmo". Contéstale tú. El cliente preguntó: '
+            f'"{(pregunta_cliente or "")[:160]}"',
+            ya_fallo=relevo_imposible,
+        )
     return RESPUESTA_SEGURA
 
 

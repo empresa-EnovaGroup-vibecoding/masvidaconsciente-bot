@@ -211,6 +211,25 @@ async def main() -> None:
               cobro6.get("ok") and abs(cobro6["monto_usd"] - esperado6) < 0.01,
               f"dio {cobro6.get('monto_usd')} · {str(cobro6.get('nota'))[:60]}")
 
+        print("\n9) 🏷️ EL PROMPT Y LA TOOL LLAMAN AL PARÁMETRO IGUAL (PRM-10)")
+        # 🔴 El prompt escribía `id_zona` en la lista de zonas y el schema declara `zona_id`. El
+        # modelo lee los dos nombres y tiene que adivinar. Si copia el del prompt, `ejecutar_tool`
+        # hace `registrar_pedido(**args)` → TypeError → `{"error": …}`: el pedido NO se registra y
+        # detrás dispara la red del PEDIDO FANTASMA. Ningún banco lo cubría — este de aquí llama a
+        # `registrar_pedido` en PYTHON, nunca a través del modelo, así que el nombre le daba igual.
+        from app.agent.system_prompt import _zonas_bloque
+        from app.agent.tools import TOOL_SCHEMAS
+
+        bloque = await _zonas_bloque()
+        props = next(
+            t["function"]["parameters"]["properties"]
+            for t in TOOL_SCHEMAS if t["function"]["name"] == "registrar_pedido"
+        )
+        check("la tool sigue declarando `zona_id` (el carril del dinero NO se toca)",
+              "zona_id" in props and "id_zona" not in props, str(sorted(props)))
+        check("🔴 y el prompt le enseña al modelo ESE mismo nombre, no otro",
+              "zona_id=" in bloque and "id_zona" not in bloque, bloque[:200])
+
         await _limpiar(s, zonas=True)
 
     print()

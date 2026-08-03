@@ -19,6 +19,118 @@
 
 ---
 
+## 2026-08-03 — 🧠 EL CEREBRO PARTIDO, EL PAGO QUE NADIE CONFIRMABA Y EL SEXTO RETURN MUDO
+
+Primera tanda del repaso completo del taller, disparada por releer el `MASVIDA-PARA-ERWIN.txt` de
+Maired contra el código de HOY: de sus **106 puntos**, 23 estaban hechos, 15 a medias, 39 abiertos y
+23 eran decisiones de negocio. Esto cierra los de más impacto que eran código.
+
+### 🔴 El cerebro partido de `dueno_telefono` — media sección 5 del reporte estaba inerte
+
+Había **DOS formas** de resolver el teléfono de la dueña y **no coincidían**. Los AVISOS leen la
+tabla `configuracion` y caen al entorno: funcionan. La **IDENTIFICACIÓN** (`_es_la_duena` del webhook
+y `es_numero_de_la_duena` de `meta_client`) leía **SOLO el entorno** — y en el taller el entorno está
+VACÍO y el número vive en la tabla. Traducido: devolvía **False SIEMPRE**.
+
+Lo que eso causaba, verificado en vivo: si Whuilianny le escribía al negocio **el bot le vendía a
+ella** (ficha de Cliente, carril de venta, tokens, CRM sucio). Y la marca que abre su ventana de 24h
+no se escribía nunca, así que el portón de META-15 **jamás aprendía** que Meta la había cerrado: el
+131047 no se reconocía como suyo. Y el peor: `avisar_relevo_caido` —el aviso de emergencia que corre
+**con Postgres caído**— pedía el entorno vacío y caía a una copia de Redis que **solo se escribía
+cuando ya había salido un aviso**. En una caja recién montada estaba vacía justo el día que hacía
+falta.
+
+⚠️ **No se podía arreglar poniendo la variable**: las env vars se fijan al crear el contenedor y con
+Coolify desconectado recrearlo perdería todo el código puesto por `docker cp`. Fue en código, que
+además es donde corresponde.
+
+→ `app/services/dueno.py` nuevo: **tabla → copia en Redis → entorno**, con memo de 60 s en el proceso
+porque el webhook corre en el carril caliente (coste amortizado por mensaje: **cero** consultas). El
+entorno vuelve a ser lo que `config.py` siempre dijo que era: la semilla del montaje. Y **vacío sigue
+siendo "nadie es la dueña"** —la regla que blindó `webhook/router.py:195`— más un filtro de 10
+dígitos: en la identificación, un falso positivo se paga con el bot **mudo frente a un cliente real**.
+Ahora la copia de Redis la reescribe el webhook con cada mensaje, así que el último testigo tiene a
+quién escribirle desde el primer minuto.
+
+### 💰 El pago confirmado que nadie le confirmaba al cliente (BUG 1 del reporte)
+
+Al final de `notificar_cliente_pago` **no había `else`**. `_enviar_en_partes` devuelve lista vacía
+cuando la dueña tiene el chat tomado — **que es el caso NORMAL**, porque si está confirmando el pago
+es justo porque pidió el comprobante a mano o contestó desde el celular. El cliente pagaba, **nadie
+le confirmaba**, y no quedaba rastro de que el aviso no había salido: ni fila, ni WhatsApp, ni error.
+→ Tres finales separados porque piden cosas distintas: entrar al chat que ya tiene abierto, escribir
+desde su teléfono porque Meta rechazó, o completar lo que salió a medias. Con candado
+anti-inundación (por cliente en el primero, único en el segundo) y **sin una sola cifra propia**:
+solo se cita el texto que YA pasó la red del dinero en ese turno.
+
+### 🚚 El cierre de la venta ya sabe cómo y cuándo (BUG 2 — Opción A)
+
+El pedido estaba **en memoria, dos líneas antes**, y no se usaba: el cliente pagaba y recibía
+"gracias, coordinamos la entrega" cuando el sistema sabía si era retiro o delivery, en qué zona y
+para qué día. Whuilianny no cierra así: cierra coordinando la **hora**.
+→ `contexto_entrega` le pega los HECHOS a la situación, **por fuera de la guía** a propósito (la guía
+es de la dueña y puede estar editada desde el panel; los hechos los pone el código y llegan igual).
+El flujo del cobro **no se toca**.
+🔴 Y con **dos paredes, no una**: lo que entra en la situación queda decible ese turno por las DOS
+vías. La primera versión de la guardia solo miraba el dinero, y `_CORRIDA_DIGITOS_RE` junta dígitos a
+través de espacios y guiones — una zona bautizada *"Retiro — llamar al 0412-123 4567"* habría
+**autorizado ese número**. Lo cazó la revisión cruzada. Ante la duda se cae el nombre, nunca la pared.
+
+### 🔇 El sexto `return RESPUESTA_SEGURA`, el único que no avisaba
+
+Los otros cinco del bucle escalan antes de rendirse; el de iteraciones agotadas se rendía mudo. Y es
+la **única grieta que el barredor no tapa**: como el texto sale y se guarda con rol `assistant`, su
+SQL da a ese cliente por atendido. → Una llamada a `_escalar` con motivo `no_se` (que **no** está en
+`_MOTIVOS_DE_PAUSA`: un tropiezo del bucle deja el aviso pero no le quita el chat al bot).
+
+### Y tres más
+
+- **`forzar=True`**: el aviso de emergencia ya no queda ahogado por el portón. Un 131047 rutinario de
+  hace 50 minutos dejaba **sin intentar** al único canal que quedaba cuando se cae la base. El
+  blindaje es **estructural**, no una promesa: `forzar` solo se lee DENTRO del guardia de la dueña,
+  así que hacia un cliente no hay nada que saltar — y un banco lo comprueba por `inspect.getsource`.
+- **PRM-10**: el prompt mandaba `id_zona` y la herramienta acepta `zona_id`. Se arregló del lado del
+  TEXTO (cambiar el schema es tocar el carril del dinero). Verificado antes: la clave del dict solo
+  se **escribe**, nadie la lee.
+- Dos motivos nuevos en la bandeja para que no se pinten crudos.
+
+### 🔴 Lo que la revisión cruzada mandó NO hacer
+
+- **Cablear `msg_guia_comprobante`** (la perilla del panel que ningún código lee). Parecía trivial y
+  era **el "reclamarle plata a quien ya pagó" de esta tanda**: la `situacion` **ES** la lista blanca
+  del dinero y de los datos sensibles. Cablearla mete **texto libre escrito por una persona en un
+  campo del panel** dentro del muro — y el valor guardado hoy habla de cuentas bancarias. Reabría la
+  fuga que `agent.py` cerró a propósito.
+- **`forzar` en `_hueco_en_el_panel`**: código muerto. Lee `settings.dueno_telefono` (vacío) y el
+  entorno no se puede cambiar. Arrastraba 4 ediciones de banco a cambio de cero.
+- **Retry de Celery en `notificar_cliente_pago`**: la tarea no revienta, termina con un `return`
+  limpio. Un retry sería un envío proactivo **duplicado**, días después, con un texto DISTINTO (lo
+  redacta el LLM cada vez). Regla dura de Meta.
+
+### Verificado
+
+`ruff` limpio · **111 tests del CI en verde** (`tests/test_contexto_entrega.py` nuevo: la fecha no se
+corre de día y la pared del dinero no se mueve) · **los 23 bancos en verde** con los casos nuevos
+adentro · desplegado a los DOS contenedores y comprobado por **checksum** · cero AppleDouble · y la
+prueba que importa, contra el taller vivo: `es_la_duena('573005690062')` da **True** (antes False
+siempre), un cliente da False, y el último testigo resuelve el número **sin tocar la base**.
+
+⚠️ **Cambio de comportamiento que hay que saber**: `573005690062` es a la vez el `dueno_telefono` y
+uno de los dos `NUMEROS_PERMITIDOS`. Hoy el bot le contestaba; **ahora ya no** (que es lo correcto).
+Para probar el carril de CLIENTE a mano: `584264399792`, `593993314532` o el simulador del panel.
+Vuelta atrás en caliente sin redesplegar: vaciar `dueno_telefono` en `configuracion` y esperar 60 s.
+
+### Método
+
+Se repitió el que ya funcionó el 2026-08-02: **mapear → revisión cruzada → recién entonces escribir**.
+La revisión encontró 5 colisiones entre mapas hechos por separado (dos reescribían el MISMO `if` de
+`enviar_texto`, y aplicarlos sueltos perdía el `await` o el `forzar`), corrigió un check que habría
+**reventado el banco entero** con un `ValueError`, y mandó descartar los tres de arriba. Y al aplicar
+apareció uno más que ni el mapa ni la revisión vieron: el banco iba a leer `inspect.getsource` sobre
+un espía en vez de la función real, así que ese check habría salido rojo siempre.
+
+---
+
 ## 2026-08-02 — 🚀 PRODUCCIÓN, META Y EL PROMPT (bloques 6, 3 y 5)
 
 ### Bloque 6 — el script de promoción deja de ser una ruleta

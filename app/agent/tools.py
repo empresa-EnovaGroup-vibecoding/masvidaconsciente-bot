@@ -34,6 +34,7 @@ from app.models import (
     now_utc,
 )
 from app.services.db import get_session_factory
+from app.services.dueno import CLAVE_COPIA, telefono_de_la_duena
 from app.services.meta_client import enviar_imagen, enviar_texto, enviar_video
 from app.services.redis_client import get_cache, set_cache
 from app.services.tasa import obtener_tasa_bcv
@@ -157,7 +158,7 @@ TOOL_SCHEMAS = [
                     "zona_id": {
                         "type": "integer",
                         "description": (
-                            "El NÚMERO de la zona, copiado EXACTO del `id_zona` de la lista de "
+                            "El NÚMERO de la zona, copiado EXACTO del `zona_id` de la lista de "
                             "ZONAS DE ENTREGA que te doy en cada mensaje. Es un código de barras, "
                             "igual que el del producto: el COSTO DEL ENVÍO lo pone el sistema a "
                             "partir de este id, y lo SUMA al total. TÚ NUNCA sumas ni estimas el "
@@ -1146,7 +1147,7 @@ async def _validar_entrega(session, fecha: date, items_pedido) -> dict | None:
 
 
 async def _lista_de_zonas(session) -> list[dict]:
-    """La lista CERRADA de zonas: el bot elige un `id_zona` de aquí. No puede escribir otro."""
+    """La lista CERRADA de zonas: el bot elige un `zona_id` de aquí. No puede escribir otro."""
     from app.models import ZonaEntrega
 
     filas = (
@@ -1158,7 +1159,7 @@ async def _lista_de_zonas(session) -> list[dict]:
     ).scalars().all()
     return [
         {
-            "id_zona": z.id,
+            "zona_id": z.id,
             "zona": z.nombre,
             "costo": float(z.costo),
             "es_retiro": z.es_retiro,
@@ -1275,7 +1276,7 @@ async def registrar_pedido(
                 "ok": False,
                 "nota": (
                     f"La zona {zona_id!r} no existe o no está disponible. NO la inventes ni "
-                    "deduzcas el costo: elige un `id_zona` EXACTO de la lista y vuelve a registrar "
+                    "deduzcas el costo: elige un `zona_id` EXACTO de la lista y vuelve a registrar "
                     "el pedido COMPLETO. Si el sitio del cliente no calza con ninguna zona, "
                     "pregúntale en cuál está; si sigue sin calzar, llama a `pedir_ayuda`."
                 ),
@@ -2024,7 +2025,11 @@ async def pedir_ayuda(session, telefono, motivo: str, detalle: str = ""):
 # La COPIA DE SEGURIDAD del teléfono de la dueña, fuera de Postgres. Se reescribe cada vez que
 # la base SÍ respondió, para que `avisar_relevo_caido` (abajo) tenga a quién escribirle el día
 # que no responda. Prefijo `cache:` por la convención de `redis_client.py:102-104`.
-_CLAVE_DUENO = "cache:dueno_telefono_ultimo_bueno"
+#
+# 🔴 Desde 2026-08-03 la clave la define `services/dueno.py`, que es el resolvedor ÚNICO: el alias
+# se conserva porque este módulo (y `probar_relevo.py`) ya la nombraban así. Es LA MISMA clave, no
+# una copia — que fuesen dos era justamente el bug del cerebro partido.
+_CLAVE_DUENO = CLAVE_COPIA
 
 
 async def _recordar_dueno(destino: str) -> None:
@@ -2102,12 +2107,16 @@ async def avisar_relevo_caido(telefono: str, motivo: str, detalle: str) -> bool:
         # candado que ya usan `enviar_catalogo` y `enviar_fotos_producto`.
         return False
 
-    destino = get_settings().dueno_telefono
-    if not destino:
-        try:
-            destino = await get_cache(_CLAVE_DUENO)
-        except Exception:  # noqa: BLE001 — si Redis tampoco está, queda el log de abajo
-            destino = None
+    # 🔴 EL ORDEN IMPORTA, Y ANTES ESTABA AL REVÉS (arreglo del cerebro partido, 2026-08-03).
+    # Esto pedía primero el ENTORNO y solo caía a la copia si venía vacío. Pero el entorno es la
+    # SEMILLA que se pone el día que se monta la caja: en el taller está VACÍO, y la copia solo la
+    # escribían `_avisar_intervencion` y `_avisar_duena` — o sea, únicamente cuando de verdad ya
+    # había SALIDO un aviso. En una caja recién montada, donde nunca salió ninguno, este testigo
+    # se quedaba sin nadie a quien escribirle justo el día de la caída.
+    # `sin_base=True` porque esto corre CON POSTGRES CAÍDO: va a la copia de Redis y al entorno,
+    # que son los dos sitios que sobreviven a esa caída. Y ahora la copia la reescribe el webhook
+    # con cada mensaje que entra, así que existe desde el primer minuto.
+    destino = await telefono_de_la_duena(sin_base=True)
     if not destino:
         logger.error(
             "RELEVO CAÍDO y SIN a quién avisar (ni DUENO_TELEFONO ni caché): cliente=%s "
@@ -2140,7 +2149,9 @@ async def avisar_relevo_caido(telefono: str, motivo: str, detalle: str) -> bool:
         "Entra al WhatsApp del negocio y respóndele tú."
     )
     try:
-        await enviar_texto(destino, cuerpo)
+        # `forzar`: este aviso NO tiene bandeja donde caer —la bandeja ES lo que falló—, así que
+        # el portón de la ventana de 24h no puede dejarlo sin intentar. Ver `enviar_texto`.
+        await enviar_texto(destino, cuerpo, forzar=True)
         logger.error(
             "RELEVO CAÍDO para %s: se avisó a la dueña por WhatsApp, fuera de la base", telefono
         )

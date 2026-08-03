@@ -757,7 +757,7 @@ async def _zonas_bloque() -> str:
     prohibía DOS VECES y lo hizo igual. La causa: **el sistema no sabía cobrar delivery**, y cuando
     algo no existe, el modelo lo inventa.
 
-    Ahora el bot NO ESCRIBE el envío: ELIGE un `id_zona` de esta lista, y **el costo lo pone el
+    Ahora el bot NO ESCRIBE el envío: ELIGE un `zona_id` de esta lista, y **el costo lo pone el
     código**. El precio va aquí a la vista (a diferencia del catálogo) porque el cliente TIENE que
     poder oírlo antes de decidir: sin eso, no puede cantar una zona mal elegida.
     """
@@ -784,7 +784,7 @@ async def _zonas_bloque() -> str:
     lineas = []
     for z in zonas:
         costo = "sin costo" if not z.costo or float(z.costo) == 0 else f"${float(z.costo):g}"
-        linea = f"- {z.nombre} = {costo} (id_zona={z.id})"
+        linea = f"- {z.nombre} = {costo} (zona_id={z.id})"
         if z.es_retiro:
             linea += " [el cliente lo RETIRA]"
         if z.referencias:
@@ -795,7 +795,7 @@ async def _zonas_bloque() -> str:
         "\n\nZONAS DE ENTREGA (lista CERRADA — el envío es DINERO):\n"
         + "\n".join(lineas)
         + "\n· Antes de cobrar, pregunta si lo RETIRA o quiere DELIVERY, y pásale a "
-          "`registrar_pedido` el `id_zona` que corresponda. El sistema le suma el envío al total: "
+          "`registrar_pedido` el `zona_id` que corresponda. El sistema le suma el envío al total: "
           "TÚ NUNCA lo sumes, ni lo estimes, ni lo descuentes.\n"
         "· Si el sitio que dice el cliente NO calza claramente con una zona, LÉELE las zonas con "
         "su costo y pregúntale en cuál está. Si sigue sin calzar, llama a `pedir_ayuda`. JAMÁS "

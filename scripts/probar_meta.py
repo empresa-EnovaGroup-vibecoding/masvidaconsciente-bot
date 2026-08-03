@@ -35,6 +35,7 @@ tres módulos que las usan (tasks, tools y meta_client). Los teléfonos de prueb
 `finally` los borra — igual que hace `probar_vigilante`.
 """
 import asyncio
+import inspect
 import sys
 import time
 
@@ -42,6 +43,7 @@ from sqlalchemy import delete, select
 
 import app.agent.tools as tl
 import app.services.db as dbmod
+import app.services.dueno as dn
 import app.services.meta_client as mc
 import app.webhook.router as W
 from app.models import Cliente, Intervencion, Mensaje, now_utc
@@ -76,7 +78,9 @@ def check(nombre: str, ok: bool, detalle: str = "") -> None:
         fallos.append(nombre)
 
 
-async def _espia(telefono, texto):
+async def _espia(telefono, texto, **_):
+    # `**_`: el carril de EMERGENCIA (`avisar_relevo_caido`) manda `forzar=True`, y este espía
+    # está puesto a la vez en `T`, `tl` y `mc` (main, :664-666).
     enviados.append((telefono, texto))
     return {"messages": [{"id": f"wamid.META{len(enviados)}"}]}
 
@@ -107,6 +111,10 @@ async def _limpiar() -> None:
         "aviso:pago_con_bot_apagado",
         f"aviso:comprobante_doc:{TEL_DOC}",
         "aviso:meta_fallo:131049",
+        # Los candados del aviso nuevo (bug 1): sin soltarlos, la SEGUNDA corrida del día no
+        # vería ningún WhatsApp y el banco saldría rojo por estar el código haciendo su trabajo.
+        f"aviso:pago_en_chat_tomado:{TEL}",
+        "aviso:pago_no_entregado",
     )
 
 
@@ -198,9 +206,16 @@ async def caso_ventana_de_la_duena() -> None:
     await _limpiar()
     guardado = mc.settings.dueno_telefono
     mc.settings.dueno_telefono = DUENA
+    # 🔴 Y SE LE FIJA EL MEMO AL RESOLVEDOR ÚNICO. Desde el arreglo del cerebro partido, el número
+    # de la dueña sale de la tabla `configuracion` ANTES que del entorno — y en el taller la tabla
+    # SÍ trae un número real. Sin esto, el banco compararía contra la dueña DE VERDAD y se pondría
+    # rojo por el motivo equivocado. Se fija el MEMO (que es lo primero que mira `dueno.py`) en vez
+    # de tocar la tabla: un banco no le escribe a la base.
+    dn._memo_valor, dn._memo_hasta = DUENA, time.monotonic() + 3600
     try:
         check("un aviso a la dueña se reconoce como tal (no se confunde con un cliente)",
-              mc.es_numero_de_la_duena(f"+{DUENA}") and not mc.es_numero_de_la_duena(TEL))
+              await mc.es_numero_de_la_duena(f"+{DUENA}")
+              and not await mc.es_numero_de_la_duena(TEL))
 
         check("sin saber nada, se intenta igual que siempre (nunca se apaga el canal a ciegas)",
               await mc.puede_escribirle_a_la_duena(DUENA))
@@ -255,6 +270,40 @@ async def caso_ventana_de_la_duena() -> None:
         check("✅ con la marca CERRADA, un envío a un CLIENTE sí se intenta (su ventana es otra)",
               bool(intentos_cliente), "el portón de la dueña estaría frenando a los clientes")
 
+        # 🔴 LA PUERTA DE EMERGENCIA (2026-08-03). `avisar_relevo_caido` existe porque la BASE se
+        # cayó: no hay fila en la bandeja donde su aviso pueda esperar. Si el portón lo frena por
+        # un 131047 rutinario de hace un rato, la dueña no se entera de NADA.
+        forzados: list[int] = []
+
+        async def _espia_forzado(*a, **k):
+            forzados.append(1)
+            return {"messages": [{"id": "wamid.FORZADO"}]}
+
+        await mc._cerrar_ventana_de_la_duena(DUENA, mc.CODIGO_FUERA_DE_VENTANA)
+        real_enviar3 = mc._enviar
+        mc._enviar = _espia_forzado
+        try:
+            await _ENVIAR_REAL(DUENA, "el bot no pudo dejarte el aviso", forzar=True)
+        except Exception:  # noqa: BLE001 — lo que importa es si llegó a intentarse
+            pass
+        finally:
+            mc._enviar = real_enviar3
+        check("🔴 con la ventana CERRADA, un aviso de EMERGENCIA (`forzar`) SÍ se intenta",
+              bool(forzados), "el portón dejó mudo al único canal que quedaba")
+
+        # Y el blindaje se comprueba en el CÓDIGO, no en el comportamiento: hacia un cliente no
+        # hay nada que saltar, y no puede haberlo mañana por un copiar-pegar. `forzar` tiene que
+        # leerse DENTRO del guardia de la dueña.
+        # ⚠️ `_ENVIAR_REAL`, NO `mc.enviar_texto`: `main()` ya sustituyó el atributo del módulo por
+        # el espía (:831), así que `getsource(mc.enviar_texto)` leería el ESPÍA y este check se
+        # pondría rojo sin que nadie hubiera roto nada. Es el mismo motivo por el que la función
+        # de verdad se guarda arriba (:65-69).
+        fuente = inspect.getsource(_ENVIAR_REAL)
+        check("🔴 `forzar` vive DENTRO del guardia de la dueña (no hay puerta hacia el CLIENTE)",
+              "if await es_numero_de_la_duena" in fuente
+              and fuente.index("if await es_numero_de_la_duena") < fuente.index("if not forzar"),
+              "la bandera se lee fuera del guardia: un carril de cliente podría usarla")
+
         # La dueña escribe al número del negocio ⇒ su ventana se abre y el canal vuelve entero.
         await mc.abrir_ventana_de_la_duena()
         check("🔴 en cuanto ella escribe, el canal vuelve (la marca se cura sola)",
@@ -269,6 +318,7 @@ async def caso_ventana_de_la_duena() -> None:
               await mc.puede_escribirle_a_la_duena("__duena_prueba__"))
     finally:
         mc.settings.dueno_telefono = guardado
+        dn._memo_valor, dn._memo_hasta = "", 0.0
         await rc._client().delete(mc._MARCA_VENTANA)
 
     # Y la fila de la bandeja sale SIEMPRE, aunque el WhatsApp no salga: es lo que nunca falla.
@@ -495,10 +545,15 @@ async def caso_webhook() -> None:
     guardado = W.settings.dueno_telefono
     guardado_mc = mc.settings.dueno_telefono
     W.settings.dueno_telefono = mc.settings.dueno_telefono = DUENA
+    # Mismo motivo que en el caso 2: el resolvedor único mira la TABLA antes que el entorno, y en
+    # el taller la tabla trae el número REAL de la dueña. El entorno se sigue fijando (es la
+    # tercera capa y no estorba), pero el que manda en la prueba es el memo.
+    dn._memo_valor, dn._memo_hasta = DUENA, time.monotonic() + 3600
     await rc._client().delete(mc._MARCA_VENTANA)
     try:
         check("se la reconoce por la cola de 10 dígitos (+58…, 0…, sin prefijo)",
-              W._es_la_duena(f"+{DUENA}") and W._es_la_duena(DUENA) and not W._es_la_duena(TEL))
+              await W._es_la_duena(f"+{DUENA}") and await W._es_la_duena(DUENA)
+              and not await W._es_la_duena(TEL))
         r = await W._procesar_entrante({
             "telefono": DUENA, "message_id": "wamid.DUENA1", "tipo": "text",
             "texto": "ok, ya voy", "nombre": "Maired",
@@ -515,11 +570,16 @@ async def caso_webhook() -> None:
               await rc.get_cache(mc._MARCA_VENTANA) == "abierta")
 
         W.settings.dueno_telefono = ""
+        # 🔴 EL CANDADO DE router.py:195, AHORA EN EL RESOLVEDOR. Vacío = NADIE es la dueña. Este
+        # check es EL que prueba que el arreglo no reintrodujo el riesgo de dejar al bot mudo con
+        # el mundo entero: si se pone rojo, NO SE DESPLIEGA.
+        dn._memo_valor, dn._memo_hasta = "", time.monotonic() + 3600
         check("✅ sin DUENO_TELEFONO configurado, NADIE es la dueña (el bot no se queda mudo)",
-              not W._es_la_duena(TEL) and not W._es_la_duena(""))
+              not await W._es_la_duena(TEL) and not await W._es_la_duena(""))
     finally:
         W.settings.dueno_telefono = guardado
         mc.settings.dueno_telefono = guardado_mc
+        dn._memo_valor, dn._memo_hasta = "", 0.0
 
 
 # ─── 8) META-10: EL FRENO DE TASA Y EL 429 ──────────────────────────
@@ -659,6 +719,115 @@ async def caso_eco() -> None:
           await W._procesar_eco(eco) == "eco_duplicado")
 
 
+# ─── 11) EL PAGO CONFIRMADO QUE NADIE LE CONFIRMA AL CLIENTE ────────
+
+async def caso_pago_que_nadie_confirma() -> None:
+    print("\n11) 💰 BUG 1 de Maired: el aviso de pago que se descartaba EN SILENCIO")
+    factory = get_session_factory()
+    real_activo, real_redactar, real_envio = T._bot_activo, T.redactar_mensaje, T.enviar_texto
+
+    async def _redacta(*a, **k):
+        return "listo Rosa, ya me llegó tu pago 💚"
+
+    # (a) LA DUEÑA TIENE EL CHAT TOMADO. Es EL CASO NORMAL: si está confirmando el pago es
+    #     porque tomó ese chat para cobrar. Antes el bot se callaba (bien) y nadie avisaba (mal).
+    await _limpiar()
+    async with factory() as s:
+        s.add(Cliente(telefono=TEL, nombre="Rosa", ultimo_entrante_at=now_utc(),
+                      bot_pausado=True, pausado_por="dueña"))
+        await s.commit()
+    T._bot_activo, T.redactar_mensaje = _si, _redacta
+    enviados.clear()
+    try:
+        await T._notificar_cliente_pago(TEL, "su pago quedó confirmado")
+    finally:
+        T._bot_activo, T.redactar_mensaje = real_activo, real_redactar
+
+    check("✅ con el chat TOMADO el bot NO le habla encima a la dueña (eso ya estaba bien)",
+          not [t for t, _ in enviados if t == TEL], str(enviados))
+    check("🔴 pero YA NO se va mudo: queda la fila 'pago_en_chat_tomado' en la bandeja",
+          "pago_en_chat_tomado" in await _motivos(TEL), str(await _motivos(TEL)))
+    check("🔴 ...y a ella le llega el WhatsApp para que se lo diga ella al cliente",
+          bool(enviados), str(enviados))
+
+    # ANTI-INUNDACIÓN: el panel puede disparar la tarea dos veces por el MISMO cliente
+    # (verificar monto ⇒ parcial ⇒ confirmar). Eso es DOS filas, pero UN solo WhatsApp.
+    enviados.clear()
+    T._bot_activo, T.redactar_mensaje = _si, _redacta
+    try:
+        await T._notificar_cliente_pago(TEL, "su pago quedó confirmado")
+    finally:
+        T._bot_activo, T.redactar_mensaje = real_activo, real_redactar
+    check("🔴 el segundo toque del MISMO cliente no repite el WhatsApp (candado de 15 min)",
+          not enviados, str(enviados))
+    check("   ...pero la fila de la bandeja sí se abre igual (cada toque importa)",
+          (await _motivos(TEL)).count("pago_en_chat_tomado") == 2, str(await _motivos(TEL)))
+
+    # (b) META RECHAZA TODOS LOS GLOBOS: al cliente no le llegó NADA, y eso SÍ es una avería.
+    await _limpiar()
+    async with factory() as s:
+        s.add(Cliente(telefono=TEL_DOC, nombre="Ana", ultimo_entrante_at=now_utc()))
+        await s.commit()
+
+    async def _rechaza(destino, texto):
+        raise RuntimeError("Meta devolvió 400")
+
+    T._bot_activo, T.redactar_mensaje, T.enviar_texto = _si, _redacta, _rechaza
+    try:
+        await T._notificar_cliente_pago(TEL_DOC, "su pago quedó confirmado")
+    finally:
+        T._bot_activo, T.redactar_mensaje, T.enviar_texto = (
+            real_activo, real_redactar, real_envio
+        )
+    check("🔴 con Meta rechazando TODO, la dueña se entera ('pago_no_entregado')",
+          "pago_no_entregado" in await _motivos(TEL_DOC), str(await _motivos(TEL_DOC)))
+    check("   ...y la fila queda aunque el WhatsApp a ELLA tampoco haya podido salir",
+          len(await _motivos(TEL_DOC)) == 1, str(await _motivos(TEL_DOC)))
+
+    # (c) EL TURNO A MEDIAS: pasa el globo 1 y falla el 2. La MEDIA VERDAD es lo peligroso.
+    await _limpiar()
+    async with factory() as s:
+        s.add(Cliente(telefono=TEL_MEDIA, nombre="Luz", ultimo_entrante_at=now_utc()))
+        await s.commit()
+
+    async def _redacta_dos_globos(*a, **k):
+        return "listo Luz, ya me llegó 💚\n\nte coordino la entrega para mañana"
+
+    intentos: list[str] = []
+
+    async def _falla_el_segundo(destino, texto):
+        intentos.append(texto)
+        if len(intentos) > 1:
+            raise RuntimeError("Meta rechazó el segundo globo")
+        return {"messages": [{"id": "wamid.MEDIO1"}]}
+
+    T._bot_activo, T.redactar_mensaje, T.enviar_texto = _si, _redacta_dos_globos, _falla_el_segundo
+    try:
+        await T._notificar_cliente_pago(TEL_MEDIA, "su pago quedó confirmado")
+    finally:
+        T._bot_activo, T.redactar_mensaje, T.enviar_texto = (
+            real_activo, real_redactar, real_envio
+        )
+    check("🔴 medio aviso de pago ⇒ 'mensaje_a_medias' (el cliente vio MEDIA confirmación)",
+          "mensaje_a_medias" in await _motivos(TEL_MEDIA), str(await _motivos(TEL_MEDIA)))
+
+    # ANTI-REGRESIÓN: el camino BUENO no puede abrirle ni una fila. Un detector que grita
+    # siempre se acaba ignorando, y esta bandeja es la que le avisa cuando hay dinero en juego.
+    await _limpiar()
+    async with factory() as s:
+        s.add(Cliente(telefono=TEL, nombre="Rosa", ultimo_entrante_at=now_utc()))
+        await s.commit()
+    T._bot_activo, T.redactar_mensaje = _si, _redacta
+    enviados.clear()
+    try:
+        await T._notificar_cliente_pago(TEL, "su pago quedó confirmado")
+    finally:
+        T._bot_activo, T.redactar_mensaje = real_activo, real_redactar
+    check("✅ cuando el aviso SÍ sale, no se le abre NINGUNA fila (no avisamos de lo que funciona)",
+          not await _motivos(TEL) and any(t == TEL for t, _ in enviados),
+          f"{await _motivos(TEL)} {enviados}")
+
+
 async def main() -> None:
     # Nada sale al mundo: los tres módulos que envían quedan con espías.
     T.enviar_texto = _espia
@@ -680,6 +849,7 @@ async def main() -> None:
     await caso_freno_de_tasa()
     await caso_media_gigante()
     await caso_eco()
+    await caso_pago_que_nadie_confirma()
 
 
 async def _correr() -> None:
@@ -687,7 +857,7 @@ async def _correr() -> None:
     try:
         await main()
     finally:
-        print("\n11) LIMPIEZA")
+        print("\n12) LIMPIEZA")
         await _limpiar()
         check("los teléfonos de prueba se borraron (no ensucian el panel de la dueña)", True)
 

@@ -106,7 +106,7 @@ async def _procesar_entrante(mensaje) -> str:
     # funciona", ya NO le contesta. Para eso está el SIMULADOR del panel (teléfonos "__…"), que
     # se construyó justo para eso y no gasta ventana de Meta. Lo que dijo queda en el log del
     # contenedor, con su texto, para que nunca sea un silencio sin rastro.
-    if _es_la_duena(mensaje["telefono"]):
+    if await _es_la_duena(mensaje["telefono"]):
         from app.services.meta_client import abrir_ventana_de_la_duena
 
         logger.info(
@@ -175,28 +175,29 @@ async def _procesar_entrante(mensaje) -> str:
     return await _encolar_evento(mensaje)
 
 
-def _cola(s: str | None) -> str:
-    """Los últimos 10 dígitos de un teléfono: así 58412…, +58412… y 0412… son el MISMO número.
-    Copia deliberada del criterio de `_numero_permitido` (workers/tasks.py): comparar teléfonos
-    con `==` sobre la cadena cruda es el bug clásico de este dominio."""
-    d = "".join(c for c in (s or "") if c.isdigit())
-    return d[-10:] if len(d) >= 10 else d
-
-
-def _es_la_duena(telefono: str) -> bool:
+async def _es_la_duena(telefono: str) -> bool:
     """¿Este mensaje lo escribió LA DUEÑA desde su teléfono personal? (META-11).
 
-    Se compara contra `DUENO_TELEFONO` del ENTORNO y no contra la tabla `configuracion` a
-    propósito: esto corre en el camino caliente del webhook, donde Meta espera ~5 s y donde una
-    consulta de más se paga en cada mensaje de cada cliente. El valor del entorno es la semilla
-    que Enova pone al montar la caja; si algún día se cambia solo desde el panel, lo peor que
-    pasa es que volvemos al comportamiento de hoy (el bot le contesta), no que se rompa nada.
+    🔴 YA NO SE MIRA SOLO EL ENTORNO (arreglo del cerebro partido, 2026-08-03). Antes esto decía
+    que se comparaba contra `DUENO_TELEFONO` del ENTORNO a propósito, y que "si algún día se
+    cambia solo desde el panel, lo peor que pasa es que volvemos al comportamiento de hoy (el bot
+    le contesta), no que se rompa nada". Los dos supuestos resultaron falsos en la caja real:
+      · no es "algún día": el taller lleva así desde siempre — entorno VACÍO y el número en la
+        tabla — así que esto devolvía False SIEMPRE y el bot le vendía a la dueña;
+      · y "el bot le contesta" no es inofensivo: le crea ficha de Cliente, la mete en el carril de
+        venta, gasta tokens y ensucia el CRM y el reporte.
 
-    Vacío = nadie es la dueña. Un `dueno_telefono` sin configurar NO puede convertir a todos los
-    clientes en 'la dueña' y dejar al bot mudo con el mundo entero.
+    El argumento del carril caliente SÍ seguía en pie, y por eso el resolvedor único memoriza el
+    valor en el proceso (`services/dueno.py`, memo de 60 s): la consulta a Postgres se paga UNA
+    vez por minuto y por proceso, no una por mensaje. Coste amortizado por mensaje: CERO.
+
+    ⚠️ Vacío = nadie es la dueña. Un `dueno_telefono` sin configurar NO puede convertir a todos los
+    clientes en 'la dueña' y dejar al bot mudo con el mundo entero. Esa regla NO cambió: vive
+    ahora dentro de `dueno.es_la_duena`, y `probar_meta.py` caso 7 la vigila.
     """
-    mio = _cola(settings.dueno_telefono)
-    return bool(mio) and _cola(telefono) == mio
+    from app.services.dueno import es_la_duena
+
+    return await es_la_duena(telefono)
 
 
 async def _marcar_leido_si_vamos_a_responder(mensaje) -> None:

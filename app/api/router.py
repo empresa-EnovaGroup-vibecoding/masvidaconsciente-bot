@@ -2157,6 +2157,13 @@ _MOTIVO_TEXTO = {
     # Un cliente pasó el tope de mensajes del día: el bot dejó de contestarle para no dispararse
     # el gasto de IA, pero sus mensajes SE SIGUEN GUARDANDO en el hilo. La sigue una persona.
     "tope_diario": "Un cliente pasó el tope del día: contéstale tú",
+    # 🔴 EL PAGO CONFIRMADO QUE NADIE LE CONFIRMÓ AL CLIENTE (bug 1 del reporte de Maired). Tocó
+    # el botón en el panel y el aviso NO salió: o porque ella tiene ese chat tomado (el caso
+    # normal: lo tomó justo para cobrar) o porque WhatsApp lo rechazó. Son dos filas distintas
+    # porque la acción es distinta: en la primera ya está dentro del chat, en la segunda tiene
+    # que salir por su teléfono. Sin estas entradas la bandeja pintaría el motivo crudo.
+    "pago_en_chat_tomado": "Confirmaste un pago y el chat lo tienes tú: avísale",
+    "pago_no_entregado": "El aviso de su pago NO le llegó al cliente",
 }
 
 
@@ -2772,10 +2779,18 @@ async def confirmar_pago(pago_id: int, usuario: str = Depends(usuario_actual)):
         telefono = pedido.cliente_telefono if pedido else None
 
     if telefono:
-        from app.services.mensajes import leer_guia
+        from app.services.mensajes import contexto_entrega, leer_guia
         from app.workers.tasks import notificar_cliente_pago
 
-        notificar_cliente_pago.apply_async((telefono, await leer_guia("msg_guia_confirmado")))
+        # 🚚 EL PEDIDO YA ESTABA AQUÍ Y NO SE USABA. Con la guía sola, el cliente pagaba y recibía
+        # "gracias, coordinamos la entrega" — cuando el pedido sabe si es retiro o delivery, en qué
+        # zona y para qué día (se lo preguntamos ANTES de cobrar; eso NO cambia). Whuilianny cierra
+        # coordinando la HORA. Los HECHOS van POR FUERA de la guía a propósito: la guía es de la
+        # dueña y puede estar editada desde el panel; el contexto lo pone el código y llega igual.
+        # Y no lleva NI UN MONTO: lo que entra en la situación queda decible ese turno
+        # (`autorizados_por_moneda(situacion)` en `redactar_mensaje`). Ver `contexto_entrega`.
+        situacion = await leer_guia("msg_guia_confirmado") + await contexto_entrega(pedido)
+        notificar_cliente_pago.apply_async((telefono, situacion))
     return {"ok": True, "pago_id": pago_id, "estado": "confirmado"}
 
 
@@ -2862,6 +2877,7 @@ async def verificar_monto(pago_id: int, datos: MontoIn, usuario: str = Depends(u
         estado_final = pago.estado
 
     if telefono:
+        from app.services.mensajes import contexto_entrega
         from app.workers.tasks import notificar_cliente_pago
 
         if estado_final == "confirmado":
@@ -2873,6 +2889,11 @@ async def verificar_monto(pago_id: int, datos: MontoIn, usuario: str = Depends(u
                     f". Ademas pago {moneda} {(recibido - total):.2f} de mas: dile con cariño que "
                     f"le queda ese saldo a favor para su proxima compra"
                 )
+            # Mismo cierre que en `/confirmar`: por esta puerta el pago TAMBIÉN queda confirmado
+            # (el cliente pagó justo o de más), así que el mensaje tiene que saber cómo y cuándo
+            # recibe su pedido, no solo que el dinero cuadró. En el carril PARCIAL no va: ahí
+            # todavía falta plata y no hay entrega que cerrar.
+            situacion += await contexto_entrega(pedido)
         else:
             situacion = (
                 f"el cliente pago {moneda} {recibido:.2f} pero el total era {moneda} {total:.2f}, "
