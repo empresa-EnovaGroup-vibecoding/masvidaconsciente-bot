@@ -116,6 +116,47 @@ async def _procesar_entrante(mensaje) -> str:
         await abrir_ventana_de_la_duena()
         return "duena"
 
+    # 🔴 …NI TAMPOCO SI QUIEN ESCRIBE ES UN **CONTACTO PRIVADO** (Capa 1, reporte de Maired §6).
+    # Su familia, sus amigos y los clientes de su OTRO negocio entran por este mismo número, y
+    # ELLOS TAMBIÉN ESCRIBEN PRIMERO — por eso la auto-pausa por eco no los cubre: esa solo
+    # protege los chats donde ella ya intervino.
+    #
+    # VA ANTES DE `_marcar_entrante`, Y ESA ES LA DECISIÓN IMPORTANTE DE TODO EL ARREGLO. De aquí
+    # para abajo, cada paso deja una huella; el mensaje tiene que morir ANTES de la primera:
+    #   · No sube `no_leidos` ⇒ NO se repite SIL-7 (el globito de "3 no leídos" sobre un hilo
+    #     VACÍO). Ojo con la lección: el error de SIL-7 fue el DESAJUSTE — el contador decía 3 y
+    #     el hilo no tenía nada. Allí se arregló guardando el mensaje, porque el contador YA había
+    #     subido. Aquí se arregla por la otra rama, que también es coherente: NI contador NI
+    #     mensaje. Es exactamente lo que hace la dueña tres líneas más arriba, y nadie se queja de
+    #     globitos huérfanos en su chat.
+    #   · No se guarda en `mensajes` ⇒ sus conversaciones con la familia NO quedan archivadas en
+    #     la base del NEGOCIO, que es lo que la palabra "privado" promete. Callar al bot pero
+    #     seguir archivándolo todo sería media solución, y la peor mitad: da la sensación de
+    #     privacidad sin darla. El mensaje no se pierde — está en su teléfono, en WhatsApp, que
+    #     es su sitio; y el chat viejo sigue en el panel para poder DESmarcarlo.
+    #   · No se marca leído ni sale "escribiendo…" (`_marcar_leido_si_vamos_a_responder` está más
+    #     abajo desde META-9) ⇒ cero rastro de robot en un chat personal. El doble check azul lo
+    #     pone WhatsApp cuando ELLA lo abre, que es como tiene que ser.
+    #   · No cuenta para el tope anti-abuso (`_excede_tope`, más abajo) ⇒ una hermana habladora no
+    #     dispara el aviso de "este cliente pasó el límite". El tope existe para no gastar IA con
+    #     un troll, y por este camino se gasta CERO IA.
+    #   · No se descarga ni se transcribe NADA: la foto familiar no pasa por la visión y la nota
+    #     de voz no pasa por Gemini. Ahorra dinero, sí — pero sobre todo NO manda material privado
+    #     a un proveedor de IA. Ese es el motivo por el que este freno NO puede vivir solo en
+    #     `_estado_pausa`: allí se llega DESPUÉS de haber descargado y pagado.
+    #
+    # ⚠️ DEL TEXTO NO SE DEJA RASTRO, y aquí SÍ nos apartamos de la dueña a propósito: su línea de
+    # log guarda lo que dijo para que nunca sea un silencio sin rastro, pero volcar el mensaje de
+    # un familiar al log del contenedor contradice de frente lo que este freno defiende. Queda el
+    # número y el tipo: suficiente para depurar "¿por qué no contestó?", sin archivar a nadie.
+    if await _es_contacto_privado(mensaje["telefono"]):
+        logger.info(
+            "Mensaje (%s) de un CONTACTO PRIVADO (%s): el bot no lo atiende, no lo guarda y no "
+            "gasta IA. El contenido NO se registra a propósito.",
+            mensaje.get("tipo"), mensaje["telefono"],
+        )
+        return "privado"
+
     # EL RELOJ DE LAS 24 HORAS arranca AQUÍ y no en el worker: este es el único embudo por
     # el que pasan los CUATRO caminos (texto, voz, comprobante, sticker). El comprobante, por
     # ejemplo, nunca pasa por el worker de texto: si el reloj viviera allá, un cliente que solo
@@ -198,6 +239,52 @@ async def _es_la_duena(telefono: str) -> bool:
     from app.services.dueno import es_la_duena
 
     return await es_la_duena(telefono)
+
+
+async def _es_contacto_privado(telefono: str) -> bool:
+    """¿Este número está marcado como CONTACTO PRIVADO? (familia, amigos, el otro negocio).
+
+    🔴 POR QUÉ EXISTE (Capa 1 del reporte de Maired). El WhatsApp del negocio es TAMBIÉN el
+    personal de Whuilianny. La auto-pausa por eco no cubre esto: solo se enciende cuando ELLA ya
+    respondió en ese chat, y el familiar que escribe "hola cómo estás" es el que ESTRENA la
+    conversación. Sin este freno, el bot le contesta con el catálogo de comida.
+
+    ⚠️ Y no confundir con `_numero_permitido`: ESA es la lista blanca de PRUEBAS, que hoy tapa el
+    problema por accidente (tiene dos números) y que desaparece el día que se abra el bot a
+    clientes reales. Esto es otra cosa y vive aparte a propósito.
+
+    FALLA ABIERTA, igual que `_cliente_pausado` (workers/tasks.py): si Postgres no contesta, el
+    bot sigue atendiendo. Un error de lectura es GLOBAL y transitorio, y dejar mudo al bot con
+    TODOS los clientes de verdad es la avería que ya costó una semana muda. Lo peor que pasa por
+    fallar abierto es una respuesta de más a un familiar en plena caída de base — recuperable, y
+    el segundo cinturón (`_estado_pausa`) todavía puede pillarla más adelante.
+
+    Se pide SOLO la columna, no la fila entera: es una lectura por el UNIQUE de `telefono` y se
+    paga una vez por mensaje entrante, detrás del filtro de la dueña. Los teléfonos internos
+    ("__…", simulador del panel y bancos) se cortan antes de tocar la base: no son gente.
+    """
+    if (telefono or "").startswith("__"):
+        return False
+
+    from sqlalchemy import select
+
+    from app.models import Cliente
+    from app.services.db import get_session_factory
+
+    try:
+        factory = get_session_factory()
+        async with factory() as session:
+            privado = (
+                await session.execute(
+                    select(Cliente.privado).where(Cliente.telefono == telefono)
+                )
+            ).scalar_one_or_none()
+        return bool(privado)
+    except Exception:  # noqa: BLE001 — ante la duda, se atiende como siempre (ver docstring)
+        logger.exception(
+            "No pude saber si %s es un contacto privado; se atiende como hasta hoy", telefono
+        )
+        return False
 
 
 async def _marcar_leido_si_vamos_a_responder(mensaje) -> None:

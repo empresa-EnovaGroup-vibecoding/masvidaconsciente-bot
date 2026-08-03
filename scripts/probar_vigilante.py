@@ -151,6 +151,13 @@ async def probar_salud() -> None:
         check("y el fallo se llama por su nombre", "saldo_ia" in cuerpo["fallos"], str(cuerpo["fallos"]))
 
         print("\n1b) LAS SONDAS EXTERNAS: fallan por lo que TIENEN que fallar, y no por lo demás")
+        # EL TESTIGO DEL 402 VIVE EN REDIS (lo estampa el WORKER, otro proceso), así que
+        # `olvidar_cache` no lo alcanza. Se limpia ANTES de nada: un 402 de verdad en el taller
+        # pondría en rojo el assert de "un timeout NO es quedarse sin saldo" y el banco culparía al
+        # código equivocado. Valor vacío = sin marca (`redis_client` no expone DELETE).
+        from app.services import redis_client as _rc
+
+        await _rc.set_cache(S.MARCA_402, "", 1)
         S._meta, S._saldo = sondas[0], sondas[1]  # type: ignore[assignment] — ahora sí, las de verdad
         S.settings.meta_access_token = ""
         S.olvidar_cache()
@@ -173,9 +180,53 @@ async def probar_salud() -> None:
               m["ok"] is True and "aviso" in m, str(m))
         check("un TIMEOUT de OpenRouter NO es quedarse sin saldo (anti falso positivo)",
               sd["ok"] is True and "aviso" in sd, str(sd))
+
+        # 🔴 EL TESTIGO DEL 402: un rechazo REAL le gana a la estimación de `/api/v1/credits`, y le
+        # gana ANTES de la caché de 5 min. Es lo único que hoy convierte un 402 de cuenta en una
+        # alarma de segundos en vez de días — el fallback comparte la MISMA llave y no salva.
+        await S.marcar_402("HTTP 402 con un modelo de prueba")
+        S.olvidar_cache()
+        sd402 = await S._saldo()
+        await _rc.set_cache(S.MARCA_402, "", 1)
+        S.olvidar_cache()
+        check("🔴 un 402 REAL de OpenRouter pone el saldo en ROJO (le gana a /credits y a la caché)",
+              sd402["ok"] is False and "402" in str(sd402.get("error", "")), str(sd402)[:200])
+
+        print("\n1c) LA DUEÑA CONTACTABLE: ¿pueden salir SUS avisos?")
+        import app.services.meta_client as MC
+        from app.services.dueno import telefono_de_la_duena
+
+        S.olvidar_cache()
+        dn = await S._duena_contactable()
+        numero = await telefono_de_la_duena()
+        check("con número de dueña configurado → la sonda NO falla",
+              dn["ok"] is True and dn.get("hay_numero") is True, str(dn)[:220])
+        # `/salud` es PÚBLICO: el teléfono personal de la dueña no puede salir por ahí NUNCA.
+        check("🔴 y NO publica su teléfono (/salud lo lee cualquiera)",
+              bool(numero) and numero not in str(dn), str(dn)[:220])
+
+        # La ventana cerrada se simula sustituyendo la FUNCIÓN, no escribiendo la marca: este banco
+        # corre contra la Redis REAL del taller y un "cerrada" olvidado le apagaría los avisos a la
+        # dueña durante una hora de verdad. Funciona porque la sonda importa el símbolo del módulo
+        # en cada llamada.
+        guardada = MC.puede_escribirle_a_la_duena
+        MC.puede_escribirle_a_la_duena = lambda destino: _fijo(False)  # type: ignore[assignment]
+        try:
+            S.olvidar_cache()
+            dn_cerrada = await S._duena_contactable()
+        finally:
+            MC.puede_escribirle_a_la_duena = guardada  # type: ignore[assignment]
+        check("🔴 ventana CERRADA = AVISO, JAMÁS fallo (un /salud en rojo permanente se ignora)",
+              dn_cerrada["ok"] is True and dn_cerrada.get("ventana") == "cerrada"
+              and "aviso" in dn_cerrada, str(dn_cerrada)[:250])
+        S.olvidar_cache()
+        cuerpo, codigo = await S.revisar()
+        check("y con la ventana cerrada el endpoint sigue en 200 (no arrastra el estado global)",
+              codigo == 200 and "duena_contactable" in cuerpo, str(cuerpo)[:200])
     finally:
         S.settings.meta_access_token, S.settings.openrouter_api_key = guardado
         S._meta, S._saldo, S._redis = sondas  # type: ignore[assignment]
+        await _rc.set_cache(S.MARCA_402, "", 1)
         S.olvidar_cache()
 
     # `GET /` por HTTP de verdad (ASGI): tiene que seguir en 200 pase lo que pase.

@@ -2,6 +2,7 @@ from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     CheckConstraint,
     Date,
@@ -146,6 +147,13 @@ class Cliente(Base):
         DateTime(timezone=True), nullable=True
     )
     no_leidos: Mapped[int] = mapped_column(Integer, default=0)
+    # CONTACTO PRIVADO (migración 031): familia, amigos, o los clientes del OTRO negocio de
+    # Whuilianny (pulseras, sartenes, franelas). El bot NO les responde, NUNCA — y sus mensajes
+    # ni siquiera se guardan. No es lo mismo que `bot_pausado`, y por eso es una columna aparte:
+    # la pausa es TEMPORAL y de UN chat que ella está atendiendo ahora (se devuelve con un botón,
+    # y el propio bot la pone al escalar); esto es PERMANENTE y dice que esa persona NO es un
+    # cliente. Mezclarlas haría que "Devolver al bot" le abriera la puerta al bot con la familia.
+    privado: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
 class Intervencion(Base):
@@ -412,3 +420,54 @@ class Pago(Base):
     motivo_rechazo: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+class LlamadaIA(Base):
+    """UNA llamada al modelo: qué respondió, cuántos tokens gastó y cuánto costó (migración 032).
+
+    🔴 UNA FILA POR LLAMADA, NO POR TURNO NI POR GLOBO. Un turno gasta VARIAS llamadas (hasta 6
+    vueltas del bucle + la Voz + el reintento del dinero + el fallback) y en `mensajes` hay una
+    fila por GLOBO ENVIADO: 5 contra 4. Repartir inventa un número y copiar el total en cada
+    globo lo cuenta cuatro veces. Una llamada HTTP ⇄ un bloque `usage` ⇄ un `cost` es la única
+    correspondencia 1:1 que existe, así que aquí sumar es SUM() y nunca miente. `turno_id`
+    reagrupa lo que costó atender a un cliente sin repartir nada.
+
+    `modelo_pedido` vs `modelo_real`: el primero es el que eligió la proveedora en el panel; el
+    segundo, el que OpenRouter dice que contestó (`data["model"]`). Son distintos cada vez que
+    entra `_llamar_con_fallback` — y esa es justo la avería que hoy no se ve: si el id del panel
+    está mal escrito, el bot sigue hablando por el fallback (más caro) y nadie se entera.
+
+    `costo_usd` NULL = OpenRouter no lo dijo. NO es cero. El costo jamás se estima.
+
+    NO se guarda ni una letra de lo que se habló: eso ya vive en `mensajes` y en Redis.
+    """
+
+    __tablename__ = "llamadas_ia"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    # Agrupa TODAS las llamadas de un mismo turno (viaja por contexto, ver services/telemetria.py).
+    turno_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Sin FK a propósito: aquí entran '__simulador__…' y '__sistema__', que no son clientes.
+    cliente_telefono: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # charla | pago | comprobante | audio | sin_turno (lo abre el que empieza el turno).
+    carril: Mapped[str] = mapped_column(Text, default="sin_turno")
+    # agente | voz | transcripcion | vision | embedding (lo pone el punto que hace el POST).
+    paso: Mapped[str] = mapped_column(Text, default="agente")
+    modelo_pedido: Mapped[str | None] = mapped_column(Text, nullable=True)
+    modelo_real: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Por qué proveedor ruteó OpenRouter (ej. 'Amazon Bedrock'): dos proveedores del MISMO modelo
+    # no rinden igual, y `require_parameters` hace que el ruteo cambie sin avisar.
+    proveedor: Mapped[str | None] = mapped_column(Text, nullable=True)
+    tokens_entrada: Mapped[int] = mapped_column(Integer, default=0)
+    tokens_salida: Mapped[int] = mapped_column(Integer, default=0)
+    # `prompt_tokens_details.cached_tokens`: lo que el `cache_control` del prompt estable AHORRÓ.
+    # Hoy ese ahorro se da por supuesto y nadie lo ha visto nunca.
+    tokens_cache: Mapped[int] = mapped_column(Integer, default=0)
+    # (14,10) y no (12,8): un embedding cuesta 0.00000006 y ya está al filo de 8 decimales. Es la
+    # columna del dinero — un redondeo silencioso a cero es justo lo que `NULL` vino a evitar.
+    costo_usd: Mapped[Decimal | None] = mapped_column(Numeric(14, 10), nullable=True)
+    ms: Mapped[int] = mapped_column(Integer, default=0)
+    ok: Mapped[bool] = mapped_column(Boolean, default=True)
+    # El PORQUÉ del fallo (402 sin saldo, 429, timeout, modelo inexistente), recortado.
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)

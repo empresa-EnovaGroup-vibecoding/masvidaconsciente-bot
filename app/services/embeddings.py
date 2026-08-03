@@ -8,10 +8,12 @@ modelo no responde, estas funciones devuelven None y el llamador cae a la búsqu
 léxica (pg_trgm). NUNCA deben romper el bot.
 """
 import logging
+import time
 
 import httpx
 
 from app.config import get_settings
+from app.services.telemetria import registrar
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -25,6 +27,11 @@ async def obtener_embeddings(textos: list[str]) -> list[list[float] | None]:
     limpios = [(t or "").strip() for t in textos]
     if not limpios or not any(limpios):
         return [None] * len(textos)
+    # 📊 Telemetría (migración 032). Verificado contra la API real: el endpoint /embeddings
+    # también devuelve `usage` con `cost` (6e-08 por una consulta). Son céntimos, pero corren en
+    # CADA `buscar_info`, en cada alta de Conocimiento desde el panel y en el backfill de CADA
+    # arranque — y hasta hoy nadie sabía cuántas llamadas eran.
+    t0 = time.monotonic()
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(
@@ -33,9 +40,17 @@ async def obtener_embeddings(textos: list[str]) -> list[list[float] | None]:
                 json={"model": settings.openrouter_model_embedding, "input": limpios},
             )
             resp.raise_for_status()
-            data = resp.json().get("data", [])
+            crudo = resp.json()
+            data = crudo.get("data", [])
+        await registrar(
+            paso="embedding", modelo_pedido=settings.openrouter_model_embedding, t0=t0, datos=crudo,
+        )
     except Exception as e:  # noqa: BLE001 — embeddings es MEJORA; jamás debe tumbar el bot
         logger.warning("Embeddings fallaron (%s): se usará solo búsqueda léxica", e)
+        await registrar(
+            paso="embedding", modelo_pedido=settings.openrouter_model_embedding,
+            t0=t0, ok=False, error=str(e),
+        )
         return [None] * len(textos)
     # El API devuelve cada vector con su 'index'; lo respetamos por si vienen desordenados.
     vectores: list[list[float] | None] = [None] * len(limpios)

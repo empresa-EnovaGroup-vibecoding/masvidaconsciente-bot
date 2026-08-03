@@ -19,6 +19,111 @@
 
 ---
 
+## 2026-08-03 — 🔒 CONTACTOS PRIVADOS, TELEMETRÍA Y DOS SONDAS MÁS (migraciones 031 y 032)
+
+Tercera y última tanda del repaso del taller.
+
+### 🔒 El bot deja de hablarle a la familia (Capa 1 del §6 del reporte)
+
+El WhatsApp del negocio es **también** el personal de Whuilianny: por ahí le escriben su familia, sus
+amigos y los clientes de su OTRO negocio (pulseras, sartenes, franelas). La auto-pausa por eco **no
+cubre este caso** y conviene entender por qué: esa pausa se enciende cuando **ella responde**, o sea
+que solo protege los chats donde ella YA intervino. Un familiar que escribe *"hola cómo estás"* es
+justo el que **estrena** la conversación.
+
+⚠️ **Hoy parecía resuelto y era un espejismo:** `NUMEROS_PERMITIDOS` trae dos números, así que el bot
+solo le habla a esos dos. Esa lista es un interruptor de **pruebas**, no de privacidad. **El día que
+se vacíe para abrir a clientes, la familia queda expuesta el mismo minuto.**
+
+🔴 **Y el mapa corrigió el sitio donde iba el freno.** El diseño decía "dentro de `_estado_pausa`,
+que ya trae la fila y cubre los seis puntos". Se contaron los llamadores reales: son **dos**,
+consultados en cinco sitios, **más un sexto** (`_la_duena_tomo_el_chat`, el freno de la media) que
+**no cuelga de ella** y duplica la lógica a sabiendas. Pero el problema de fondo era otro: **llega
+tarde**. Trazando el mensaje entrante, para cuando se consulta la pausa ya se creó la ficha de
+Cliente, ya se abrió la ventana de 24 h, ya subió `no_leidos` — y en los carriles de media **ya se
+transcribió la nota de voz con Gemini y ya se pasó la foto por la visión**. O sea: material privado
+de la familia enviado a un proveedor de IA externo, y pagado. Un gate ahí calla al bot pero no evita
+ni el gasto ni la fuga.
+
+→ El freno de verdad va en el **webhook, antes de `_marcar_entrante`**, con `_estado_pausa` como
+**segundo cinturón** (que sigue haciendo falta: atrapa lo que ya venía en vuelo). Es el mismo patrón
+de dos cinturones que el repo ya documenta en META-1.
+
+Ni contador ni mensaje: es lo mismo que ya hace la dueña tres líneas más arriba. **No repite SIL-7**
+—cuya lección fue el *desajuste* entre el contador y el hilo vacío, no el descarte en sí.
+
+### 📊 Telemetría: qué modelo respondió, cuántos tokens y cuánto costó
+
+`grep usage|prompt_tokens|completion_tokens` en todo el repo daba **cero**: el bloque `usage` de
+OpenRouter se tiraba en los cuatro puntos de llamada.
+
+🔴 **El punto delicado, y por qué NO son columnas en `mensajes`:** un turno gasta **varias** llamadas
+al LLM y en `mensajes` hay **una fila por globo enviado**. Un turno de 3 vueltas produce hasta 4
+globos, y hay llamadas que producen **cero** — la transcripción, la visión cuando la dueña tomó el
+chat, los embeddings del panel y del arranque, el simulador. Todas cuestan y ninguna deja fila.
+Colgarlo de `mensajes` **mentiría**. → Tabla propia `llamadas_ia`: **1 POST ⇄ 1 `usage` ⇄ 1 fila**,
+así que `SUM(costo_usd)` es exacto por construcción. Sin reparto y sin copia.
+
+### Lo que la revisión cruzada corrigió, y valía sola toda la fase
+
+- 🔴 **La sonda del modelo mentía justo en la avería que venía a cazar.** Agrupaba por modelo y
+  ordenaba por conteo: con un id mal escrito, `_llamar_con_fallback` hace una llamada por cada fallo,
+  así que el modelo malo (N fallos) y el fallback (N éxitos) quedaban **empatados** y Postgres
+  devolvía cualquiera de los dos. Decía "ok" la mitad de las veces. → Se ancla al modelo que dice la
+  configuración AHORA, sin `GROUP BY` ni desempate.
+- 🔴 **`NUMERIC(12,8)` truncaba dinero.** Un embedding cuesta `6e-08`, justo al filo; cualquier modelo
+  más barato se guardaría como **0.00000000** — la mentira exacta que `costo_usd NULL` existía para
+  evitar (*"no lo sé"* y *"salió gratis"* no son lo mismo). → `NUMERIC(14,10)`.
+- 🟠 El `await registrar(...)` vivía **dentro** del `async with httpx.AsyncClient(...)`: mantenía el
+  socket abierto hasta 2 s por llamada mientras escribía en Postgres. → Fuera, en los cuatro puntos.
+- 🟠 **El texto del panel prometía privacidad que el código no da:** decía *"lo que te escriba ya no
+  se guardará"*, pero el eco sigue guardando **lo que escribe ELLA** en ese hilo. Quedaba falso en
+  cuanto respondiera una vez. → Texto corregido; el hueco del eco se difiere a propósito (tocar
+  `_procesar_eco` —donde viven el ORDEN SAGRADO, META-1 y META-2— en la misma tanda que estrena una
+  columna es mala gestión de riesgo).
+- Y **el arreglo más valioso, que no estaba en ningún mapa**: responder desde el panel daba por
+  `resuelta` **toda** intervención pendiente, **incluida `chat_tomado`** — que es el botón que
+  devuelve el chat al bot. El eco hace lo contrario y el barredor ya lo excluía por una corrección
+  previa; el panel era la única puerta que seguía matándolo.
+
+### 🩹 Y el saludo, que llevaba meses mal
+
+`_asegurar_saludo` unía las partes con `" ".join`, así que salía *"…buenas tardes Muy bien, gracias a
+Dios 💚"* — sin puntuación, pegado. Es **lo primero que lee cada cliente nuevo**, y va después de
+todas las redes. → `". ".join`. No se tocó ni la voz ni la bienvenida.
+
+### 🔴 Descartado por la revisión (cinco cosas)
+
+- **`GET /api/telemetria`**: ~65 líneas de agregación metidas en el archivo del dinero para alimentar
+  una pantalla que nadie va a construir. Las cuatro consultas viven en la **cabecera de la migración
+  032**, que es donde el próximo las va a buscar.
+- **El UPSERT de `/privado`**: crearía fichas fantasma que se van al tope de Conversaciones sin un
+  solo mensaje. → UPDATE + 404, calcando `pausar_bot_cliente`.
+- **`msg_guia_comprobante`**: ni se cablea ni se saca (sacarla sin el TSX deja la caja del panel
+  guardando en el vacío).
+- **Telemetría en `_llamar_con_fallback`**: haría que los 8 bancos que inyectan dobles **escribieran
+  en la BD real**.
+- **Tocar `_procesar_eco`**: diferido.
+
+### Una aserción propia que salió roja, y por el motivo bueno
+
+`probar_telemetria` comparaba el costo por su **texto** (`str(...) == "3.3E-5"`) y salía ROJA con el
+código **correcto**: `Decimal` solo usa notación científica cuando el exponente ajustado es menor que
+-6, así que `Decimal("3.3e-05")` se escribe `0.000033`. Mismo número, otro texto. Es el veneno de
+TST-6 otra vez. → Se compara el **valor**, y se añadió el check que de verdad justifica la columna:
+un costo de `0.0000000060` da la vuelta por la base **sin truncarse a cero**.
+⚠️ Ese rojo hizo que el vigilante le mandara un **WhatsApp a la dueña**. Funcionó como debe, pero fue
+falsa alarma — la segunda vez que pasa (la primera fue el AppleDouble del 2026-08-02). *Un detector
+que grita en falso se acaba ignorando.*
+
+**Verificado:** ensayo con `ROLLBACK` antes de aplicar · ruff limpio · 111 tests del CI · **los 26
+bancos en verde** (`probar_contacto_privado` y `probar_telemetria` nuevos) · migraciones ANTES del
+código · desplegado a los DOS contenedores por checksum · panel con `localhost:8000` en 0 chunks ·
+`/salud` con **7 sondas**, todas en ok, `duena_contactable` viendo el número y `modelo_ia` contando
+llamadas de verdad.
+
+---
+
 ## 2026-08-03 — 🧹 CONOCIMIENTO DEJA DE DARLE ÓRDENES AL BOT (migración 030)
 
 **Lo pidió Erwin:** *"en la db de conocimiento está lo que es cosas de ingredientes, lo cual eso no

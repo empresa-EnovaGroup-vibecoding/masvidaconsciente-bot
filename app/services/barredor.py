@@ -175,6 +175,7 @@ SELECT c.telefono, c.nombre, c.ultimo_entrante_at
    AND c.ultimo_entrante_at <  now() - make_interval(mins  => :minutos)
    AND c.ultimo_entrante_at >  now() - make_interval(hours => :horas)
    AND c.bot_pausado = false
+   AND c.privado = false
    AND left(c.telefono, 2) <> '__'
    AND NOT EXISTS (
          SELECT 1 FROM mensajes m
@@ -231,6 +232,11 @@ async def vigilar_bot_callado(session, minutos: int = MINUTOS_SIN_RESPUESTA) -> 
       6. El tope anti-abuso (`_paso_el_tope`) — silencio deliberado, no avería.
       7. `MAX_AVISOS` — 9 colgados a la vez NO son 9 clientes: es el SISTEMA caído, y 9 avisos
          esconderían justo el hecho que importa.
+      8. `privado = false` (en el SQL) — un CONTACTO PRIVADO (migración 031) no recibe respuesta
+         A PROPÓSITO: es su familia, no un cliente colgado. Sin esto, marcar a alguien como
+         privado justo después de que escribiera dispararía un "lleva 30 min esperando" sobre su
+         propia hermana. En régimen normal ni siquiera llegan aquí (el freno del webhook no les
+         toca `ultimo_entrante_at`); esto cubre la ventana del que ya había escrito antes.
 
     ⚠️ EFECTO CONOCIDO Y ACEPTADO: mientras este aviso siga PENDIENTE, `pedir_ayuda` no dejará
     otro para ese mismo chat (el `ya_hay` de tools.py:1949 gobierna el alta Y el WhatsApp). Se

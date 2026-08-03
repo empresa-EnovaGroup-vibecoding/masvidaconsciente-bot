@@ -206,6 +206,10 @@ class PausaIn(BaseModel):
     pausado: bool
 
 
+class PrivadoIn(BaseModel):
+    privado: bool
+
+
 class MensajesIn(BaseModel):
     valores: dict[str, str]
 
@@ -1636,6 +1640,11 @@ async def listar_conversaciones(_: str = Depends(usuario_actual)):
                     "bot_pausado": c.bot_pausado,
                     "pausado_por": c.pausado_por,  # 'dueña' = lo tomaste tú
                     "no_leidos": c.no_leidos,
+                    # CONTACTO PRIVADO (031): el panel lo pinta con su etiqueta en la lista, para
+                    # que se vea de un vistazo cuáles NO son clientes. No se ocultan de la lista a
+                    # propósito: si se escondieran, un chat marcado por error sería IMPOSIBLE de
+                    # desmarcar desde el panel.
+                    "privado": c.privado,
                 }
             )
     return resultado
@@ -1827,6 +1836,7 @@ async def estado_conversacion(telefono: str, _: str = Depends(usuario_actual)):
             "pausado_por": cliente.pausado_por,
             "no_leidos": cliente.no_leidos,
             "ventana": _ventana(cliente),
+            "privado": cliente.privado,  # CONTACTO PRIVADO (031): el bot no le habla nunca
             "es_simulador": telefono.startswith(SIMULADOR),
         }
 
@@ -1914,16 +1924,51 @@ async def responder_como_dueña(
         cliente.ultima_interaccion = now_utc()
 
         # Si había un aviso de "el bot te necesita" abierto, ya lo atendió.
-        for aviso in (
+        #
+        # 🔴 MENOS `chat_tomado`, Y ESA ES LA MITAD OBLIGATORIA DEL ARREGLO (2026-08-03). Ese aviso
+        # NO es un problema que atender: ES EL BOTÓN que devuelve el chat al bot ("Ya lo atendí
+        # (reactivar el bot)"), y es el único que hay. Tal como estaba, este bucle lo daba por
+        # RESUELTO. Caso real y frecuente: ella le contesta desde el celular (el eco crea el aviso,
+        # webhook/router.py:355), después escribe una línea desde el panel ⇒ el botón DESAPARECE de
+        # la bandeja con el chat todavía pausado, y ese cliente se queda sin bot PARA SIEMPRE. Es
+        # el síntoma que SIL-9 vino a matar, entrando por la otra puerta.
+        #
+        # Y por eso mismo se CREA si no está: responder desde el panel pausa igual que el eco, así
+        # que tiene que dejar el mismo botón. Sin él, el único rastro es la etiqueta "Tú" en la
+        # lista de conversaciones —hay que entrar al chat para verla—, y cinco respuestas rápidas un
+        # martes son cinco clientes sin bot que nadie va a echar en falta. Idempotente: una segunda
+        # respuesta en el mismo chat NO añade una segunda fila.
+        #
+        # Cero cambios en el panel: la bandeja pinta `motivo_texto` (que sale de `_MOTIVO_TEXTO`,
+        # aquí abajo, y ya tiene `chat_tomado`) y el botón es genérico. Es el mismo camino que ya
+        # funciona para el eco: no se estrena nada.
+        pendientes = (
             await session.execute(
                 select(Intervencion).where(
                     Intervencion.cliente_telefono == telefono,
                     Intervencion.estado == "pendiente",
                 )
             )
-        ).scalars().all():
-            aviso.estado = "resuelta"
-            aviso.resuelta_at = now_utc()
+        ).scalars().all()
+        ya_tomado = any(i.motivo == "chat_tomado" for i in pendientes)
+        for aviso in pendientes:
+            if aviso.motivo != "chat_tomado":
+                aviso.estado = "resuelta"
+                aviso.resuelta_at = now_utc()
+        if not ya_tomado:
+            session.add(Intervencion(
+                cliente_telefono=telefono,
+                motivo="chat_tomado",
+                # El texto nombra el botón REAL del panel, palabra por palabra
+                # (dashboard/src/app/(app)/bandeja/page.tsx:297). Y dice "desde el panel" —no
+                # "desde tu teléfono" como el del eco— porque la bandeja tiene que contar la
+                # verdad de CÓMO se tomó el chat: es lo que le hace reconocer el suyo.
+                detalle=(
+                    "Le respondiste tú desde el panel, así que el bot se calló en ese chat. "
+                    "Cuando termines con ese cliente, dale aquí a 'Ya lo atendí (reactivar el "
+                    "bot)': si no, se queda sin bot para siempre."
+                ),
+            ))
 
         await session.commit()
 
@@ -2128,6 +2173,42 @@ async def pausar_bot_cliente(telefono: str, datos: PausaIn, _: str = Depends(usu
     if not datos.pausado:
         _disparar_retomar(telefono, nombre, firma_previa)
     return {"ok": True, "pausado": datos.pausado}
+
+
+@router.put("/clientes/{telefono}/privado")
+async def marcar_contacto_privado(
+    telefono: str, datos: PrivadoIn, _: str = Depends(usuario_actual)
+):
+    """CONTACTO PRIVADO: familia, amigos, o los clientes del OTRO negocio (migración 031).
+
+    NO ES "Yo atiendo". La pausa es TEMPORAL, de un chat que ella está atendiendo ahora mismo, y
+    se levanta con un botón (y el propio bot la pone al escalar). Esto es PERMANENTE y significa
+    que esa persona no entra al carril de venta: el bot no le responde, no le marca leído, no le
+    manda "escribiendo…", no le gasta IA y NO GUARDA lo que escriba. Por eso son dos interruptores
+    y dos columnas — si compartieran una, "Devolver al bot" le abriría la puerta a la familia.
+
+    ⚠️ NO TOCA `bot_pausado` NI `pausado_por`. Si ella tenía ese chat tomado, sigue tomado; si el
+    bot lo había pausado al escalar, esa firma se respeta. Y al DESmarcar como privado NO se
+    dispara `_disparar_retomar`: retomar sirve para pagar una respuesta que el bot había
+    prometido, y a un contacto privado el bot no le prometió nada. Sería un envío proactivo
+    disfrazado, y Meta no lo permite sin aprobación humana.
+
+    ⚠️ 404 SI NO EXISTE, IGUAL QUE SU VECINA `pausar_bot_cliente` — y NO un UPSERT (revisión
+    cruzada). El UPSERT se propuso "por si algún día hay que marcar un número antes de que
+    escriba"; ese día no existe: el único botón vive DENTRO de un chat abierto, o sea que la ficha
+    ya está. Lo que sí haría un UPSERT es crear fichas fantasma con `ultima_interaccion=now()`
+    que se van al tope de la lista de Conversaciones sin un solo mensaje. YAGNI.
+    """
+    factory = get_session_factory()
+    async with factory() as session:
+        cliente = (
+            await session.execute(select(Cliente).where(Cliente.telefono == telefono))
+        ).scalar_one_or_none()
+        if cliente is None:
+            raise HTTPException(status_code=404, detail="Cliente no encontrado")
+        cliente.privado = datos.privado
+        await session.commit()
+    return {"ok": True, "privado": datos.privado}
 
 
 @router.put("/clientes/{telefono}")

@@ -74,6 +74,11 @@ BANCOS = [
     "probar_prompt_coherente",
     "probar_retomar",
     "probar_bandeja",
+    # CONTACTOS PRIVADOS (migración 031): que el bot NO le hable a la familia. El freno vive en el
+    # webhook, ANTES de `_marcar_entrante`, así que un mensaje privado no sube `no_leidos`, no se
+    # guarda, no marca leído y no gasta un céntimo de IA. Sin este banco, el caso de oro (ni
+    # contador huérfano ni hilo vacío, la lección de SIL-7) no lo vigila nadie.
+    "probar_contacto_privado",
     # EL RELEVO (auditoría 2026-08-02): que una escalada FALLIDA no se dé por buena. `ejecutar_tool`
     # se tragaba toda excepción sin loguear y el bucle marcaba `pidio_ayuda=True` mirando el NOMBRE
     # de la tool, no el resultado: si `pedir_ayuda` reventaba, no había Intervencion, no salía el
@@ -89,6 +94,11 @@ BANCOS = [
     # los `failed` de CALIDAD (131049 = "no entregado para mantener un ecosistema sano") morían en
     # un log que nadie mira — justo la telemetría que un Tech Provider no puede ignorar.
     "probar_meta",
+    # LA TELEMETRÍA (032): que el gasto se cuente POR LLAMADA y no por globo (una fila por globo
+    # contaría el mismo turno hasta cuatro veces), que el `usage` real se lea entero —incluido el
+    # `cost` de 10 decimales, que con NUMERIC(10,2) se redondearía a cero— y, sobre todo, que con
+    # la base caída `registrar()` NO LANCE: si anotar falla, el mensaje del cliente sale igual.
+    "probar_telemetria",
     "probar_fase2",
     "probar_panel_tamanos",
 ]

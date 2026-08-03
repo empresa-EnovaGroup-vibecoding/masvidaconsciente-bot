@@ -6,7 +6,7 @@
 mensaje del cliente se evaporaba, con el contenedor en VERDE. Aquí se TOCAN las dependencias, una
 por una, en vez de suponer que están vivas.
 
-LAS CINCO SONDAS, y por qué cada una está y no otra:
+LAS SIETE SONDAS, y por qué cada una está y no otra:
   1. POSTGRES — se cae y el bot deja de saber quién es nadie.
   2. REDIS ESCRIBIENDO (no PING) — es el que se comió la semana de mensajes.
   3. EL TOKEN DE META — caduca sin avisar; el bot sigue "funcionando" y no sale un solo mensaje.
@@ -16,6 +16,18 @@ LAS CINCO SONDAS, y por qué cada una está y no otra:
      Un `/salud` que mira todo menos eso mira todo menos lo que de verdad se cayó. Y avisa ANTES
      del 402 (por umbral), no después: al llegar el 402 ya se perdieron ventas.
   5. EL BARREDOR — el vigilante también necesita quien lo vigile (F5).
+  6. 🔴 LA DUEÑA CONTACTABLE (2026-08-03) — las otras cinco miran si el bot puede ATENDER.
+     Ninguna miraba si la persona que tiene que ENTERARSE cuando algo se rompe puede recibir el
+     aviso. Y ese estado EXISTE: el portón de `enviar_texto` (META-15) frena TODOS los avisos a
+     la dueña cuando consta que su ventana de 24h está cerrada, y hasta hoy lo único que quedaba
+     de eso era un `logger.error` dentro del contenedor — el sitio donde nadie mira. Un sistema
+     que sabe que su propia alarma está muda y no lo dice es la semana del 10-17 de julio otra
+     vez, una capa más arriba.
+  7. 🔴 EL MODELO CONFIGURADO (2026-08-03) — el saldo dice si HAY dinero; esta dice si el modelo
+     que la proveedora eligió en el panel CONTESTA. `modelo_ia` se cambia SIN redeploy: si el id
+     se escribe mal, todas las llamadas fallan, `_llamar_con_fallback` lo tapa con un modelo MÁS
+     CARO y el bot sigue hablando con todo en verde. Se apoya en `llamadas_ia` (migración 032) y
+     falla ABIERTA: sin esa tabla, esto no puede poner el bot en rojo.
 
 CONTRATO PARA EL MONITOR EXTERNO:
   · 200 + "estado":"ok"        → todo bien.
@@ -78,6 +90,30 @@ _EXTERNO_SEGUNDOS = 300.0
 # subirlo mucho, cansar. Si algún día el gasto sube, sube este número.
 UMBRAL_SALDO_USD = 2.0
 
+# 🔴 EL TESTIGO DEL 402, ESCRITO POR QUIEN LO SUFRE (2026-08-03).
+#
+# `_saldo` PREGUNTA por el saldo a `/api/v1/credits` y se cree la respuesta 5 minutos. Pero el 402
+# de verdad lo cobra el AGENTE, y lo cobra en OTRO PROCESO (el WORKER de Celery), mientras `/salud`
+# vive en la API. Por eso esto NO puede ser una bandera en memoria como `_SALDO`: tiene que viajar
+# por REDIS o no llega. Cuando OpenRouter rechaza una llamada REAL por dinero, eso es la VERDAD y
+# le gana a cualquier estimación.
+#
+# ES LO ÚNICO QUE SE PUEDE HACER HOY CONTRA EL 402 SIN UNA SEGUNDA CUENTA: el modelo de respaldo
+# comparte la MISMA llave que el principal (`config.py:26` y `:31`), así que un 402 de cuenta los
+# tumba a los dos y NO HAY A DÓNDE CAERSE. Lo que sí se puede es dejar de ser silencioso: esto
+# convierte la semana muda del 10-17 de julio en una alarma de segundos.
+#
+# El VALOR es el detalle y su presencia es el veredicto — una sola clave, igual que `_MARCA_VENTANA`
+# en `meta_client`, porque `redis_client` solo expone get/set con TTL y no hay DELETE: para
+# borrarla se escribe VACÍO (`""` es falsy, así que se lee como "sin marca").
+MARCA_402 = "cache:salud:openrouter_402"
+_TTL_402 = 900  # 15 min: si fue un pico se cura solo; si es la cuenta, se vuelve a estampar sola
+
+# Cuántas llamadas del agente hacen falta antes de que la sonda del modelo se atreva a decir que
+# está roto. Con menos de esto, un 429 suelto o una hora floja pintarían una avería que no existe
+# — y un detector que grita en falso se acaba ignorando (DAT-10).
+_MINIMO_LLAMADAS = 5
+
 # El testigo del barredor se da por rancio pasado esto. El bucle pasa cada 5 minutos: 15 son tres
 # pasadas perdidas, o sea "esto no es un tropiezo, esto está muerto".
 MINUTOS_BARREDOR_RANCIO = 15
@@ -94,10 +130,32 @@ def _limpio(e: Exception) -> str:
 
 def olvidar_cache() -> None:
     """Tira las tres cachés. La usa el banco (`probar_vigilante.py`) para que un assert no lea la
-    respuesta del assert anterior; en producción no la llama nadie."""
+    respuesta del assert anterior; en producción no la llama nadie.
+
+    ⚠️ NO tira el testigo del 402 (`MARCA_402`): ese vive en REDIS y lo escribe OTRO PROCESO, así
+    que esta función —que es síncrona a propósito— no lo puede alcanzar. El banco lo limpia a mano
+    escribiendo vacío. Está dicho aquí para que nadie lo dé por tirado."""
     _CACHE.update(en=0.0, cuerpo=None)
     _META.update(en=0.0, dato=None)
     _SALDO.update(en=0.0, dato=None)
+
+
+async def marcar_402(detalle: str = "") -> None:
+    """OpenRouter rechazó una llamada REAL por dinero (402) o por la llave (401). Estámpalo.
+
+    La llama `agent._anotar_si_es_falta_de_saldo`, que corre DENTRO del turno de un cliente: por eso
+    esto NUNCA lanza, pase lo que pase. Un testigo que tumba el turno que venía a vigilar es peor
+    que no tener testigo.
+
+    El detalle pasa por el mismo filtro de credenciales que todo lo demás: `/salud` es PÚBLICO y
+    esto acaba saliendo en el cuerpo de la respuesta.
+    """
+    try:
+        from app.services import redis_client as rc
+
+        await rc.set_cache(MARCA_402, _CREDENCIAL.sub("://***:***@", detalle or "sin detalle")[:200], _TTL_402)
+    except Exception:  # noqa: BLE001 — sin Redis queda la estimación de /credits, que es la de hoy
+        logger.warning("No se pudo estampar el testigo del 402 de OpenRouter")
 
 
 # ─── Las sondas ──────────────────────────────────────────────────────
@@ -189,6 +247,26 @@ async def _saldo() -> dict:
     no se entiende, esto NO se pone rojo (`ok: True` + aviso). Solo el 401 (llave inválida), el 402
     (sin saldo) y un saldo por debajo del umbral cuentan como fallo.
     """
+    # 🔴 LA VERDAD LE GANA A LA ESTIMACIÓN — Y VA ANTES DE LA CACHÉ, que es el detalle que hace
+    # que esto sirva. Un 402 REAL de hace un minuto no puede quedar tapado cinco minutos por un
+    # `total_credits` que decía que había saldo: cuando `/credits` y el rechazo de verdad se
+    # contradicen, manda el rechazo. Es la diferencia entre enterarse en segundos o en días.
+    try:
+        from app.services import redis_client as rc
+
+        visto = await rc.get_cache(MARCA_402)
+    except Exception:  # noqa: BLE001 — sin Redis queda la vía de siempre (preguntar por el saldo)
+        visto = None
+    if visto:
+        return {
+            "ok": False,
+            "error": (
+                "OPENROUTER RECHAZÓ UNA LLAMADA REAL (402/401) hace menos de 15 min: el bot está "
+                "MUDO. El modelo de respaldo NO salva, usa la MISMA llave. Recarga en "
+                f"openrouter.ai → Credits. ({visto})"
+            ),
+        }
+
     ahora = time.monotonic()
     if _SALDO["dato"] is not None and ahora - _SALDO["en"] < _EXTERNO_SEGUNDOS:
         return _SALDO["dato"]
@@ -266,15 +344,157 @@ async def _barredor() -> dict:
         return {"ok": True, "aviso": f"no se pudo leer el testigo del barredor ({_limpio(e)[:120]})"}
 
 
+async def _duena_contactable() -> dict:
+    """🔴 ¿PUEDE LA DUEÑA RECIBIR SUS AVISOS? — el estado que hasta hoy vivía SOLO en el log.
+
+    EL VEREDICTO LO DA LA MISMA FUNCIÓN QUE ABRE EL PORTÓN (`puede_escribirle_a_la_duena`), no una
+    copia de su lógica. Si mañana cambia la regla de la ventana, esta sonda cambia con ella sola;
+    una reimplementación aquí podría cantar VERDE con la puerta cerrada, que es EXACTAMENTE el modo
+    de fallo que `/salud` vino a matar. `_MARCA_VENTANA` se lee solo para distinguir "abierta" de
+    "no consta" en el informe: eso es color, no veredicto. Se importa la CONSTANTE (no se copia la
+    cadena "cache:ventana_duena") para que siga habiendo UN solo nombre de esa clave en la casa.
+
+    ⚠️ QUÉ ES FALLO Y QUÉ ES AVISO — la decisión de diseño, y va razonada porque es la que se puede
+    equivocar:
+      · SIN NÚMERO RESUELTO ⇒ **fallo**. No se cura solo, no hay a quién avisar por NINGÚN canal, y
+        además `es_la_duena` devuelve False para todo el mundo (el cerebro partido: el bot le vende
+        a la dueña y su ventana no se abre nunca). Es la misma clase que "META_ACCESS_TOKEN sin
+        configurar", que esta casa ya trata como fallo.
+      · VENTANA CERRADA ⇒ **aviso, NUNCA fallo**. En un taller donde la dueña no le escribe al bot
+        todos los días esto estaría rojo casi siempre, y UN DETECTOR QUE GRITA EN FALSO SE ACABA
+        IGNORANDO — la peor avería posible en un detector (DAT-10, y costó un WhatsApp de falsa
+        alarma a la dueña). El día que de verdad caiga el saldo, la alarma llegaría a un endpoint
+        que ya nadie lee. Y además NO SE PIERDE NADA: cada aviso frenado queda en la BANDEJA (es el
+        diseño entero de META-15), la marca se cura sola en 1 h y se borra en cuanto ella le escriba
+        al número del negocio. Se grita cuando algo se PIERDE o cuando hace falta una persona; aquí
+        ni lo uno ni lo otro. El dato sale igual en `ventana`, legible por máquina: quien quiera
+        alertar sobre eso puede, sin secuestrar el `estado` global.
+
+    ⚠️ EL TELÉFONO NO SALE DE AQUÍ. `/salud` es PÚBLICO (ver `_limpio`): sale un booleano y el
+    estado de la ventana, JAMÁS el número personal de la dueña.
+
+    Coste: `telefono_de_la_duena` memoriza 60 s en el proceso y `/salud` se cachea 10 s ⇒ como
+    mucho UNA consulta más a Postgres por minuto (`_postgres` ya hace dos por llamada).
+    """
+    try:
+        from app.services.dueno import telefono_de_la_duena
+        from app.services.meta_client import _MARCA_VENTANA, puede_escribirle_a_la_duena
+
+        destino = await telefono_de_la_duena()
+        if not destino:
+            return {
+                "ok": False,
+                "hay_numero": False,
+                "error": (
+                    "NO hay teléfono de la dueña configurado (ni en la tabla `configuracion`, ni en "
+                    "la copia de Redis, ni en el entorno): sus avisos no tienen a dónde ir y el bot "
+                    "tampoco la reconoce cuando ella escribe. Ponlo en el panel → Configuración."
+                ),
+            }
+
+        puede = await puede_escribirle_a_la_duena(destino)
+        marca = None
+        try:
+            from app.services import redis_client as rc
+
+            marca = await rc.get_cache(_MARCA_VENTANA)
+        except Exception:  # noqa: BLE001 — sin Redis manda el veredicto del portón, no el color
+            pass
+
+        # "no consta" NO es un problema: es el estado normal de una caja recién montada (nadie ha
+        # escrito y Meta no nos ha rechazado nada). El portón lo trata como "se intenta".
+        ventana = "cerrada" if not puede else ("abierta" if marca == "abierta" else "no consta")
+        dato: dict = {"ok": True, "hay_numero": True, "ventana": ventana}
+        if not puede:
+            dato["aviso"] = (
+                "LOS AVISOS POR WHATSAPP A LA DUEÑA NO ESTÁN SALIENDO: Meta rechazó uno hace menos "
+                "de una hora (131047, ventana de 24h cerrada) y el portón ya no los intenta. No se "
+                "pierde ninguno —quedan todos en la bandeja del panel— y se cura solo en cuanto "
+                "ella le escriba al número del negocio. Por eso es AVISO y no fallo."
+            )
+        return dato
+    except Exception as e:  # noqa: BLE001 — el chequeo NUNCA puede tumbar la API
+        return {"ok": True, "aviso": f"no se pudo mirar el canal de la dueña ({_limpio(e)[:120]})"}
+
+
+async def _modelo() -> dict:
+    """🔴 ¿EL MODELO QUE ELIGIÓ LA PROVEEDORA EN EL PANEL CONTESTA? (migración 032)
+
+    LA AVERÍA QUE NINGUNA OTRA SONDA VE: `modelo_ia` se cambia desde el panel SIN redeploy. Si el
+    id se escribe mal (o el modelo se retira de OpenRouter), TODAS las llamadas del bucle fallan y
+    `_llamar_con_fallback` tapa el agujero con `openrouter_model_fallback` — que es MÁS CARO. El
+    bot sigue hablando, Postgres verde, Redis verde, el token verde y el saldo verde: solo que el
+    modelo que la proveedora cree que está corriendo NO está corriendo, y el gasto sube.
+
+    🔴 SE PREGUNTA POR **EL MODELO CONFIGURADO**, NO POR "EL QUE MÁS SALE" (corrección de la
+    revisión cruzada, y es la que hace que esto sirva). La primera versión hacía
+    `GROUP BY modelo_pedido ORDER BY count(*) DESC LIMIT 1`. Pero cuando el id está mal escrito,
+    cada fallo del principal genera UNA llamada del fallback: el modelo malo tiene N filas todas
+    en rojo y el fallback tiene N filas todas en verde. EMPATE — y Postgres devuelve cualquiera
+    de los dos. La sonda diría "ok" la mitad de las veces, justo en la avería que vino a cazar.
+    Anclándola al modelo que dice la configuración AHORA no hay desempate posible.
+
+    Aquí NO SALE NI UNA CIFRA DE DINERO ni el id del modelo, y es a propósito: `/salud` es PÚBLICO
+    y sin auth (ver `_limpio`). Lo que se publica son conteos. El gasto y los modelos se leen con
+    psql, detrás del ssh.
+
+    Misma doctrina anti-falso-positivo que Meta y el saldo: hacen falta AL MENOS `_MINIMO_LLAMADAS`
+    llamadas del AGENTE en la última hora y que hayan fallado TODAS para ponerse rojo. Un 429
+    suelto, una hora tranquila o la tabla todavía sin crear NO son una avería — un detector que se
+    equivoca se acaba ignorando (DAT-10). Por eso también el `except` devuelve `ok: True`: con la
+    032 sin aplicar, esto NO puede poner el bot en rojo.
+    """
+    from app.agent.system_prompt import leer_modelo_ia
+    from app.services.db import get_session_factory
+
+    try:
+        modelo = await leer_modelo_ia()
+        factory = get_session_factory()
+        async with factory() as s:
+            fila = (
+                await s.execute(
+                    text(
+                        "SELECT count(*) AS todas, count(*) FILTER (WHERE ok) AS buenas "
+                        "FROM llamadas_ia "
+                        "WHERE created_at > now() - interval '1 hour' "
+                        "  AND paso = 'agente' AND modelo_pedido = :modelo"
+                    ),
+                    {"modelo": modelo},
+                )
+            ).first()
+    except Exception as e:  # noqa: BLE001 — sin la 032 aplicada, o con Postgres caído (que ya lo
+        # dice su propia sonda), esto NO puede poner el bot en rojo.
+        return {"ok": True, "aviso": f"no se pudo leer la telemetría ({_limpio(e)[:120]})"}
+
+    todas, buenas = int(fila[0] or 0), int(fila[1] or 0)
+    if todas == 0:
+        return {"ok": True, "aviso": "ninguna llamada al modelo configurado en la última hora"}
+    if todas >= _MINIMO_LLAMADAS and buenas == 0:
+        return {
+            "ok": False,
+            "llamadas_hora": todas,
+            "error": (
+                f"el modelo elegido en Configuración falló las {todas} llamadas de la última "
+                "hora. Si el bot sigue contestando es por el modelo de respaldo (más caro). "
+                "Revisa el id en el panel → Configuración → modelo de IA."
+            ),
+        }
+    return {"ok": True, "llamadas_hora": todas, "fallos_hora": todas - buenas}
+
+
 # ─── El veredicto ────────────────────────────────────────────────────
 
 async def revisar() -> tuple[dict, int]:
     """(cuerpo, código HTTP).
 
     503 SOLO por Postgres o Redis: son los dos cuya caída hace que el bot se COMA los mensajes en
-    silencio, y los dos que un reinicio puede arreglar. Un token de Meta caducado, un saldo en cero
-    o un barredor muerto salen como `degradado` con 200 —reiniciar el contenedor no revive ninguno
-    de los tres— y el monitor los caza por la PALABRA, no por el código.
+    silencio, y los dos que un reinicio puede arreglar. Un token de Meta caducado, un saldo en cero,
+    un barredor muerto o una dueña sin número salen como `degradado` con 200 —reiniciar el
+    contenedor no revive ninguno— y el monitor los caza por la PALABRA, no por el código.
+
+    ⚠️ La VENTANA cerrada de la dueña NO entra en `fallos` a propósito (ver `_duena_contactable`):
+    sale como `aviso` dentro de su bloque. Si entrara, este endpoint viviría en rojo y el monitor
+    aprendería a ignorarlo justo antes del día que haga falta.
     """
     ahora = time.monotonic()
     if _CACHE["cuerpo"] is not None and ahora - _CACHE["en"] < _CACHE_SEGUNDOS:
@@ -282,7 +502,18 @@ async def revisar() -> tuple[dict, int]:
         return cuerpo, (503 if cuerpo["estado"] == "caido" else 200)
 
     pg, rd, mt, sd, bd = await _postgres(), await _redis(), await _meta(), await _saldo(), await _barredor()
-    piezas = (("postgres", pg), ("redis", rd), ("meta", mt), ("saldo_ia", sd), ("barredor", bd))
+    # LAS DOS SONDAS NUEVAS (2026-08-03). Van en líneas aparte y no dentro de la tupla larga
+    # porque esa ya roza el ancho, y la próxima persona que añada una no debería reformatear nada.
+    #  · `duena_contactable`: el saldo dice si el BOT puede pensar; esta dice si la PERSONA que
+    #    tiene que enterarse cuando algo se rompe puede recibir el aviso.
+    #  · `modelo_ia`: el saldo dice si HAY dinero; esta dice si el modelo que la proveedora eligió
+    #    en el panel CONTESTA. Son tres averías distintas y ninguna tapa a las otras.
+    dn = await _duena_contactable()
+    md = await _modelo()
+    piezas = (
+        ("postgres", pg), ("redis", rd), ("meta", mt), ("saldo_ia", sd),
+        ("barredor", bd), ("duena_contactable", dn), ("modelo_ia", md),
+    )
     fallos = [n for n, d in piezas if not d["ok"]]
     estado = "caido" if (not pg["ok"] or not rd["ok"]) else ("degradado" if fallos else "ok")
 
@@ -294,6 +525,8 @@ async def revisar() -> tuple[dict, int]:
         "meta": mt,
         "saldo_ia": sd,
         "barredor": bd,
+        "duena_contactable": dn,
+        "modelo_ia": md,
         "negocio": settings.negocio_nombre,
     }
     _CACHE.update(en=ahora, cuerpo=cuerpo)

@@ -7,6 +7,7 @@ import base64
 import json
 import logging
 import re
+import time
 import unicodedata
 from datetime import UTC, datetime, timedelta
 
@@ -25,6 +26,11 @@ from app.agent.tools import (
     schemas_para,
 )
 from app.config import get_settings
+
+# La telemetría del modelo (migración 032). `app.services.*` ya se importa aquí arriba
+# (`tools_config`), así que no abre ningún ciclo: telemetria importa `models` y `db` de forma
+# PEREZOSA, dentro de la función que escribe.
+from app.services.telemetria import abrir_turno, registrar
 from app.services.tools_config import leer_tools_activas
 
 logger = logging.getLogger(__name__)
@@ -146,30 +152,85 @@ async def _escalar(
 
 
 async def _llamar_openrouter(messages: list, tools: list, model: str) -> dict:
+    # 🔴 LA FIRMA NO SE TOCA, Y ES DELIBERADO. Esta función es INYECTABLE (`llm=` en `responder`) y
+    # media docena de bancos le pasan dobles con EXACTAMENTE estos tres parámetros —
+    # `probar_dos_agentes` incluso vigila que no cambien. Por eso el turno, el cliente y el carril
+    # llegan por CONTEXTO (`app/services/telemetria.py`) y no como argumentos nuevos.
+    #
+    # Y por eso el apunte va AQUÍ y no en `_llamar_con_fallback`: los dobles de los bancos no
+    # pasan por esta función, así que correr los bancos NO escribe ni una fila en la BD real del
+    # taller. Lo que se anota es lo que de verdad se le pagó a OpenRouter.
+    t0 = time.monotonic()
     async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.post(
-            OPENROUTER_URL,
-            headers={"Authorization": f"Bearer {settings.openrouter_api_key}"},
-            # Temperatura = "dial de libertad". Se mantiene BAJA (0.15) a propósito: probado
-            # 2026-07-03 subirla a 0.4/0.5 daba MUY poca variación extra (Haiku converge igual)
-            # pero empezaba a fallar el precio cuando lo piden (info_producto devuelve varios
-            # campos y a veces omitía el monto) — y NO se rompe el cobro. La naturalidad/variación
-            # se logra QUITANDO las frases-ejemplo del prompt (que el modelo copiaba), no subiendo
-            # la temperatura. (redactar_mensaje sí usa 0.7 porque ahí no hay tools ni cobro.)
-            # provider.require_parameters: OpenRouter SOLO rutea a proveedores que soporten
-            # TODO lo que mandamos (en especial las `tools`). Sin esto podía caer en un proveedor
-            # que IGNORA las herramientas en silencio → el bot "dice" que agendó/cobró SIN llamar
-            # a la herramienta (el bug del "te agendo" por la puerta del proveedor). Blinda el cobro.
-            json={
-                "model": model,
-                "messages": messages,
-                "tools": tools,
-                "temperature": 0.15,
-                "provider": {"require_parameters": True},
-            },
-        )
-        resp.raise_for_status()
-        return resp.json()
+        try:
+            resp = await client.post(
+                OPENROUTER_URL,
+                headers={"Authorization": f"Bearer {settings.openrouter_api_key}"},
+                # Temperatura = "dial de libertad". Se mantiene BAJA (0.15) a propósito: probado
+                # 2026-07-03 subirla a 0.4/0.5 daba MUY poca variación extra (Haiku converge igual)
+                # pero empezaba a fallar el precio cuando lo piden (info_producto devuelve varios
+                # campos y a veces omitía el monto) — y NO se rompe el cobro. La naturalidad/variación
+                # se logra QUITANDO las frases-ejemplo del prompt (que el modelo copiaba), no subiendo
+                # la temperatura. (redactar_mensaje sí usa 0.7 porque ahí no hay tools ni cobro.)
+                # provider.require_parameters: OpenRouter SOLO rutea a proveedores que soporten
+                # TODO lo que mandamos (en especial las `tools`). Sin esto podía caer en un proveedor
+                # que IGNORA las herramientas en silencio → el bot "dice" que agendó/cobró SIN llamar
+                # a la herramienta (el bug del "te agendo" por la puerta del proveedor). Blinda el cobro.
+                json={
+                    "model": model,
+                    "messages": messages,
+                    "tools": tools,
+                    "temperature": 0.15,
+                    "provider": {"require_parameters": True},
+                },
+            )
+            resp.raise_for_status()
+            datos = resp.json()
+        except Exception as e:  # noqa: BLE001 — se ANOTA el fallo y se RELANZA tal cual
+            # No se cambia el comportamiento: `_llamar_con_fallback` sigue viendo la misma
+            # excepción y sigue tirando del modelo de respaldo. Lo único nuevo es que ahora queda
+            # ESCRITO cuál falló y por qué (402 sin saldo, 429, timeout, modelo inexistente) —
+            # hasta hoy eso vivía en un `logger.warning` de un contenedor que se recrea.
+            await registrar(paso="agente", modelo_pedido=model, t0=t0, ok=False, error=str(e))
+            raise
+    # 🔴 FUERA del `async with` (revisión cruzada): dentro, el apunte mantenía abierto el socket
+    # HTTP hasta 2 s por cada una de las ~6 llamadas del turno.
+    await registrar(paso="agente", modelo_pedido=model, t0=t0, datos=datos)
+    return datos
+
+
+def _codigo_http(e: Exception) -> int | None:
+    """El código HTTP de un fallo de httpx, si lo hay. Nunca se adivina por el TEXTO del error:
+    un `str(e)` que contenga '402' puede ser cualquier cosa, y aquí se decide si se enciende una
+    alarma."""
+    return getattr(getattr(e, "response", None), "status_code", None)
+
+
+async def _anotar_si_es_falta_de_saldo(e: Exception, modelo: str) -> None:
+    """🔴 EL 402 DEJA DE SER MUDO (2026-08-03) — sin segunda cuenta, pero con testigo.
+
+    El fallback usa la MISMA llave que el principal (`config.py:26` y `:31`), así que un 402 de
+    CUENTA los tumba a los dos: es la semana muda del 10-17 de julio, y hoy sigue igual de posible.
+    Con una sola cuenta no hay a dónde caerse; lo que sí se puede es que se SEPA. Aquí se estampa
+    el testigo que `/salud` lee (`services/salud.marcar_402`) y el 402 pasa de días de silencio a
+    una alarma en segundos.
+
+    Solo 401 y 402. Un timeout, un 500 o un 429 NO son quedarse sin dinero, y meterlos aquí sería
+    encender la alarma por lo que no es — un detector con falsos positivos se acaba ignorando.
+    """
+    if _codigo_http(e) not in (401, 402):
+        return
+    logger.error(
+        "🔴 OPENROUTER RECHAZÓ POR DINERO O POR LA LLAVE (%s) con el modelo %s. El respaldo usa la "
+        "MISMA llave, así que NO salva: si es un 402 de cuenta, el bot se queda MUDO. Queda "
+        "estampado para que /salud lo cante.", _codigo_http(e), modelo,
+    )
+    try:
+        from app.services.salud import marcar_402
+
+        await marcar_402(f"HTTP {_codigo_http(e)} con {modelo}")
+    except Exception:  # noqa: BLE001 — el testigo JAMÁS puede tumbar el turno que vino a vigilar
+        logger.exception("No se pudo estampar el testigo del rechazo de OpenRouter")
 
 
 async def _llamar_con_fallback(messages: list, llm, modelo: str, tools: list) -> dict:
@@ -178,12 +239,23 @@ async def _llamar_con_fallback(messages: list, llm, modelo: str, tools: list) ->
     `tools` es lo que el modelo VE — ya filtrado por lo que la proveedora dejó activo (fase 4).
     `_DISPATCH` sigue entero: las redes de seguridad y el worker de visión pueden ejecutar
     CUALQUIER herramienta aunque el modelo ya no la vea.
+
+    ⚠️ EL FALLBACK SE SIGUE INTENTANDO AUNQUE EL PRIMERO DÉ 402, Y ESO ES A PROPÓSITO. Tentaba
+    ahorrarse la segunda llamada (misma llave ⇒ mismo resultado), pero OpenRouter también devuelve
+    402 cuando el saldo NO ALCANZA PARA ESE MODELO en concreto — y ahí un modelo más barato SÍ
+    contesta. Saltárselo convertiría una alarma nueva en una venta perdida. Se anota y se sigue:
+    este carril es el del dinero y no cambia de comportamiento ni un milímetro.
     """
     try:
         return await llm(messages, tools, modelo)
     except Exception as e:  # noqa: BLE001
         logger.warning("Modelo principal (%s) falló (%s), usando fallback", modelo, e)
-        return await llm(messages, tools, settings.openrouter_model_fallback)
+        await _anotar_si_es_falta_de_saldo(e, modelo)
+        try:
+            return await llm(messages, tools, settings.openrouter_model_fallback)
+        except Exception as e2:  # noqa: BLE001 — se anota y se deja subir EXACTAMENTE igual que antes
+            await _anotar_si_es_falta_de_saldo(e2, settings.openrouter_model_fallback)
+            raise
 
 
 _SALUDOS = (
@@ -246,7 +318,17 @@ def _asegurar_saludo(texto: str, mensaje_usuario: str, nombre_cliente: str | Non
         partes.append(f"Hola{nombre}, {franja}")
     if quiere_estado:
         partes.append("Muy bien, gracias a Dios")
-    return " ".join(partes) + " 💚\n\n" + texto
+    # Las dos partes son DOS FRASES, y se pegaban con un espacio: con el saludo más común de
+    # Venezuela —"hola como estas?", que enciende las dos— al cliente le llegaba
+    # "Hola, Ana, buenas tardes Muy bien, gracias a Dios 💚". Se lee como un error de tecleo, y es
+    # lo PRIMERO que lee un cliente nuevo. Con una sola parte no cambia nada (`join` de un
+    # elemento), así que esto solo toca el caso que estaba roto.
+    #
+    # ⚠️ NO SE TOCA NI UNA PALABRA MÁS, NI EL 💚: eso es la VOZ de Whuilianny y la voz es de la
+    # dueña (CLAUDE.md §3). Si algún día se quiere otro saludo, lo decide ELLA, no el código. Y el
+    # "¡" que denunciaba el informe ya no está: lo quitó PRM-16 el 2026-08-02, y encima `_aplanar`
+    # (workers/tasks.py:250) borra "¡" y "¿" en el ENVÍO, o sea después de todo lo de este módulo.
+    return ". ".join(partes) + " 💚\n\n" + texto
 
 
 # ─── RED DEL DINERO: el bot NO puede decir un monto que no salió del código ──────────
@@ -968,6 +1050,16 @@ async def responder(
     del panel no se tocan. Radio de explosión: mínimo.
     """
     pregunta_cliente = pregunta_cliente or mensaje_usuario
+
+    # 📊 EL TURNO EMPIEZA AQUÍ (telemetría, migración 032). `responder` es la puerta ÚNICA de
+    # todos los turnos de conversación —el buffer de texto, el audio, el retomar y el simulador
+    # del panel—, así que con esta línea las hasta 6 llamadas del bucle, las del fallback y las de
+    # la Voz quedan cosidas al MISMO `turno_id` y al mismo cliente.
+    # NO pisa un turno ya abierto: si venimos de una nota de voz, la transcripción y esto son el
+    # mismo turno del mismo cliente (lo que se quiere medir es lo que costó ATENDERLO, no una
+    # llamada suelta). Y el teléfono del simulador empieza por '__simulador__', así que el gasto
+    # de las pruebas del panel se puede separar del gasto real con un LIKE.
+    abrir_turno(telefono, "charla")
 
     # 🔒 LA BANDERA. 'uno' = el agente de siempre (lo que corre hoy). 'dos' = Operador + Voz.
     # Volver atrás es UN `UPDATE` en `configuracion`, sin redeploy: el bot lo obedece en el
@@ -1809,15 +1901,27 @@ async def _responder_dos_agentes(
 
 
 async def _pedir_redaccion(messages: list, modelo: str) -> str:
+    # LA VOZ. Su firma tampoco cambia: es inyectable (`voz=`) y la usan el modo dos y los bancos.
+    # Anotarla aparte del `agente` importa porque es la que puede llamarse DOS veces en el mismo
+    # turno (el `for intento in (1, 2)` de `redactar_mensaje`, cuando la red del dinero tumba el
+    # mensaje): con el `paso` separado, ese reintento se ve en vez de confundirse con el bucle.
+    t0 = time.monotonic()
     async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.post(
-            OPENROUTER_URL,
-            headers={"Authorization": f"Bearer {settings.openrouter_api_key}"},
-            json={"model": modelo, "messages": messages, "temperature": 0.7},
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        return (data["choices"][0]["message"].get("content") or "").strip()
+        try:
+            resp = await client.post(
+                OPENROUTER_URL,
+                headers={"Authorization": f"Bearer {settings.openrouter_api_key}"},
+                json={"model": modelo, "messages": messages, "temperature": 0.7},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as e:  # noqa: BLE001 — se anota y se relanza: el que llama ya la trata
+            await registrar(paso="voz", modelo_pedido=modelo, t0=t0, ok=False, error=str(e))
+            raise
+    # 🔴 FUERA del `async with` (revisión cruzada): dentro, el apunte mantenía abierto el socket
+    # HTTP mientras se escribía en Postgres.
+    await registrar(paso="voz", modelo_pedido=modelo, t0=t0, datos=data)
+    return (data["choices"][0]["message"].get("content") or "").strip()
 
 
 async def redactar_mensaje(
@@ -1854,6 +1958,11 @@ async def redactar_mensaje(
     Devuelve "" si el mensaje no se puede salvar ni corrigiéndolo. El que llama NO debe callarse:
     manda un acuse seguro y avisa a la dueña. Preferimos un mensaje sobrio a una mentira.
     """
+    # 📊 EL TURNO DEL DINERO (telemetría, migración 032). Este carril lo dispara el SISTEMA, no un
+    # mensaje del cliente: el comprobante que entra, el pago que la dueña confirma, el que rechaza.
+    # Sin esto sus llamadas quedarían huérfanas justo en el momento del dinero. NO pisa el turno
+    # del comprobante si ya está abierto (la visión y este mensaje son el mismo turno).
+    abrir_turno(telefono, "pago")
     # `telefono` (nuevo): el carril del dinero era el que MENOS contexto tenía — redactaba sin la
     # ficha del cliente, justo en el momento en que hay que tratarlo mejor.
     estable, dinamico = await construir_partes_prompt(nombre, telefono)
@@ -1990,15 +2099,29 @@ async def transcribir_audio(contenido: bytes, mime: str = "audio/ogg") -> str:
             ],
         },
     ]
-    async with httpx.AsyncClient(timeout=60) as client:
-        resp = await client.post(
-            OPENROUTER_URL,
-            headers={"Authorization": f"Bearer {settings.openrouter_api_key}"},
-            json={"model": settings.openrouter_model_audio, "messages": messages, "temperature": 0},
+    # 📊 LA NOTA DE VOZ ES DE LOS CARRILES MÁS CAROS Y EL MÁS INVISIBLE: el audio entra en tokens
+    # (`prompt_tokens_details.audio_tokens`), va por `OPENROUTER_MODEL_AUDIO` —que el selector del
+    # panel NUNCA toca— y hoy no hay una sola cifra de lo que cuesta.
+    t0 = time.monotonic()
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp = await client.post(
+                OPENROUTER_URL,
+                headers={"Authorization": f"Bearer {settings.openrouter_api_key}"},
+                json={"model": settings.openrouter_model_audio, "messages": messages, "temperature": 0},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+    except Exception as e:  # noqa: BLE001 — se anota y se relanza: `_procesar_audio` ya lo trata
+        await registrar(
+            paso="transcripcion", modelo_pedido=settings.openrouter_model_audio,
+            t0=t0, ok=False, error=str(e),
         )
-        resp.raise_for_status()
-        data = resp.json()
-        return (data["choices"][0]["message"].get("content") or "").strip()
+        raise
+    await registrar(
+        paso="transcripcion", modelo_pedido=settings.openrouter_model_audio, t0=t0, datos=data,
+    )
+    return (data["choices"][0]["message"].get("content") or "").strip()
 
 
 # ─── Visión: reconocer comprobantes de pago ──────────────────────────
@@ -2139,6 +2262,11 @@ async def leer_comprobante(
             ],
         },
     ]
+    # 📊 LA VISIÓN DEL COMPROBANTE (telemetría, migración 032). Es el carril del DINERO y el que
+    # más caro sale por llamada (la imagen entra como tokens). Y su fallo tiene un coste de
+    # negocio medible: cada `leido=False` es un pago que la dueña tiene que juzgar a mano. Que
+    # quede contado, no solo logueado.
+    t0 = time.monotonic()
     try:
         async with httpx.AsyncClient(timeout=45) as client:
             resp = await client.post(
@@ -2149,9 +2277,16 @@ async def leer_comprobante(
             resp.raise_for_status()
             data = resp.json()
             texto = (data["choices"][0]["message"].get("content") or "").strip()
-    except Exception:  # noqa: BLE001 — leer el comprobante nunca debe tumbar el worker
+    except Exception as e:  # noqa: BLE001 — leer el comprobante nunca debe tumbar el worker
         logger.exception("No se pudo leer el comprobante con visión")
+        await registrar(
+            paso="vision", modelo_pedido=settings.openrouter_model_audio,
+            t0=t0, ok=False, error=str(e),
+        )
         return {"es_comprobante": None, "leido": False}
+    # 🔴 FUERA del `async with` y FUERA del `try` (revisión cruzada): dentro, el apunte mantenía
+    # abierto el socket HTTP hasta 2 s. `registrar` no lanza nunca, así que aquí no hace falta red.
+    await registrar(paso="vision", modelo_pedido=settings.openrouter_model_audio, t0=t0, datos=data)
     parsed = _parsear_json_comprobante(texto)
     if parsed is None:
         return {"es_comprobante": None, "leido": False}

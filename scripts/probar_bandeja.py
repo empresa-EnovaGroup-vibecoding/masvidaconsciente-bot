@@ -20,7 +20,7 @@ from datetime import timedelta
 from sqlalchemy import delete, select
 
 from app.api.router import _ventana
-from app.models import Cliente, Mensaje, now_utc
+from app.models import Cliente, Intervencion, Mensaje, now_utc
 from app.services.db import get_session_factory
 
 TEL = "__prueba_bandeja__"
@@ -32,6 +32,16 @@ def check(nombre: str, ok: bool, detalle: str = "") -> None:
     print(f"   {'[OK ]' if ok else '[MAL]'} {nombre}{('  → ' + detalle) if detalle and not ok else ''}")
     if not ok:
         fallos.append(nombre)
+
+
+async def _avisos(factory) -> list[Intervencion]:
+    """Los avisos de este chat, del más viejo al más nuevo."""
+    async with factory() as s:
+        return list((await s.execute(
+            select(Intervencion)
+            .where(Intervencion.cliente_telefono == TEL)
+            .order_by(Intervencion.id)
+        )).scalars().all())
 
 
 async def main() -> None:
@@ -121,8 +131,107 @@ async def main() -> None:
     from app.api.router import SIMULADOR
     check("el teléfono del simulador se reconoce", (SIMULADOR + "x").startswith(SIMULADOR))
 
-    print("\n5) LIMPIEZA")
+    print("\n5) 🔴 RESPONDER DESDE EL PANEL DEJA EL BOTÓN QUE DEVUELVE EL CHAT AL BOT")
+    print("   (el bug: el panel daba por RESUELTO el `chat_tomado`, que es el ÚNICO botón)")
+    # Se habla por HTTP DE VERDAD (ASGI + JWT): llamar a la función del endpoint a pelo no evalúa
+    # los `Depends`, así que ni el guardia ni la validación del cuerpo llegarían a correr.
+    import httpx
+
+    import app.services.meta_client as MC
+    from app.api.security import crear_token
+    from app.config import get_settings
+    from app.main import app
+
+    # ⚠️ Se espía `meta_client.enviar_texto` y NO `api.router.enviar_texto`: el endpoint lo
+    # importa DENTRO de la función (línea 1869), así que el nombre se resuelve en el módulo
+    # ORIGEN en cada llamada. Parchear el router no interceptaría nada y este banco mandaría
+    # WhatsApp de verdad.
+    enviados: list[tuple] = []
+    original_enviar = MC.enviar_texto
+
+    async def _espia_envio(destino, texto):
+        enviados.append((destino, texto))
+        return {"messages": [{"id": f"wamid.PANEL{len(enviados)}"}]}
+
+    MC.enviar_texto = _espia_envio  # type: ignore[assignment]
+    auth = {"Authorization": f"Bearer {crear_token(get_settings().admin_email)}"}
+    try:
+        # Un chat con la ventana abierta y SIN avisos: el punto de partida limpio.
+        async with factory() as s:
+            await s.execute(delete(Intervencion).where(Intervencion.cliente_telefono == TEL))
+            await s.execute(delete(Mensaje).where(Mensaje.cliente_telefono == TEL))
+            cli = (await s.execute(select(Cliente).where(Cliente.telefono == TEL))).scalar_one()
+            cli.bot_pausado, cli.pausado_por = False, None
+            cli.ultimo_entrante_at = now_utc()
+            await s.commit()
+
+        transporte = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transporte, base_url="http://test") as c:
+            r1 = await c.post(
+                f"/api/conversaciones/{TEL}/mensajes",
+                json={"texto": "Ya te confirmo el precio"}, headers=auth,
+            )
+            check("la respuesta desde el panel sale (HTTP 200)", r1.status_code == 200,
+                  f"{r1.status_code} · {r1.text[:90]}")
+            avisos = await _avisos(factory)
+            check("🔴 deja UN aviso `chat_tomado` pendiente (el botón de devolverlo al bot)",
+                  [(a.motivo, a.estado) for a in avisos] == [("chat_tomado", "pendiente")],
+                  str([(a.motivo, a.estado) for a in avisos]))
+
+            r2 = await c.post(
+                f"/api/conversaciones/{TEL}/mensajes",
+                json={"texto": "Son 14 dólares"}, headers=auth,
+            )
+            check("responder otra vez sale igual", r2.status_code == 200, r2.text[:90])
+            avisos = await _avisos(factory)
+            check("y NO apila un segundo aviso (idempotente)", len(avisos) == 1, str(len(avisos)))
+
+            # El caso del bug, tal cual pasa en la calle: el aviso lo creó EL ECO (ella contestó
+            # desde el celular) y después ella escribe una línea desde el panel.
+            async with factory() as s:
+                await s.execute(delete(Intervencion).where(Intervencion.cliente_telefono == TEL))
+                s.add(Intervencion(
+                    cliente_telefono=TEL, motivo="chat_tomado", estado="pendiente",
+                    detalle="Le respondiste tú desde tu teléfono",
+                ))
+                await s.commit()
+            r3 = await c.post(
+                f"/api/conversaciones/{TEL}/mensajes",
+                json={"texto": "te lo mando ya"}, headers=auth,
+            )
+            check("responder sobre un chat que ya estaba tomado sale igual",
+                  r3.status_code == 200, r3.text[:90])
+            avisos = await _avisos(factory)
+            check("🔴 el `chat_tomado` del eco SIGUE pendiente (antes lo mataba: ESE era el bug)",
+                  len(avisos) == 1 and avisos[0].estado == "pendiente",
+                  str([(a.motivo, a.estado) for a in avisos]))
+
+            # Y lo de antes no se rompe: un aviso de VERDAD sí se da por atendido al responder.
+            async with factory() as s:
+                await s.execute(delete(Intervencion).where(Intervencion.cliente_telefono == TEL))
+                s.add(Intervencion(
+                    cliente_telefono=TEL, motivo="no_se", estado="pendiente",
+                    detalle="El cliente preguntó algo que el bot no sabe",
+                ))
+                await s.commit()
+            r4 = await c.post(
+                f"/api/conversaciones/{TEL}/mensajes",
+                json={"texto": "listo, ya le respondí"}, headers=auth,
+            )
+            check("responder con un aviso de verdad abierto sale igual",
+                  r4.status_code == 200, r4.text[:90])
+            avisos = await _avisos(factory)
+            porma = {a.motivo: a.estado for a in avisos}
+            check("un aviso que NO es `chat_tomado` sí pasa a 'resuelta' (no se rompe lo de antes)",
+                  porma.get("no_se") == "resuelta", str(porma))
+            check("y el botón de devolver el chat al bot queda puesto",
+                  porma.get("chat_tomado") == "pendiente", str(porma))
+    finally:
+        MC.enviar_texto = original_enviar  # type: ignore[assignment]
+
+    print("\n6) LIMPIEZA")
     async with factory() as s:
+        await s.execute(delete(Intervencion).where(Intervencion.cliente_telefono == TEL))
         await s.execute(delete(Mensaje).where(Mensaje.cliente_telefono == TEL))
         await s.execute(delete(Cliente).where(Cliente.telefono == TEL))
         await s.commit()

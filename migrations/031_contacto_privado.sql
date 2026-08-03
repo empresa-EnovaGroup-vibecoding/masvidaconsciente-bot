@@ -1,0 +1,34 @@
+-- 031_contacto_privado.sql — EL BOT NO LE HABLA A LA FAMILIA (aditiva e idempotente).
+--
+-- 🔴 POR QUÉ. El WhatsApp del negocio es TAMBIÉN el personal de Whuilianny. Por ese mismo número
+-- le escriben su familia, sus amigos y los clientes de su OTRO negocio (pulseras, sartenes,
+-- franelas). La auto-pausa por eco NO cubre este caso, y conviene entender por qué: esa pausa se
+-- enciende cuando ELLA responde, o sea que solo protege los chats en los que ella YA intervino.
+-- Un familiar que escribe "hola cómo estás" es justo el que ESTRENA la conversación — nadie ha
+-- intervenido todavía — y el bot le contesta con el catálogo de comida.
+--
+-- ⚠️ HOY PARECE QUE NO PASA, Y ES UN ESPEJISMO. NUMEROS_PERMITIDOS trae dos números, así que el
+-- bot solo le habla a esos dos. Esa lista es un interruptor de PRUEBAS (ver `_numero_permitido`,
+-- workers/tasks.py), no una lista de privacidad, y el reporte de Maired ya proponía invertirla —
+-- se descartó justo porque seis sitios dependen de su semántica. El día que se vacíe para abrir
+-- el bot a clientes reales, la familia queda expuesta EL MISMO MINUTO. Esta columna es
+-- independiente de esa lista A PROPÓSITO: son dos preguntas distintas.
+--
+-- NOT NULL DEFAULT FALSE. Las 23 filas de hoy quedan en FALSE, así que este ALTER solo, sin el
+-- código que lo lee, NO CAMBIA NADA para nadie. Mismo patrón que `conocimiento.activo` (030) y
+-- que `productos.disponible`: un interruptor que nace apagado.
+--
+-- ⚠️ NO SE MARCA NI UNA FILA. Quién es privado lo decide Whuilianny desde el panel, chat por
+-- chat. Adivinar aquí qué número es "de la familia" sería inventar, y encima con SQL — la misma
+-- enfermedad que la 030 vino a curar.
+--
+-- SIN ÍNDICE, A PROPÓSITO. Los dos sitios que la leen ya llegan por otro camino: el freno del
+-- webhook busca por `telefono` (que tiene su UNIQUE desde la 001) y el barredor la usa como
+-- filtro dentro de un SELECT que ya está acotado a 100 filas. Un índice que nadie usa es deuda
+-- que hay que mantener para siempre.
+--
+-- El partidor `_statements` de app/init_db.py TIRA las líneas que empiezan por '--' ANTES de
+-- partir el resto por ';'. Aquí todos los comentarios son líneas completas, no hay bloques DO, ni
+-- un solo ';' dentro de un literal, ni ningún bind param suelto. Misma regla que la 029 y la 030.
+
+ALTER TABLE clientes ADD COLUMN IF NOT EXISTS privado BOOLEAN NOT NULL DEFAULT FALSE;

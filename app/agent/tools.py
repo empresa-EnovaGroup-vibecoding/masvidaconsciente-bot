@@ -2515,7 +2515,17 @@ async def _la_duena_tomo_el_chat(session, telefono: str) -> bool:
     except Exception:  # noqa: BLE001
         logger.exception("No sé quién pausó a %s → la media NO sale (lado seguro)", telefono)
         return True
-    if cliente is None or not cliente.bot_pausado:
+    if cliente is None:
+        return False
+    # CONTACTO PRIVADO (migración 031): a la familia no le salen ni fotos ni catálogo del negocio.
+    # 🔴 ESTE ES EL SEXTO PUNTO, y no lo cubría el cambio de `_estado_pausa`: este gemelo lee la
+    # fila de `Cliente` por su cuenta (ver el ⚠️ del docstring, que avisa de que la regla vive en
+    # DOS sitios). Hoy es el día que anunciaba. Si faltara, un chat privado que llegue a ejecutar
+    # una tool de media recibiría las fotos aunque el texto se hubiera frenado — que es
+    # exactamente el agujero META-5 que este gemelo vino a tapar, con otro disfraz.
+    if cliente.privado:
+        return True
+    if not cliente.bot_pausado:
         return False
     # `pausado_por='bot'` = el propio bot escaló: sus envíos en curso SÍ salen (migración 020).
     return cliente.pausado_por != "bot"

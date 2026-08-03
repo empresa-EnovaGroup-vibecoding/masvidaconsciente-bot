@@ -44,6 +44,7 @@ Antes de tocar datos reales, probar el cambio dentro de una transacción y hacer
 - **`BRIEF-*.md`** → el diseño detallado de UN tema continuo (ej. `BRIEF-closer-masvida.md` = la voz/personalidad del bot).
 - **`PRP-*.md`** → la receta de construcción de UNA mejora, antes de hacerla (**un PRP por mejora**).
 - ⚠️ `BRIEF-*` y `PRP-*` son **LOCALES (gitignored)**: tienen estrategia/datos sensibles, **NO se suben** a GitHub.
+- 🔴 **HOY NO EXISTE NI UNO** (verificado 2026-08-03: `find` no encuentra ningún `BRIEF-*` ni `PRP-*` en `bot/` ni en `dashboard/`). Al ser gitignored no están en el historial: se perdieron con el disco donde vivían. Este documento y `ROADMAP.md` los siguen nombrando (`PRP-cobro.md`, `BRIEF-closer-masvida.md`, `PRP-bandeja.md`…): **son referencias a papeles que ya no hay, no los busques.** Lo que sobrevivió de ellos está en `SESIONES.md`, en `ROADMAP.md` y en los comentarios del código — y **la voz vive en la BD** (clave `personalidad`).
 - Código del bot: `app/` (`webhook/`, `agent/`, `services/`, `workers/`, `api/`). Migraciones: `migrations/`.
 
 ## 7. Principios de código (de Praxis, lo que aplica)
@@ -101,7 +102,7 @@ KISS · YAGNI · DRY · una responsabilidad por pieza · nombres claros · archi
 - **Notas de voz y stickers:** responder con naturalidad. → `_REGLAS`.
 - **Dudas del negocio:** ubicación/pago/horarios (`info_negocio`), un producto (`info_producto`), generales (`buscar_info`; distingue envío nacional ≠ entrega local). → `_REGLAS`.
 
-**En la Personalidad (panel/BD) va SOLO:** quién es Whuilianny + su **voz/esencia** + su **bienvenida** + sus **ejemplos de cómo habla** (la dueña los definió: son intocables, no reescribir), los **hechos del producto** (sin gluten, azúcar de coco, alulosa…), **reglas del negocio** (horario, delivery, anticipación), **pagos** y los **datos bancarios**. Copia canónica de la voz: `BRIEF-personalidad-whuilianny.md`. ⚠️ El texto VIVO manda: vive en la BD del servidor (clave `personalidad`); antes de editar, leerlo del servidor.
+**En la Personalidad (panel/BD) va SOLO:** quién es Whuilianny + su **voz/esencia** + su **bienvenida** + sus **ejemplos de cómo habla** (la dueña los definió: son intocables, no reescribir), los **hechos del producto** (sin gluten, azúcar de coco, alulosa…), **reglas del negocio** (horario, delivery, anticipación), **pagos** y los **datos bancarios**. 🔴 **La ÚNICA copia canónica de la voz es la BD del servidor** (tabla `configuracion`, clave `personalidad`): **léela de ahí antes de tocar nada.** *(Esta línea decía "copia canónica: `BRIEF-personalidad-whuilianny.md`" — ese fichero NO existe, y siendo `BRIEF-*` gitignored tampoco está en el historial de git: mandaba al próximo a buscar durante media hora un respaldo que no hay. Corregido el 2026-08-03.)*
 
 ---
 *Documento vivo. Si algo aquí ya no es cierto, corrígelo. Inspirado en el sistema del mentor (Erwin) y en Praxis, adaptado al stack real de másvida.*

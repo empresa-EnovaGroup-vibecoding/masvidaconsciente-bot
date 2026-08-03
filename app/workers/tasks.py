@@ -22,6 +22,7 @@ from app.services.meta_client import (
     enviar_texto,
     marcar_mensaje_propio,
 )
+from app.services.telemetria import abrir_turno
 from app.workers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -456,11 +457,27 @@ async def _lo_paso_una_persona(telefono: str) -> bool:
 
 
 async def _estado_pausa(telefono: str) -> tuple[bool, str | None]:
-    """(¿pausado?, ¿quién lo pausó?) — 'dueña' | 'bot' | None.
+    """(¿pausado?, ¿quién lo pausó?) — 'dueña' | 'bot' | 'privado' | None.
 
     PROPAGA la excepción a propósito: cada quien tiene su lado seguro (el bot sigue hablando
     si no sabemos si está pausado; el bot se CALLA si no sabemos QUIÉN lo pausó). Tragarse el
     error aquí obligaba a los dos a compartir el mismo, y uno de los dos quedaba mal.
+
+    🔴 'privado' ES EL **SEGUNDO CINTURÓN** DE LOS CONTACTOS PRIVADOS (migración 031). El freno de
+    verdad está en el webhook (`_es_contacto_privado`), que corta antes de guardar nada y antes de
+    gastar un céntimo de IA. Este de aquí atrapa lo que YA venía en vuelo cuando ella apretó el
+    interruptor: el mensaje sentado en el buffer de 15 s, un `retomar_chat` ya encolado, un
+    comprobante a medio camino. Sin él, marcar a alguien como privado no callaría al bot hasta el
+    mensaje SIGUIENTE — y el que está en vuelo es justo el que la hizo darse cuenta.
+    Son dos cinturones, no uno sustituyendo al otro (misma doctrina que META-1).
+
+    Devuelve 'privado' y no 'dueña' para no mentir en el log ni en el motivo. Los DOS llamadores
+    ya lo tratan bien sin tocarlos: `_cliente_pausado` solo mira el booleano, y
+    `_lo_paso_una_persona` hace `por != "bot"` ⇒ True ⇒ el bot se CALLA, que es lo que queremos.
+
+    ⚠️ 'privado' NUNCA SE ESCRIBE EN `clientes.pausado_por`: el CHECK `ck_cliente_pausado_por`
+    (migración 020) solo admite 'dueña' | 'bot' | NULL. Esto es un valor de RETORNO en memoria,
+    no una fila. Un INSERT/UPDATE con 'privado' reventaría — y no lo hay.
     """
     from sqlalchemy import select
 
@@ -472,7 +489,13 @@ async def _estado_pausa(telefono: str) -> tuple[bool, str | None]:
         cliente = (
             await session.execute(select(Cliente).where(Cliente.telefono == telefono))
         ).scalar_one_or_none()
-    if cliente is None or not cliente.bot_pausado:
+    if cliente is None:
+        return False, None
+    # Va ANTES de mirar `bot_pausado`: un contacto privado calla al bot AUNQUE su chat no esté
+    # pausado. Son dos cosas distintas — la pausa es de un rato, esto es de siempre.
+    if cliente.privado:
+        return True, "privado"
+    if not cliente.bot_pausado:
         return False, None
     return True, cliente.pausado_por
 
@@ -979,6 +1002,11 @@ async def _vigilar_disco_comprobantes() -> None:
 async def _leer_comprobante_seguro(telefono, contenido, base_mime) -> dict:
     """Lee el comprobante con visión, dándole TODAS las cuentas de pago de la dueña
     (tabla metodos_pago) para reconocer SOLO pagos hacia alguna de ellas. Nunca lanza."""
+    # 📊 El turno del COMPROBANTE empieza aquí (telemetría, 032): `leer_comprobante` recibe bytes,
+    # no sabe de quién es el pago. Y el mensaje que la Voz le escriba después al cliente cae en
+    # este mismo turno (`redactar_mensaje` no pisa un turno abierto), así que "lo que cuesta
+    # procesar un pago" queda medido de punta a punta.
+    abrir_turno(telefono, "comprobante")
     from sqlalchemy import select
 
     from app.models import MetodoPago
@@ -1692,6 +1720,10 @@ def procesar_audio(telefono, message_id, media_id, nombre=None, mime_type=None):
 
 
 async def _procesar_audio(telefono, media_id, nombre, mime_type) -> None:
+    # 📊 El turno de la NOTA DE VOZ empieza aquí, antes de transcribir (telemetría, 032). Así la
+    # transcripción y las vueltas del bucle que vienen detrás quedan bajo UN solo `turno_id`: una
+    # nota de voz cuesta las dos cosas, y medirlas por separado no diría lo que cuesta atenderla.
+    abrir_turno(telefono, "audio")
     transcripcion = ""
     try:
         contenido, mime = await descargar_media(media_id)
