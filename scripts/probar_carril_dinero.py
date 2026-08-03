@@ -21,11 +21,24 @@ Lo que se prueba:
   6. 🔌 El interruptor de apagado ya cubre el comprobante: con el bot apagado, no le habla al
      cliente que paga (pero el pago SÍ queda registrado).
 
+Y desde la auditoría del 2026-08-02 (tanda 4), EL CARRIL DEL COMPROBANTE de punta a punta:
+  7. 🔁 El reintento EXISTE (SIL-5). Los `except` decían "dejar reintentar a Meta" — y Meta no
+     reintenta (el webhook ya devolvió 200 al encolar) y Celery tampoco (el `@task` iba a secas).
+     El pago se perdía PARA SIEMPRE: sin fila, sin respuesta al cliente y sin aviso a la dueña.
+     Ahora se reintenta 3 veces y, si aun así no se puede, se le entrega el caso a una persona.
+  8. 💾 El disco no puede tumbar el cobro: `_guardar_comprobante` vivía FUERA de todo try, así
+     que un /data lleno mataba la tarea y el PAGO no dejaba ni un rastro.
+  9. 👁️ El dinero se juzga UNA vez: la visión no es determinista, y con reintentos el segundo
+     intento podía dar un veredicto DISTINTO sobre el MISMO comprobante.
+ 10. 🙈 "No pude leer" ≠ "no es un comprobante" (SIL-6): con la visión caída el bot pedía la
+     captura otra vez, con cada captura, y el negocio dejaba de cobrar en silencio.
+
 No se manda un solo WhatsApp: Meta está amordazado y el modelo, sustituido por un doble.
 """
 import asyncio
 import sys
 from datetime import timedelta
+from decimal import Decimal
 
 from sqlalchemy import delete, select
 
@@ -37,7 +50,7 @@ from app.agent.agent import (
     frase_prohibida_siempre,
 )
 from app.agent.system_prompt import _REGLAS
-from app.models import Cliente, Configuracion, Intervencion, Mensaje, now_utc
+from app.models import Cliente, Configuracion, Intervencion, Mensaje, Pago, Pedido, now_utc
 from app.services import redis_client as rc
 from app.services.db import get_session_factory
 from app.workers import tasks
@@ -45,6 +58,19 @@ from app.workers import tasks
 TEL = "__prueba_dinero__"
 fallos: list[str] = []
 enviados: list[tuple[str, str]] = []
+
+# Los ids que usa el carril del COMPROBANTE (secciones 6-8). Están en constantes para poder
+# SOLTARLOS en `_limpiar`: la marca `comprob:` dura 24 h y la caché de visión 15 min, así que sin
+# esto la SEGUNDA corrida del banco saldría toda por "duplicado" —el banco verde el lunes y rojo
+# el martes, sin que nada esté roto—. Un banco que solo funciona una vez no es un banco.
+MENSAJES_PRUEBA = (
+    "wamid.PRUEBA_COMP_1", "wamid.DISCO", "wamid.BD", "wamid.VOL", "wamid.IL1",
+    "wamid.ILEG", "wamid.FOTO", "wamid.OTRA", "wamid.GIF1", "wamid.GIF2",
+)
+MEDIAS_PRUEBA = (
+    "media_prueba_comp_1", "media_disco", "media_bd", "media_voluble", "media_ilegible_cache",
+    "media_ileg_1", "media_foto_1", "media_otra_cuenta", "media_gif_1", "media_gif_2",
+)
 
 
 def check(nombre: str, ok: bool, detalle: str = "") -> None:
@@ -61,11 +87,71 @@ async def _falso_envio(telefono: str, texto: str) -> dict:
 async def _limpiar() -> None:
     f = get_session_factory()
     async with f() as s:
+        pedidos = (await s.execute(
+            select(Pedido.id).where(Pedido.cliente_telefono == TEL)
+        )).scalars().all()
+        if pedidos:
+            await s.execute(delete(Pago).where(Pago.pedido_id.in_(pedidos)))
+            await s.execute(delete(Pedido).where(Pedido.id.in_(pedidos)))
         await s.execute(delete(Mensaje).where(Mensaje.cliente_telefono == TEL))
         await s.execute(delete(Intervencion).where(Intervencion.cliente_telefono == TEL))
         await s.execute(delete(Cliente).where(Cliente.telefono == TEL))
         await s.commit()
     await rc.borrar_memoria(TEL)
+    # Los candados antiinundación duran 15 min y las marcas del dinero 24 h: sin soltarlos, el
+    # caso siguiente no vería ningún aviso —o saldría por "duplicado"— y parecería una regresión.
+    # Mismo patrón que `probar_retomar._soltar_candado`.
+    await rc._client().delete(
+        f"aviso:vision_caida:{TEL}", "aviso:panel_incompleto",
+        *[f"comprob:{m}" for m in MENSAJES_PRUEBA],
+        *[f"cache:vision:{m}" for m in MEDIAS_PRUEBA],
+    )
+
+
+# ─── Utilería del carril del COMPROBANTE (secciones 6-8) ─────────────
+
+async def _pedido_esperando_pago(total: str = "28") -> int:
+    """Un cliente con un pedido ESPERANDO PAGO: sin esto `registrar_comprobante` devuelve
+    ok=False y no se crea ningún Pago (esa puerta es la que impide que una foto cualquiera
+    se convierta en dinero)."""
+    f = get_session_factory()
+    async with f() as s:
+        s.add(Cliente(telefono=TEL, nombre="Rosa", ultimo_entrante_at=now_utc()))
+        await s.flush()
+        ped = Pedido(cliente_telefono=TEL, items=[], total=Decimal(total), estado="esperando_pago")
+        s.add(ped)
+        await s.commit()
+        return ped.id
+
+
+async def _pagos() -> list[tuple[str, str | None]]:
+    f = get_session_factory()
+    async with f() as s:
+        filas = (await s.execute(
+            select(Pago.estado, Pago.comprobante_url)
+            .join(Pedido, Pago.pedido_id == Pedido.id)
+            .where(Pedido.cliente_telefono == TEL)
+        )).all()
+    return [(e, u) for e, u in filas]
+
+
+async def _motivos() -> list[str]:
+    f = get_session_factory()
+    async with f() as s:
+        return list((await s.execute(
+            select(Intervencion.motivo).where(Intervencion.cliente_telefono == TEL)
+        )).scalars().all())
+
+
+async def _burbujas() -> list[tuple[str | None, str | None]]:
+    """(media_id, media_url) de lo que entró al HILO del panel."""
+    f = get_session_factory()
+    async with f() as s:
+        filas = (await s.execute(
+            select(Mensaje.media_id, Mensaje.media_url)
+            .where(Mensaje.cliente_telefono == TEL, Mensaje.media_id.is_not(None))
+        )).all()
+    return [(m, u) for m, u in filas]
 
 
 async def main() -> None:
@@ -259,6 +345,230 @@ async def main() -> None:
             fila.valor = antes if antes is not None else "true"
         await s.commit()
     check("el interruptor quedó como estaba (no se ensucia el panel)", True)
+
+    # ─── EL CARRIL DEL COMPROBANTE (auditoría 2026-08-02, tanda 4) ───
+    # De aquí en adelante el interruptor se fuerza ENCENDIDO: en el servidor puede estar
+    # legítimamente apagado (pasó el 2026-07-13) y estas pruebas se caerían por el motivo
+    # equivocado. Que el interruptor calla al bot ya lo prueba la sección 5, arriba.
+    real_activo = tasks._bot_activo
+
+    async def _siempre_encendido() -> bool:
+        return True
+
+    async def _descarga_ok(media_id):
+        return b"...bytes de la captura del pago...", "image/jpeg"
+
+    async def _descarga_rota(media_id):
+        raise RuntimeError("Meta devolvió 500 al entregar el media")
+
+    situaciones: list[str] = []
+
+    async def _situacion_doble(telefono, situacion, nombre):
+        """Doble de `_responder_situacion`: anota QUÉ se le iba a decir al cliente y no llama al
+        modelo. Devuelve una parte 'enviado' para no disparar el aviso de chat pausado."""
+        situaciones.append(situacion)
+        return [{"texto": "(mensaje al cliente)", "wa_message_id": "wamid.SIT", "estado": "enviado"}]
+
+    real_descarga = tasks.descargar_media
+    real_guardar = tasks._guardar_comprobante
+    real_vision = tasks._leer_comprobante_seguro
+    real_situacion = tasks._responder_situacion
+    tasks._bot_activo = _siempre_encendido
+
+    try:
+        print("\n6) 🔁 EL REINTENTO DEL COMPROBANTE EXISTE DE VERDAD (SIL-5)")
+        print("   (los `except` decían 'dejar reintentar a Meta'. Meta NO reintenta: el webhook")
+        print("    ya devolvió 200 al encolar. Y Celery tampoco: el `@task` iba a secas.)")
+        await _limpiar()
+        MSG, MEDIA = "wamid.PRUEBA_COMP_1", "media_prueba_comp_1"
+        tasks.descargar_media = _descarga_rota
+        enviados.clear()
+        v = await tasks._procesar_comprobante(
+            TEL, MSG, MEDIA, None, "Rosa", "image/jpeg", ultimo_intento=False
+        )
+        check("la descarga falla ⇒ veredicto 'reintentar' (antes: `return` y el pago perdido)",
+              v == "reintentar", repr(v))
+        check("y NO se marca como atendido: el reintento tiene que poder entrar",
+              not await rc.comprobante_procesado(MSG))
+        check("y todavía no se molesta a la dueña (quedan intentos por delante)",
+              not await _motivos(), str(await _motivos()))
+
+        v = await tasks._procesar_comprobante(
+            TEL, MSG, MEDIA, None, "Rosa", "image/jpeg", ultimo_intento=True
+        )
+        check("agotados los intentos ⇒ 'rendido': NO se abandona en silencio", v == "rendido", repr(v))
+        check("🔴 la CAPTURA entra al hilo IGUAL, sin archivo (el panel se la baja de Meta)",
+              await _burbujas() == [(MEDIA, None)], str(await _burbujas()))
+        check("🔴 y hay aviso en la bandeja: 'comprobante_sin_procesar'",
+              "comprobante_sin_procesar" in await _motivos(), str(await _motivos()))
+        check("el cliente —que ACABA de pagar— recibe el acuse sobrio",
+              any("revisando tu pago" in t for d, t in enviados if d == TEL), str(enviados))
+        check("y AHORA sí se marca: ya hay una persona enterada, no se repite el aviso",
+              await rc.comprobante_procesado(MSG))
+
+        print("\n6.b) 💾 EL DISCO NO PUEDE TUMBAR EL COBRO (esa línea vivía FUERA de todo try)")
+        await _limpiar()
+        await _pedido_esperando_pago("28")
+
+        def _disco_lleno(media_id, contenido, mime):
+            raise OSError("[Errno 28] No space left on device")
+
+        async def _vision_buena(telefono, contenido, base_mime):
+            return {"es_comprobante": True, "leido": True, "es_pantalla_bancaria": True,
+                    "monto": "28", "referencia": "0123456789"}
+
+        tasks.descargar_media = _descarga_ok
+        tasks._guardar_comprobante = _disco_lleno
+        tasks._leer_comprobante_seguro = _vision_buena
+        tasks._responder_situacion = _situacion_doble
+        situaciones.clear()
+        v = await tasks._procesar_comprobante(
+            TEL, "wamid.DISCO", "media_disco", None, "Rosa", "image/jpeg"
+        )
+        check("con el disco lleno la tarea NO muere a mitad: llega al final", v == "ok", repr(v))
+        check("🔴 y el PAGO se registra igual (antes: OSError, y el pago no dejaba NI UN rastro)",
+              [e for e, _ in await _pagos()] == ["reportado"], str(await _pagos()))
+        check("la burbuja entra al hilo, sin archivo local pero con su media_id",
+              await _burbujas() == [("media_disco", None)], str(await _burbujas()))
+        check("y la dueña se entera del disco ('comprobante_sin_archivo')",
+              "comprobante_sin_archivo" in await _motivos(), str(await _motivos()))
+
+        print("\n6.c) 🗄️ Y SI LA BASE FALLA AL REGISTRAR, TAMPOCO SE PIERDE")
+        await _limpiar()
+        await _pedido_esperando_pago("28")
+        import app.agent.tools as tools_mod
+        real_registrar = tools_mod.registrar_comprobante
+
+        async def _registro_roto(*a, **k):
+            raise RuntimeError("la base de datos se cayó justo aquí")
+
+        tasks._guardar_comprobante = real_guardar
+        tools_mod.registrar_comprobante = _registro_roto
+        try:
+            v = await tasks._procesar_comprobante(
+                TEL, "wamid.BD", "media_bd", None, "Rosa", "image/jpeg", ultimo_intento=False
+            )
+            check("la base falla ⇒ 'reintentar' y SIN marcar", v == "reintentar", repr(v))
+            check("(sigue sin marcar: el reintento tiene que poder entrar)",
+                  not await rc.comprobante_procesado("wamid.BD"))
+            v = await tasks._procesar_comprobante(
+                TEL, "wamid.BD", "media_bd", None, "Rosa", "image/jpeg", ultimo_intento=True
+            )
+            check("y al último intento ⇒ 'rendido' + aviso a la dueña", v == "rendido", repr(v))
+            check("con el aviso 'comprobante_sin_procesar' en la bandeja",
+                  "comprobante_sin_procesar" in await _motivos(), str(await _motivos()))
+        finally:
+            tools_mod.registrar_comprobante = real_registrar
+
+        print("\n7) 👁️ EL DINERO SE JUZGA UNA VEZ (la visión NO es determinista)")
+        print("   Con reintentos, el 2º intento podría dar un veredicto DISTINTO sobre el MISMO")
+        print("   comprobante y cerrar como 'no es un pago' algo que el 1º ya había leído bien.")
+        await _limpiar()
+        await _pedido_esperando_pago("28")
+        MEDIA_V = "media_voluble"
+        lecturas: list[int] = []
+
+        async def _vision_voluble(telefono, contenido, base_mime):
+            lecturas.append(1)
+            if len(lecturas) == 1:
+                return {"es_comprobante": True, "leido": True, "es_pantalla_bancaria": True,
+                        "monto": "28"}
+            return {"es_comprobante": False, "leido": True, "es_pantalla_bancaria": False}
+
+        tasks._leer_comprobante_seguro = _vision_voluble
+        situaciones.clear()
+        v1 = await tasks._procesar_comprobante(
+            TEL, "wamid.VOL", MEDIA_V, None, "Rosa", "image/jpeg"
+        )
+        # El reintento REAL llega con el mismo message_id y SIN marca (el fallo fue antes de
+        # marcar); aquí se suelta a mano para reproducir esa segunda pasada.
+        await rc._client().delete("comprob:wamid.VOL")
+        v2 = await tasks._procesar_comprobante(
+            TEL, "wamid.VOL", MEDIA_V, None, "Rosa", "image/jpeg"
+        )
+        check("la visión se cobra UNA sola vez por comprobante", len(lecturas) == 1, str(len(lecturas)))
+        check("🔴 y el 2º intento NO cierra como 'no es un pago' lo que el 1º leyó bien",
+              v1 == "ok" and v2 != "no_es_comprobante", f"{v1!r} → {v2!r}")
+
+        MEDIA_I = "media_ilegible_cache"
+        ilegibles: list[int] = []
+
+        async def _vision_caida(telefono, contenido, base_mime):
+            ilegibles.append(1)
+            return {"es_comprobante": None, "leido": False}
+
+        tasks._leer_comprobante_seguro = _vision_caida
+        await tasks._procesar_comprobante(TEL, "wamid.IL1", MEDIA_I, None, "Rosa", "image/jpeg")
+        await rc._client().delete("comprob:wamid.IL1")
+        await tasks._procesar_comprobante(TEL, "wamid.IL1", MEDIA_I, None, "Rosa", "image/jpeg")
+        check("una lectura FALLIDA no se congela (si la visión vuelve, que la aproveche)",
+              len(ilegibles) == 2, str(len(ilegibles)))
+
+        print("\n8) 🙈 'NO PUDE LEER' **NO** ES 'NO ES UN COMPROBANTE' (SIL-6)")
+        print("   Con la visión caída (402 del 2026-07-15, 429, timeout, un GIF), el cliente")
+        print("   recibía 'mándame la captura clara' con CADA captura. El negocio dejaba de cobrar.")
+        await _limpiar()
+        await _pedido_esperando_pago("28")
+        tasks._leer_comprobante_seguro = _vision_caida
+        situaciones.clear()
+        enviados.clear()
+        v = await tasks._procesar_comprobante(
+            TEL, "wamid.ILEG", "media_ileg_1", None, "Rosa", "image/jpeg"
+        )
+        check("🔴 con la visión caída el PAGO SE REGISTRA igual (el corazón del arreglo)",
+              [e for e, _ in await _pagos()] == ["reportado"], str(await _pagos()))
+        check("🔴 y la dueña lo ve en la bandeja ('comprobante_ilegible')",
+              "comprobante_ilegible" in await _motivos(), str(await _motivos()))
+        check("al cliente NO se le pide otra vez la captura: se le dice que se está revisando",
+              bool(situaciones) and "MONTO no cuadra" in situaciones[-1]
+              and "reenvíe la captura" not in situaciones[-1], str(situaciones[-1:]))
+
+        # ANTI-REGRESIÓN: la conducta vieja, la que SÍ hay que conservar.
+        await _limpiar()
+        await _pedido_esperando_pago("28")
+
+        async def _vision_no_es(telefono, contenido, base_mime):
+            return {"es_comprobante": False, "leido": True, "es_pantalla_bancaria": False}
+
+        tasks._leer_comprobante_seguro = _vision_no_es
+        situaciones.clear()
+        v = await tasks._procesar_comprobante(
+            TEL, "wamid.FOTO", "media_foto_1", None, "Rosa", "image/jpeg"
+        )
+        check("✅ una foto cualquiera (la visión SEGURA de que no es pago) NO crea Pago",
+              v == "no_es_comprobante" and not await _pagos(), f"{v!r} {await _pagos()}")
+        check("✅ y se le pide la captura clara, como siempre",
+              bool(situaciones) and "no parece un comprobante" in situaciones[-1],
+              str(situaciones[-1:]))
+
+        async def _vision_otra_cuenta(telefono, contenido, base_mime):
+            return {"es_comprobante": False, "leido": True, "es_pantalla_bancaria": True}
+
+        tasks._leer_comprobante_seguro = _vision_otra_cuenta
+        situaciones.clear()
+        await tasks._procesar_comprobante(
+            TEL, "wamid.OTRA", "media_otra_cuenta", None, "Rosa", "image/jpeg"
+        )
+        check("✅ un pago a OTRA cuenta sigue con su mensaje neutral (no acusa a nadie)",
+              bool(situaciones) and "NO te aparece hecho a TU cuenta" in situaciones[-1],
+              str(situaciones[-1:]))
+
+        print("\n8.b) 🔒 Y LA VISIÓN CAÍDA NO INUNDA A LA DUEÑA (un aviso por cliente / 15 min)")
+        await _limpiar()
+        await _pedido_esperando_pago("28")
+        tasks._leer_comprobante_seguro = _vision_caida
+        await tasks._procesar_comprobante(TEL, "wamid.GIF1", "media_gif_1", None, "Rosa", "image/gif")
+        await tasks._procesar_comprobante(TEL, "wamid.GIF2", "media_gif_2", None, "Rosa", "image/gif")
+        ilegible = [m for m in await _motivos() if m == "comprobante_ilegible"]
+        check("🔴 dos imágenes ilegibles seguidas ⇒ UN solo aviso (con la visión caída serían "
+              "una Intervencion y un WhatsApp por CADA imagen de CADA cliente)",
+              len(ilegible) == 1, str(await _motivos()))
+    finally:
+        tasks._bot_activo = real_activo
+        tasks.descargar_media = real_descarga
+        tasks._guardar_comprobante = real_guardar
+        tasks._leer_comprobante_seguro = real_vision
+        tasks._responder_situacion = real_situacion
 
     await _limpiar()
     print()

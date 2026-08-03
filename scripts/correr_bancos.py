@@ -54,6 +54,11 @@ BANCOS = [
     # invalidaba la cotización y no revalidaba la fecha. Habla HTTP de verdad (ASGI + JWT).
     "probar_cobro_panel",
     "probar_carril_dinero",
+    # QUE EL MENSAJE DEL CLIENTE NO SE EVAPORE (auditoría 2026-08-02): el lock tomado descartaba
+    # el turno sin reencolar, el buffer se vaciaba ANTES de pensar y el historial se guardaba
+    # DESPUÉS, así que un 402 borraba el mensaje de Redis Y de la tabla `mensajes` — en el panel
+    # quedaba un hueco. Y el bot recordaba haber dicho globos que el cliente nunca recibió.
+    "probar_no_se_evapora",
     "probar_recibo_visible",
     "probar_honestidad",
     "probar_retomar",

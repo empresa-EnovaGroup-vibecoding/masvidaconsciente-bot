@@ -102,6 +102,22 @@ def _texto_de(msg: dict, tipo: str) -> str | None:
         return (msg.get("text") or {}).get("body")
     if tipo == "reaction":
         return (msg.get("reaction") or {}).get("emoji")
+    # 🔴 LA UBICACIÓN ES LA DIRECCIÓN DE ENTREGA (auditoría 2026-08-02, SIL-12). Meta manda
+    # latitude/longitude y, si el cliente la eligió del mapa, `name` y `address`. Todo eso se
+    # tiraba aquí: `_extraer_media` devuelve (None, None, None) —el cuerpo de una ubicación no
+    # tiene `id`— y esta función no tenía rama, así que el worker resumía el evento a "(el cliente
+    # envio un location, sin texto)" y la dirección A DONDE HAY QUE LLEVAR EL PEDIDO no quedaba en
+    # NINGÚN sitio del sistema: ni en `mensajes`, ni en Redis, ni en el log. En un negocio de
+    # delivery eso es una entrega que no se puede hacer.
+    if tipo == "location":
+        loc = msg.get("location") or {}
+        if not isinstance(loc, dict):
+            return None
+        trozos = [str(p).strip() for p in (loc.get("name"), loc.get("address")) if p]
+        lat, lon = loc.get("latitude"), loc.get("longitude")
+        if lat is not None and lon is not None:
+            trozos.append(f"https://maps.google.com/?q={lat},{lon}")
+        return " — ".join(trozos) or None
     return None
 
 

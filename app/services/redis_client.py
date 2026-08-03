@@ -163,3 +163,26 @@ async def aviso_abuso_nuevo(telefono: str) -> bool:
         f"abuso_avisado:{telefono}:{_hoy()}", "1", nx=True, ex=93600
     )
     return creado is not None
+
+
+# ─── Candado antiinundación de avisos a la dueña ─────────────────────
+# Mismo patrón que `aviso_abuso_nuevo` (arriba), pero con clave LIBRE: lo usan las redes que
+# avisan de una AVERÍA, no de un cliente. Prefijo propio `aviso:` a propósito, como `comprob:`
+# y `retomar:`: no es caché (no se lee su valor, solo se compite por crearla).
+
+
+async def aviso_unico(clave: str, ttl: int) -> bool:
+    """True solo la PRIMERA vez en `ttl` segundos. Para que UNA avería no se convierta en una
+    LLUVIA de avisos a la dueña.
+
+    🔴 Por qué (auditoría 2026-08-02, SIL-10/SIL-15/SIL-6): las redes nuevas avisan cuando el bot
+    no pudo contestar, cuando el panel no aceptó una escritura o cuando la visión no pudo leer un
+    comprobante. Todas esas averías son de las que duran RATO (OpenRouter sin saldo, Postgres
+    reiniciando): sin candado, una caída de una hora le manda a la dueña un WhatsApp por cada
+    mensaje de cada cliente, y el aviso importante se ahoga entre doscientos iguales.
+
+    La clave la elige quien avisa, y ahí está la gracia: `f"sin_respuesta:{telefono}"` avisa una
+    vez POR CLIENTE (cada cliente perdido importa), `"panel_incompleto"` a secas avisa una vez
+    para TODO el sistema (la avería es una sola, la base).
+    """
+    return await _client().set(f"aviso:{clave}", "1", nx=True, ex=ttl) is not None

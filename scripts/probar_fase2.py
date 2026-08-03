@@ -12,7 +12,7 @@ import time
 
 from sqlalchemy import delete, select
 
-from app.models import Cliente, Mensaje
+from app.models import Cliente, Intervencion, Mensaje
 from app.services.db import get_session_factory
 from app.webhook.parser import contenido_seguro, extraer_eventos, tipo_valido
 
@@ -47,6 +47,11 @@ async def limpiar():
     factory = get_session_factory()
     async with factory() as s:
         await s.execute(delete(Mensaje).where(Mensaje.cliente_telefono == TEL))
+        # Desde SIL-9, un eco deja un aviso `chat_tomado` PENDIENTE en la bandeja (es el botón
+        # que le devuelve el chat al bot). Sin borrarlo aquí, cada corrida de este banco le
+        # dejaría a la dueña un "Te esperan" de un cliente que no existe — y el barredor no lo
+        # cierra nunca, precisamente porque ese motivo está excluido a propósito.
+        await s.execute(delete(Intervencion).where(Intervencion.cliente_telefono == TEL))
         await s.execute(delete(Cliente).where(Cliente.telefono == TEL))
         await s.commit()
 

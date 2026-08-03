@@ -43,7 +43,14 @@ from app.api.security import crear_token
 from app.config import get_settings
 from app.main import app
 from app.models import (
-    Cliente, Intervencion, Pago, Pedido, Producto, ProductoVariante, ZonaEntrega, now_utc,
+    Cliente,
+    Intervencion,
+    Pago,
+    Pedido,
+    Producto,
+    ProductoVariante,
+    ZonaEntrega,
+    now_utc,
 )
 from app.services import redis_client as rc
 from app.services.db import get_session_factory

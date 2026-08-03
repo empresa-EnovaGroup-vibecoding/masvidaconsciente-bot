@@ -4,6 +4,8 @@ import logging
 import os
 import re
 
+from celery.exceptions import MaxRetriesExceededError
+
 from app.agent.agent import (
     leer_comprobante,
     redactar_mensaje,
@@ -37,27 +39,87 @@ def _run(coro):
     return _LOOP.run_until_complete(coro)
 
 
+# ─── Escrituras del PANEL: si fallan, alguien se entera ──────────────
+
+_INTENTOS_PANEL = 2  # el original + UN reintento
+
+
+async def _escribir_en_panel(escribir, telefono: str, que: str) -> bool:
+    """Ejecuta una escritura del panel y, si revienta, la reintenta UNA vez tras un segundo.
+
+    🔴 Por qué (auditoría 2026-08-02, SIL-15): esto era `except: logger.exception(...)` y punto.
+    El fallo típico aquí NO es "Postgres está muerto": es una conexión del pool que el servidor
+    cerró por su lado y explota al usarla, o el pestañeo de un reinicio de la base. El segundo
+    intento pasa. Con el trago-y-log, ese pestañeo borraba del panel el intercambio ENTERO —lo
+    que preguntó el cliente Y lo que contestó el bot— y la dueña seguía atendiendo a ciegas,
+    sin ninguna señal de que le faltaban mensajes.
+    """
+    for intento in range(1, _INTENTOS_PANEL + 1):
+        try:
+            await escribir()
+            return True
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "No se pudo guardar %s de %s en el panel (intento %s/%s)",
+                que, telefono, intento, _INTENTOS_PANEL,
+            )
+            if intento < _INTENTOS_PANEL:
+                await asyncio.sleep(1.0)
+    return False
+
+
+async def _hueco_en_el_panel(telefono: str, texto_usuario: str, dichos: list) -> None:
+    """La base no aceptó el intercambio ni al segundo intento: el hilo del panel queda con un
+    HUECO. Que no sea silencioso — el silencio es LA falla de esta casa.
+
+    El orden importa: (1) log en ERROR con el contenido íntegro, porque los logs del contenedor
+    son el último respaldo que queda cuando la BD no está; (2) WhatsApp a la dueña, con el
+    destino sacado de la VARIABLE DE ENTORNO y no de la tabla `configuracion` —la tabla vive en
+    el Postgres que acaba de fallar, que es como preguntarle la hora al reloj roto—; (3) candado
+    de 15 min, para que una caída de la base no se convierta en 200 WhatsApps. La clave del
+    candado va SIN teléfono a propósito: la avería es UNA (la base), no una por cliente.
+    """
+    logger.error(
+        "HUECO EN EL PANEL de %s — cliente=%r bot=%r", telefono, texto_usuario, dichos
+    )
+    try:
+        if settings.dueno_telefono and await rc.aviso_unico("panel_incompleto", 900):
+            await enviar_texto(
+                settings.dueno_telefono,
+                "⚠️ No estoy pudiendo guardar las conversaciones en el panel (falla la base de "
+                "datos). El bot sigue contestando por WhatsApp, pero el panel está INCOMPLETO: "
+                "hay mensajes de tus clientes y respuestas mías que no vas a ver ahí. "
+                "Avísale a Enova.",
+            )
+    except Exception:  # noqa: BLE001 — el aviso es lo último que hay; que no tumbe al worker
+        logger.exception("Tampoco se pudo avisar de que el panel está perdiendo mensajes")
+
+
 async def _guardar_en_panel(
     telefono: str, nombre: str | None, texto_usuario: str, partes: list[dict]
-) -> None:
+) -> bool:
     """Persiste la conversacion en Postgres para que aparezca en el panel.
 
     El historial en Redis es para el contexto del agente; el PANEL lee de Postgres
     (tablas clientes + mensajes). Sin esto, las charlas no se ven en el panel.
-    No es critico: si falla, el bot ya respondio igual.
 
     🔴 UNA FILA POR GLOBO. El bot responde en varios mensajitos (hasta 6), y Meta devuelve un
     id por cada uno. Antes se guardaba UNA sola fila con todo el texto junto y se TIRABAN los
     ids: cuando Meta avisaba de que un globo había FALLADO, ese aviso no casaba con ninguna
     fila y se perdía. O sea: si fallaba justo el globo con LOS DATOS BANCARIOS, en el panel se
     veía todo verde y nadie se enteraba de que el cliente nunca supo dónde pagar.
+
+    Devuelve `True` si el intercambio QUEDÓ ESCRITO. El que llama lo necesita: el comentario
+    viejo decía "no critico: la respuesta ya se envio" —cierto para el CLIENTE, falso para la
+    DUEÑA—, y ahora hay una red (SIL-10) que escribe el turno del cliente cuando nadie más pudo.
+    Esa red solo funciona si aquí se dice la VERDAD sobre si se guardó o no.
     """
     from sqlalchemy import select
 
     from app.models import Cliente, Mensaje, now_utc
     from app.services.db import get_session_factory
 
-    try:
+    async def _escribir() -> None:
         factory = get_session_factory()
         async with factory() as session:
             cliente = (
@@ -83,8 +145,11 @@ async def _guardar_en_panel(
                     error=p.get("error"),
                 ))
             await session.commit()
-    except Exception:  # noqa: BLE001 — no critico: la respuesta ya se envio
-        logger.exception("No se pudo guardar la conversacion en el panel de %s", telefono)
+
+    if await _escribir_en_panel(_escribir, telefono, "la conversación"):
+        return True
+    await _hueco_en_el_panel(telefono, texto_usuario, [p.get("texto") for p in partes])
+    return False
 
 
 # ─── Cinturon de seguridad del DINERO (anti-alucinacion) ─────────────
@@ -198,6 +263,20 @@ async def _enviar_en_partes(telefono: str, texto: str) -> list[dict]:
                 {"texto": parte, "wa_message_id": None, "estado": "fallido",
                  "error": str(exc)[:400]}
             )
+            # 🔴 LOS GLOBOS QUE NUNCA SE INTENTARON TAMBIÉN DEJAN FILA (auditoría 2026-08-02,
+            # SIL-8). Aquí había un `break` seco: si fallaba el globo 2 de 4, el 3 y el 4 se
+            # descartaban SIN rastro. En el panel se veía UN globo rojo y nadie podía saber que
+            # al cliente le faltaban DOS mensajes — el peor caso es que uno de ellos lleve la
+            # cuenta y la cédula. Se sigue sin insistir (si Meta rechazó uno, los siguientes
+            # también), pero lo que no sale queda ESCRITO. Van con estado 'fallido' y NO con un
+            # estado nuevo a propósito: 'fallido' es el único valor que el panel pinta en ROJO
+            # (conversaciones/page.tsx:394 y :426, "· no se envió"), y el panel HOY no se puede
+            # recompilar. El `wa_message_id` en NULL hace que ningún aviso de Meta las pise.
+            for resto in partes[i + 1:]:
+                enviados.append({
+                    "texto": resto, "wa_message_id": None, "estado": "fallido",
+                    "error": "no se intentó: falló el globo anterior de este mismo mensaje",
+                })
             break  # si el primero no pasó, los siguientes tampoco: no se insiste
     return enviados
 
@@ -208,8 +287,27 @@ def _algo_llego(partes: list[dict]) -> bool:
     return any(p.get("estado") == "enviado" for p in partes)
 
 
+def _lo_que_llego(partes: list[dict], respuesta: str) -> str:
+    """Lo que el cliente REALMENTE recibió, para la memoria del bot.
+
+    🔴 El docstring de `_algo_llego` (justo arriba) promete que un globo 'fallido' NO cuenta como
+    dicho… y los seis sitios que lo llaman guardaban la `respuesta` ENTERA (auditoría 2026-08-02,
+    SIL-8). O sea: llegaba el globo 1 ("perfecto, te paso los datos"), fallaba el 2 —EL DE LA
+    CUENTA Y LA CÉDULA— y el bot creía haberlos dado. Como ya está "dicho", no lo repite nunca: el
+    cliente se queda sin saber dónde pagar y la venta sigue como si nada.
+
+    En el camino feliz devuelve la `respuesta` TAL CUAL, sin tocar ni un carácter: este arreglo es
+    para el turno ROTO, no para cambiarle la memoria a los turnos que funcionan. (Devolver siempre
+    el texto aplanado y unido por \\n\\n sería un cambio de comportamiento en el 100% de los turnos
+    para arreglar un caso raro.)
+    """
+    if all(p.get("estado") == "enviado" for p in partes):
+        return respuesta
+    return "\n\n".join(p["texto"] for p in partes if p.get("estado") == "enviado")
+
+
 async def _guardar_media_en_hilo(
-    *, telefono: str, message_id: str | None, media_id: str, ruta: str,
+    *, telefono: str, message_id: str | None, media_id: str, ruta: str | None,
     mime: str, caption: str | None, es_imagen: bool,
 ) -> None:
     """Mete la FOTO DEL CLIENTE (el comprobante) en el hilo del panel.
@@ -217,6 +315,11 @@ async def _guardar_media_en_hilo(
     Va en sesión PROPIA y con todo tragado: si esto falla, el pago se registra igual. Nunca
     al revés. Y con `message_id` (que tiene UNIQUE desde la 001) como candado: un reintento de
     Meta no puede duplicar la burbuja.
+
+    `ruta=None` es un caso REAL y válido (auditoría 2026-08-02, SIL-5): el disco falló, o ni
+    siquiera pudimos bajar el archivo. La burbuja entra IGUAL con el `media_id` a secas — el
+    panel se la baja de Meta al vuelo (/api/mensajes/{id}/media, caso 3), así que la dueña VE la
+    captura del pago aunque nosotros no la tengamos guardada.
     """
     from sqlalchemy.dialects.postgresql import insert as pg_insert
 
@@ -328,15 +431,21 @@ async def _estado_pausa(telefono: str) -> tuple[bool, str | None]:
     return True, cliente.pausado_por
 
 
-async def _guardar_entrante(telefono: str, nombre: str | None, texto: str) -> None:
+async def _guardar_entrante(telefono: str, nombre: str | None, texto: str) -> bool:
     """Guarda SOLO el mensaje entrante del cliente (sin respuesta), para que la
-    dueña lo vea en Conversaciones cuando el bot está apagado y responda ella."""
+    dueña lo vea en Conversaciones cuando el bot está apagado y responda ella.
+
+    Devuelve `True` si quedó escrito. Es la escritura MÁS importante de las dos (SIL-15): cubre
+    justo los casos en los que ELLA es la única que va a contestar —bot apagado, chat tomado, o
+    el bot se cayó sin poder responder—, así que un fallo silencioso aquí le deja el globito de
+    "no leído" sobre una conversación en la que no hay nada que leer.
+    """
     from sqlalchemy import select
 
     from app.models import Cliente, Mensaje, now_utc
     from app.services.db import get_session_factory
 
-    try:
+    async def _escribir() -> None:
         factory = get_session_factory()
         async with factory() as session:
             cliente = (
@@ -350,8 +459,11 @@ async def _guardar_entrante(telefono: str, nombre: str | None, texto: str) -> No
                     cliente.nombre = nombre
             session.add(Mensaje(cliente_telefono=telefono, rol="user", contenido=texto))
             await session.commit()
-    except Exception:  # noqa: BLE001
-        logger.exception("No se pudo guardar el mensaje entrante de %s", telefono)
+
+    if await _escribir_en_panel(_escribir, telefono, "el mensaje entrante"):
+        return True
+    await _hueco_en_el_panel(telefono, texto, [])
+    return False
 
 
 async def _numero_permitido(telefono: str) -> bool:
@@ -404,20 +516,64 @@ async def _numero_permitido(telefono: str) -> bool:
     return any(_cola(n) == objetivo for n in juntos.split(",") if n.strip())
 
 
-@celery_app.task(name="procesar_buffer")
-def procesar_buffer(telefono: str, nombre: str | None = None):
-    """Tarea Celery: procesa los mensajes acumulados de un cliente y responde."""
-    _run(_procesar(telefono, nombre))
+# Cuántas veces se reintenta el turno cuando el lock está tomado, y cada cuánto.
+# 8 × 20 s = 160 s de cobertura, A PROPÓSITO por encima de los 120 s que dura el lock
+# (`adquirir_lock`, redis_client.py): aunque el worker que lo tenía se muera sin soltarlo, el
+# lock caduca solo y el siguiente reintento entra. NO se sube más: cada reintento con countdown
+# queda RESERVADO en la memoria del worker (Celery incrementa la ventana QoS), y con
+# --concurrency=2 esa ventana es de 8 mensajes. Diez clientes × 15 reintentos serían ~150
+# mensajes reservados contra una ventana de 8 ⇒ el carril del COMPROBANTE (el del DINERO)
+# haría cola detrás de la basura de reintentos. Cobertura de sobra con la mitad de mensajes.
+_REINTENTOS_BUFFER = 8
+_ESPERA_BUFFER = 20
 
 
-async def _procesar(telefono: str, nombre: str | None) -> None:
-    # Solo un worker procesa el buffer de este cliente a la vez.
-    if not await rc.adquirir_lock(telefono):
+@celery_app.task(name="procesar_buffer", bind=True, max_retries=_REINTENTOS_BUFFER)
+def procesar_buffer(self, telefono: str, nombre: str | None = None):
+    """Tarea Celery: procesa los mensajes acumulados de un cliente y responde.
+
+    🔴 OCUPADO NO ES "LISTO" (auditoría 2026-08-02, SIL-1). Antes, cuando no conseguía el lock,
+    la tarea se iba sin hacer nada y SIN dejar otra programada. El caso real: t=0 llega "hola"
+    → tarea a t+15; t=15 esa tarea toma el lock y se pone a pensar; t=20 llega "sí, dale, lo
+    quiero" → tarea a t=35; a t=35 el lock sigue tomado ⇒ esa tarea se iba muda y el "sí, lo
+    quiero" se pudría en el buffer hasta expirar (1 h). Ni el cliente, ni la dueña, ni el log.
+    Reintentar aquí es GRATIS y no duplica nada: en esa rama no se vació el buffer, no se llamó
+    al modelo y no se envió un solo globo.
+    """
+    if _run(_procesar(telefono, nombre)) != "ocupado":
         return
+    try:
+        self.retry(countdown=_ESPERA_BUFFER)
+    except MaxRetriesExceededError:
+        # 160 s con el lock tomado no pasa ni en el peor turno: algo está muy roto. El texto
+        # sigue en el buffer (TTL 1 h) y el próximo mensaje del cliente lo arrastrará, pero eso
+        # NO puede ser el plan: alguien tiene que enterarse.
+        logger.error(
+            "Buffer de %s: %s reintentos y el lock sigue tomado; se avisa",
+            telefono, _REINTENTOS_BUFFER,
+        )
+        try:
+            _run(_avisar_turno_perdido(telefono, nombre, "(el bot no logró tomar el turno)"))
+        except Exception:  # noqa: BLE001 — con Redis caído el aviso también revienta; que no
+            # se lleve por delante la tarea entera: el log de arriba ya dejó el rastro.
+            logger.exception("Y el aviso del turno perdido de %s tampoco pudo", telefono)
+
+
+async def _procesar(telefono: str, nombre: str | None) -> str:
+    """Un turno de texto de punta a punta. Devuelve el veredicto para que el que llama decida:
+    "ocupado" (hay que REENCOLAR), "vacio", "apagado", "sin_envio", "error", "ok"."""
+    # Solo un worker procesa el buffer de este cliente a la vez. Ver SIL-1: "ocupado" NO es
+    # "listo" — el que llama REENCOLA.
+    if not await rc.adquirir_lock(telefono):
+        logger.info("Buffer de %s: hay un turno en curso; se reencola", telefono)
+        return "ocupado"
+
+    texto = ""
+    guardado = False  # ¿el turno del cliente ya quedó ESCRITO en Postgres?
     try:
         mensajes = await rc.vaciar_buffer(telefono)
         if not mensajes:
-            return  # otra tarea ya lo procesó
+            return "vacio"  # otra tarea ya lo procesó
 
         texto = "\n".join(mensajes)
 
@@ -425,31 +581,58 @@ async def _procesar(telefono: str, nombre: str | None) -> None:
             # Bot apagado (global o solo en este chat): guarda lo que escribió el
             # cliente para que la dueña lo vea en Conversaciones y responda ella.
             await rc.guardar_historial(telefono, "user", texto)
-            await _guardar_entrante(telefono, nombre, texto)
-            return
+            guardado = await _guardar_entrante(telefono, nombre, texto)
+            return "apagado"
 
         historial = await rc.obtener_historial(telefono)
+
+        # 🔴 EL TURNO DEL CLIENTE SE ANOTA ANTES DE PENSAR (auditoría 2026-08-02, SIL-10).
+        # `vaciar_buffer` es LRANGE+DELETE atómico: desde esa línea, lo que el cliente escribió
+        # no existe en NINGÚN otro sitio. Esta línea vivía DESPUÉS de `responder()`, así que un
+        # 402 de OpenRouter (sin saldo — ya nos costó una semana de mensajes mudos) lo borraba
+        # del mapa: ni en Redis, ni en la tabla `mensajes`. Y el webhook ya le había sumado 1 a
+        # `no_leidos`, o sea que el panel mostraba el globito de no leído sobre una conversación
+        # sin nada nuevo dentro. VA DESPUÉS DE LEER `historial` A PROPÓSITO: `responder()` recibe
+        # el turno aparte, y si además ya estuviera en la lista el modelo lo leería DOS VECES.
+        await rc.guardar_historial(telefono, "user", texto)
 
         respuesta = await responder(telefono, texto, historial, nombre)
         respuesta = _proteger_afirmacion_de_pago(respuesta)
 
         partes = await _enviar_en_partes(telefono, respuesta)
-        await rc.guardar_historial(telefono, "user", texto)
         if not partes:
             # La dueña tomó el chat mientras el bot pensaba: su respuesta se DESCARTA
             # (no se envía ni se recuerda). Lo que sí se guarda es lo que dijo el cliente,
             # para que ella lo vea y le conteste.
-            await _guardar_entrante(telefono, nombre, texto)
-            return
+            guardado = await _guardar_entrante(telefono, nombre, texto)
+            return "sin_envio"
         # Los globos FALLIDOS también se guardan (se ven en ROJO en el panel), pero el bot no
-        # "recuerda" haber dicho algo que el cliente nunca recibió.
+        # "recuerda" haber dicho algo que el cliente nunca recibió (`_lo_que_llego`, SIL-8).
         if _algo_llego(partes):
-            await rc.guardar_historial(telefono, "assistant", respuesta)
-        await _guardar_en_panel(telefono, nombre, texto, partes)
+            await rc.guardar_historial(telefono, "assistant", _lo_que_llego(partes, respuesta))
+        guardado = await _guardar_en_panel(telefono, nombre, texto, partes)
+        await _avisar_turno_a_medias(telefono, nombre, partes)
     except Exception:  # noqa: BLE001
-        logger.exception("Error procesando el buffer de %s", telefono)
+        logger.exception("Error procesando el buffer de %s (texto=%r)", telefono, texto[:200])
+        # SIL-10, la segunda mitad: el buffer YA está vacío. Si nadie alcanzó a escribir el
+        # turno en Postgres, se escribe AQUÍ aunque el bot no haya podido contestar. Un mensaje
+        # sin respuesta se ve y se atiende; un mensaje que no existe, no.
+        try:
+            if texto and not guardado:
+                await _guardar_entrante(telefono, nombre, texto)
+                await _avisar_turno_perdido(telefono, nombre, texto)
+        except Exception:  # noqa: BLE001 — el RESCATE no puede tumbar el turno que YA se cayó.
+            # Sin este try: con Redis caído (que es UNA de las averías que traen aquí), la avería
+            # típica no viene sola — `_guardar_entrante` falla contra Postgres y `aviso_unico`
+            # falla contra Redis, DENTRO del except. La excepción se escaparía de `_procesar`,
+            # se llevaría el `return "error"` por delante y la tarea moriría con un traceback en
+            # vez de con un veredicto. Que el rescate falle es aceptable; que se lleve el turno
+            # entero, no.
+            logger.exception("Y el rescate del turno de %s tampoco pudo", telefono)
+        return "error"
     finally:
         await rc.liberar_lock(telefono)
+    return "ok"
 
 
 # ─── RETOMAR: la dueña devolvió el chat y el cliente quedó esperando ─
@@ -669,7 +852,7 @@ async def _retomar(telefono: str, nombre: str | None, pausado_por: str | None = 
             # DESCARTA (ni se envía ni se recuerda). Lo que dijo el cliente ya está guardado.
             return
         if _algo_llego(partes):
-            await rc.guardar_historial(telefono, "assistant", respuesta)
+            await rc.guardar_historial(telefono, "assistant", _lo_que_llego(partes, respuesta))
         # texto_usuario="" a propósito: lo que dijo el cliente YA está en `mensajes` (se guardó
         # cuando llegó, durante la pausa). Volver a insertarlo lo duplicaría en el hilo del panel.
         await _guardar_en_panel(telefono, nombre, "", partes)
@@ -765,16 +948,20 @@ async def _responder_situacion(
         logger.error("Carril del dinero: no salió un mensaje limpio para %s; acuse seguro", telefono)
         partes = await _enviar_en_partes(telefono, _RESPUESTA_PAGO_SEGURA)
         if _algo_llego(partes):
-            await rc.guardar_historial(telefono, "assistant", _RESPUESTA_PAGO_SEGURA)
+            await rc.guardar_historial(
+                telefono, "assistant", _lo_que_llego(partes, _RESPUESTA_PAGO_SEGURA)
+            )
         if partes:
             await _guardar_en_panel(telefono, nombre, "", partes)
         await _avisar_mensaje_frenado(telefono, nombre)
         return partes
     partes = await _enviar_en_partes(telefono, mensaje)
     # Si no se envió (la dueña tomó el chat), NO se guarda en el historial: el bot no puede
-    # "recordar" haber dicho algo que el cliente nunca vio.
+    # "recordar" haber dicho algo que el cliente nunca vio. Y si salió A MEDIAS, solo se recuerda
+    # lo que SÍ llegó (`_lo_que_llego`, SIL-8) — en el carril del dinero eso es la diferencia
+    # entre repetir los datos de la cuenta o no volver a darlos nunca.
     if _algo_llego(partes):
-        await rc.guardar_historial(telefono, "assistant", mensaje)
+        await rc.guardar_historial(telefono, "assistant", _lo_que_llego(partes, mensaje))
     # Y AHORA SÍ se guarda en el panel: hasta hoy, TODO este carril (el del comprobante)
     # NO escribía una sola línea en `mensajes` — en el hilo del panel ese tramo estaba EN
     # BLANCO, y la dueña tenía que responder a ciegas justo en el momento del dinero.
@@ -885,29 +1072,91 @@ def _monto_cuadra(leido: float | None, esperados) -> bool:
     return any(abs(leido - c) <= max(1.0, c * 0.02) for c in candidatos)
 
 
-@celery_app.task(name="procesar_comprobante")
-def procesar_comprobante(telefono, message_id, media_id, caption=None, nombre=None, mime_type=None):
-    """Tarea dedicada (fuera del buffer de texto): descarga y guarda el comprobante."""
-    _run(_procesar_comprobante(telefono, message_id, media_id, caption, nombre, mime_type))
+# Cuántas veces se reintenta el comprobante antes de rendirse, y con qué espera.
+# Se PUEDE reintentar porque `descargar_media` PIDE UNA URL NUEVA en cada intento (meta_client,
+# paso 1: GET /{media_id}): lo que caduca a los ~5 min es la URL firmada, NO el media_id (ese
+# vive ~30 días). El comentario viejo usaba ese dato justo al revés, como excusa para no hacer
+# nada. Y es SEGURO repetir: el archivo se sobrescribe, la burbuja va con
+# on_conflict_do_nothing(message_id) y `registrar_comprobante` está blindado por el UNIQUE de
+# comprobante_media_id + el índice ux_pago_reportado_por_pedido (migración 026).
+_REINTENTOS_COMPROBANTE = 3
+_ESPERA_COMPROBANTE = (20, 60, 180)  # segundos entre intentos
 
 
-async def _procesar_comprobante(telefono, message_id, media_id, caption, nombre, mime_type) -> None:
-    # Idempotencia del carril de DINERO: se marca SOLO tras un registro exitoso.
-    # Si la descarga o el registro fallan, NO se marca, para que el reintento de
-    # Meta tenga otra oportunidad real (la URL del media caduca a ~5 min).
+@celery_app.task(name="procesar_comprobante", bind=True, max_retries=_REINTENTOS_COMPROBANTE)
+def procesar_comprobante(self, telefono, message_id, media_id, caption=None, nombre=None, mime_type=None):
+    """Tarea dedicada (fuera del buffer de texto): descarga y guarda el comprobante.
+
+    🔴 EL REINTENTO VIVE AQUÍ, NO EN META (auditoría 2026-08-02, SIL-5). Los `except` de abajo
+    decían "NO marcar, dejar reintentar a Meta". Meta NO puede reintentar: el webhook ya
+    devolvió 200 AL ENCOLAR esta tarea (`_encolar_comprobante` → `recibir` → 200), y para Meta
+    ese evento está entregado y cerrado. Y Celery tampoco reintentaba: `celery_app.conf` no
+    tiene retry ni autoretry_for, y el decorador era `@task(name=...)` a secas. O sea: el
+    "reintento" al que se le dejaba el pago del cliente NO EXISTÍA. Un 5xx de Meta o un parpadeo
+    de la BD y el pago se perdía PARA SIEMPRE: sin fila, sin respuesta al cliente —que ACABA de
+    pagar— y sin que la dueña se enterara. Es el único carril donde el silencio cuesta dinero.
+    """
+    resultado = _run(_procesar_comprobante(
+        telefono, message_id, media_id, caption, nombre, mime_type,
+        ultimo_intento=self.request.retries >= _REINTENTOS_COMPROBANTE,
+    ))
+    if resultado == "reintentar":
+        espera = _ESPERA_COMPROBANTE[min(self.request.retries, len(_ESPERA_COMPROBANTE) - 1)]
+        raise self.retry(countdown=espera)
+
+
+async def _procesar_comprobante(
+    telefono, message_id, media_id, caption, nombre, mime_type, ultimo_intento: bool = False
+) -> str:
+    """Devuelve el VEREDICTO para que el wrapper decida si reintenta: "duplicado" / "reintentar"
+    / "rendido" / "no_es_comprobante" / "ok". Se devuelve un string (y no se lanza la excepción)
+    para que un banco pueda probar los tres finales sin montar Celery."""
+    # Idempotencia del carril de DINERO: se marca SOLO tras un registro exitoso (o tras avisarle
+    # a una persona). Si la descarga o el registro fallan, NO se marca: reintentamos nosotros.
     if message_id and await rc.comprobante_procesado(message_id):
-        return
+        return "duplicado"
 
     try:
         contenido, mime = await descargar_media(media_id)
-    except Exception:  # noqa: BLE001 — fallo transitorio: NO marcar, dejar reintentar
+    except Exception:  # noqa: BLE001 — fallo transitorio: NO marcar, el reintento es NUESTRO
         logger.exception("No se pudo descargar el comprobante %s de %s", media_id, telefono)
-        return
-    ruta = _guardar_comprobante(media_id, contenido, mime or mime_type or "")
-    logger.info("Comprobante de %s guardado en %s (%s bytes)", telefono, ruta, len(contenido))
+        if not ultimo_intento:
+            return "reintentar"
+        await _comprobante_a_ciegas(
+            telefono, message_id, media_id, caption, nombre, mime_type,
+            porque="WhatsApp no me entregó la imagen",
+        )
+        return "rendido"
 
     base_mime = (mime or mime_type or "").split(";")[0].strip().lower()
     es_imagen = base_mime.startswith("image/")
+
+    # EL DISCO NO PUEDE TUMBAR EL COBRO (SIL-5). Esta línea vivía FUERA de todo try: con /data
+    # lleno, sin montar o de solo lectura saltaba OSError, la tarea moría con el traceback en el
+    # log y el pago del cliente no dejaba NI UN RASTRO — ni burbuja en el hilo, ni Pago, ni
+    # respuesta, ni aviso. Un problema de DISCO borraba el rastro de un PAGO. Los bytes YA están
+    # en memoria: la visión y el registro siguen igual. Lo único que se pierde es la copia local,
+    # y la burbuja se guarda con `media_id` a secas — el panel se la baja de Meta al vuelo.
+    ruta = None
+    try:
+        ruta = _guardar_comprobante(media_id, contenido, mime or mime_type or "")
+        logger.info("Comprobante de %s guardado en %s (%s bytes)", telefono, ruta, len(contenido))
+    except Exception:  # noqa: BLE001
+        logger.exception("Disco: no se pudo escribir el comprobante de %s (el cobro sigue)", telefono)
+        await _avisar_a_la_duena(
+            telefono,
+            motivo="comprobante_sin_archivo",
+            detalle=(
+                "No pude guardar el archivo del comprobante en el servidor (disco lleno o sin "
+                "montar). El pago SÍ se registró y la captura se ve en el chat, pero si el "
+                "problema sigue, avisa a soporte."
+            ),
+            mensaje_cliente="(comprobante de pago)",
+            whatsapp=(
+                "⚠️ No pude guardar el archivo de un comprobante en el servidor. El pago sí "
+                "quedó registrado."
+            ),
+        )
 
     # LA FOTO ENTRA AL HILO **AQUÍ**, apenas se descarga y ANTES de que la visión la juzgue.
     # Si se insertara junto al registro del pago, la imagen que la visión RECHAZA (la captura
@@ -926,9 +1175,31 @@ async def _procesar_comprobante(telefono, message_id, media_id, caption, nombre,
 
     # VISIÓN: extrae los datos y valida EN CÓDIGO que el pago sea A LA CUENTA de la
     # dueña. Solo para imágenes; un PDF no se analiza por visión.
+    #
+    # 🔴 EL DINERO SE JUZGA UNA VEZ. La visión NO es determinista, y desde que el reintento
+    # existe de verdad (arriba) el MISMO comprobante puede pasar por aquí varias veces: el
+    # intento 1 podría leer "es comprobante, $28" y fallar al registrar, y el intento 2 leer "no
+    # es un comprobante" y cerrar el caso pidiéndole al cliente la captura otra vez. El veredicto
+    # sobre un pago no puede cambiar entre intentos. Se congela por `media_id` durante la ventana
+    # de reintentos (15 min > 20+60+180 s), y SOLO si se pudo leer: una lectura fallida no vale
+    # la pena congelarla — si la visión se recupera, que el siguiente intento la aproveche.
     lectura = {}
     if es_imagen:
-        lectura = await _leer_comprobante_seguro(telefono, contenido, base_mime)
+        try:
+            _cacheado = await rc.get_cache(f"cache:vision:{media_id}")
+        except Exception:  # noqa: BLE001 — sin caché se lee de nuevo; nunca tumbar el dinero
+            logger.exception("No se pudo leer la caché de visión de %s", media_id)
+            _cacheado = None
+        if _cacheado:
+            lectura = json.loads(_cacheado)
+            logger.info("Visión de %s: se reusa la lectura ya hecha (mismo comprobante)", media_id)
+        else:
+            lectura = await _leer_comprobante_seguro(telefono, contenido, base_mime)
+            if lectura.get("leido"):
+                try:
+                    await rc.set_cache(f"cache:vision:{media_id}", json.dumps(lectura), 900)
+                except Exception:  # noqa: BLE001
+                    logger.exception("No se pudo cachear la lectura de visión de %s", media_id)
     es_comprobante = lectura.get("es_comprobante")
     monto = lectura.get("monto")
     monto_ok = bool(monto) and str(monto).strip().lower() not in ("", "null", "none", "0")
@@ -943,7 +1214,49 @@ async def _procesar_comprobante(telefono, message_id, media_id, caption, nombre,
     # comprobante, es de otra cuenta, o la visión no pudo leer— se PIDE la captura y
     # NO se registra. (Antes la red de seguridad registraba ante la duda, y por eso
     # se colaban fotos cualquiera.)
-    if es_imagen and not (es_comprobante is True and monto_ok):
+    # 🔴 "NO PUDE LEER" NO ES "NO ES UN COMPROBANTE" (auditoría 2026-08-02, SIL-6).
+    # `leer_comprobante` distingue TRES estados y hasta hoy los tres caían en el mismo `if`:
+    # `leido` se logueaba (línea de arriba) y NUNCA se ramificaba sobre él. Con la visión caída
+    # —402 de OpenRouter sin saldo (pasó el 2026-07-15), 429, timeout de 45 s, JSON ilegible, o
+    # un image/gif que ni llega a la API porque no está en _FORMATOS_IMAGEN— el cliente recibía
+    # "ahí no veo el comprobante, mándame la captura clara" CON CADA CAPTURA, y encima se marcaba
+    # el mensaje como atendido: no había vuelta atrás ni cuando la visión volviera. EL NEGOCIO
+    # DEJABA DE COBRAR y el único testigo era un logger.info. Ahora un comprobante ilegible se
+    # trata como un PDF, que es lo que es: no puedo juzgarlo ⇒ se registra 'reportado', lo mira
+    # la dueña, y el bot NO afirma nada (con monto=None, `_monto_cuadra` da False por el
+    # fail-closed de DIN-5 y sale el mensaje "ya lo recibí, lo estoy revisando" — la verdad).
+    vision_leyo = lectura.get("leido") is True
+    if es_imagen and not vision_leyo:
+        logger.error(
+            "Visión CAÍDA con el comprobante de %s (media %s, mime %s): no se pudo leer. Se "
+            "registra igual (antes se pedía la captura otra vez y el pago se perdía).",
+            telefono, media_id, base_mime,
+        )
+        # CANDADO ANTIINUNDACIÓN (15 min por cliente). Sin esto, con la visión caída cada imagen
+        # de cada cliente abre una Intervencion y manda un WhatsApp. Y `leido=False` NO solo pasa
+        # con la visión caída: un image/gif o un image/bmp tampoco llegan a la API, así que un
+        # cliente mandando GIFs graciosos abriría un aviso por cada uno. El log de arriba deja el
+        # rastro COMPLETO aunque el aviso no salga. El registro del Pago sí va SIEMPRE: esa parte
+        # es el corazón del arreglo y no lleva candado.
+        if await rc.aviso_unico(f"vision_caida:{telefono}", 900):
+            await _avisar_a_la_duena(
+                telefono,
+                motivo="comprobante_ilegible",
+                detalle=(
+                    f"{nombre or telefono} mandó un comprobante y no lo pude leer (puede ser la "
+                    "foto, o que el lector de imágenes esté caído). Lo registré para que no se "
+                    "pierda, pero NO le dije que su pago esté completo. Ábrelo en el chat y "
+                    "confírmalo tú."
+                ),
+                mensaje_cliente="(comprobante de pago)",
+                whatsapp=(
+                    f"👁️ No pude LEER el comprobante de {nombre or telefono}. Lo registré igual "
+                    "(no se pierde) y al cliente solo le dije que lo estoy revisando. Míralo tú "
+                    "en el panel."
+                ),
+            )
+
+    if es_imagen and vision_leyo and not (es_comprobante is True and monto_ok):
         logger.info("Imagen de %s NO reconocida como comprobante de la dueña; no se registra", telefono)
         if message_id:
             await rc.marcar_comprobante(message_id)  # atendido: no reprocesar
@@ -973,7 +1286,7 @@ async def _procesar_comprobante(telefono, message_id, media_id, caption, nombre,
                 "la captura clara del pago (donde se vea el monto y la referencia)."
             )
         await _responder_situacion(telefono, situacion, nombre)
-        return
+        return "no_es_comprobante"
 
     # ¿El MONTO del comprobante cuadra con lo cobrado? Comparamos contra el monto en
     # Bs (Pago Móvil/Transferencia) Y en USD (Binance/Zelle): basta que coincida con UNO.
@@ -1021,9 +1334,15 @@ async def _procesar_comprobante(telefono, message_id, media_id, caption, nombre,
                 # 20% de descuento) o en bolívares (precio completo).
                 monto_leido=_a_float(monto) if es_comprobante is True else None,
             )
-    except Exception:  # noqa: BLE001 — error de BD: NO marcar, dejar reintentar a Meta
+    except Exception:  # noqa: BLE001 — error de BD: NO marcar, el reintento es NUESTRO
         logger.exception("No se pudo registrar el comprobante de %s", telefono)
-        return
+        if not ultimo_intento:
+            return "reintentar"   # Meta no va a volver; volvemos nosotros (SIL-5)
+        await _comprobante_a_ciegas(
+            telefono, message_id, media_id, caption, nombre, mime_type,
+            porque="la base de datos me falló al registrar el pago",
+        )
+        return "rendido"
     logger.info("Comprobante de %s registrado: %s", telefono, resultado)
 
     # Registro exitoso: marcar para que un reintento de Meta no repita el cierre.
@@ -1059,6 +1378,62 @@ async def _procesar_comprobante(telefono, message_id, media_id, caption, nombre,
     # tampoco salió. Aquí se le avisa a ella, sí o sí.
     if resultado.get("ok") and not partes:
         await _avisar_pago_en_chat_pausado(telefono, nombre)
+    return "ok"
+
+
+async def _comprobante_a_ciegas(
+    telefono, message_id, media_id, caption, nombre, mime_type, *, porque: str
+) -> None:
+    """Se agotaron los reintentos: el comprobante NO se pudo procesar. Aquí NO se pierde.
+
+    Tres cosas, en este orden y ninguna opcional:
+      1. La burbuja entra al hilo IGUAL, aunque no tengamos el archivo. Con el `media_id` a
+         secas basta: el panel se lo baja de Meta al vuelo (/api/mensajes/{id}/media, caso 3),
+         así que la dueña VE la captura del pago con sus ojos aunque nosotros no la hayamos
+         podido bajar. Es lo más valioso que queda cuando todo lo demás falló.
+      2. Le llega el aviso a ELLA: bandeja + WhatsApp. Un pago no se puede quedar sin dueño.
+      3. El cliente recibe el acuse sobrio de siempre. Acaba de pagar: el silencio no es opción.
+
+    Lo que NO se hace: afirmar nada. No hay Pago registrado, así que el bot no puede decir
+    "recibí tu pago y coordino la entrega". Dice "lo estoy revisando", que es la verdad.
+    """
+    base_mime = (mime_type or "").split(";")[0].strip().lower()
+    await _guardar_media_en_hilo(
+        telefono=telefono,
+        message_id=message_id,
+        media_id=media_id,
+        ruta=None,
+        mime=base_mime,
+        caption=caption,
+        es_imagen=base_mime.startswith("image/"),
+    )
+    quien = nombre or telefono
+    await _avisar_a_la_duena(
+        telefono,
+        motivo="comprobante_sin_procesar",
+        detalle=(
+            f"{quien} te mandó un comprobante y NO lo pude procesar: {porque}. El pago NO quedó "
+            "registrado. Ábrelo en el chat, míralo con tus ojos y regístralo tú. Al cliente solo "
+            "le mandé un acuse de 'lo estoy revisando'."
+        ),
+        mensaje_cliente="(comprobante de pago)",
+        whatsapp=(
+            f"💰⚠️ {quien} te mandó un comprobante y NO lo pude procesar ({porque}). El pago NO "
+            "está registrado. Entra al chat, míralo y regístralo tú."
+        ),
+    )
+    # El acuse al cliente respeta el interruptor y la lista blanca, igual que `_responder_situacion`.
+    if await _bot_activo() and await _numero_permitido(telefono):
+        partes = await _enviar_en_partes(telefono, _RESPUESTA_PAGO_SEGURA)
+        if _algo_llego(partes):
+            await rc.guardar_historial(
+                telefono, "assistant", _lo_que_llego(partes, _RESPUESTA_PAGO_SEGURA)
+            )
+        if partes:
+            await _guardar_en_panel(telefono, nombre, "", partes)
+    # Ahora SÍ se marca: ya hay una persona enterada; una reentrega no debe repetir el aviso.
+    if message_id:
+        await rc.marcar_comprobante(message_id)
 
 
 async def _avisar_pago_en_chat_pausado(telefono: str, nombre: str | None) -> None:
@@ -1101,36 +1476,66 @@ async def _avisar_pago_en_chat_pausado(telefono: str, nombre: str | None) -> Non
 
 # ─── Notas de voz y otros eventos (respuesta humana) ─────────────────
 
-async def _responder_y_enviar(telefono: str, texto: str, nombre: str | None) -> None:
+async def _responder_y_enviar(telefono: str, texto: str, nombre: str | None) -> str:
     """Pasa un texto por el agente y envia la respuesta. Comparte el lock por
-    cliente para no responder en paralelo con el flujo de texto."""
+    cliente para no responder en paralelo con el flujo de texto.
+
+    Devuelve el mismo veredicto que `_procesar` ("ocupado" / "apagado" / "sin_envio" /
+    "error" / "ok").
+    """
+    # 🔴 ESTE CARRIL NO TIENE BUFFER (auditoría 2026-08-02, SIL-1b). El texto que llega aquí no
+    # está en Redis: es una variable local (la transcripción de la nota de voz, ya descargada y
+    # ya PAGADA a Gemini). Antes, si el lock estaba tomado, este `return` la borraba del mundo —
+    # y el reintento de Meta tampoco la salvaba, porque el webhook ya había quemado el
+    # message_id con `ya_procesado` (webhook/router.py, `_encolar_audio`). Ahora, en vez de
+    # reintentar la tarea entera (que volvería a descargar un media cuya URL caduca a ~5 min y a
+    # pagar otra transcripción), el texto se DERRAMA al buffer de texto y lo atiende el carril
+    # normal, que sí tiene red. De regalo sale mejor UX: la nota de voz y el "y también quiero
+    # dos" que el cliente escribe justo después se contestan JUNTOS, en un solo turno.
     if not await rc.adquirir_lock(telefono):
-        return
+        await rc.agregar_a_buffer(telefono, texto)
+        procesar_buffer.apply_async((telefono, nombre), countdown=settings.buffer_segundos)
+        logger.info("Turno ocupado en %s: la voz/evento se derrama al buffer de texto", telefono)
+        return "ocupado"
+
+    guardado = False  # ¿el turno del cliente ya quedó ESCRITO en Postgres?
     try:
         if not await _bot_activo() or await _cliente_pausado(telefono) or not await _numero_permitido(telefono):
             await rc.guardar_historial(telefono, "user", texto)
-            await _guardar_entrante(telefono, nombre, texto)
-            return
+            guardado = await _guardar_entrante(telefono, nombre, texto)
+            return "apagado"
         historial = await rc.obtener_historial(telefono)
+        # EL TURNO DEL CLIENTE SE ANOTA ANTES DE PENSAR — el gemelo de `_procesar` (SIL-10).
+        # Aquí es todavía más grave: lo que se pierde es una transcripción que NO está en ningún
+        # buffer ni en ningún webhook. Si `responder()` revienta, esto es lo único que queda.
+        await rc.guardar_historial(telefono, "user", texto)
         respuesta = await responder(telefono, texto, historial, nombre)
         respuesta = _proteger_afirmacion_de_pago(respuesta)
         partes = await _enviar_en_partes(telefono, respuesta)
-        await rc.guardar_historial(telefono, "user", texto)
         if not partes:
             # La dueña tomó el chat mientras el bot pensaba: su respuesta se DESCARTA
             # (no se envía ni se recuerda). Lo que sí se guarda es lo que dijo el cliente,
             # para que ella lo vea y le conteste.
-            await _guardar_entrante(telefono, nombre, texto)
-            return
+            guardado = await _guardar_entrante(telefono, nombre, texto)
+            return "sin_envio"
         # Los globos FALLIDOS también se guardan (se ven en ROJO en el panel), pero el bot no
-        # "recuerda" haber dicho algo que el cliente nunca recibió.
+        # "recuerda" haber dicho algo que el cliente nunca recibió (`_lo_que_llego`, SIL-8).
         if _algo_llego(partes):
-            await rc.guardar_historial(telefono, "assistant", respuesta)
-        await _guardar_en_panel(telefono, nombre, texto, partes)
+            await rc.guardar_historial(telefono, "assistant", _lo_que_llego(partes, respuesta))
+        guardado = await _guardar_en_panel(telefono, nombre, texto, partes)
+        await _avisar_turno_a_medias(telefono, nombre, partes)
     except Exception:  # noqa: BLE001
-        logger.exception("Error respondiendo a %s", telefono)
+        logger.exception("Error respondiendo a %s (texto=%r)", telefono, texto[:200])
+        try:
+            if not guardado:
+                await _guardar_entrante(telefono, nombre, texto)
+                await _avisar_turno_perdido(telefono, nombre, texto)
+        except Exception:  # noqa: BLE001 — el RESCATE no puede tumbar el turno que ya se cayó
+            logger.exception("Y el rescate del turno de %s tampoco pudo", telefono)
+        return "error"
     finally:
         await rc.liberar_lock(telefono)
+    return "ok"
 
 
 @celery_app.task(name="procesar_audio")
@@ -1156,9 +1561,32 @@ async def _procesar_audio(telefono, media_id, nombre, mime_type) -> None:
 
 
 @celery_app.task(name="procesar_evento")
-def procesar_evento(telefono, tipo, nombre=None):
-    """Tarea: sticker/video/ubicacion/etc. El agente responde natural, sin robotismos."""
-    _run(_responder_y_enviar(telefono, f"(el cliente envio un {tipo}, sin texto)", nombre))
+def procesar_evento(telefono, tipo, nombre=None, texto=None, message_id=None):
+    """Tarea: sticker/video/ubicacion/etc. El agente responde natural, sin robotismos.
+
+    Los dos parámetros nuevos van AL FINAL y con default, a propósito: las tareas que YA estén
+    encoladas con la tupla de 3 siguen ejecutándose sin reventar durante el despliegue.
+    (`message_id` todavía no se usa: viaja ya para no volver a tocar la firma cuando llegue el
+    candado del audio.)
+    """
+    _run(_procesar_evento(telefono, tipo, nombre, texto, message_id))
+
+
+async def _procesar_evento(telefono, tipo, nombre, texto, message_id) -> None:
+    """🔴 SI EL EVENTO TRAE DATOS, SE LE PASAN AL AGENTE (auditoría 2026-08-02, SIL-12).
+
+    Hoy: la UBICACIÓN. Se resumía a "(el cliente envio un location, sin texto)" y la DIRECCIÓN DE
+    ENTREGA del cliente no quedaba en ningún sitio del sistema: ni en el hilo del panel, ni en la
+    memoria del bot. Se perdía el dato por el que el bot pregunta en cada venta con delivery.
+    Ahora entra en el texto del turno, así que `_guardar_en_panel` lo escribe en
+    `mensajes.contenido` —la dueña lo ve y lo puede copiar— y el bot puede confirmarlo con el
+    cliente en vez de volver a preguntarlo.
+    """
+    dato = (texto or "").strip()
+    if tipo == "location" and dato:
+        await _responder_y_enviar(telefono, f"(el cliente envio su ubicacion: {dato})", nombre)
+        return
+    await _responder_y_enviar(telefono, f"(el cliente envio un {tipo}, sin texto)", nombre)
 
 
 @celery_app.task(name="notificar_cliente_pago")
@@ -1222,6 +1650,61 @@ async def _avisar_mensaje_frenado(telefono: str, nombre: str | None) -> None:
     )
 
 
+async def _avisar_turno_perdido(telefono: str, nombre: str | None, texto: str) -> None:
+    """El cliente escribió y el bot NO pudo contestarle (se cayó la IA, Redis, lo que sea).
+
+    Su mensaje queda escrito en el panel — pero eso solo sirve si ALGUIEN lo mira. Este es el
+    mismo principio que ya rige el carril del dinero (`_avisar_pago_en_chat_pausado`): en esta
+    casa nada se queda en silencio. Candado de 15 min POR CLIENTE: si OpenRouter se cae una hora
+    (el 402 del 2026-07-15), la dueña recibe un aviso por persona, no uno por mensaje.
+    """
+    quien = nombre or telefono
+    corto = (texto or "").strip().replace("\n", " ")[:120]
+    if not await rc.aviso_unico(f"sin_respuesta:{telefono}", 900):
+        logger.error("Turno perdido de %s (ya avisado hace poco): %r", telefono, corto)
+        return
+    await _avisar_a_la_duena(
+        telefono,
+        motivo="sin_respuesta",
+        detalle=(
+            f"{quien} te escribió y el bot NO pudo contestarle (falló la IA o un servicio). Su "
+            f"mensaje quedó guardado en la conversación: «{corto}». Entra tú y contéstale."
+        ),
+        mensaje_cliente=texto[:500],
+        whatsapp=(
+            f"⚠️ {quien} te escribió y el bot no pudo contestarle: «{corto}». "
+            "Está en el panel; contéstale tú."
+        ),
+    )
+
+
+async def _avisar_turno_a_medias(telefono: str, nombre: str | None, partes: list[dict]) -> None:
+    """Un turno que salió A MEDIAS tiene que llegarle a la dueña.
+
+    Es el caso más caro que hay: el cliente recibió "perfecto, te paso los datos" y NO recibió la
+    cuenta, y el bot ya no lo repite (ver `_lo_que_llego`). Solo dispara si algo SÍ llegó: es la
+    MEDIA VERDAD lo peligroso — una caída total de Meta no manda nada y no confunde a nadie.
+    """
+    perdidos = [p for p in partes if p.get("estado") != "enviado"]
+    if not perdidos or not _algo_llego(partes):
+        return
+    quien = nombre or telefono
+    await _avisar_a_la_duena(
+        telefono,
+        motivo="mensaje_a_medias",
+        detalle=(
+            f"A {quien} el mensaje del bot le salió A MEDIAS: WhatsApp aceptó "
+            f"{len(partes) - len(perdidos)} y rechazó {len(perdidos)}. NO recibió esto: "
+            f"«{perdidos[0]['texto'][:180]}». Está en rojo en el chat: mándaselo tú."
+        ),
+        mensaje_cliente="(el mensaje del bot salió a medias)",
+        whatsapp=(
+            f"⚠️ A {quien} el mensaje del bot le salió A MEDIAS ({len(perdidos)} de {len(partes)} "
+            "no llegaron). Entra al chat: lo que falta está en rojo."
+        ),
+    )
+
+
 async def _notificar_cliente_pago(telefono, situacion) -> None:
     """La dueña confirmó o rechazó un pago desde el panel: hay que decírselo al cliente.
 
@@ -1268,6 +1751,6 @@ async def _notificar_cliente_pago(telefono, situacion) -> None:
         return
     partes = await _enviar_en_partes(telefono, mensaje)
     if _algo_llego(partes):
-        await rc.guardar_historial(telefono, "assistant", mensaje)
+        await rc.guardar_historial(telefono, "assistant", _lo_que_llego(partes, mensaje))
     if partes:
         await _guardar_en_panel(telefono, None, "", partes)

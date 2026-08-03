@@ -114,6 +114,17 @@ async def _procesar_entrante(mensaje) -> str:
     if tipo not in ("image", "document") and await _excede_tope(
         mensaje["telefono"], mensaje.get("nombre")
     ):
+        # 🔴 EL TOPE FRENA LA RESPUESTA, NO EL MENSAJE (auditoría 2026-08-02, SIL-7). Esto era un
+        # `return "limite"` a secas: el texto o la nota de voz del cliente no llegaban ni al
+        # buffer ni a la tabla `mensajes`. Pero `_marcar_entrante` (arriba) YA le había subido el
+        # contador de no leídos ⇒ el panel mostraba "3 no leídos" Y EL HILO VACÍO: la dueña
+        # entraba a leer y no había NADA que leer. Es la peor forma del fallo mudo — el sistema
+        # te DICE que hay algo y luego te enseña un vacío.
+        # El tope existe para no gastar IA con un troll, no para borrarle los mensajes a un
+        # cliente que habla mucho (con 80/día, los que más hablan suelen ser los que COMPRAN).
+        # Lo que se frena es la RESPUESTA del bot; lo que dijo el cliente se guarda igual y ella
+        # puede contestarle.
+        await _guardar_sin_responder(mensaje)
         return "limite"
 
     if tipo == "text":
@@ -144,7 +155,7 @@ async def _procesar_eco(eco) -> str:
     from sqlalchemy import select
     from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-    from app.models import Cliente, Mensaje, now_utc
+    from app.models import Cliente, Intervencion, Mensaje, now_utc
     from app.services import redis_client as rc
     from app.services.db import get_session_factory
     from app.webhook.parser import contenido_seguro
@@ -196,6 +207,59 @@ async def _procesar_eco(eco) -> str:
         )
         await session.commit()
     logger.info("ECO de la dueña → el bot queda CALLADO con %s", telefono)
+
+    # 3.5) EL AVISO SE CIERRA Y SE CONVIERTE EN "DEVUÉLVEME EL CHAT".
+    #
+    # 🔴 El aviso de `pedir_ayuda` le dice a la dueña, con estas palabras: "Entra al WhatsApp del
+    # negocio y respóndele tú" (tools.py, `_avisar_intervencion`). Cuando ella OBEDECÍA, este
+    # camino no cerraba nada — solo lo hacía el del panel (api/router.py). La Intervencion se
+    # quedaba 'pendiente' para siempre y, con la regla de "un solo aviso vivo por chat", se
+    # tragaba TODAS las escaladas futuras de ese cliente: el bot prometía "te confirmo enseguida"
+    # y no había fila, ni WhatsApp, ni rastro. (Auditoría 2026-08-02, SIL-9.)
+    #
+    # ⚠️ Y CERRARLO A SECAS SERÍA PEOR: ese aviso pendiente es el ÚNICO botón de la bandeja que
+    # reactiva el bot (`/intervenciones/{id}/resolver` con reactivar=True → `_disparar_retomar`).
+    # Si el eco lo cierra y no deja nada en su lugar, desaparece de "Te esperan", nadie aprieta
+    # nada y el chat queda MUDO PARA SIEMPRE — el síntoma exacto que se vino a matar. Por eso se
+    # cierra el viejo (ya lo está atendiendo ELLA) y se deja UNO que dice la verdad de ahora: el
+    # chat lo tienes tú. Ese es el que cierra al terminar, y ahí el bot vuelve.
+    #
+    # Transacción PROPIA y con todo tragado: la PAUSA de arriba es lo único que no se puede
+    # perder (ORDEN SAGRADO). Y es idempotente frente a los 5 mensajes seguidos que ella mande:
+    # el segundo eco encuentra el `chat_tomado` pendiente, no cierra nada más y no añade nada.
+    # (El barredor NO lo toca: `cerrar_avisos_ya_atendidos` excluye este motivo EXACTO.)
+    try:
+        async with factory() as session:
+            pendientes = (
+                await session.execute(
+                    select(Intervencion).where(
+                        Intervencion.cliente_telefono == telefono,
+                        Intervencion.estado == "pendiente",
+                    )
+                )
+            ).scalars().all()
+            ya_tomado = any(i.motivo == "chat_tomado" for i in pendientes)
+            for aviso in pendientes:
+                if aviso.motivo != "chat_tomado":
+                    aviso.estado = "resuelta"
+                    aviso.resuelta_at = ahora
+            if not ya_tomado:
+                session.add(Intervencion(
+                    cliente_telefono=telefono,
+                    motivo="chat_tomado",
+                    # El texto nombra el botón REAL del panel, palabra por palabra
+                    # (dashboard/src/app/(app)/bandeja/page.tsx): "Ya lo atendí (reactivar el
+                    # bot)". Decirle que apriete algo que no existe sería dejarla igual de
+                    # atascada, y el dashboard no se puede recompilar hasta que vuelva Coolify.
+                    detalle=(
+                        "Le respondiste tú desde tu teléfono, así que el bot se calló en ese "
+                        "chat. Cuando termines con ese cliente, dale aquí a 'Ya lo atendí "
+                        "(reactivar el bot)': si no, se queda sin bot para siempre."
+                    ),
+                ))
+            await session.commit()
+    except Exception:  # noqa: BLE001 — la pausa YA está puesta: eso es lo que no se puede perder
+        logger.exception("No se pudo cerrar el aviso pendiente del eco de %s", telefono)
 
     # 4) LA BURBUJA (otra transacción, y si falla NO se lleva la pausa).
     texto = contenido_seguro(eco["tipo"], eco.get("texto"), eco.get("caption"))
@@ -421,13 +485,32 @@ async def _encolar_audio(mensaje) -> str:
 
 
 async def _encolar_evento(mensaje) -> str:
-    """Sticker/video/ubicacion/etc.: el agente responde natural, sin frases roboticas."""
+    """Sticker/video/ubicacion/etc.: el agente responde natural, sin frases roboticas.
+
+    🔴 EL EVENTO VIAJA CON SUS DATOS (auditoría 2026-08-02, SIL-12). Aquí se encolaban solo
+    (teléfono, tipo, nombre) y el worker construía la frase genérica "(el cliente envio un
+    location, sin texto)". Para una UBICACIÓN eso es tirar LA DIRECCIÓN A DONDE HAY QUE LLEVAR EL
+    PEDIDO: `latitude`/`longitude`/`name`/`address` no quedaban en `mensajes`, ni en Redis, ni en
+    el log. En un negocio de delivery eso es una entrega que no se puede hacer. El `message_id`
+    va también porque es el candado UNIQUE que hace idempotente la fila del hilo.
+
+    ⚠️ ESTA LLAMADA Y LA FIRMA DE `procesar_evento` (tasks.py) SON UNA SOLA COSA: van juntas al
+    contenedor del bot Y al del worker en el mismo despliegue. `procesar_evento` gana los dos
+    parámetros AL FINAL y con default, así que las tareas YA encoladas con la tupla de 3 siguen
+    ejecutándose; lo que no sobrevive es un worker VIEJO recibiendo esta tupla de 5.
+    """
     from app.services import redis_client as rc
     from app.workers.tasks import procesar_evento
 
     if await rc.ya_procesado(mensaje["message_id"]):
         return "duplicado"
-    procesar_evento.apply_async((mensaje["telefono"], mensaje["tipo"], mensaje.get("nombre")))
+    procesar_evento.apply_async((
+        mensaje["telefono"],
+        mensaje["tipo"],
+        mensaje.get("nombre"),
+        mensaje.get("texto"),
+        mensaje.get("message_id"),
+    ))
     return "ok"
 
 
@@ -456,27 +539,77 @@ async def _excede_tope(telefono: str, nombre: str | None) -> bool:
     return True
 
 
-async def _avisar_duena_abuso(telefono: str, nombre: str | None, n: int) -> None:
-    """Avisa a la duena (su WhatsApp) que un cliente supero el tope del dia."""
-    from sqlalchemy import select
+async def _guardar_sin_responder(mensaje) -> None:
+    """Mete en el hilo un mensaje que el bot NO va a contestar (tope del día alcanzado).
 
-    from app.models import Configuracion
+    Va con `message_id` (UNIQUE desde la 001) de candado, igual que la burbuja del eco: una
+    reentrega de Meta no puede duplicarlo. Y de la nota de voz se guarda el `media_id`: el panel
+    se la baja de Meta al vuelo (`/api/mensajes/{id}/media`), así que la dueña puede ESCUCHARLA
+    aunque el bot no la haya transcrito (el tope corta antes de la transcripción).
+
+    Si esto falla se loguea y ya: NO puede tumbar el webhook. (Ojo: desde F1, un `error` aquí
+    haría que Meta reintentara el evento entero, y este carril no es el que hay que salvar.)
+    """
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+    from app.models import Mensaje
     from app.services.db import get_session_factory
-    from app.services.meta_client import enviar_texto
+    from app.webhook.parser import contenido_seguro, tipo_valido
 
-    factory = get_session_factory()
-    async with factory() as session:
-        fila = (
-            await session.execute(
-                select(Configuracion).where(Configuracion.clave == "dueno_telefono")
-            )
-        ).scalar_one_or_none()
-    destino = (fila.valor if fila else None) or settings.dueno_telefono
-    if not destino:
-        return
+    tipo = tipo_valido(mensaje.get("tipo"))
+    try:
+        factory = get_session_factory()
+        async with factory() as session:
+            ins = pg_insert(Mensaje).values(
+                message_id=mensaje["message_id"],
+                cliente_telefono=mensaje["telefono"],
+                rol="user",
+                contenido=contenido_seguro(tipo, mensaje.get("texto"), mensaje.get("caption")),
+                tipo=tipo,
+                media_id=mensaje.get("media_id"),
+                media_mime=mensaje.get("mime_type"),
+            ).on_conflict_do_nothing(index_elements=[Mensaje.message_id])
+            await session.execute(ins)
+            await session.commit()
+    except Exception:  # noqa: BLE001 — guardar jamás puede tumbar el webhook
+        logger.exception(
+            "No se pudo guardar el mensaje frenado por el tope de %s", mensaje["telefono"]
+        )
+
+
+async def _avisar_duena_abuso(telefono: str, nombre: str | None, n: int) -> None:
+    """Un cliente pasó el tope del día: aviso a la dueña por BANDEJA + WhatsApp.
+
+    🔴 Esta era la ÚNICA función de aviso del sistema que NO creaba Intervencion — las otras
+    tres (`_avisar_ventana_cerrada`, `_avisar_pago_en_chat_pausado`, `_avisar_a_la_duena`) sí. Y
+    sale UNA SOLA VEZ AL DÍA (`aviso_abuso_nuevo`, nx + ex=93600). O sea: si ese único WhatsApp
+    se perdía —su ventana de 24h cerrada, o el chat enterrado entre 200—, ese cliente se quedaba
+    sin respuesta el RESTO DEL DÍA y no quedaba ni un rastro en el sitio donde ella mira, que es
+    la bandeja. Se reusa `_avisar_a_la_duena` (la función de aviso del proyecto) en vez de
+    repetir aquí la mitad de su cuerpo. (Auditoría 2026-08-02, SIL-7.)
+
+    El texto también dejó de mentir por omisión: antes decía "el bot pausó las respuestas
+    automáticas" sin decir que además los mensajes se estaban TIRANDO. Ahora ya no se tiran
+    (`_guardar_sin_responder`) y el aviso lo dice.
+
+    Import perezoso de `tasks`, el mismo patrón que `_encolar_mensaje` / `_encolar_comprobante`
+    / `_encolar_evento`: importar este router no puede exigir Celery.
+    """
+    from app.workers.tasks import _avisar_a_la_duena
+
     quien = nombre or telefono
-    await enviar_texto(
-        destino,
-        f"⚠️ {quien} superó el límite de mensajes de hoy ({n}). El bot pausó las "
-        f"respuestas automáticas con ese cliente por hoy; si quieres, escríbele tú.",
+    await _avisar_a_la_duena(
+        telefono,
+        motivo="tope_diario",
+        detalle=(
+            f"{quien} pasó el límite de mensajes de hoy ({n}). El bot dejó de contestarle hasta "
+            "mañana para no dispararse el gasto de IA, pero SUS MENSAJES SIGUEN LLEGANDO y están "
+            "guardados en el chat: entra y contéstale tú."
+        ),
+        mensaje_cliente="(pasó el tope de mensajes del día)",
+        whatsapp=(
+            f"⚠️ {quien} superó el límite de mensajes de hoy ({n}). El bot pausó las respuestas "
+            "automáticas con ese cliente por hoy; lo que escriba se sigue guardando en el chat. "
+            "Entra y contéstale tú."
+        ),
     )

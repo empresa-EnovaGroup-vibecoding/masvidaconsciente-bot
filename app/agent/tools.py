@@ -1946,15 +1946,39 @@ async def pedir_ayuda(session, telefono, motivo: str, detalle: str = ""):
         )
     ).scalar_one_or_none()
 
-    # 3) Un solo aviso vivo por chat: si ya hay uno PENDIENTE, no la inundamos.
+    # 3) UN SOLO AVISO VIVO POR CHAT — pero que NO SE TRAGUE EL PROBLEMA NUEVO.
+    #
+    # 🔴 Esta regla nació para no inundar la bandeja y hasta hoy DESCARTABA TODO: con un aviso
+    # 'pendiente' delante, la segunda escalada de ese cliente no dejaba fila, no mandaba WhatsApp
+    # y —lo peor— TIRABA el `detalle` del problema NUEVO. La dueña seguía viendo el aviso viejo
+    # ("te piden un precio") mientras el cliente ya estaba RECLAMANDO.
+    #
+    # Y ese aviso se quedaba 'pendiente' PARA SIEMPRE en cuanto ella hacía justo lo que este
+    # mismo aviso le pide más abajo ("Entra al WhatsApp del negocio y respóndele tú"): el eco de
+    # su celular pausaba el chat y guardaba la burbuja, pero NUNCA tocaba `intervenciones`
+    # (webhook/router.py). Desde ese momento, CADA escalada futura de ese cliente se perdía
+    # entera — el bot le decía "eso te lo confirmo enseguida" y NADIE se enteraba nunca.
+    #
+    # Ahora el aviso vivo se ENRIQUECE con el detalle nuevo, y si el motivo AGRAVA (el cliente
+    # pasó de "no sé algo" a pedir una persona o a reclamar) sube de motivo y se vuelve a pingar.
+    # (La otra mitad del arreglo vive en `_procesar_eco`: cerrar el viejo y dejar el `chat_tomado`.)
     ya_hay = (
         await session.execute(
-            select(Intervencion.id).where(
+            select(Intervencion)
+            .where(
                 Intervencion.cliente_telefono == telefono,
                 Intervencion.estado == "pendiente",
-            ).limit(1)
+            )
+            .order_by(Intervencion.created_at.desc())
+            .limit(1)
         )
     ).scalar_one_or_none()
+
+    # AGRAVA = el problema nuevo SÍ calla al bot y el aviso vivo no lo hacía. Es justo lo que
+    # ella tiene que saber YA, aunque ya tuviera un aviso abierto por otra cosa.
+    agrava = motivo in _MOTIVOS_DE_PAUSA and (
+        ya_hay is None or ya_hay.motivo not in _MOTIVOS_DE_PAUSA
+    )
 
     if ya_hay is None:
         session.add(
@@ -1965,10 +1989,24 @@ async def pedir_ayuda(session, telefono, motivo: str, detalle: str = ""):
                 mensaje_cliente=ultimo,
             )
         )
+    else:
+        # ⚠️ `chat_tomado` NO CAMBIA DE MOTIVO NUNCA. Ese aviso no describe un problema: ES EL
+        # BOTÓN que le devuelve el chat al bot (`resolver_intervencion` con reactivar=True), y
+        # el barredor lo respeta por su motivo EXACTO (`i.motivo <> 'chat_tomado'`,
+        # services/barredor.py). Pisárselo aquí lo dejaría sin identidad de botón Y elegible para
+        # que `cerrar_avisos_ya_atendidos` lo cerrara a los 5 minutos: chat mudo para siempre,
+        # que es el desastre exacto que ese aviso vino a evitar. El detalle sí se le añade y el
+        # WhatsApp sale igual si agrava — que es lo que ella necesita saber.
+        if agrava and ya_hay.motivo != "chat_tomado":
+            ya_hay.motivo = motivo
+        ya_hay.mensaje_cliente = ultimo or ya_hay.mensaje_cliente
+        nuevo = (detalle or _MOTIVO_TITULO[motivo]).strip()
+        if nuevo and nuevo not in (ya_hay.detalle or ""):
+            ya_hay.detalle = (f"{ya_hay.detalle}\n· {nuevo}" if ya_hay.detalle else nuevo)[-1500:]
     await session.commit()
 
     # 4) El ping a la dueña. Si no sale, NO rompe nada: el aviso ya está en el panel.
-    if ya_hay is None:
+    if ya_hay is None or agrava:
         await _avisar_intervencion(session, telefono, motivo, detalle, ultimo)
 
     return {

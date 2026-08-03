@@ -19,6 +19,57 @@
 
 ---
 
+## 2026-08-02 — 📨 EL MENSAJE, EL COMPROBANTE Y LA BANDEJA (bloque 2, tandas 3-5 — CIERRA EL BLOQUE 2)
+
+**El mensaje del cliente ya no se evapora.** Tres agujeros que lo tiraban en silencio:
+- El **lock tomado** mataba la tarea sin reencolar ni loguear. Escenario real: t=0 llega "quiero 2",
+  t=20 llega *"sí, dale, lo quiero"* → esa segunda tarea no consigue el lock → `return` → cuando la
+  primera libera **ya no queda ninguna tarea programada** y el mensaje muere en el buffer. Ahora se
+  reintenta (8 × 20 s = 160 s, por encima de los 120 s del lock) y la voz/evento **se derrama al
+  buffer** en vez de perderse (ese carril no tenía buffer: la nota de voz se perdía entera).
+- El **buffer se vaciaba ANTES de pensar** y el historial se guardaba DESPUÉS: un 402 borraba el
+  mensaje de Redis **y** de la tabla `mensajes`, y en el panel quedaba un hueco. Ahora el turno se
+  anota antes, con rescate en el `except` (envuelto en su propio try: si Redis también está caído,
+  el rescate no puede tumbar el turno que ya se cayó).
+- **El bot recordaba haber dicho lo que el cliente nunca recibió.** Si el globo 1 salía y el 2
+  fallaba —*el que lleva la cuenta y la cédula*—, el bot lo daba por dicho y no lo repetía nunca.
+  Y el `break` descartaba los globos siguientes sin dejarles ni fila roja. Ahora `_lo_que_llego()`,
+  que en el camino feliz devuelve la respuesta **tal cual** (arreglar un caso raro no puede
+  cambiarle la memoria al 100% de los turnos).
+
+**El comprobante.** El `except` decía *"dejar reintentar a Meta"* — y **Meta no puede**: el webhook
+ya devolvió 200 al encolar, y Celery no tenía reintentos. El pago se perdía para siempre: sin fila,
+sin respuesta al cliente, sin aviso. Ahora reintenta 3 veces, `_guardar_comprobante` vive dentro de
+un try (un `/data` lleno mataba la tarea), y **la lectura de visión se cachea por `media_id`**:
+la visión NO es determinista, así que un reintento podía dar un veredicto DISTINTO sobre el mismo
+comprobante y cerrar como "no es un pago" algo que el primer intento ya había leído bien. *El dinero
+se juzga UNA vez.* Y "no pude leer" deja de tratarse igual que "seguro que no es un comprobante":
+con la visión caída, el bot pedía la captura otra vez con cada captura y **el negocio dejaba de
+cobrar en silencio**.
+
+**La bandeja.** El eco de la dueña no cerraba la Intervencion, y como `pedir_ayuda` tiene la regla
+"un solo aviso vivo por chat", **cada escalada futura de ese cliente se tragaba entera**. Ahora el
+eco cierra las pendientes y deja una `chat_tomado` — que es el botón que devuelve el chat al bot, y
+que el barredor ya sabía excluir. El aviso vivo además **se enriquece**: si el motivo agrava
+(`no_se` → `reclamo`), sube de motivo y vuelve a pingar. Y el **tope anti-abuso** ya no descarta el
+mensaje antes de `mensajes`: se acabó el "3 no leídos" sobre un hilo vacío. La **ubicación** del
+cliente —su dirección de entrega— deja de resumirse a *"(el cliente envio un location, sin texto)"*.
+
+### Dos cosas que los agentes cazaron y no estaban en el mapa
+
+1. **`_texto_de` en el parser**: sin tocarlo, SIL-12 era código muerto — el cuerpo `location` no
+   tiene `id`, así que las coordenadas se perdían **dos capas antes** de llegar al router.
+2. **El motivo de R6 en la revisión era falso, y el riesgo real era peor.** Se decía que reactivar
+   un aviso de `tope_diario` dispararía `_retomar`; en realidad ese mensaje nunca llega al historial
+   de Redis. El riesgo verdadero: `tope_diario` **no pausó nada**, así que reactivar no deshace su
+   pausa — **borra la que hubiera**, incluida la `pausado_por='dueña'` de un chat que ella tomó a
+   propósito.
+
+**Bancos 20 → 21** (`probar_no_se_evapora`). **Los 21 en verde**, con los dos contenedores
+verificados alineados por checksum (el publicador y el consumidor tienen que compartir firma).
+
+---
+
 ## 2026-08-02 — 🔇 EL SISTEMA DEJA DE FALLAR MUDO (bloque 2, tandas 1 y 2)
 
 41 hallazgos mapeados sobre el corazón del bot, con revisión cruzada. **Lo más valioso de la

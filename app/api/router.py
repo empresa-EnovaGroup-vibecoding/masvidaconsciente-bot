@@ -2136,12 +2136,27 @@ _MOTIVO_TEXTO = {
     # los mensajes que nunca llegaron a guardarse — que son justo los de la semana muda del 10-17
     # de julio, cuando el bot llevaba días sin responder y la bandeja estaba vacía.
     "bot_callado": "Un cliente escribió y el bot NO le respondió",
+    # Redes nuevas del carril del comprobante y del turno (auditoría 2026-08-02). Sin estas
+    # entradas la bandeja mostraría el motivo crudo: no rompe nada, pero se lee feo.
+    "sin_respuesta": "Un cliente quedó sin respuesta",
+    "mensaje_a_medias": "Al cliente le llegó solo parte del mensaje",
+    "comprobante_ilegible": "No se pudo leer un comprobante: míralo tú",
+    "comprobante_sin_procesar": "Entró un comprobante y no se pudo procesar",
+    "comprobante_sin_archivo": "Se registró un pago pero el archivo no se pudo guardar",
     # Le devolviste el chat al bot, pero pasaron +24h desde el último mensaje del cliente:
     # WhatsApp no deja escribirle. El bot NO le escribió (lado seguro) y te lo avisa a ti.
     "ventana_cerrada": "Pasaron 24h: el bot no puede escribirle",
     # La red del dinero tumbó lo que el bot iba a decir (un monto inventado, una frase prohibida).
     # Al cliente solo le llegó un acuse: la conversación la termina una persona.
     "bot_frenado": "Frené un mensaje del bot: entra tú",
+    # 🔴 LA DUEÑA RESPONDIÓ DESDE SU CELULAR (el eco). El chat quedó en SUS manos y el bot se
+    # calló ahí. Este aviso no es un problema que atender: ES EL BOTÓN que le devuelve el chat al
+    # bot cuando termine (resolver con reactivar=True). Por eso el barredor no lo cierra nunca
+    # (`cerrar_avisos_ya_atendidos`) y `pedir_ayuda` no le pisa el motivo. Ver SIL-9.
+    "chat_tomado": "Le respondiste tú: devuélvele el chat al bot",
+    # Un cliente pasó el tope de mensajes del día: el bot dejó de contestarle para no dispararse
+    # el gasto de IA, pero sus mensajes SE SIGUEN GUARDANDO en el hilo. La sigue una persona.
+    "tope_diario": "Un cliente pasó el tope del día: contéstale tú",
 }
 
 
@@ -2198,6 +2213,20 @@ async def resolver_intervencion(
             raise HTTPException(status_code=404, detail="Aviso no encontrado")
         inter.estado = "resuelta"
         inter.resuelta_at = now_utc()
+        # 🔴 HAY AVISOS QUE NO SON UN CHAT PAUSADO, y "reactivar" ahí hace daño de verdad.
+        #
+        # `tope_diario` (SIL-7) es el caso: ese aviso NO pausó nada — el bot nunca se calló, solo
+        # dejó de gastar IA con ese cliente por hoy (`_excede_tope`, webhook/router.py). Así que
+        # este bloque no estaría DESHACIENDO su pausa: estaría borrando LA QUE HUBIERA, sea de
+        # quien sea. Un clic en "ya lo atendí" sobre el aviso del tope le devolvería al bot un
+        # chat que ELLA tomó a propósito (pausado_por='dueña'), y el bot volvería a hablar encima
+        # de una conversación suya. Encima dispara `_retomar`, que no consulta el tope por ningún
+        # lado: si el historial de Redis termina en un turno del cliente (pasa cuando los globos
+        # del turno anterior fallaron, `_algo_llego`), el bot le contesta igual y el tope queda
+        # anulado con un clic.
+        #
+        # `tasa_congelada` (cuando llegue) es un aviso del SISTEMA, no del chat de nadie.
+        reactivar = reactivar and inter.motivo not in ("tope_diario", "tasa_congelada")
         if reactivar:
             cliente = (
                 await session.execute(
