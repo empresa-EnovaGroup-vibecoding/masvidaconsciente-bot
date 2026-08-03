@@ -234,7 +234,10 @@ def _renderizar(nombre: str, r: dict) -> str:
     if nombre == "enviar_fotos_producto":
         n = int(r.get("enviadas") or 0)
         if n:
-            return f"Le ENVIASTE {n} foto(s)/video(s) por WhatsApp: ya las tiene."
+            # DE QUÉ era la foto: con dos fotos del mismo producto (la de plátano y la de yuca)
+            # la Voz tiene que saber cuál salió, o se lo inventa.
+            de = f" de {r['etiqueta_enviada']}" if r.get("etiqueta_enviada") else ""
+            return f"Le ENVIASTE {n} foto(s)/video(s){de} por WhatsApp: ya las tiene."
         return "NO se pudo enviar ninguna foto: NO le digas que se las mandaste."
 
     if nombre == "enviar_catalogo":

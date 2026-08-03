@@ -268,7 +268,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "enviar_fotos_producto",
-            "description": "Envía al cliente las FOTOS y VIDEOS de UN producto por WhatsApp. Es tu arma de venta, ÚSALA PROACTIVA: en cuanto el cliente se enfoque en UN producto concreto (lo elija, te pida su info o pregunte por él), muéstraselo SIN esperar a que pida la foto; y también cuando pida ver/mostrar ('muéstrame', 'mándame una foto', 'quiero verlo'), pregunte cómo se ve, o dude. UN producto a la vez (no mandes fotos de varios a la vez). Es la ÚNICA forma de saber si el producto tiene fotos: NO asumas que no hay sin llamarla primero. Manda las mejores (hasta 3). Si no tiene fotos cargadas, te avisa para que lo digas con sinceridad. (Para ver el menú/opciones en general usa enviar_catalogo.)",
+            "description": "Envía al cliente las FOTOS y VIDEOS de UN producto por WhatsApp. Es tu arma de venta, ÚSALA PROACTIVA: en cuanto el cliente se enfoque en UN producto concreto (lo elija, te pida su info o pregunte por él), muéstraselo SIN esperar a que pida la foto; y también cuando pida ver/mostrar ('muéstrame', 'mándame una foto', 'quiero verlo'), pregunte cómo se ve, o dude. UN producto a la vez (no mandes fotos de varios a la vez). Es la ÚNICA forma de saber si el producto tiene fotos: NO asumas que no hay sin llamarla primero. Manda las mejores (hasta 3). Si no tiene fotos cargadas, te avisa para que lo digas con sinceridad. Si el cliente ya eligió una VERSIÓN (la de yuca, la de plátano…), pásala en `etiqueta`. (Para ver el menú/opciones en general usa enviar_catalogo.)",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -282,6 +282,16 @@ TOOL_SCHEMAS = [
                             "OPCIONAL. Si el cliente pidió un TAMAÑO concreto, pon aquí su "
                             "`id_para_pedir` y se le mandan las fotos DE ESE tamaño. Si no dijo "
                             "tamaño, no lo pongas."
+                        ),
+                    },
+                    "etiqueta": {
+                        "type": "string",
+                        "description": (
+                            "OPCIONAL. Si el cliente ya dijo QUÉ VERSIÓN quiere de ese producto "
+                            "(la de yuca, la de plátano, de chocolate…), pon aquí SUS PALABRAS "
+                            "tal cual. Si hay una foto de esa versión se le manda ESA; si no la "
+                            "hay, se le mandan las generales y te aviso para que NO le digas que "
+                            "la foto era de eso. Si no dijo cuál, NO lo pongas."
                         ),
                     },
                 },
@@ -427,6 +437,56 @@ def _coincide_texto(prod, palabras: list[str], extra: str = "") -> bool:
     calza con 'Pan de Sándwich' pero NO con em-PAN-adas."""
     tokens = _tokens_producto(prod, extra)
     return all(any(t.startswith(w) for t in tokens) for w in palabras)
+
+
+# ─── QUÉ FOTO SE MANDA (funciones PURAS, a propósito) ───────────────────────────────
+# Las Empanadas (producto 5) se hacen de plátano O de yuca: MISMO precio, MISMA variante, DOS
+# fotos. La dueña le pone NOMBRE a cada una en el panel (`producto_media.etiqueta`) y aquí se
+# elige cuál va. Puras porque así el banco las prueba SIN escribir una fila en la base.
+
+
+def _calza_etiqueta(etiqueta: str | None, pedido: str | None) -> bool:
+    """True si el nombre que la dueña le puso a la foto responde a lo que pidió el cliente.
+    Prefijo de PALABRA y sin acentos: el MISMO criterio de `_coincide_texto` y por la misma
+    razón — con substring, 'yuca' calzaría dentro de cualquier palabra que la contenga."""
+    limpio = (
+        _sin_acentos(etiqueta or "")
+        .replace(",", " ").replace(".", " ").replace(":", " ")
+        .replace("/", " ").replace("-", " ").replace("(", " ").replace(")", " ")
+    )
+    tokens = limpio.split()
+    palabras = _palabras_busqueda(pedido or "")
+    return bool(tokens and palabras and all(any(t.startswith(w) for t in tokens) for w in palabras))
+
+
+def _elegir_medios(todos, variante_id, etiqueta):
+    """Cuáles de las fotos del producto se mandan. Devuelve
+    (medios, etiqueta_enviada, etiquetas_disponibles)."""
+    ets = sorted({(m.etiqueta or "").strip() for m in todos if (m.etiqueta or "").strip()})
+    medios = list(todos)
+    if variante_id is not None:
+        # Primero las de ESE tamaño; luego las neutras (las que no tienen tamaño asignado). Las
+        # de OTRO tamaño NO se mandan: enviar la de 350ml cuando piden la de 700ml es
+        # exactamente el error que se arregló en su día.
+        medios = (
+            [m for m in medios if m.variante_id == variante_id]
+            + [m for m in medios if m.variante_id is None]
+        )
+    pedido = (etiqueta or "").strip()
+    if not pedido:
+        # 🔴 SIN PEDIDO NO SE FILTRA NADA — se comporta EXACTAMENTE como antes de existir esta
+        # columna. Si aquí se filtrara, el día que la dueña le ponga nombre a las DOS fotos de
+        # las Empanadas, "muéstrame las empanadas" mandaría CERO fotos y el bot diría que no
+        # tiene ninguna. Es la trampa de este cambio: no la muevas.
+        return medios, None, ets
+    con_et = [m for m in medios if _calza_etiqueta(m.etiqueta, pedido)]
+    neutras = [m for m in medios if not (m.etiqueta or "").strip()]
+    if con_et:
+        # Las de OTRA etiqueta JAMÁS salen: mandar la de plátano cuando pidieron la de yuca es
+        # justo el error que se está arreglando (misma doctrina que `variante_id`).
+        return con_et + neutras, (con_et[0].etiqueta or "").strip(), ets
+    # Ninguna es de eso: van las generales (y el resultado avisa para que el bot NO mienta).
+    return neutras, None, ets
 
 
 async def _buscar_productos_difuso(
@@ -986,6 +1046,16 @@ async def info_producto(session, telefono, nombre):
             "productos_disponibles": disponibles,
         }
     vs = (await _tamanos_de(session, [prod.id])).get(prod.id) or []
+    # LOS NOMBRES QUE LA DUEÑA LE PUSO A CADA FOTO ("base de plátano"). Van aquí y no en el
+    # prompt: esta es la ficha completa, es resultado de HERRAMIENTA (el canal sancionado) y
+    # viaja en el MISMO payload que `descripcion`, así que no puede desincronizarse.
+    _etiquetas_media = (
+        await session.execute(
+            select(ProductoMedia.etiqueta).where(ProductoMedia.producto_id == prod.id)
+        )
+    ).scalars().all()
+    fotos_etiquetadas = sorted({(e or "").strip() for e in _etiquetas_media if (e or "").strip()})
+    fotos_sin_etiqueta = sum(1 for e in _etiquetas_media if not (e or "").strip())
     tamanos = []
     for v in vs:
         precio = await _precio_efectivo(session, v)
@@ -1011,10 +1081,17 @@ async def info_producto(session, telefono, nombre):
         "apto_diabeticos": prod.apto_diabeticos,
         "info": prod.info,
         "disponible": prod.disponible,
+        # Los nombres de las fotos: sirven SOLO para escoger cuál mandar (ver la nota).
+        "fotos_etiquetadas": fotos_etiquetadas,
+        "fotos_sin_etiqueta": fotos_sin_etiqueta,
         "nota": (
             "Responde sobre ESTE producto SOLO con estos datos. Si el cliente pregunta algo "
             "que aquí está vacío/None (ej. duración, si se congela), NO lo inventes ni copies "
-            "de otro producto: dile con calidez que lo confirmas con la dueña."
+            "de otro producto: dile con calidez que lo confirmas con la dueña. "
+            "Las `fotos_etiquetadas` son los nombres que la dueña le puso a CADA FOTO: sirven "
+            "SOLO para escoger cuál mandarle (pásalo en `etiqueta` de enviar_fotos_producto). "
+            "NO son la lista de opciones del producto: lo que se puede pedir está en "
+            "`descripcion` y en los tamaños. NO ofrezcas una versión que no esté ahí."
         ),
     }
 
@@ -2529,18 +2606,24 @@ async def enviar_catalogo(session, telefono):
     return {"ok": True, "nota": "catalogo PDF enviado al cliente; confirmaselo con calidez"}
 
 
-async def enviar_fotos_producto(session, telefono, nombre, variante_id=None):
+async def enviar_fotos_producto(session, telefono, nombre, variante_id=None, etiqueta=None):
     """Envía al cliente las fotos/videos de UN producto por WhatsApp (cuando las pide).
 
     Con `variante_id` manda PRIMERO las de ESE tamaño (si piden la kombucha de 700ml, la de
     700ml — antes mandaba siempre la de 350ml porque eran dos productos y el buscador devolvía
     el primero) y completa con las NEUTRAS (las que no tienen tamaño asignado).
 
+    Con `etiqueta` (las PALABRAS DEL CLIENTE: "de yuca") manda la foto que la dueña nombró así.
+    Sin `etiqueta` no se filtra NADA: se comporta igual que siempre.
+
     Usa el link público de R2 que Meta descarga. Si el producto no tiene media cargada, lo dice
     con sinceridad (NUNCA afirmar que se envió algo que no se envió)."""
     from app.services import r2
 
-    logger.info("enviar_fotos_producto LLAMADA: nombre=%r variante_id=%r", nombre, variante_id)
+    logger.info(
+        "enviar_fotos_producto LLAMADA: nombre=%r variante_id=%r etiqueta=%r",
+        nombre, variante_id, etiqueta,
+    )
     prod = None
     variante = None
     if variante_id:
@@ -2562,26 +2645,44 @@ async def enviar_fotos_producto(session, telefono, nombre, variante_id=None):
             .order_by(ProductoMedia.orden, ProductoMedia.id)
         )
     ).scalars().all()
-    if variante is not None and variante.producto_id == prod.id:
-        # Primero las de ESE tamaño; luego las neutras (las que no tienen tamaño asignado).
-        # Las de OTRO tamaño NO se mandan: enviar la de 350ml cuando piden la de 700ml es
-        # exactamente el error que estamos arreglando.
-        del_tamano = [m for m in todos if m.variante_id == variante.id]
-        neutras = [m for m in todos if m.variante_id is None]
-        medios = del_tamano + neutras
-    else:
-        medios = todos
+    # Qué fotos van: el tamaño (como siempre) y, si el cliente dijo cuál versión quiere, la que
+    # la dueña nombró así. Toda la decisión vive en `_elegir_medios`, que es PURA y está probada.
+    _vid = variante.id if (variante is not None and variante.producto_id == prod.id) else None
+    medios, et_enviada, ets_disp = _elegir_medios(todos, _vid, etiqueta)
+    # Lo que el cliente pidió, ya limpio: es lo que se le repite al modelo en los avisos.
+    _pedido = (etiqueta or "").strip()
     logger.info(
         "enviar_fotos_producto: producto=%s id=%s media=%d r2_config=%s",
         prod.nombre, prod.id, len(medios), r2.configurado(),
     )
-    if not medios:
+    if not todos:
         return {
             "enviadas": 0,
             "nota": (
                 f"'{prod.nombre}' no tiene fotos ni videos cargados. Dile con sinceridad que "
                 "por ahora no tienes fotos de ese y ofrécele el catálogo o más info; NO digas "
                 "que se las enviaste"
+            ),
+        }
+    if not medios:
+        # 🔴 TIENE FOTOS, PERO NINGUNA ES DE ESO. Sin esta rama caería en el mensaje de arriba y
+        # le diría al cliente que el producto "no tiene fotos" — mentira sobre un producto que
+        # tiene dos. Mejor ninguna que la equivocada, pero DICHO con la verdad.
+        # (Sin `etiqueta` esto solo pasa si TODAS son de OTRO tamaño; ahí se dice así y no
+        # "ninguna es de None", que es lo que saldría al copiar el texto a lo bruto.)
+        _de_eso = f"de '{_pedido}'" if _pedido else "del tamaño que pidió"
+        _hay = (
+            f" Ofrécele la(s) que sí hay ({', '.join(ets_disp)}) o el catálogo."
+            if ets_disp
+            else " Ofrécele el catálogo o más info."
+        )
+        return {
+            "enviadas": 0,
+            "producto": prod.nombre,
+            "etiquetas_disponibles": ets_disp,
+            "nota": (
+                f"'{prod.nombre}' SÍ tiene fotos, pero NINGUNA es {_de_eso} y no hay generales. "
+                f"Dilo con sinceridad.{_hay} JAMÁS mandes otra diciendo que es {_de_eso}"
             ),
         }
     # 🧪 EL SIMULADOR DEL PANEL (teléfono "__simulador__…") NO tiene un WhatsApp real al que
@@ -2593,18 +2694,36 @@ async def enviar_fotos_producto(session, telefono, nombre, variante_id=None):
         for m in medios[:3]:
             url = r2.url_publica(m.clave)
             if url:
+                # La etiqueta también AQUÍ: el simulador es el ÚNICO sitio desde donde la dueña
+                # puede comprobar esto sin un WhatsApp real. Sin ella vería dos burbujas
+                # idénticas y concluiría que no funciona.
+                _et = (m.etiqueta or "").strip()
                 await _guardar_media_saliente(
                     telefono=telefono,
                     tipo="video" if m.tipo == "video" else "image",
-                    contenido=f"({'video' if m.tipo=='video' else 'foto'} de {prod.nombre})",
+                    contenido=(
+                        f"({'video' if m.tipo=='video' else 'foto'} de {prod.nombre}"
+                        + (f" — {_et}" if _et else "")
+                        + ")"
+                    ),
                     url=url, respuesta=None,
                 )
         n = min(len(medios), 3)
         return {
             "enviadas": n, "producto": prod.nombre,
+            "etiqueta_enviada": et_enviada,
+            "etiquetas_disponibles": ets_disp,
             "nota": (
-                f"(SIMULADOR) le mostraste {n} foto(s) de '{prod.nombre}'. En WhatsApp real le "
-                "llegan de verdad. Coméntale cálido que ahí las tiene y sigue la venta."
+                f"(SIMULADOR) le mostraste {n} foto(s) de '{prod.nombre}'"
+                + (f" — la(s) de {et_enviada}" if et_enviada else "")
+                + ". En WhatsApp real le llegan de verdad. Coméntale cálido que ahí las tiene "
+                "y sigue la venta."
+                + (
+                    ""
+                    if (et_enviada or not _pedido)
+                    else f" ⚠️ NO tienes foto de '{_pedido}': le mostraste la(s) general(es). "
+                         f"NO le digas que esa foto es de '{_pedido}'."
+                )
             ),
         }
 
@@ -2643,7 +2762,12 @@ async def enviar_fotos_producto(session, telefono, nombre, variante_id=None):
             )
             continue
         es_video = m.tipo == "video"
-        cap = prod.nombre if enviadas else (f"{prod.nombre}\n{_desc[:140]}" if _desc else prod.nombre)
+        # EL NOMBRE DE LA FOTO VA EN TODAS (aquí SÍ hay que repetirlo: es lo único que las
+        # distingue cuando son dos del mismo producto al mismo precio). No es texto del modelo:
+        # lo escribe el código copiando lo que puso la dueña. Sigue SIN precio.
+        _et = (m.etiqueta or "").strip()
+        _base = f"{prod.nombre} — {_et}" if _et else prod.nombre
+        cap = _base if enviadas else (f"{_base}\n{_desc[:140]}" if _desc else _base)
         try:
             resp = (
                 await enviar_video(telefono, url, cap) if es_video else await enviar_imagen(telefono, url, cap)
@@ -2658,7 +2782,11 @@ async def enviar_fotos_producto(session, telefono, nombre, variante_id=None):
         await _guardar_media_saliente(
             telefono=telefono,
             tipo="video" if es_video else "image",
-            contenido=f"({'video' if es_video else 'foto'} de {prod.nombre})",
+            contenido=(
+                f"({'video' if es_video else 'foto'} de {prod.nombre}"
+                + (f" — {_et}" if _et else "")
+                + ")"
+            ),
             url=url,
             respuesta=resp,
         )
@@ -2677,9 +2805,21 @@ async def enviar_fotos_producto(session, telefono, nombre, variante_id=None):
     return {
         "enviadas": enviadas,
         "producto": prod.nombre,
+        # De QUÉ era la foto que salió (None = las generales), y qué nombres hay en total. Con
+        # esto el bot puede decir la verdad en el mismo turno en vez de dar por hecho.
+        "etiqueta_enviada": et_enviada,
+        "etiquetas_disponibles": ets_disp,
         "nota": (
-            f"YA le enviaste {enviadas} archivo(s) de '{prod.nombre}'. Coméntale cálido que ahí "
-            "los tiene y sigue la venta. NO digas que vas a enviarlos: ya están enviados"
+            f"YA le enviaste {enviadas} archivo(s) de '{prod.nombre}'"
+            + (f" — la(s) de {et_enviada}" if et_enviada else "")
+            + ". Coméntale cálido que ahí los tiene y sigue la venta. NO digas que vas a "
+            "enviarlos: ya están enviados"
+            + (
+                ""
+                if (et_enviada or not _pedido)
+                else f". ⚠️ NO tienes foto de '{_pedido}': le mandaste la(s) general(es). NO le "
+                     f"digas que esa foto es de '{_pedido}'"
+            )
         ),
     }
 

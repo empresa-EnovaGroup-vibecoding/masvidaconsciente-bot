@@ -1,0 +1,28 @@
+-- 029_media_etiqueta.sql — CADA FOTO DICE QUÉ ES (aditiva e idempotente).
+--
+-- POR QUÉ. Un mismo producto puede tener dos fotos que son, en la práctica, dos productos:
+-- las Empanadas (producto 5) se hacen con masa de plátano O de yuca — MISMO PRECIO y MISMA
+-- variante (id 25, $12). Eso es una OPCIÓN, no un TAMAÑO: no toca `producto_variantes` ni el
+-- dinero. Pero hoy la foto no dice de cuál es, así que ni el bot puede escoger la correcta ni
+-- el cliente sabe cuál le llegó: las DOS fotos del producto 5 (media 21 y 22) salen con el
+-- mismo pie y son indistinguibles.
+--
+-- NULL = FOTO NEUTRA, sin nombre. Es lo que tienen las 35 filas de hoy y NO cambia NADA para
+-- ellas. Cero backfill y cero adivinanza: nadie sabe hoy cuál de las dos de las Empanadas es
+-- la de yuca, y el sistema JAMÁS se lo inventa (misma doctrina que `variante_id` NULL,
+-- models.py:106-109).
+--
+-- NO ES UN CATÁLOGO DE OPCIONES. Qué opciones EXISTEN sigue viviendo donde ya vive:
+-- `productos.descripcion` cuando valen para todos los tamaños ("Masa de plátano o de yuca") y
+-- `producto_variantes.sabores` cuando dependen del tamaño (la Kombucha de 700ml). Esta columna
+-- solo dice QUÉ SE VE EN ESTA FOTO. Un dato, un solo sitio — la enfermedad que causó la fuga de
+-- la Kombucha fue justamente tener el mismo dato en dos lados.
+--
+-- SIN ÍNDICE, A PROPÓSITO. Todo lo que lee etiquetas lo hace filtrando por `producto_id`, que ya
+-- tiene `idx_producto_media_producto` desde la 014. Un índice que nadie usa es deuda: se anota y
+-- hay que mantenerlo para siempre.
+--
+-- Nada de bloques DO $$ ni un solo ';' dentro de un literal: `_statements` parte por ';'
+-- (app/init_db.py). Misma regla que la 028.
+
+ALTER TABLE producto_media ADD COLUMN IF NOT EXISTS etiqueta TEXT;

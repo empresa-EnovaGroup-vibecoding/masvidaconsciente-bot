@@ -19,6 +19,89 @@
 
 ---
 
+## 2026-08-03 — 🏷️ CADA FOTO DICE QUÉ ES (migración 029)
+
+**Lo pidió Erwin:** *"si en el mismo producto hay tortilla de pollo una a base de plátano y otra a
+base de yuca y ambas cuestan lo mismo y lo único que lo diferencia es la base de la masa, debe
+permitir etiquetar cada imagen subida para que el bot sepa qué imagen está enviando"*.
+
+El caso ya estaba en la base: las **Empanadas (producto 5)** tienen **un precio, una variante
+(id 25, $12) y DOS fotos** (media 21 y 22) que salían con el mismo pie y eran indistinguibles.
+
+### 🔴 La decisión de diseño de la que depende que no se rompa el cobro
+
+El proyecto separa **VARIANTE** (= tamaño, lleva PRECIO, es la lista cerrada contra la que se valida
+el cobro) de **OPCIÓN** (relleno, masa, sabor — mismo precio). Plátano vs yuca al mismo precio es una
+**OPCIÓN**, así que el `variante_id` que ya existía en `producto_media` NO resolvía el caso.
+
+**Las dos trampas que NO se pisaron:**
+- **Crear una variante "base de plátano"** para colgarle la foto: metería una fila **con precio** en
+  la lista cerrada del cobro para resolver un problema que no es de dinero, y obligaría al bot a
+  preguntar "¿cuál tamaño?" cuando no hay dos tamaños.
+- **Crear dos productos**: es literalmente la Kombucha otra vez, y además rompe el buscador —
+  `_buscar_producto("tortillas")` calzaría con varios, devolvería None, y el bot preguntaría en CADA
+  conversación.
+
+→ `producto_media.etiqueta` dice **ÚNICAMENTE qué se ve en ESA foto**. No es el catálogo de opciones:
+qué se puede pedir sigue viviendo en `productos.descripcion` y en `producto_variantes.sabores`. **No
+toca `producto_variantes`, ni el precio, ni la lista cerrada, ni una línea del system prompt.**
+
+`NULL` = foto neutra. Es lo que tienen las **35 filas de hoy**: cero backfill y cero adivinanza,
+porque nadie sabe cuál de las dos de las Empanadas es la de yuca y el sistema no se lo inventa.
+
+### Lo que caza el revisor adversarial y no se veía solo
+
+- 🔴 **El filtro corría SIEMPRE**, también cuando el modelo no manda etiqueta. El día que la dueña
+  nombrara las dos fotos, *"muéstrame las empanadas"* habría mandado **CERO fotos** y el bot habría
+  dicho que no tiene ninguna. Y el test de retrocompatibilidad contra las 35 filas NULL habría salido
+  **VERDE igual**, porque el bug solo asoma cuando ella usa la función nueva. → `if not pedido:
+  return medios` y un caso de banco dedicado.
+- 🔴 **La propuesta inyectaba las etiquetas en el catálogo del prompt.** Eso copiaba a un segundo
+  sitio la lista de masas que YA vive en `productos.descripcion` — la enfermedad de la Kombucha, y
+  contra la regla que el propio panel escribe ("un dato, un solo lugar"). **`system_prompt.py` no se
+  abrió.** La capacidad se anuncia en la `description` del parámetro de la tool, que ya viaja cada turno.
+- 🔴 **El bot habría MENTIDO**: si el filtro vaciaba la lista caía en el `if not medios` que dice "no
+  tiene fotos ni videos cargados" sobre un producto con dos. → Dos guardias: `if not todos` (el
+  mensaje de hoy, intacto) y una rama honesta que ofrece `etiquetas_disponibles` para que rectifique
+  **en el mismo turno**.
+- 🔴 **`re` no está importado en `router.py`** — el endpoint habría dado NameError el primer día. Y
+  `ProductoMedia` no tiene `updated_at`: copiar `editar_variante` literal revienta.
+- 🔴 **La rama del SIMULADOR** quedaba sin parchear, y es el ÚNICO sitio donde la dueña puede probar
+  esto desde el panel: lo habría probado, habría visto dos burbujas idénticas y habría concluido que
+  no funciona.
+
+Y una que apareció al implementar: afirmar en el banco *"ninguna fila tiene etiqueta"* lo pondría
+**ROJO el día que la dueña use la función**. Se comprueba como INVARIANTE: sin etiqueta, la lista
+sale idéntica a como entró.
+
+### La etiqueta no puede llevar precios
+
+El pie de la foto lo escribe el CÓDIGO y **no pasa por las redes del dinero**. Si ella escribiera
+"base de plátano $12", esa cifra le llegaría al cliente sin que nadie la valide. El `PATCH` la
+rechaza (`$`, bs, usd, dólar, precio, euro) y topa en 60 caracteres.
+
+### Medido en el taller, con el caso real
+
+| El cliente dice | Fotos que salen | Qué sabe el bot |
+|---|---|---|
+| "de yuca" | solo la 2 | mandó la de yuca |
+| "plátano" | solo la 1 | mandó la de plátano |
+| *(no menciona la masa)* | **las dos** | ninguna en particular |
+| "de trigo" | ninguna | pero recibe la lista para rectificar, en vez de mentir |
+
+**Verificado:** ruff limpio · 111 tests del CI · **los 23 bancos en verde** · migración aplicada
+ANTES del código (el orden no es negociable: `select(ProductoMedia)` pide todas las columnas
+mapeadas, y al revés cada envío revienta con UndefinedColumn y el bot diría "no pude mandarte la
+foto" dejando solo un WARNING) · desplegado a los DOS contenedores por checksum · panel recompilado
+con `localhost:8000` en **0 chunks** · `PATCH /api/media/{id}` responde 401 (existe y pide auth).
+
+⚠️ **Hueco que este cambio NO cierra** (y no finge que sí): sigue sin haber forma de asignar el
+TAMAÑO (`variante_id`) de una foto desde el panel. Hoy solo lo tienen las dos de la Kombucha porque
+se lo puso `022b_variantes_datos.sql`. Si la dueña borra y vuelve a subir una de esas dos, ese dato
+se pierde sin manera de recuperarlo. Es otro trabajo, con su propia decisión.
+
+---
+
 ## 2026-08-03 — 🧠 EL CEREBRO PARTIDO, EL PAGO QUE NADIE CONFIRMABA Y EL SEXTO RETURN MUDO
 
 Primera tanda del repaso completo del taller, disparada por releer el `MASVIDA-PARA-ERWIN.txt` de

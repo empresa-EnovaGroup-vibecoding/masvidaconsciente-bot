@@ -24,6 +24,7 @@ Este banco comprueba LAS DOS.
 """
 import asyncio
 import sys
+from types import SimpleNamespace
 
 from sqlalchemy import delete, select
 
@@ -203,6 +204,75 @@ async def main() -> None:
             bool(burbuja and burbuja.get("tiene_media")),
             "la foto de la dueña salía como una burbuja vacía en el chat interno",
         )
+
+        print("\n4) CADA FOTO DICE QUÉ ES (029) — SIN ESCRIBIR UNA SOLA FILA EN producto_media")
+        # 🔴 ESTE BANCO CORRE CONTRA LA BD REAL. Por eso los casos van contra `_elegir_medios`,
+        # que es PURA a propósito: objetos de mentira, cero INSERTs. Lo que se prueba es la
+        # decisión de QUÉ FOTO SALE cuando el cliente ya dijo cuál versión quiere.
+        def _foto(mid: int, etiqueta=None, variante_id=None):
+            return SimpleNamespace(id=mid, etiqueta=etiqueta, variante_id=variante_id,
+                                   tipo="imagen", clave=f"falsa/{mid}.jpg")
+
+        platano = _foto(1, "base de plátano")
+        yuca = _foto(2, "base de yuca")
+        neutra = _foto(3, None)
+
+        medios, et, disp = tools._elegir_medios([platano, yuca], None, "de yuca")
+        check("pide 'de yuca' con las dos etiquetadas → sale SOLO la de yuca",
+              [m.id for m in medios] == [2], str([m.id for m in medios]))
+        check("el resultado dice CUÁL mandó (para que el bot no lo invente)",
+              et == "base de yuca", repr(et))
+        check("lista los nombres que sí existen",
+              disp == ["base de plátano", "base de yuca"], str(disp))
+
+        medios, et, disp = tools._elegir_medios([platano], None, "de yuca")
+        check("pide 'de yuca' y solo hay de plátano → NO se manda la de plátano",
+              medios == [] and et is None, str([m.id for m in medios]))
+        check("…y el bot recibe la lista para rectificar en el mismo turno",
+              disp == ["base de plátano"], str(disp))
+
+        # 🔴 EL BUG QUE MATÓ LA VERSIÓN ANTERIOR DEL DISEÑO. Si el filtro corriera también sin
+        # pedido, el día que la dueña nombre las dos fotos de las Empanadas "muéstrame las
+        # empanadas" mandaría CERO fotos y el bot diría que no tiene ninguna. La retrocompat
+        # contra las 35 filas NULL salía VERDE igual: el bug solo asoma con la función nueva.
+        medios, et, _ = tools._elegir_medios([platano, yuca], None, None)
+        check("SIN etiqueta y con las dos fotos nombradas → salen LAS DOS (no cero)",
+              [m.id for m in medios] == [1, 2] and et is None, str([m.id for m in medios]))
+        medios, _, _ = tools._elegir_medios([platano, yuca, neutra], None, "de yuca")
+        check("la etiquetada primero y la neutra detrás; la de plátano JAMÁS",
+              [m.id for m in medios] == [2, 3], str([m.id for m in medios]))
+
+        check("'masa de yuca' calza con 'base de yuca' ('masa' es palabra vacía)",
+              tools._calza_etiqueta("base de yuca", "masa de yuca"))
+        check("'yuca' NO calza con 'base de plátano'",
+              not tools._calza_etiqueta("base de plátano", "yuca"))
+        check("sin nombre en la foto no calza nunca (NULL = neutra)",
+              not tools._calza_etiqueta(None, "yuca"))
+
+        print("\n5) RETROCOMPATIBILIDAD CONTRA LAS FILAS REALES (solo lectura)")
+        async with factory() as s6:
+            reales = (
+                await s6.execute(select(ProductoMedia).order_by(ProductoMedia.orden, ProductoMedia.id))
+            ).scalars().all()
+        medios, et, _ = tools._elegir_medios(reales, None, None)
+        check(f"sin etiqueta, las {len(reales)} filas reales salen TAL CUAL entraron",
+              [m.id for m in medios] == [m.id for m in reales] and et is None,
+              f"entraron {len(reales)} y salieron {len(medios)}")
+        vid = next((m.variante_id for m in reales if m.variante_id is not None), None)
+        if vid is not None:
+            esperado = ([m.id for m in reales if m.variante_id == vid]
+                        + [m.id for m in reales if m.variante_id is None])
+            medios, _, _ = tools._elegir_medios(reales, vid, None)
+            check(f"con variante_id={vid} el orden es el de siempre (ese tamaño + las neutras)",
+                  [m.id for m in medios] == esperado, str([m.id for m in medios])[:80])
+        else:
+            check("hay alguna fila con variante_id para probar el orden de siempre", False,
+                  "ninguna media tiene tamaño asignado")
+        if prod is not None:
+            r_retro = await tools.enviar_fotos_producto(session, TEL, prod.nombre)
+            check("end-to-end sin `etiqueta`: manda lo MISMO que antes de la 029",
+                  r_retro.get("enviadas") == enviadas and r_retro.get("etiqueta_enviada") is None,
+                  f"antes {enviadas}, ahora {r_retro.get('enviadas')}")
 
         # Limpieza: este banco escribe de verdad, así que se lleva lo suyo.
         async with factory() as s5:

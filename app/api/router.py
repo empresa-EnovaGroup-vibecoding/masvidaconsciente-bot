@@ -908,7 +908,13 @@ async def listar_media(producto_id: int, _: str = Depends(usuario_actual)):
                 .order_by(ProductoMedia.orden, ProductoMedia.id)
             )
         ).scalars().all()
-    return [{"id": m.id, "tipo": m.tipo, "url": r2.url_publica(m.clave)} for m in filas]
+    # `etiqueta` = QUÉ SE VE en esa foto ("base de plátano"), lo único que distingue dos fotos
+    # del mismo producto al mismo precio. (`variante_id` NO se manda: nadie lo consume, y un
+    # dato muerto en un contrato es lo que hace que el siguiente construya sobre una mentira.)
+    return [
+        {"id": m.id, "tipo": m.tipo, "url": r2.url_publica(m.clave), "etiqueta": m.etiqueta}
+        for m in filas
+    ]
 
 
 @router.post("/productos/{producto_id}/media")
@@ -973,7 +979,63 @@ async def subir_media(
         session.add(m)
         await session.commit()
         await session.refresh(m)
-    return {"id": m.id, "tipo": tipo, "url": r2.url_publica(clave)}
+    # Recién subida NO tiene nombre: la dueña se lo pone abajo, en el panel (PATCH /media/{id}).
+    return {"id": m.id, "tipo": tipo, "url": r2.url_publica(clave), "etiqueta": None}
+
+
+class MediaIn(BaseModel):
+    # `str | None` pelado: es el patrón de esta casa para los opcionales (NotasIn/ClienteEditIn).
+    # El recorte, el tope y la regla del dinero van abajo, en código.
+    etiqueta: str | None = None
+
+
+# Palabras que delatan un PRECIO metido en el nombre de la foto.
+_PLATA_EN_ETIQUETA = {
+    "bs", "bss", "usd", "us$", "dolar", "dolares", "dólar", "dólares",
+    "precio", "euro", "euros",
+}
+
+
+def _sin_tildes(s: str) -> str:
+    """Para que 'dólar' se rechace igual que 'dolar'. Cinco vocales a mano: `unicodedata` no
+    está importado en este archivo y no vale la pena traerlo solo para esto."""
+    for a, b in (("á", "a"), ("é", "e"), ("í", "i"), ("ó", "o"), ("ú", "u"), ("ü", "u")):
+        s = s.replace(a, b)
+    return s
+
+
+@router.patch("/media/{media_id}")
+async def etiquetar_media(media_id: int, datos: MediaIn, _: str = Depends(usuario_actual)):
+    """Le pone NOMBRE a una foto ('base de plátano'). Es lo ÚNICO que distingue dos fotos del
+    mismo producto al mismo precio (las Empanadas son de plátano o de yuca, misma variante).
+    Vacío = foto neutra: el bot la manda sin afirmar de cuál es, exactamente como hoy."""
+    et = (datos.etiqueta or "").strip() or None
+    if et:
+        if len(et) > 60:
+            raise HTTPException(
+                status_code=400, detail="La etiqueta es muy larga (máximo 60 caracteres)."
+            )
+        # EL PIE DE LA FOTO LO ESCRIBE EL CÓDIGO Y NO PASA POR LAS REDES DEL DINERO: una
+        # etiqueta con precio se le enviaría al cliente sin que nadie la valide.
+        bajo = _sin_tildes(et.lower())
+        if "$" in et or any(t.strip(".,;:()") in _PLATA_EN_ETIQUETA for t in bajo.split()):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "La etiqueta no lleva precios: solo qué se ve en la foto "
+                    "(ej. 'base de plátano')."
+                ),
+            )
+    factory = get_session_factory()
+    async with factory() as session:
+        m = await session.get(ProductoMedia, media_id)
+        if m is None:
+            raise HTTPException(status_code=404, detail="Esa foto no existe")
+        # Sin `updated_at`: ProductoMedia no la tiene (models.py). Copiar `editar_variante`
+        # literal reventaría aquí.
+        m.etiqueta = et
+        await session.commit()
+    return {"ok": True, "etiqueta": et}
 
 
 @router.delete("/media/{media_id}")

@@ -112,6 +112,13 @@ class ProductoMedia(Base):
     )
     tipo: Mapped[str] = mapped_column(Text, default="imagen")  # 'imagen' | 'video'
     clave: Mapped[str] = mapped_column(Text)  # ruta del objeto en R2
+    # QUÉ SE VE EN ESTA FOTO, en las palabras de la dueña ("base de plátano"). Las Empanadas
+    # (producto 5) se hacen de plátano O de yuca: MISMO precio, MISMA variante, DOS fotos que
+    # hoy salen con el mismo pie. Con esto el bot manda la correcta y el cliente sabe cuál le
+    # llegó. NULL = foto neutra (lo que tienen todas las de hoy): el bot no afirma de cuál es.
+    # ⚠️ NO ES EL CATÁLOGO DE OPCIONES: qué opciones EXISTEN sigue viviendo en
+    # `productos.descripcion` y en `producto_variantes.sabores`. Un dato, un solo sitio.
+    etiqueta: Mapped[str | None] = mapped_column(Text, nullable=True)
     orden: Mapped[int] = mapped_column(default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 

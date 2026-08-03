@@ -43,6 +43,7 @@ COLUMNAS = [
     ("producto_variantes", "precio", "022 · el precio vive en el TAMAÑO"),
     ("precio_dia", "variante_id", "022 · el precio del día es POR TAMAÑO"),
     ("pedidos", "entrega_fecha", "016 · sin fecha no se cobra"),
+    ("producto_media", "etiqueta", "029 · cada foto dice qué es"),
 ]
 
 # Índices que TIENEN que estar… y el que NO puede estar.
