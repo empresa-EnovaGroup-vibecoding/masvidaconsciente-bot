@@ -2379,6 +2379,41 @@ async def registrar_comprobante(
     }
 
 
+async def _la_duena_tomo_el_chat(session, telefono: str) -> bool:
+    """¿Le tiene la dueña tomado el chat a este cliente? (el freno anti-atropello, para la MEDIA).
+
+    🔴 Por qué existe (auditoría 2026-08-02, META-5): el docstring de `_enviar_en_partes`
+    (workers/tasks.py) afirma ser *"el único embudo por el que salen las 4 respuestas del bot"*.
+    Es falso: cubre los cuatro carriles de TEXTO y **no cubre la media**. Las fotos y el catálogo
+    salían por su cuenta, sin mirar nada. El caso real: el bot tarda ~20 s en contestar; en ese
+    rato la dueña toma el chat desde el panel. Su texto se frena (bien) pero el cliente recibe
+    igual TRES FOTOS de un bot que debía estar callado, mientras ella le está escribiendo.
+
+    ⚠️ Es el gemelo de `_lo_paso_una_persona` y la lógica está repetida a sabiendas: importar
+    `app.workers.tasks` desde aquí metería Celery dentro del contenedor de la API (que también
+    importa este módulo) e invertiría las capas — la herramienta pasaría a depender del worker.
+    Se copian las DIEZ líneas, no las doscientas. Si un día cambia la regla de la pausa, cambia
+    en los dos sitios: por eso este comentario nombra al gemelo.
+
+    Ante cualquier duda o error devuelve True (NO se envía): mismo lado seguro que el gemelo.
+    Callarse de más cuesta una foto; hablarle encima a la dueña delante del cliente cuesta la venta.
+    Los teléfonos internos ("__…", simulador del panel y bancos) nunca están tomados.
+    """
+    if (telefono or "").startswith("__"):
+        return False
+    try:
+        cliente = (
+            await session.execute(select(Cliente).where(Cliente.telefono == telefono))
+        ).scalar_one_or_none()
+    except Exception:  # noqa: BLE001
+        logger.exception("No sé quién pausó a %s → la media NO sale (lado seguro)", telefono)
+        return True
+    if cliente is None or not cliente.bot_pausado:
+        return False
+    # `pausado_por='bot'` = el propio bot escaló: sus envíos en curso SÍ salen (migración 020).
+    return cliente.pausado_por != "bot"
+
+
 async def _guardar_media_saliente(
     *, telefono: str, tipo: str, contenido: str, url: str, respuesta: dict | None
 ) -> None:
@@ -2401,7 +2436,12 @@ async def _guardar_media_saliente(
     """
     from app.models import Mensaje
     from app.services.db import get_session_factory
-    from app.services.meta_client import wa_message_id
+
+    # META-1: la marca de "este mensaje es MÍO" se pone ANTES de tocar la base, porque el eco
+    # puede llegar mientras esta fila se está escribiendo. Nunca lanza.
+    from app.services.meta_client import marcar_mensaje_propio, wa_message_id
+
+    await marcar_mensaje_propio(wa_message_id(respuesta))
 
     try:
         mime, _ = mimetypes.guess_type(url)
@@ -2440,6 +2480,18 @@ async def enviar_catalogo(session, telefono):
             url=link, respuesta=None,
         )
         return {"ok": True, "nota": "(SIMULADOR) le enviaste el catálogo PDF; confírmaselo con calidez"}
+
+    # ÚLTIMA MIRADA AL FRENO, con el PDF ya en la mano (META-5). Sin esto, el catálogo salía
+    # aunque la dueña hubiera tomado el chat mientras el bot pensaba.
+    if await _la_duena_tomo_el_chat(session, telefono):
+        logger.info("No se envía el catálogo: la dueña tomó el chat de %s (relevo)", telefono)
+        return {
+            "ok": False,
+            "nota": (
+                "no se envió el catálogo (la dueña está atendiendo este chat). NO le digas al "
+                "cliente que se lo mandaste ni intentes mandarlo otra vez"
+            ),
+        }
 
     # El archivo lo guarda y lo SIRVE el bot (su propia URL pública), no el worker.
     # Worker y bot no comparten disco, así que aquí NO revisamos el archivo local:
@@ -2542,6 +2594,18 @@ async def enviar_fotos_producto(session, telefono, nombre, variante_id=None):
             "nota": (
                 f"(SIMULADOR) le mostraste {n} foto(s) de '{prod.nombre}'. En WhatsApp real le "
                 "llegan de verdad. Coméntale cálido que ahí las tiene y sigue la venta."
+            ),
+        }
+
+    # ÚLTIMA MIRADA AL FRENO, con las fotos ya elegidas (META-5). El envío de media es el
+    # más ruidoso que tiene el bot —hasta 3 archivos seguidos— y era justo el que no miraba nada.
+    if await _la_duena_tomo_el_chat(session, telefono):
+        logger.info("No se envían fotos: la dueña tomó el chat de %s (relevo)", telefono)
+        return {
+            "enviadas": 0,
+            "nota": (
+                "no se enviaron las fotos (la dueña está atendiendo este chat). NO le digas al "
+                "cliente que se las mandaste ni intentes mandarlas otra vez"
             ),
         }
 

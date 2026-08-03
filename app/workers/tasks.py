@@ -15,7 +15,13 @@ from app.agent.agent import (
 from app.config import get_settings
 from app.services import redis_client as rc
 from app.services.db import get_session_factory
-from app.services.meta_client import descargar_media, enviar_texto
+from app.services.meta_client import (
+    MAX_MEDIA_BYTES,
+    MediaDemasiadoGrande,
+    descargar_media,
+    enviar_texto,
+    marcar_mensaje_propio,
+)
 from app.workers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -37,6 +43,44 @@ def _run(coro):
         _LOOP = asyncio.new_event_loop()
         asyncio.set_event_loop(_LOOP)
     return _LOOP.run_until_complete(coro)
+
+
+# ─── EL ÚNICO PORTÓN DE LOS AVISOS A LA DUEÑA ────────────────────────
+
+
+async def _whatsapp_a_la_duena(destino: str, cuerpo: str, *, que: str) -> bool:
+    """Le manda el WhatsApp a la DUEÑA y DEJA CONSTANCIA si no salió. Nunca lanza.
+
+    🔴 Por qué existe (auditoría 2026-08-02, META-15): los seis carriles de aviso a la dueña
+    hacían el POST a ciegas y se tragaban el error con un `logger.exception` genérico. De los 16
+    puntos de salida del sistema solo 3 miran la ventana de 24h, y ninguno de estos — que son los
+    ÚNICOS envíos verdaderamente proactivos que hay, los que nadie aprueba a mano. No era
+    fail-closed: era *fail-silent después de intentar*, que es peor, porque el intento fuera de
+    ventana SÍ se ejecuta y Meta lo apunta contra este número.
+
+    ⚠️ LA COMPROBACIÓN DE LA VENTANA **NO** ESTÁ AQUÍ, y es a propósito: vive en
+    `meta_client.enviar_texto`, la única puerta por la que salen los seis carriles (y los que se
+    escriban mañana). Repartirla por los call sites es exactamente lo que produjo este hallazgo:
+    seis sitios donde olvidarla. Lo que sí vive aquí es lo otro que faltaba — que cuando el aviso
+    NO sale, quede escrito en el log con su motivo y con lo que se quería decir, en vez de un
+    traceback anónimo. El aviso nunca se pierde: quien llama deja SIEMPRE la fila en la bandeja
+    ANTES de llegar aquí, y la bandeja es lo único de esta casa que nunca falló.
+
+    ⚠️ Usa el `enviar_texto` DE ESTE MÓDULO (el de arriba del todo) y no uno importado dentro de
+    la función: los bancos sustituyen `tasks.enviar_texto` por un doble, y un import local se lo
+    saltaría — mandando WhatsApps de verdad en cada corrida de pruebas.
+    """
+    if not destino:
+        return False
+    try:
+        await enviar_texto(destino, cuerpo)
+        return True
+    except Exception as exc:  # noqa: BLE001 — un aviso que no sale no puede tumbar al worker
+        logger.error(
+            "AVISO A LA DUEÑA NO ENTREGADO (%s): %s — decía: %r. La fila SÍ está en la bandeja.",
+            que, exc, cuerpo[:200],
+        )
+        return False
 
 
 # ─── Escrituras del PANEL: si fallan, alguien se entera ──────────────
@@ -84,12 +128,13 @@ async def _hueco_en_el_panel(telefono: str, texto_usuario: str, dichos: list) ->
     )
     try:
         if settings.dueno_telefono and await rc.aviso_unico("panel_incompleto", 900):
-            await enviar_texto(
+            await _whatsapp_a_la_duena(
                 settings.dueno_telefono,
                 "⚠️ No estoy pudiendo guardar las conversaciones en el panel (falla la base de "
                 "datos). El bot sigue contestando por WhatsApp, pero el panel está INCOMPLETO: "
                 "hay mensajes de tus clientes y respuestas mías que no vas a ver ahí. "
                 "Avísale a Enova.",
+                que="el panel está perdiendo mensajes",
             )
     except Exception:  # noqa: BLE001 — el aviso es lo último que hay; que no tumbe al worker
         logger.exception("Tampoco se pudo avisar de que el panel está perdiendo mensajes")
@@ -254,6 +299,7 @@ async def _enviar_en_partes(telefono: str, texto: str) -> list[dict]:
         try:
             resp = await enviar_texto(telefono, parte)
             wa_id = ((resp.get("messages") or [{}])[0] or {}).get("id")
+            await marcar_mensaje_propio(wa_id)
             enviados.append(
                 {"texto": parte, "wa_message_id": wa_id, "estado": "enviado", "error": None}
             )
@@ -749,10 +795,11 @@ async def _avisar_ventana_cerrada(telefono: str, nombre: str | None) -> None:
             await session.commit()
         destino = (fila.valor if fila else None) or settings.dueno_telefono
         if destino:
-            await enviar_texto(
+            await _whatsapp_a_la_duena(
                 destino,
                 f"⏰ Le devolviste el chat de {quien} al bot, pero pasaron más de 24 horas desde "
                 "su último mensaje: WhatsApp no deja escribirle. El bot NO le respondió nada.",
+                que=f"ventana cerrada de {telefono}",
             )
     except Exception:  # noqa: BLE001 — el aviso es lo único que hay aquí; que no tumbe al worker
         logger.exception("No se pudo avisar de la ventana cerrada de %s", telefono)
@@ -882,6 +929,51 @@ def _guardar_comprobante(media_id: str, contenido: bytes, mime: str) -> str:
     with open(ruta, "wb") as f:
         f.write(contenido)
     return ruta
+
+
+# Cuánto disco libre hace falta para dormir tranquilo. Por debajo de esto, la próxima captura
+# de pago puede no caber — y un comprobante que no se guarda es una discusión con un cliente.
+_DISCO_MINIMO_BYTES = 500 * 1024 * 1024
+
+
+async def _vigilar_disco_comprobantes() -> None:
+    """Avisa si a `/data/comprobantes` se le está acabando el sitio. NUNCA borra nada.
+
+    🔴 La otra mitad de META-13 (auditoría 2026-08-02) pedía "limpieza": cada comprobante se
+    escribe ahí PARA SIEMPRE, sin cuota ni rotación. **Y aun así aquí no se borra nada, a
+    propósito.** Estos archivos son el respaldo de PAGOS de un negocio real: son la prueba que
+    la dueña abre cuando un cliente dice "yo ya te pagué". Un barrido automático que se lleve
+    por delante el comprobante equivocado es un daño que no se puede deshacer, y el ahorro (unos
+    megas) no se le parece ni de lejos. Lo que sí puede hacer el sistema es lo que nunca hizo:
+    DECIRLO a tiempo, para que se archive o se agrande el volumen con calma. Un aviso al día.
+    """
+    try:
+        import shutil
+
+        libre = shutil.disk_usage(settings.comprobantes_dir).free
+    except Exception:  # noqa: BLE001 — mirar el disco jamás puede tumbar el carril del dinero
+        return
+    if libre >= _DISCO_MINIMO_BYTES:
+        return
+    megas = libre // (1024 * 1024)
+    logger.error(
+        "DISCO DE COMPROBANTES BAJO: quedan %s MB libres en %s", megas, settings.comprobantes_dir
+    )
+    await _avisar_a_la_duena(
+        "__sistema__",
+        motivo="disco_lleno",
+        detalle=(
+            f"Al servidor le quedan {megas} MB libres donde se guardan los comprobantes de pago. "
+            "Si se llena, las próximas capturas no se van a poder guardar (el pago se registra "
+            "igual, pero la imagen se pierde). Avísale a Enova para agrandar el espacio."
+        ),
+        mensaje_cliente="(aviso del sistema)",
+        whatsapp=(
+            f"💾 Al servidor le quedan {megas} MB libres para guardar comprobantes. Avísale a "
+            "Enova antes de que se llene."
+        ),
+        candado=("disco_comprobantes", 86400),
+    )
 
 
 async def _leer_comprobante_seguro(telefono, contenido, base_mime) -> dict:
@@ -1118,6 +1210,23 @@ async def _procesar_comprobante(
 
     try:
         contenido, mime = await descargar_media(media_id)
+    except MediaDemasiadoGrande:
+        # 🔴 UN ARCHIVO DE 100 MB NO SE REINTENTA (auditoría 2026-08-02, META-13). WhatsApp los
+        # acepta y `descargar_media` los cargaba ENTEROS en la RAM del worker — el del DINERO.
+        # Ahora se corta antes, y aquí se sale del bucle de reintentos: volver a intentarlo es
+        # volver a pedir lo mismo y recibir el mismo "no". Se va DIRECTO al camino de la rendición,
+        # que es el bueno: la burbuja entra al hilo con su `media_id` (el panel se lo baja de Meta
+        # al vuelo, así que la dueña LO VE), ella recibe el aviso y el cliente su acuse sobrio.
+        logger.error(
+            "Comprobante %s de %s: el archivo pasa del tope de %s bytes; no se descarga y NO se "
+            "reintenta (reintentarlo da el mismo resultado y el mismo riesgo de RAM)",
+            media_id, telefono, MAX_MEDIA_BYTES,
+        )
+        await _comprobante_a_ciegas(
+            telefono, message_id, media_id, caption, nombre, mime_type,
+            porque="el archivo es demasiado grande para poder abrirlo",
+        )
+        return "rendido"
     except Exception:  # noqa: BLE001 — fallo transitorio: NO marcar, el reintento es NUESTRO
         logger.exception("No se pudo descargar el comprobante %s de %s", media_id, telefono)
         if not ultimo_intento:
@@ -1157,6 +1266,10 @@ async def _procesar_comprobante(
                 "quedó registrado."
             ),
         )
+    if ruta:
+        # Fuera del `try` de arriba a propósito: si esto avisara desde dentro, un fallo suyo se
+        # leería como "falló el disco" y le mandaría a la dueña el aviso equivocado.
+        await _vigilar_disco_comprobantes()
 
     # LA FOTO ENTRA AL HILO **AQUÍ**, apenas se descarga y ANTES de que la visión la juzgue.
     # Si se insertara junto al registro del pago, la imagen que la visión RECHAZA (la captura
@@ -1299,7 +1412,20 @@ async def _procesar_comprobante(
     # Resultado: ante un comprobante de Bs 5.000 sobre una venta de Bs 16.591, el bot soltaba
     # "recibí tu pago y coordino la entrega". El pago se registra igual (eso está bien: es la red
     # de seguridad), pero el bot ya NO afirma que está completo y la dueña lo ve en la bandeja.
-    monto_cuadra = True  # los que no son imagen (PDF/doc) no se comprueban: van a la bandeja igual
+    # 🔴 Y UN PDF NO ES UN PAGO COMPROBADO (auditoría 2026-08-02, META-7). Esta línea decía
+    # `monto_cuadra = True` para todo lo que no fuera imagen, y `True` aquí significa una cosa muy
+    # concreta 60 líneas más abajo: el bot le dice al cliente **"recibí tu pago y coordino la
+    # entrega"**. O sea, el guard estricto se aplicaba SOLO a `es_imagen` y CUALQUIER documento
+    # entraba por la puerta de atrás: un cliente con un pedido abierto manda una receta médica en
+    # PDF por error → se crea un `Pago` en 'reportado' amarrado a su pedido Y el bot le confirma
+    # un pago que nadie ha visto. El PDF no se puede leer por visión: afirmar que el pago llegó
+    # es, literalmente, inventarse el dinero — lo único que este proyecto no perdona.
+    #
+    # El registro NO se toca (esa es la red de seguridad: un comprobante de banco en PDF es un
+    # caso REAL y frecuente, y el dinero jamás se descarta). Lo que cambia es lo que el bot DICE:
+    # cae en el mismo carril que un monto que no cuadra —"ya lo recibí, lo estoy revisando y te
+    # confirmo en un momentito"—, que es exactamente la verdad, y la dueña lo ve en la bandeja.
+    monto_cuadra = False
     if es_imagen:
         esperado_bs, esperado_usd, esperado_div = await _montos_cobrados(telefono)
         leido_monto = _a_float(monto)
@@ -1344,6 +1470,27 @@ async def _procesar_comprobante(
         )
         return "rendido"
     logger.info("Comprobante de %s registrado: %s", telefono, resultado)
+
+    # LA OTRA MITAD DE META-7: si entró un DOCUMENTO, nadie lo ha mirado todavía. Ni la visión
+    # (no lee PDFs) ni una persona. El pago queda registrado —bien— pero alguien tiene que abrirlo
+    # con los ojos antes de despachar, y hasta hoy nada se lo decía a la dueña. Candado por cliente
+    # de 15 min: un cliente que manda tres PDFs seguidos es UN aviso, no tres.
+    if resultado.get("ok") and not es_imagen:
+        await _avisar_a_la_duena(
+            telefono,
+            motivo="comprobante_sin_leer",
+            detalle=(
+                f"{nombre or telefono} mandó un ARCHIVO (no una foto) como comprobante. No lo "
+                "puedo leer, así que NO le dije que su pago esté completo: solo que lo estoy "
+                "revisando. Lo registré para que no se pierda — ábrelo en el chat y confírmalo tú."
+            ),
+            mensaje_cliente="(comprobante en archivo)",
+            whatsapp=(
+                f"📎 {nombre or telefono} mandó un archivo como comprobante. Yo no puedo leerlo: "
+                "lo registré y al cliente solo le dije que lo estoy revisando. Míralo tú."
+            ),
+            candado=(f"comprobante_doc:{telefono}", 900),
+        )
 
     # Registro exitoso: marcar para que un reintento de Meta no repita el cierre.
     if message_id:
@@ -1442,7 +1589,6 @@ async def _avisar_pago_en_chat_pausado(telefono: str, nombre: str | None) -> Non
     from sqlalchemy import select
 
     from app.models import Configuracion, Intervencion
-    from app.services.meta_client import enviar_texto
 
     quien = nombre or telefono
     try:
@@ -1465,10 +1611,11 @@ async def _avisar_pago_en_chat_pausado(telefono: str, nombre: str | None) -> Non
             await session.commit()
         destino = (fila.valor if fila else None) or settings.dueno_telefono
         if destino:
-            await enviar_texto(
+            await _whatsapp_a_la_duena(
                 destino,
                 f"💰 {quien} te mandó un comprobante, pero ese chat lo estás atendiendo tú: "
                 "el bot NO le respondió nada. Entra y contéstale.",
+                que=f"pago en chat pausado de {telefono}",
             )
     except Exception:  # noqa: BLE001 — el pago YA está registrado; esto es el aviso
         logger.exception("No se pudo avisar del pago en chat pausado de %s", telefono)
@@ -1597,12 +1744,19 @@ def notificar_cliente_pago(telefono, situacion):
 
 
 async def _avisar_a_la_duena(
-    telefono: str, *, motivo: str, detalle: str, mensaje_cliente: str, whatsapp: str
+    telefono: str, *, motivo: str, detalle: str, mensaje_cliente: str, whatsapp: str,
+    candado: tuple[str, int] | None = None,
 ) -> None:
     """Deja el aviso en la BANDEJA y le manda un WhatsApp a la dueña.
 
     Se usa cuando el bot NO pudo hacer su trabajo y alguien tiene que enterarse. Si esto fallara
     en silencio, el cliente se quedaría esperando a nadie — que es el peor final posible.
+
+    `candado=(clave, ttl)` frena SOLO el WhatsApp, nunca la fila de la bandeja. Es la diferencia
+    entre las dos cosas: la bandeja tiene que tener UNA fila por cliente (cada cliente importa
+    y ella necesita saber cuál), pero si la avería es UNA sola —el bot apagado, la base caída—
+    no puede convertirse en un WhatsApp por cada cliente afectado. Sin candado se comporta
+    exactamente como siempre.
     """
     from sqlalchemy import select
 
@@ -1624,8 +1778,14 @@ async def _avisar_a_la_duena(
             ).scalar_one_or_none()
             await session.commit()
         destino = (fila.valor if fila else None) or settings.dueno_telefono
+        if candado is not None and not await rc.aviso_unico(*candado):
+            logger.info(
+                "Aviso '%s' de %s: la fila queda en la bandeja, pero el WhatsApp no se repite "
+                "(candado '%s')", motivo, telefono, candado[0],
+            )
+            return
         if destino:
-            await enviar_texto(destino, whatsapp)
+            await _whatsapp_a_la_duena(destino, whatsapp, que=f"{motivo} de {telefono}")
     except Exception:  # noqa: BLE001 — el aviso es lo último que hay; que no tumbe al worker
         logger.exception("No se pudo avisar a la dueña sobre %s", telefono)
 
@@ -1718,6 +1878,7 @@ async def _notificar_cliente_pago(telefono, situacion) -> None:
     """
     if not await _numero_permitido(telefono):
         return
+
     if not await _ventana_abierta(telefono):
         logger.warning("Aviso de pago a %s: ventana de 24h CERRADA → el bot NO escribe", telefono)
         await _avisar_a_la_duena(
@@ -1733,6 +1894,45 @@ async def _notificar_cliente_pago(telefono, situacion) -> None:
                 f"⏰ No pude avisarle a {telefono} lo de su pago: pasaron más de 24 horas desde su "
                 "último mensaje y WhatsApp no deja escribirle. Escríbele tú."
             ),
+        )
+        return
+
+    # 🔴 EL INTERRUPTOR TAMPOCO CUBRÍA ESTE CARRIL (auditoría 2026-08-02, META-3). Los cuatro
+    # carriles hermanos SÍ lo comprueban (`_procesar`, `_retomar`, `_responder_y_enviar` y
+    # `_responder_situacion` — el comentario de este último documenta el bug EXACTO, cazado el
+    # 2026-07-13). Este quedó sin cerrar, y es el peor sitio donde podía quedar: es el ÚNICO
+    # camino que le habla al cliente DÍAS DESPUÉS, con texto redactado por el LLM y sin que
+    # nadie lea ese texto antes de que salga.
+    #
+    # El caso real: la dueña APAGA el bot (porque está diciendo algo raro, o porque se va de
+    # viaje), entra al panel a ponerse al día y confirma tres pagos ⇒ el bot le escribía a TRES
+    # clientes, 12-48 h después, sin supervisión. Apagar el bot tiene que significar apagar el bot.
+    #
+    # Va DESPUÉS de la ventana a propósito: si a ese cliente no se le puede escribir, eso es lo
+    # que ella necesita leer (y el consejo es el mismo, "escríbele tú"). El pago NO se pierde por
+    # esto: la confirmación ya está escrita en la BD y la bandeja le dice a quién le toca. El
+    # WhatsApp lleva candado de 15 min —la avería es UNA, el bot apagado— pero la FILA de la
+    # bandeja se abre para CADA cliente, que es lo que ella necesita para no dejarse a ninguno.
+    if not await _bot_activo():
+        logger.warning(
+            "Aviso de pago a %s: el BOT ESTÁ APAGADO → no le escribe. Queda en la bandeja.",
+            telefono,
+        )
+        await _avisar_a_la_duena(
+            telefono,
+            motivo="bot_apagado",
+            detalle=(
+                "Confirmaste o rechazaste el pago de este cliente, pero el BOT ESTÁ APAGADO, así "
+                "que no le avisó nada (apagado es apagado). Escríbele tú, o enciende el bot y "
+                "vuelve a tocar el botón."
+            ),
+            mensaje_cliente="(esperando el resultado de su pago)",
+            whatsapp=(
+                "🔌 Tocaste confirmar/rechazar un pago, pero el bot está APAGADO: no le avisó al "
+                "cliente. Míralo en 'Te esperan' y escríbele tú, o enciende el bot y vuelve a "
+                "tocarlo."
+            ),
+            candado=("pago_con_bot_apagado", 900),
         )
         return
     try:

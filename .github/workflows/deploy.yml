@@ -15,6 +15,9 @@ name: Bot — verificar en cada push · desplegar SOLO a mano
 #     no toca ni la BD, ni Redis, ni OpenRouter, ni WhatsApp — y te dice si rompiste algo.
 #   • Desplegar   ->  SIEMPRE a mano: pestaña "Actions" -> "Run workflow" -> elegir destino
 #     (o `gh workflow run deploy.yml -f destino=taller`).
+#   • Y desde el 2026-08-02, LOS DOS DESTINOS SE COMPRUEBAN DESPUÉS DE DESPLEGAR: el taller
+#     con los 18 bancos, y producción con los dos detectores de esquema (solo lectura). Antes
+#     producción era un `curl` a ciegas — ver el comentario del último paso (DAT-7).
 #
 # El flujo recomendado sigue siendo el que dio certeza del 100%: probar por `docker cp` en el
 # taller, correr los bancos, y solo entonces publicar. Ver `SESIONES.md` 2026-08-02.
@@ -123,3 +126,60 @@ jobs:
           curl -fsS --connect-timeout 20 --max-time 120 --retry 3 --retry-all-errors --retry-delay 5 \
             -H "Authorization: Bearer ${{ secrets.COOLIFY_NEW_TOKEN }}" \
             "http://152.53.89.118:8000/api/v1/deploy?uuid=y20mosanb19cw8ukso56hv7e,hrkrh8f9buora7aqxt8rsbna"
+
+      # 🛡️ EL VIGILANTE DE PRODUCCIÓN (auditoría 2026-08-02, DAT-7 — el hallazgo que explica
+      # todo el reporte de la clienta SIN necesidad de ningún bug).
+      #
+      # Hasta hoy el destino `produccion` era UN `curl` Y NADA MÁS. Se disparaba el despliegue
+      # y NADIE comprobaba que hubiera llegado. Los dos detectores de esquema existían desde la
+      # fase 0, pero corrían SOLO contra el taller — que sí estaba al día. Resultado: producción
+      # pudo pasar semanas con migraciones sin aplicar y ningún rojo se encendió en ninguna
+      # parte. No era un bug: era un despliegue que nunca se disparó y un vigilante que solo
+      # miraba al otro lado.
+      #
+      # ⚠️ Aquí NO se corre `correr_bancos.py`, y es a propósito: los bancos ESCRIBEN en la
+      # base (pedidos, pagos y clientes de prueba) y esta base es la de los CLIENTES REALES.
+      # Solo estos dos, que son de SOLO LECTURA:
+      #   · `probar_migraciones` → la lista de columnas/índices que cada migración debía dejar.
+      #   · `probar_drift`       → `models.py` ENTERO contra el esquema real de Postgres.
+      # Si alguno sale rojo, este flujo queda ROJO: producción NO está como el código cree, y
+      # promover contenido encima sería promoverlo a un esquema viejo.
+      #
+      # 🔑 Necesita el secreto `PROD_SSH_KEY` (llave privada con acceso root a netcup), el
+      # gemelo del `TALLER_SSH_KEY` que ya usa el paso de los bancos.
+      - name: PRODUCCIÓN — los dos detectores de esquema, DENTRO del contenedor nuevo
+        if: ${{ inputs.destino == 'produccion' }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.PROD_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20 root@152.53.89.118 \
+            'bash -s' -- "$GITHUB_SHA" <<'SCRIPT'
+          set -e
+          SHA="$1"
+          echo "Esperando a que los contenedores NUEVOS (commit $SHA) estén corriendo…"
+          # Se busca por el SHA de la imagen, NO por el prefijo del nombre: los nombres que
+          # pone Coolify cambian cuando recrea los contenedores (pasó el 23-jul en el taller y
+          # nadie supo durante semanas qué versión estaba viva). El SHA no miente.
+          CONT=""
+          for i in $(seq 1 60); do
+            CONT=$(docker ps --format '{{.Names}} {{.Image}}' | grep "$SHA" | head -1 | cut -d' ' -f1 || true)
+            CUANTOS=$(docker ps --format '{{.Image}}' | grep -c "$SHA" || true)
+            if [ -n "$CONT" ] && [ "${CUANTOS:-0}" -ge 2 ]; then break; fi
+            sleep 15
+          done
+          if [ -z "$CONT" ]; then
+            echo "🔴 Ningún contenedor de producción corre el commit $SHA."
+            echo "   ¿Falló el build en Coolify, o el despliegue de producción está desconectado?"
+            docker ps --format '{{.Names}} {{.Image}}'
+            exit 1
+          fi
+          if [ "${CUANTOS:-0}" -lt 2 ]; then
+            echo "🔴 Solo $CUANTOS contenedor(es) con el commit $SHA: falta el bot o el worker."
+            docker ps --format '{{.Names}} {{.Image}}'
+            exit 1
+          fi
+          echo "Contenedores nuevos: $CUANTOS · corriendo los detectores en $CONT (solo lectura)…"
+          docker exec -w /app -e PYTHONPATH=/app "$CONT" python scripts/probar_migraciones.py
+          docker exec -w /app -e PYTHONPATH=/app "$CONT" python scripts/probar_drift.py
+          SCRIPT

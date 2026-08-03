@@ -238,7 +238,12 @@ def _asegurar_saludo(texto: str, mensaje_usuario: str, nombre_cliente: str | Non
         h = ahora.hour
         franja = "buenos días" if h < 12 else ("buenas tardes" if h < 19 else "buenas noches")
         nombre = f", {nombre_cliente}" if nombre_cliente else ""
-        partes.append(f"¡Hola{nombre}, {franja}!")
+        # 🔴 SIN SIGNOS DE APERTURA NI ADMIRACIÓN (auditoría 2026-08-02, PRM-16). Esto decía
+        # "¡Hola, {nombre}, {franja}!" — y la regla 92 del prompt prohíbe TEXTUALMENTE el "¡" de
+        # apertura y pide no llenar de signos de admiración. Es lo PRIMERO que lee cada cliente
+        # nuevo y va DESPUÉS de todas las redes, así que ningún reintento podía arreglarlo:
+        # el código desmentía al prompt en la primera línea de la primera conversación.
+        partes.append(f"Hola{nombre}, {franja}")
     if quiere_estado:
         partes.append("Muy bien, gracias a Dios")
     return " ".join(partes) + " 💚\n\n" + texto
@@ -391,7 +396,38 @@ def _calza(lecturas: set[float], permitidos: set[float]) -> bool:
 # lo dejó pasar. Aquí se caza: si el bot presenta una cifra COMO bolívares, esa cifra TIENE que ser
 # el monto en bolívares que calculó el código. Nunca un dólar disfrazado.
 _DICE_BOLIVARES = re.compile(r"bol[íi]vares?\b|\bbs\b\.?", re.IGNORECASE)
-_DICE_TOTAL = re.compile(r"\btotal(es)?\b|\ben total\b|\bqueda(r[íi]a)? en\b|\bser[íi]an?\b", re.IGNORECASE)
+
+# 🔴 UN TOTAL ES UN HECHO, NO UN VERBO (auditoría 2026-08-02, PRM-2).
+#
+# Esta lista traía `queda(ría) en` y `sería(n)`. Con eso, la red **dependía de cómo estuviera
+# conjugada la frase y no de lo que la frase decía**:
+#
+#     "El pan keto queda en 25$"  → se marcaba: "dijo que es un TOTAL y NO lo calculó el sistema"
+#     "El pan keto cuesta 25$"    → pasaba limpio
+#
+# El MISMO hecho (un precio suelto del catálogo, autorizado, de un solo producto) y dos destinos
+# opuestos. Y no es un caso raro: la regla 5 del bloque del catálogo le ORDENA al bot dar ese
+# precio de una, inline, sin llamar a ninguna herramienta — así que `usd_de_herramienta` está
+# VACÍO justo cuando eso pasa. Era la respuesta más frecuente del negocio ("¿a cómo el pan?")
+# muriendo por el verbo. En modo `dos` no hay ni reintento: `RESPUESTA_SEGURA` directa.
+#
+# Un TOTAL es una afirmación sobre una SUMA, y en español eso se dice **con la palabra**
+# ("el total", "en total", "todo junto", "por todo", "sumando") o **nombrando el pedido**
+# ("tu pedido queda en…"), nunca con un verbo copulativo suelto.
+#
+# ⚠️ Lo que NO se pierde: el chequeo 1 (por moneda) sigue cazando toda suma inventada que no
+# calce con un monto autorizado — que es el caso general. El chequeo 2 solo añadía valor cuando
+# la suma inventada COINCIDÍA por casualidad con un precio del catálogo ($20 + $5 = $25 = Pan
+# Keto), y esa coincidencia se sigue cazando en cuanto la frase se llama a sí misma un total.
+_DICE_TOTAL = re.compile(
+    r"\btotal(es)?\b"
+    r"|\btodo\s+(junto|eso|ello|completo)\b"
+    r"|\bpor\s+todo\b"
+    r"|\bsumando\b"
+    r"|\b(el|tu|su|la)\s+(pedido|orden|compra)\s+(te\s+)?"
+    r"(queda|sale|ser[íi]a|es|cuesta|sube|son|va)\b",
+    re.IGNORECASE,
+)
 
 
 def _dinero_inventado(
@@ -430,9 +466,9 @@ def _dinero_inventado(
     # Antes se partía por `\n\n` **y** por frase, y el bucle empezaba con
     # `if not montos or not _DICE_TOTAL.search(parrafo): continue`. Dos agujeros:
     #   a) El `continue` se saltaba los chequeos 2 Y 3 de golpe cuando no aparecía la palabra
-    #      "total". Y `_DICE_TOTAL` cubre "sería/serían" pero NO "son" ni "es", así que
-    #      **"En bolívares son $23 a la tasa del día" pasaba limpio** — la frase asesina otra vez,
-    #      solo que conjugada distinto.
+    #      "total", así que **"En bolívares son $23 a la tasa del día" pasaba limpio** — la frase
+    #      asesina otra vez, solo que conjugada distinto. Hoy el chequeo 3 ya NO exige esa palabra
+    #      (ni ninguna otra): el `_DICE_TOTAL` de abajo solo condiciona al chequeo 2.
     #   b) Partir por FRASE deja la moneda en una y la cifra en la otra:
     #      "El total en bolívares." + "Son $23." — cada mitad, por separado, parece inocente.
     for parrafo in re.split(r"\n\s*\n", texto or ""):
@@ -486,14 +522,33 @@ def _dinero_inventado(
 # el modelo no escaló. Resultado: el cliente esperando a alguien que nunca fue avisado. Es el
 # mismo agujero de siempre con otra cara. Prometer que un humano va a entrar ES una promesa.
 # Sobre-avisar cuesta un aviso de más en la bandeja; NO avisar cuesta el cliente.
+#
+# 🔴 EL PRONOMBRE OTRA VEZ (auditoría 2026-08-02, PRM-13). La red solo miraba `lo`, y el prompt
+# empuja al modelo justo a la formulación que no ve. La regla 67 le dice **"La HORA no la cierres
+# tú: la coordina la dueña después"**, así que el bot escribe lo natural en español:
+#
+#     "La hora te LA confirmo luego"   → _promete_averiguar = False  (¡y es una promesa!)
+#     "Eso te LO confirmo enseguida"   → True
+#
+# La misma frase, cambiando el género del objeto. Y la paradoja: la redacción de intermediaria que
+# la regla 70 PROHÍBE ("le pregunto a la dueña y te aviso enseguida") sí disparaba. O sea, la red
+# premiaba lo prohibido y castigaba lo que el prompt ordena. Ahora el pronombre es cualquiera
+# (lo/la/los/las/le) y los adverbios cubren los diminutivos venezolanos ("enseguidita",
+# "ahoritica") que son EXACTAMENTE como habla esta voz.
 _PROMESA_RE = re.compile(
-    r"(d[ée]jame\s+(que\s+)?(lo\s+|te\s+lo\s+)?(verific|consult|revis|averigu|pregunt|confirm)"
-    r"|perm[ií]teme\s+(que\s+)?(lo\s+|te\s+lo\s+)?(verific|consult|revis|averigu|pregunt)"
-    r"|(lo|te lo|eso)\s+(verifico|consulto|averiguo|pregunto|confirmo)\b"
-    r"|te\s+(lo\s+)?(confirmo|aviso|averiguo|pregunto)\s+"
-    r"(enseguida|ya|luego|en un momento|apenas|ahorita|más tarde|mas tarde|en breve)"
-    r"|te\s+(lo\s+)?confirmo\s+(con|eso|esa|ese)"
-    r"|lo\s+confirmo\s+con"
+    r"(d[ée]jame\s+(que\s+)?((te\s+)?(lo|la|los|las|le)\s+)?"
+    # `verifiqu` no es un adorno: en subjuntivo la raíz cambia de c a qu ("déjame que lo
+    # VERIFIQUE") y el stem `verific` no la ve. Los otros verbos no cambian (consulte, revise,
+    # averigüe, pregunte). Lo cazó el banco, no la lectura — como siempre.
+    r"(verific|verifiqu|consult|revis|averigu|pregunt|confirm)"
+    r"|perm[ií]teme\s+(que\s+)?((te\s+)?(lo|la|los|las|le)\s+)?"
+    r"(verific|verifiqu|consult|revis|averigu|pregunt)"
+    r"|((te\s+)?(lo|la|los|las)|eso)\s+(verifico|consulto|averiguo|pregunto|confirmo)\b"
+    r"|te\s+((lo|la|los|las)\s+)?(confirmo|aviso|averiguo|pregunto)\s+"
+    r"(enseguid\w*|ya|luego|en un momento|apenas|ahorit\w*|más tarde|mas tarde|en breve"
+    r"|despu[ée]s|m[áa]s adelante)"
+    r"|te\s+((lo|la|los|las)\s+)?confirmo\s+(con|eso|esa|ese)"
+    r"|(lo|la)\s+confirmo\s+con"
     r"|voy\s+a\s+(verificar|consultar|averiguar|preguntar)"
     # Prometer que entra UNA PERSONA (y no avisarle a nadie) deja al cliente esperando igual:
     r"|(whuilianny|la\s+due[ñn]a|ella)\s+te\s+(atiende|contesta|responde|escribe|confirma|habla)"
@@ -696,8 +751,27 @@ def _suena_a_sistema(texto: str) -> bool:
 # ("ya te LA envié" — el «la» viene del mensaje del cliente). Por eso se mira TAMBIÉN lo
 # que el cliente pidió: si pidió fotos y el bot afirma un envío, tiene que haber un envío
 # REAL en ese turno. Si el cliente las pide de nuevo, se REENVÍAN — jamás "ya te las mandé".
+#
+# 🔴 Y LA TRAMPA DE LA TRAMPA (auditoría 2026-08-02, PRM-1). El mismo pronombre que salva esta
+# red la volvía contra el bot en el camino MÁS común del negocio:
+#
+#     cliente: "me puedes mostrar lo que tienen?"   → `_pide_fotos` = True (por «mostrar»)
+#     prompt (regla 58): eso es pedir el CATÁLOGO → el bot llama a `enviar_catalogo`
+#     bot: "Listo, ya te LO envié 💚"               → afirmación por pronombre, sin palabra de media
+#     red: `fotos_ok` es False ⇒ ENVÍO FANTASMA ⇒ aviso FALSO a la dueña
+#
+# El cliente tiene el PDF abierto en la mano y recibe "Dame un momentito y te confirmo". En modo
+# `dos` ni siquiera hay reintento: muere al primer golpe. La red no mentía sobre el hecho —
+# **no sabía leer QUÉ había enviado**.
+#
+# El arreglo es del CÓDIGO, no del prompt (no se le quita la regla 58): la red aprende a
+# distinguir los dos envíos. Un "ya te lo envié" pelado apunta al catálogo —y no a una foto—
+# cuando la frase lo NOMBRA, o cuando el PDF salió de verdad en este turno y el cliente nunca
+# pidió una foto con todas sus letras. Si el cliente escribió "foto"/"video"/"imagen", la red
+# se queda tan dura como estaba: ese es el caso REAL del 2026-07-14 y no se toca.
 _PIDE_FOTOS_RE = re.compile(r"\b(foto|fotos|video|videos|imagen|imagenes|verlo|verla|muestrame|mostrar)\b")
 _FOTO_PALABRA_RE = re.compile(r"\b(foto|fotos|video|videos|imagen|imagenes)\b")
+_CATALOGO_PALABRA_RE = re.compile(r"\b(catalogo|menu|carta|folleto)\b")
 _AFIRMA_ENVIO_RE = re.compile(
     r"(ya\s+te\s+(la|las|lo|los)\s+(envie|mande|pase)"
     r"|te\s+(la|las|lo|los)\s+(envie|mande|envio|mando|paso)\b"
@@ -719,13 +793,36 @@ def _pide_fotos(texto_cliente: str) -> bool:
     return bool(_PIDE_FOTOS_RE.search(_sin_acentos(texto_cliente or "")))
 
 
-def _afirma_envio_fotos(texto: str, cliente_pidio_fotos: bool) -> bool:
+def _pide_media_explicita(texto_cliente: str) -> bool:
+    """True si el cliente pidió una FOTO/VIDEO **con todas sus letras**.
+
+    Es el subconjunto DURO de `_pide_fotos`: "mándame la foto de la torta" sí; "me puedes
+    mostrar lo que tienen?" no (eso, según la regla 58 del prompt, es pedir el catálogo).
+    La distinción existe para no matar el turno del catálogo — ver `_afirma_envio_fotos`.
+    """
+    return bool(_FOTO_PALABRA_RE.search(_sin_acentos(texto_cliente or "")))
+
+
+def _afirma_envio_fotos(
+    texto: str,
+    cliente_pidio_fotos: bool,
+    *,
+    pidio_media_explicita: bool = False,
+    catalogo_enviado: bool = False,
+) -> bool:
     """True si el bot AFIRMA que envió (o está enviando) fotos/videos.
 
     Cuenta si la frase trae una palabra de media ("ahí tienes las fotos") O si el cliente
     acaba de pedir fotos y el bot afirma un envío con pronombre ("ya te la envié").
     Las PREGUNTAS ("¿te mando la foto?") y los condicionales ("si quieres te la mando")
-    NO cuentan: frenar de más rompe la venta."""
+    NO cuentan: frenar de más rompe la venta.
+
+    `catalogo_enviado` / `pidio_media_explicita` (auditoría 2026-08-02, PRM-1): con los dos en
+    su valor por defecto la red se comporta EXACTAMENTE como antes — los bancos que la llaman
+    con dos argumentos siguen midiendo lo mismo. Lo que añaden es poder resolver el pronombre:
+    si el envío que de verdad ocurrió fue el CATÁLOGO y el cliente nunca escribió "foto", el
+    "ya te lo envié" es **verdad**, y frenarlo le quitaba el PDF de las manos al cliente.
+    """
     for frase in re.split(r"(?<=[.!?\n])\s+", texto or ""):
         limpia = frase.strip()
         if not limpia:
@@ -740,8 +837,20 @@ def _afirma_envio_fotos(texto: str, cliente_pidio_fotos: bool) -> bool:
             continue
         if not _AFIRMA_ENVIO_RE.search(t):
             continue
-        if _FOTO_PALABRA_RE.search(t) or cliente_pidio_fotos:
+        # (a) La frase NOMBRA la media: es una afirmación sobre fotos, pase lo que pase.
+        if _FOTO_PALABRA_RE.search(t):
             return True
+        # (b) Sin palabra de media, la afirmación es SOLO por pronombre ("ya te LO envié"):
+        #     no dice qué envió. Si el cliente no pidió nada de ver, no es de esta red.
+        if not cliente_pidio_fotos:
+            continue
+        # (c) …y el pronombre apunta al CATÁLOGO —no a una foto— si la frase lo nombra, o si
+        #     el PDF salió de verdad en este turno y el cliente nunca escribió "foto".
+        if _CATALOGO_PALABRA_RE.search(t):
+            continue
+        if catalogo_enviado and not pidio_media_explicita:
+            continue
+        return True
     return False
 
 
@@ -928,7 +1037,16 @@ async def responder(
     # Los TOTALES solo los pone una HERRAMIENTA. El catálogo autoriza precios SUELTOS, no sumas:
     # sin esto, "$20 + $5 = $25" se colaba porque $25 es el precio del Pan Keto.
     usd_de_herramienta: set[float] = set()
-    corregido = False
+    # 🔴 UN CUPO DE CORRECCIÓN **POR RED**, NO UNO COMPARTIDO (auditoría 2026-08-02, PRM-12).
+    # Hasta hoy las tres redes de abajo (dinero · datos sensibles · frase prohibida) se repartían
+    # un solo `corregido`, aunque cada docstring promete "una oportunidad de corregirse". La
+    # segunda que disparara en el mismo turno no tenía NINGUNA: escalaba de frente y el turno
+    # moría en `RESPUESTA_SEGURA`. Y la coincidencia es de lo más normal — un mensaje de cobro
+    # lleva a la vez el monto y los datos bancarios, así que un solo resbalón del modelo apagaba
+    # el cupo para el otro. Cada red tiene ahora el suyo; el tope de iteraciones sigue mandando.
+    corregido_dinero = False
+    corregido_datos = False
+    corregido_prohibida = False
     pidio_ayuda = False  # ¿el bot llamó a pedir_ayuda en este turno?
     # ¿la escalada YA falló contra la base en ESTE turno? Con Postgres caído, sin este flag un
     # solo turno abría 5 sesiones y mandaba 2 WhatsApps — por cliente, cada pocos segundos.
@@ -938,7 +1056,20 @@ async def responder(
     reclamo_pedido = False  # ya se le llamó la atención una vez por decir que agendó sin agendar
     fotos_ok = False  # ¿enviar_fotos_producto ENVIÓ algo de verdad en este turno?
     reclamo_fotos = False  # ya se le llamó la atención por afirmar un envío de fotos falso
+    # 🔴 EL GUARD DEL COMPROBANTE, TRAÍDO AL MODO QUE CORRE HOY (auditoría 2026-08-02, PRM-3).
+    # La regla 79 del prompt ORDENA: "al registrar el comprobante… dile que RECIBISTE su pago".
+    # El bot obedecía, y `_PROHIBIDO_EN_CHARLA` ("afirmó que el pago ya llegó") lo frenaba con un
+    # regaño que contradecía la regla de frente. El modo `dos` ya tenía la salida
+    # (`hoja.pago_registrado` ⇒ solo se aplica `frase_prohibida_siempre`); el modo `uno` —el que
+    # corre HOY— no la tenía, así que **todo comprobante reportado por TEXTO** ("ya pagué, ref
+    # 004512", que entra por `registrar_comprobante` desde el bucle) caía en la trampa.
+    # El carril de la VISIÓN no pasaba por aquí: iba por `redactar_mensaje`, que ya usaba la
+    # lista corta. Esto empareja los dos carriles con UN solo criterio.
+    pago_registrado = False  # ¿registrar_comprobante dio ok en este turno?
     pidio_fotos = _pide_fotos(pregunta_cliente)
+    # ¿El cliente escribió "foto"/"video"/"imagen", o solo "muéstrame"? De eso depende a qué
+    # apunta un "ya te lo envié" pelado — ver `_afirma_envio_fotos` (PRM-1).
+    pidio_media = _pide_media_explicita(pregunta_cliente)
     resumen_pedido: str | None = None
     resumen_cobro: str | None = None
 
@@ -972,9 +1103,9 @@ async def responder(
                     telefono, inventados, sorted(usd_ok)[:8], sorted(bs_ok)[:8],
                     sorted(usd_de_herramienta)[:8], texto[:160],
                 )
-                if not corregido:
+                if not corregido_dinero:
                     # Una oportunidad de corregirse, con los números buenos en la mano.
-                    corregido = True
+                    corregido_dinero = True
                     messages.append({
                         "role": "user",
                         "content": (
@@ -1012,8 +1143,8 @@ async def responder(
                     "DATOS SENSIBLES INVENTADOS por el modelo para %s: %s — texto=%r",
                     telefono, sensibles, texto[:160],
                 )
-                if not corregido:
-                    corregido = True
+                if not corregido_datos:
+                    corregido_datos = True
                     messages.append({
                         "role": "user",
                         "content": (
@@ -1038,13 +1169,21 @@ async def responder(
                 return RESPUESTA_SEGURA
 
             # RED DE LA HONESTIDAD: hay frases que NO pueden salir nunca.
-            prohibida = _frase_prohibida(texto)
+            #
+            # En el carril del PAGO, "recibí tu pago" es lo que la regla 79 le ORDENA decir: si
+            # `registrar_comprobante` dio ok en ESTE turno, solo se aplican las mentiras que
+            # NINGUNA situación puede volver ciertas (el banco, la identidad, la salud). Es el
+            # mismo criterio que ya usaban el modo `dos` (`hoja.pago_registrado`) y
+            # `redactar_mensaje`. (PRM-3.)
+            prohibida = (
+                frase_prohibida_siempre(texto) if pago_registrado else _frase_prohibida(texto)
+            )
             if prohibida:
                 logger.error(
                     "FRASE PROHIBIDA para %s (%s) — texto=%r", telefono, prohibida, texto[:160]
                 )
-                if not corregido:
-                    corregido = True
+                if not corregido_prohibida:
+                    corregido_prohibida = True
                     messages.append({
                         "role": "user",
                         "content": (
@@ -1126,7 +1265,11 @@ async def responder(
             # Caso real (2026-07-14, confirmado en el log): a "mándame la foto de la torta keto"
             # contestó "Ya te la envié hace poco 💚" con CERO llamadas a la herramienta — y su
             # propia mentira del turno anterior en la memoria como excusa.
-            if _afirma_envio_fotos(texto, pidio_fotos) and not fotos_ok:
+            if _afirma_envio_fotos(
+                texto, pidio_fotos,
+                pidio_media_explicita=pidio_media,
+                catalogo_enviado=catalogo_ok,
+            ) and not fotos_ok:
                 logger.error(
                     "ENVÍO FANTASMA de fotos a %s: dijo que las envió y NO llamó a "
                     "enviar_fotos_producto (o falló) — texto=%r",
@@ -1294,6 +1437,15 @@ async def responder(
                 resumen = str(resultado.get("resumen_cobro") or "").strip()
                 if resumen:
                     resumen_cobro = resumen
+            if (
+                nombre_tool == "registrar_comprobante"
+                and isinstance(resultado, dict)
+                and resultado.get("ok")
+            ):
+                # El comprobante quedó REGISTRADO de verdad: a partir de aquí, "recibí tu pago"
+                # es lo que la regla 79 ordena decir y deja de ser una mentira. Mismo criterio
+                # que `hoja.pago_registrado` en el modo `dos`. (PRM-3.)
+                pago_registrado = True
             if (
                 nombre_tool == "enviar_fotos_producto"
                 and isinstance(resultado, dict)
@@ -1590,7 +1742,12 @@ async def _responder_dos_agentes(
         )
         return RESPUESTA_SEGURA
 
-    if _afirma_envio_fotos(texto, _pide_fotos(pregunta_cliente)) and hoja.fotos_enviadas == 0:
+    if _afirma_envio_fotos(
+        texto,
+        _pide_fotos(pregunta_cliente),
+        pidio_media_explicita=_pide_media_explicita(pregunta_cliente),
+        catalogo_enviado=hoja.catalogo_enviado,
+    ) and hoja.fotos_enviadas == 0:
         logger.error("VOZ: envío fantasma de fotos para %s — NO sale", telefono)
         await _escalar(
             ejecutar, telefono, "no_se",

@@ -24,7 +24,18 @@ PROMESAS = [
     ("Te lo confirmo enseguida, que Whuilianny te atienda directamente", True),
     ("Tranquila, te paso con una persona ahorita", True),
     ("La dueña te contesta enseguida", True),
+    # 🔴 EL PRONOMBRE, Y EL PROMPT EMPUJANDO HACIA ÉL (auditoría 2026-08-02, PRM-13). La red solo
+    # miraba `lo`, y la regla 67 le ordena al bot NO cerrar la hora ("la coordina la dueña
+    # después"), así que escribe lo natural en español: "La hora te LA confirmo luego". Devolvía
+    # False. El prompt empujaba justo a la única formulación que la red no veía — y la redacción
+    # de intermediaria que la regla 70 PROHÍBE sí disparaba. Premiaba lo prohibido.
+    ("La hora te la confirmo luego", True),
+    ("La hora te la confirmo más tarde", True),
+    ("La fecha te la confirmo apenas hable con ella", True),
+    ("Te la confirmo enseguidita 💚", True),          # el diminutivo con el que habla esta voz
+    ("Déjame que te la verifique y te digo", True),  # subjuntivo: la raíz cambia de c a qu
     # Lo que NO debe disparar la red (falsos positivos que romperían la venta):
+    ("Te la mando ahorita", False),                  # manda una foto: no promete averiguar nada
     ("Perfecto, te confirmo el pedido: 2 paquetes de empanadas. Total: $28", False),
     ("Listo, te lo tengo para el lunes 💚", False),
     ("Son $14 el paquete de 8 unidades", False),
@@ -98,7 +109,15 @@ PEDIDO_FANTASMA = [
     ("Perfecto, te lo anoté: 2 paquetes de empanadas", True),
     ("Pedido confirmado 💚 Te espero el lunes", True),
     ("Ya quedó tu orden agendada", True),
+    # 🔴 EL CHOQUE CON "ASUME EL SÍ" (auditoría 2026-08-02, PRM-15). La regla 48 le pide al bot
+    # hablar como si la venta ya va, y el modelo llegaba a "anoto/aparto" ANTES de registrar —
+    # que es exactamente lo que esta red frena, con razón. La red NO se afloja: lo que se
+    # corrigió es el empujón (la regla 48 ahora reserva los verbos de REGISTRO para después de
+    # registrar de verdad, y propone "te preparo… / te llevas… / te dejo…", que no disparan).
+    ("Perfecto, anoto 3 paquetes. Para cuando te los preparo?", True),
     # 🔴 LO QUE **NO** DEBE FRENAR — frenar de más también rompe la venta:
+    ("Te preparo 3 paquetes, ¿para cuándo te los dejo?", False),          # la salida de la regla 48
+    ("Con 3 paquetes te llevas 12 empanadas keto 💚 ¿Para cuándo?", False),
     ("¿Te agendo entonces 2 paquetes de empanadas?", False),      # es una PREGUNTA
     ("¿Quieres que te lo agende para mañana?", False),            # pregunta
     ("Cuando me confirmes, te lo agendo enseguida 💚", False),    # futuro condicional
@@ -130,7 +149,18 @@ FOTOS_FANTASMA = [
     ("De ese no tengo fotos por ahora, pero tengo el catálogo 💚", True, False),  # la verdad
     ("Ya te la envié hace poco", False, False),      # sin foto de por medio, no es de esta red
     ("La torta keto es sin gluten y sin azúcar refinada 💚", True, False),
+    # 🔴 EL CATÁLOGO NO ES UNA FOTO (auditoría 2026-08-02, PRM-1). `_pide_fotos` matchea
+    # «mostrar», así que "me puedes mostrar lo que tienen?" —que según la regla 58 es pedir el
+    # CATÁLOGO— marcaba al cliente como si hubiera pedido fotos, y el "ya te lo envié" (verdad:
+    # el PDF salió) moría aquí. Si la frase NOMBRA el catálogo, no es de esta red.
+    ("Ya te lo envié 💚 Ahí tienes el catálogo completo", True, False),
+    ("Listo, te acabo de mandar el menú en PDF 💚", True, False),
 ]
+
+# La otra mitad de PRM-1 —resolver el pronombre con lo que de verdad se envió en el turno—
+# necesita los parámetros nuevos de la red (`catalogo_enviado`, `pidio_media_explicita`) y vive
+# en `scripts/probar_prompt_coherente.py`, junto al resto del bloque 5. Esta tabla se queda con
+# tres columnas porque `tests/test_redes.py` la parametriza con tres.
 
 def main() -> int:
     """Corre los 5 bancos e imprime el informe. Devuelve el nº de fallos.

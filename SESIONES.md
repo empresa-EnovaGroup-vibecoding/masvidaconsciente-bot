@@ -19,6 +19,69 @@
 
 ---
 
+## 2026-08-02 — 🚀 PRODUCCIÓN, META Y EL PROMPT (bloques 6, 3 y 5)
+
+### Bloque 6 — el script de promoción deja de ser una ruleta
+
+Tenía las **tres capas de defensa rotas a la vez**, y encima su resultado *correcto* ya era dañino:
+redirigía los avisos al teléfono del taller, sustituía las cuentas de cobro reales por las de
+prueba, y dejaba producción **sin una sola zona** — o sea incapaz de cobrar un pedido — justo antes
+de invitarte a abrir el bot al público.
+
+Ahora: `configuracion` viaja por **lista blanca** con lista **negra dura** (nada de `dueno_telefono`,
+`bot_activo`, tasas ni modelos: son propiedad del ENTORNO, no del contenido) · `metodos_pago` **no
+viaja** salvo que se pida, y entra desactivado · el respaldo se blinda con `pipefail` **dentro** del
+SSH (el local no viaja) y se comprueba que el `.gz` no esté vacío ni cortado · la verificación pasa
+a **antes vs después en producción** · **preflight de esquema obligatorio**, que aborta si producción
+está atrasada. *La auditoría dice que esa sola comprobación habría hecho innecesario todo el reporte
+externo.*
+Y el `deploy.yml` corre `probar_migraciones` + `probar_drift` **en producción** tras desplegar —
+solo esos dos, que son de lectura: los 23 bancos escriben, y esa base tiene clientes reales.
+
+*Probado hasta donde se puede sin tocar netcup:* el `--ensayo` **aborta ruidosamente** en el
+preflight cuando no puede leer producción, con el motivo escrito. Falla antes de destruir, que es
+todo lo que se le pide.
+
+### Bloque 3 — el riesgo de la cuenta de Meta
+
+- **El interruptor de apagado no cubría el único carril que le habla al cliente días después.** La
+  dueña apagaba el bot, confirmaba tres pagos, y el bot le escribía a tres clientes.
+- **Los avisos a la dueña salían sin mirar la ventana de 24h.** El portón vive ahora en
+  `enviar_texto` — **una puerta, no seis sitios donde olvidarla** (y estaba olvidada en los seis).
+  No se intenta cuando *consta* que Meta lo va a rechazar, y la fila de la bandeja sale **siempre
+  antes** del envío.
+- **Los `failed` de CALIDAD ya no mueren en un log.** `131049` es Meta diciendo "no lo entregué
+  para mantener un ecosistema sano": es degradación del número, y para un Tech Provider es la
+  telemetría que no puede quedar muda.
+- Un **PDF cualquiera ya no se convierte en un pago** · la media respeta el relevo (el docstring de
+  `_enviar_en_partes` decía ser "el único embudo" y no lo era) · "escribiendo…" se dispara **detrás**
+  de los frenos, no delante · la dueña deja de ser tratada como clienta · freno de tasa y `429`
+  obedecido · `descargar_media` con tope (WhatsApp acepta 100 MB, y cada uno iba entero a RAM).
+
+### Bloque 5 — el bot deja de pelearse con su prompt
+
+Criterio de `CLAUDE.md §8` (*"antes de culpar al prompt, sospecha del código"*): **7 de 12 se
+arreglaron en CÓDIGO**, y solo se tocó el texto donde no había arreglo posible.
+- *"muéstrame lo que tienen"* → el bot mandaba el catálogo **como manda la regla 58** y la red del
+  envío fantasma lo mataba: el cliente se quedaba con el PDF en la mano y un *"dame un momentito"*.
+  Arreglado en la RED, que ahora distingue catálogo de fotos. La regla no se tocó.
+- *"El pan keto queda en 25$"* se marcaba como dinero inventado y *"cuesta 25$"* pasaba: **la red
+  dependía del verbo, no del hecho**.
+- La regla 79 ordena *"dile que RECIBISTE su pago"* y la red lo castigaba en modo `uno` (el guard
+  existía solo en modo `dos`).
+- Tres redes compartían **un solo cupo** de corrección, aunque cada docstring prometía una.
+- Y el banco nuevo encontró un hueco que **no estaba en la auditoría**: *"déjame que lo VERIFIQUE"*
+  escapaba al stem `verific` por el subjuntivo.
+
+**Bancos 21 → 23** (`probar_meta`, `probar_prompt_coherente`). **Los 23 en verde.**
+
+⚠️ Dos falsos rojos que costaron rato y valen como lección: `probar_meta` se puso rojo por un
+`await` dentro de un `sum(...)` y por un test que preguntaba **al helper en vez de a la puerta** —
+acusaba de frenar a los clientes con el código correcto. *Un test que mira la pieza en vez del
+comportamiento acusa de un bug que no existe.*
+
+---
+
 ## 2026-08-02 — 📨 EL MENSAJE, EL COMPROBANTE Y LA BANDEJA (bloque 2, tandas 3-5 — CIERRA EL BLOQUE 2)
 
 **El mensaje del cliente ya no se evapora.** Tres agujeros que lo tiraban en silencio:

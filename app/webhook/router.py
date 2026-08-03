@@ -92,6 +92,30 @@ async def recibir(request: Request):
 
 async def _procesar_entrante(mensaje) -> str:
     """Un CLIENTE escribió: lo de siempre."""
+    # 🔴 …SALVO QUE QUIEN ESCRIBE SEA **LA DUEÑA** (auditoría 2026-08-02, META-11). `dueno_telefono`
+    # solo se usaba como DESTINO; nunca se comparaba contra el remitente. Ella responde "ok, ya
+    # voy" a uno de los avisos que el propio bot le manda → se le crea ficha de `Cliente`, entra
+    # al carril de venta y el bot **le vende a ella**: *"¡Hola! 💚 ¿qué te gustaría pedir?"*.
+    # Gasta tokens, ensucia el CRM y el reporte, y es la clase de cosa que se ve en una demo.
+    #
+    # Su mensaje SÍ sirve para una cosa, y es la que se aprovecha: abre SU ventana de 24h con el
+    # número del negocio. Esa marca es la que después decide si tiene sentido intentar mandarle
+    # un aviso por WhatsApp (META-15, `puede_escribirle_a_la_duena`).
+    #
+    # ⚠️ CONSECUENCIA ACEPTADA: si ella le escribe al número del negocio para "probar si el bot
+    # funciona", ya NO le contesta. Para eso está el SIMULADOR del panel (teléfonos "__…"), que
+    # se construyó justo para eso y no gasta ventana de Meta. Lo que dijo queda en el log del
+    # contenedor, con su texto, para que nunca sea un silencio sin rastro.
+    if _es_la_duena(mensaje["telefono"]):
+        from app.services.meta_client import abrir_ventana_de_la_duena
+
+        logger.info(
+            "Mensaje de LA DUEÑA al número del negocio (%s): el bot NO le contesta; se abre su "
+            "ventana de 24h. Dijo: %r", mensaje["telefono"], (mensaje.get("texto") or "")[:200],
+        )
+        await abrir_ventana_de_la_duena()
+        return "duena"
+
     # EL RELOJ DE LAS 24 HORAS arranca AQUÍ y no en el worker: este es el único embudo por
     # el que pasan los CUATRO caminos (texto, voz, comprobante, sticker). El comprobante, por
     # ejemplo, nunca pasa por el worker de texto: si el reloj viviera allá, un cliente que solo
@@ -101,11 +125,6 @@ async def _procesar_entrante(mensaje) -> str:
     # ⚠️ Y solo se llama desde AQUÍ: un ECO es un mensaje SALIENTE y NO abre la ventana de 24h
     # (si la abriera, el panel dejaría escribir fuera de plazo y Meta rechazaría el envío).
     await _marcar_entrante(mensaje["telefono"], mensaje.get("nombre"))
-
-    # Mostrar "escribiendo…" de inmediato: el cliente ve que lo estamos atendiendo
-    # (se siente humano, no robotico). Import perezoso; no critico si falla.
-    from app.services.meta_client import marcar_leido_y_escribiendo
-    await marcar_leido_y_escribiendo(mensaje["message_id"])
 
     tipo = mensaje["tipo"]
 
@@ -127,6 +146,18 @@ async def _procesar_entrante(mensaje) -> str:
         await _guardar_sin_responder(mensaje)
         return "limite"
 
+    # 🔴 "ESCRIBIENDO…" SOLO SI DE VERDAD VAMOS A ESCRIBIR (auditoría 2026-08-02, META-9).
+    # Esta llamada estaba ARRIBA DEL TODO, antes del tope, del interruptor y de la lista blanca —
+    # justo lo contrario de lo que promete su propio docstring ("SOLO se llama cuando SÍ vamos a
+    # responder"). Dos daños, y ninguno es cosmético:
+    #   · Con el bot APAGADO, el cliente veía el doble check azul y "escribiendo…" y después 20
+    #     minutos de nada. Es peor que no leerlo: le enseña que lo estás ignorando a propósito.
+    #   · Un cliente pasado del tope generaba **un POST a Meta por cada mensaje**, para siempre.
+    #     Un troll con 500 mensajes son 500 llamadas a la API contra este número, gratis para él.
+    # Ahora va después de todos los frenos. El único que queda por delante es el modelo (que puede
+    # caerse), y ese caso ya tiene su propia red (`_avisar_turno_perdido`).
+    await _marcar_leido_si_vamos_a_responder(mensaje)
+
     if tipo == "text":
         logger.info("Mensaje de %s: %s", mensaje["telefono"], mensaje["texto"])
         return await _encolar_mensaje(mensaje)
@@ -144,6 +175,59 @@ async def _procesar_entrante(mensaje) -> str:
     return await _encolar_evento(mensaje)
 
 
+def _cola(s: str | None) -> str:
+    """Los últimos 10 dígitos de un teléfono: así 58412…, +58412… y 0412… son el MISMO número.
+    Copia deliberada del criterio de `_numero_permitido` (workers/tasks.py): comparar teléfonos
+    con `==` sobre la cadena cruda es el bug clásico de este dominio."""
+    d = "".join(c for c in (s or "") if c.isdigit())
+    return d[-10:] if len(d) >= 10 else d
+
+
+def _es_la_duena(telefono: str) -> bool:
+    """¿Este mensaje lo escribió LA DUEÑA desde su teléfono personal? (META-11).
+
+    Se compara contra `DUENO_TELEFONO` del ENTORNO y no contra la tabla `configuracion` a
+    propósito: esto corre en el camino caliente del webhook, donde Meta espera ~5 s y donde una
+    consulta de más se paga en cada mensaje de cada cliente. El valor del entorno es la semilla
+    que Enova pone al montar la caja; si algún día se cambia solo desde el panel, lo peor que
+    pasa es que volvemos al comportamiento de hoy (el bot le contesta), no que se rompa nada.
+
+    Vacío = nadie es la dueña. Un `dueno_telefono` sin configurar NO puede convertir a todos los
+    clientes en 'la dueña' y dejar al bot mudo con el mundo entero.
+    """
+    mio = _cola(settings.dueno_telefono)
+    return bool(mio) and _cola(telefono) == mio
+
+
+async def _marcar_leido_si_vamos_a_responder(mensaje) -> None:
+    """Doble check azul + "escribiendo…", pero solo si el bot va a contestar de verdad.
+
+    Los tres frenos se preguntan aquí, en el webhook, y NO en el worker, porque el indicador de
+    tipeo solo sirve si sale YA (el worker arranca 15 s después, con el buffer). Cada uno de los
+    tres trae su propio lado seguro de casa y ninguno lanza; si algo raro pasara igual, se marca
+    como hasta hoy: quedarse sin doble check azul no puede tumbar un webhook.
+    """
+    from app.services.meta_client import marcar_leido_y_escribiendo
+
+    try:
+        from app.workers.tasks import _bot_activo, _cliente_pausado, _numero_permitido
+
+        telefono = mensaje["telefono"]
+        if (
+            not await _bot_activo()
+            or await _cliente_pausado(telefono)
+            or not await _numero_permitido(telefono)
+        ):
+            logger.info(
+                "No se marca leído/escribiendo a %s: el bot no va a responderle (apagado, chat "
+                "tomado o fuera de la lista blanca)", telefono,
+            )
+            return
+    except Exception:  # noqa: BLE001 — ante la duda, se comporta como siempre
+        logger.exception("No pude decidir si mostrar 'escribiendo…'; se muestra, como antes")
+    await marcar_leido_y_escribiendo(mensaje["message_id"])
+
+
 async def _procesar_eco(eco) -> str:
     """LA DUEÑA escribió desde SU CELULAR: el bot se calla en ese chat.
 
@@ -158,12 +242,26 @@ async def _procesar_eco(eco) -> str:
     from app.models import Cliente, Intervencion, Mensaje, now_utc
     from app.services import redis_client as rc
     from app.services.db import get_session_factory
+    from app.services.meta_client import es_mensaje_propio
     from app.webhook.parser import contenido_seguro
 
     telefono, wa_id = eco["telefono"], eco["message_id"]
 
     # 1) Candado barato: Meta REENTREGA el mismo evento si duda de nuestra respuesta.
-    if await rc.ya_procesado(f"eco:{wa_id}"):
+    #
+    # 🔴 SE MIRA AQUÍ, PERO SE MARCA AL FINAL (auditoría 2026-08-02, META-2). Antes esto era
+    # `ya_procesado`, que MARCA AL LEER (`SET nx ex=86400`): si el `commit` de la PAUSA reventaba
+    # tres líneas más abajo, Meta reintentaba el evento y el reintento se descartaba como
+    # "eco_duplicado" ⇒ **la pausa no se ponía nunca** y el bot le hablaba encima a la dueña
+    # delante del cliente, en medio de una venta. El "ORDEN SAGRADO" del docstring se respeta
+    # DENTRO del handler; el candado que estaba ANTES lo anulaba.
+    #
+    # Marcar al final es seguro porque todo lo de aquí es idempotente: la pausa es un UPSERT con
+    # los mismos valores, el `chat_tomado` mira si ya existe, la burbuja va con
+    # `on_conflict_do_nothing(message_id)` y la memoria del bot solo se toca `if nueva`. Dos
+    # entregas simultáneas repiten el TRABAJO, no el EFECTO — que es la misma regla con la que
+    # F1 justificó devolverle 503 a Meta.
+    if await rc.get_cache(f"cache:eco:{wa_id}"):
         return "eco_duplicado"
 
     factory = get_session_factory()
@@ -171,6 +269,16 @@ async def _procesar_eco(eco) -> str:
     # 2) ¿Es NUESTRO? Hoy está verificado que la Cloud API no genera eco, pero si Meta lo
     #    cambiara, el bot se pausaría a sí mismo tras cada respuesta y quedaría MUDO con todos
     #    los clientes. Este cinturón cuesta una consulta y evita el desastre.
+    #
+    #    🔴 Y AHORA LLEGA A TIEMPO (auditoría 2026-08-02, META-1). La fila de `mensajes` con este
+    #    `wa_message_id` no existe hasta ~3-4 s después del envío (5 × `sleep(1)` + latencia +
+    #    `_guardar_en_panel`), así que la prueba de "es mío" era un TOCTOU: llegaba TARDE. La
+    #    marca de Redis se pone en el instante en que Meta devuelve el id, y se pregunta PRIMERO.
+    #    La consulta a la BD se queda detrás como respaldo (si Redis se reinició, la fila sigue
+    #    ahí): son dos cinturones, no uno sustituyendo al otro.
+    if await es_mensaje_propio(wa_id):
+        logger.info("Eco de un mensaje NUESTRO (%s, marca de Redis): se ignora, no se pausa", wa_id)
+        return "eco_propio"
     async with factory() as session:
         mio = (
             await session.execute(
@@ -294,6 +402,15 @@ async def _procesar_eco(eco) -> str:
             await rc.guardar_historial(telefono, "assistant", texto)
         except Exception:  # noqa: BLE001
             logger.exception("No se pudo meter el eco en la memoria del bot (%s)", telefono)
+
+    # 6) AHORA SÍ: el candado (META-2). Se marca al FINAL, cuando la PAUSA —lo único que no se
+    #    puede perder— ya está commiteada. Si algo revienta antes, la excepción sube, el webhook
+    #    devuelve 503 y Meta reenvía el eco: esta vez se pone la pausa. Antes ese reenvío se
+    #    tiraba a la basura por "duplicado".
+    try:
+        await rc.set_cache(f"cache:eco:{wa_id}", "1", 86400)
+    except Exception:  # noqa: BLE001 — sin candado se repite el trabajo, no el efecto
+        logger.warning("No se pudo marcar el eco %s como procesado", wa_id)
     return "eco"
 
 
@@ -327,7 +444,93 @@ async def _aplicar_estado(ev) -> str:
         await session.commit()
     if estado == "fallido":
         logger.error("ENVÍO FALLIDO (%s): %s", wa_id, ev.get("error"))
+        await _telemetria_de_calidad(wa_id, ev.get("error"))
     return "estado" if res.rowcount else "estado_sin_dueño"
+
+
+async def _telemetria_de_calidad(wa_id: str, error: str | None) -> None:
+    """Un `failed` de Meta con un código de CALIDAD no se queda en un log (META-8).
+
+    🔴 Por qué (auditoría 2026-08-02): los fallos se escribían en `mensajes.error`, el panel los
+    pintaba en rojo, y ahí se acababa todo. **Sin Intervencion, sin aviso, sin contador.** Y los
+    tres códigos que de verdad importan no son un dedazo de nadie:
+      · `131047` — el envío iba FUERA DE LA VENTANA de 24h.
+      · `131049` — "no entregado para mantener un ecosistema sano": Meta nos está FRENANDO. Es la
+                   señal más directa que existe de que este número se está degradando.
+      · `130472` — el usuario quedó fuera por una política/experimento de Meta.
+    Enova es Tech Provider: esta es precisamente la telemetría que no puede quedar muda, porque
+    lo que está en juego no es un mensaje, es la cuenta de Meta de TODOS sus clientes futuros.
+
+    Deja el contador del día en Redis (para poder mirar "¿cuántos van?" sin abrir la BD) y UN
+    aviso por código cada 6 h: si Meta empieza a rechazar en masa, la dueña recibe UN WhatsApp,
+    no doscientos. Todo tragado: la telemetría jamás puede tumbar el webhook.
+    """
+    from sqlalchemy import select
+
+    from app.models import Mensaje
+    from app.services.db import get_session_factory
+    from app.services.meta_client import CODIGOS_DE_CALIDAD, codigo_meta
+
+    try:
+        codigo = codigo_meta(error)
+        if codigo not in CODIGOS_DE_CALIDAD:
+            return
+
+        # De quién era el mensaje. Hace falta para dos cosas: para no molestar por los teléfonos
+        # internos (simulador y bancos, que fallan a propósito) y para que la fila de la bandeja
+        # cuelgue del chat correcto, que es donde ella va a mirar.
+        factory = get_session_factory()
+        async with factory() as session:
+            destino = (
+                await session.execute(
+                    select(Mensaje.cliente_telefono)
+                    .where(Mensaje.wa_message_id == wa_id).limit(1)
+                )
+            ).scalars().first()
+        if not destino or destino.startswith("__"):
+            return
+
+        from app.services import redis_client as rc
+        from app.workers.tasks import _avisar_a_la_duena
+
+        try:
+            # Se reusa el contador diario del anti-abuso con una clave que NO es un teléfono
+            # ("metafallo:131049"): es un INCR con caducidad de 26 h, que es exactamente lo que
+            # hace falta, y no obliga a inventar otro contador que después nadie mantiene.
+            n = await rc.contar_mensaje_dia(f"metafallo:{codigo}")
+        except Exception:  # noqa: BLE001 — sin contador el aviso sale igual
+            n = 0
+        logger.error(
+            "🔴 META RECHAZÓ UN ENVÍO POR CALIDAD — código %s, cliente %s, van %s hoy: %s",
+            codigo, destino, n or "?", error,
+        )
+
+        titulo = {
+            131047: "WhatsApp NO dejó escribirle: pasaron más de 24 h desde su último mensaje.",
+            131049: (
+                "WhatsApp decidió NO entregar el mensaje 'para mantener un ecosistema sano'. "
+                "Eso es Meta frenando este número: hay que bajar el ritmo de mensajes."
+            ),
+            130472: "WhatsApp dejó a este usuario fuera por una política suya.",
+        }.get(codigo, "WhatsApp rechazó el envío.")
+
+        await _avisar_a_la_duena(
+            destino,
+            motivo="envio_rechazado",
+            detalle=(
+                f"{titulo} (código {codigo} de WhatsApp). El mensaje NO le llegó al cliente y en "
+                "el chat se ve en rojo. Si esto sale seguido, avísale a Enova: la calidad del "
+                "número está en juego."
+            ),
+            mensaje_cliente="(WhatsApp rechazó el mensaje del bot)",
+            whatsapp=(
+                f"📵 WhatsApp rechazó un mensaje del bot hacia {destino} (código {codigo}). "
+                f"{titulo} Míralo en el chat: está en rojo."
+            ),
+            candado=(f"meta_fallo:{codigo}", 21600),
+        )
+    except Exception:  # noqa: BLE001 — la telemetría NUNCA puede tumbar el webhook
+        logger.exception("No se pudo procesar el fallo de calidad de Meta (%s)", wa_id)
 
 
 def _fecha_meta(ts: str | None):

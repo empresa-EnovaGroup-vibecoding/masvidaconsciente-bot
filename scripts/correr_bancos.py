@@ -61,6 +61,11 @@ BANCOS = [
     "probar_no_se_evapora",
     "probar_recibo_visible",
     "probar_honestidad",
+    # EL PROMPT CONTRA EL CÓDIGO (auditoría 2026-08-02): reglas que el prompt ORDENA y una red
+    # CASTIGA. El cliente pedía "muéstrame lo que tienen", el bot mandaba el catálogo como manda
+    # la regla 58, y la red del envío fantasma lo mataba: el cliente se quedaba con el PDF en la
+    # mano y un "dame un momentito". Este banco vigila que las dos mitades sigan de acuerdo.
+    "probar_prompt_coherente",
     "probar_retomar",
     "probar_bandeja",
     # EL RELEVO (auditoría 2026-08-02): que una escalada FALLIDA no se dé por buena. `ejecutar_tool`
@@ -72,6 +77,12 @@ BANCOS = [
     # Se ancla en `clientes.ultimo_entrante_at` —que escribe el webhook, antes de que el worker
     # pueda fallar— así que caza incluso los mensajes que nunca llegaron a la tabla `mensajes`.
     "probar_vigilante",
+    # META / TECH PROVIDER (auditoría 2026-08-02): lo que arriesga la cuenta de Meta de TODOS los
+    # clientes futuros de Enova. El interruptor de apagado no cubría el único carril que le habla
+    # al cliente días después; los 6 avisos a la dueña salían sin comprobar la ventana de 24h; y
+    # los `failed` de CALIDAD (131049 = "no entregado para mantener un ecosistema sano") morían en
+    # un log que nadie mira — justo la telemetría que un Tech Provider no puede ignorar.
+    "probar_meta",
     "probar_fase2",
     "probar_panel_tamanos",
 ]
