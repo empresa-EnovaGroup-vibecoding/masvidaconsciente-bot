@@ -1068,6 +1068,13 @@ async def info_producto(session, telefono, nombre):
             "id_para_pedir": v.id,
             "tamano": v.presentacion,
             "precio_usd": float(precio) if precio is not None else "el precio de hoy no lo sabes: pide_ayuda",
+            # 🔴 MISMO MOTIVO QUE EN `ver_catalogo` (ver el comentario largo allá): un
+            # `precio_usd: 25.0` pelado NO lleva marca de dinero, así que `autorizados_por_moneda`
+            # no lo mete en la lista blanca. Sin esta clave, en modo DOS el precio de un producto
+            # concreto le llegaba VACÍO a la Voz — `hoja.py:_renderizar` busca literalmente
+            # `precio_texto`, y aquí no existía. `ver_catalogo` sí la traía, así que el bug solo
+            # aparecía al preguntar por UN producto, no al ver el catálogo.
+            "precio_texto": _fmt_usd(precio) if precio is not None else None,
             "sabores": v.sabores,
             "agotado": (not v.disponible) or (not prod.disponible),
         })
@@ -1080,6 +1087,9 @@ async def info_producto(session, telefono, nombre):
         # TIENE que preguntar cuál quiere (cada uno cuesta distinto).
         "tamanos": tamanos,
         "precio_usd": tamanos[0]["precio_usd"] if len(tamanos) == 1 else "depende del tamaño: pregúntale cuál quiere",
+        # Izada al nivel de la ficha con UN solo tamaño, igual que hace `ver_catalogo` — es de aquí
+        # de donde la hoja del modo dos lee el precio.
+        "precio_texto": tamanos[0]["precio_texto"] if len(tamanos) == 1 else None,
         "presentacion": (vs[0].presentacion if len(vs) == 1 and vs[0].presentacion != "única" else None),
         "duracion": prod.duracion,
         "se_congela": prod.se_congela,

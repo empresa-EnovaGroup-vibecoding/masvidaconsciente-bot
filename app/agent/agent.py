@@ -1772,13 +1772,49 @@ async def _responder_dos_agentes(
                     n, telefono, str(r_tool["error"])[:200],
                 )
             hoja.anotar_tool(n, r_tool)   # ← el CÓDIGO anota, no el modelo
-        hoja.encargo = (msg.get("content") or "").strip() or hoja.encargo
+        # 🔴 AQUÍ ESTABA EL AGUJERO, Y ERA UN `or`. La línea decía:
+        #
+        #     hoja.encargo = (msg.get("content") or "").strip() or hoja.encargo
+        #
+        # Si el reintento traía SOLO tool_calls y el contenido vacío —que es el patrón NORMAL de un
+        # modelo que decide llamar a una herramienta—, ese `or` dejaba el encargo VIEJO: justo el
+        # que la red acababa de rechazar por inventar dinero. Y veinte líneas más abajo el código
+        # volvía a extraer montos de ESE MISMO texto para meterlos en la lista blanca:
+        # **el monto rechazado se autorizaba a sí mismo.** Y si la Voz fallaba, el texto inventado
+        # le salía al cliente por el camino de degradación.
+        #
+        # Ahora, si el reintento no trae texto nuevo, el encargo se VACÍA. No se pierde nada: las
+        # tools del reintento SÍ quedaron anotadas arriba (con el precio de verdad), así que la Voz
+        # conserva los hechos y `render()` cae a "Responde con naturalidad" — lo correcto.
+        nuevo_encargo = (msg.get("content") or "").strip()
+        if not nuevo_encargo:
+            logger.error(
+                "RE-PROMPT DEL DINERO: el Operador de %s no reescribió el encargo (solo tools). "
+                "Se DESCARTA el encargo rechazado en vez de heredarlo.", telefono,
+            )
+        hoja.encargo = nuevo_encargo
         usd_ok, bs_ok, totales_ok, datos_ok = hoja.listas_blancas()
+        # LA SEGUNDA PASADA DE LA RED, ahora con la lista blanca enriquecida por las tools del
+        # reintento (si el Operador fue a buscar el precio bueno, aquí ya está autorizado). Si
+        # inventó dinero DOS VECES, su texto no se hereda. No se escala desde aquí a propósito: el
+        # cliente NO queda esperando —la Voz escribe desde los hechos de la hoja— y las 5 redes de
+        # abajo siguen vigilando lo que de verdad sale. Escalar acá sería avisar dos veces.
+        if hoja.encargo and _dinero_inventado(
+            hoja.encargo, usd_ok | usd_op, bs_ok | bs_op, totales_ok
+        ):
+            logger.error(
+                "DINERO INVENTADO DOS VECES en el encargo de %s: se descarta %r",
+                telefono, hoja.encargo[:120],
+            )
+            hoja.encargo = ""
 
     # 🔑 EL ENCARGO VALIDADO **PASA A SER VERDAD**. Sin esto, la Voz no podría repetir un precio
     # que el Operador leyó del catálogo (ella no lo ve) y el turno moriría en `RESPUESTA_SEGURA`.
     # Solo entran MONTOS SUELTOS: un TOTAL sigue naciendo únicamente de `registrar_pedido` o
     # `generar_datos_pago`, nunca de una frase.
+    #
+    # ⚠️ Y solo entra un encargo que PASÓ la red: si vino inventado y el Operador no lo arregló,
+    # arriba quedó en "" — así que este bloque ya no puede blanquear un monto rechazado.
     u_enc, b_enc = autorizados_por_moneda(hoja.encargo)
     hoja.montos_usd |= u_enc
     hoja.montos_bs |= b_enc
@@ -1799,7 +1835,7 @@ async def _responder_dos_agentes(
     except Exception:  # noqa: BLE001
         logger.exception("La VOZ falló para %s: sale el encargo del Operador", telefono)
         texto = ""
-    texto = (texto or "").strip() or hoja.encargo.strip() or RESPUESTA_SEGURA
+    texto = (texto or "").strip() or hoja.encargo.strip()
 
     # ── LAS REDES, sobre lo que de verdad le llega al cliente ───────────────────────────
     #
@@ -1812,6 +1848,27 @@ async def _responder_dos_agentes(
     # mira el resultado, reintenta con una sesión nueva y, si tampoco, avisa fuera de la base.
     # Un solo sitio que escala en TODO el archivo: modo uno y modo dos comparten la red.
     relevo_imposible = False  # ¿ya falló la escalada contra la base en ESTE turno?
+
+    # 🔴 NI VOZ NI ENCARGO: el único camino del modo dos que salía MUDO.
+    #
+    # Hasta hoy la línea de arriba terminaba en `or RESPUESTA_SEGURA`, así que este caso devolvía
+    # "Dame un momentito y te confirmo 😊" por el final del turno **sin avisarle a nadie**: ninguna
+    # de las 5 redes de abajo dispara con esa frase (comprobado contra sus regex), y el cliente
+    # quedaba esperando para siempre una confirmación que nadie tenía encargo de mandar. Es el
+    # mismo hueco que el sexto `return RESPUESTA_SEGURA` del modo uno tuvo hasta el 2026-08-03.
+    #
+    # Y el arreglo del re-prompt del dinero (arriba) lo vuelve MÁS alcanzable: ahora el encargo se
+    # vacía cuando el Operador no lo reescribe, en vez de heredar el texto rechazado. Cerrarlo es
+    # parte del mismo arreglo, no un extra.
+    if not texto:
+        logger.error("MODO DOS: sin Voz y sin encargo utilizable para %s", telefono)
+        await _escalar(
+            ejecutar, telefono, "no_se",
+            "el bot se quedó sin nada que decirle al cliente: la Voz no respondió y el encargo del "
+            "Operador no era utilizable. El cliente preguntó: "
+            f'"{(pregunta_cliente or "")[:160]}"',
+        )
+        return RESPUESTA_SEGURA
 
     inventados = _dinero_inventado(texto, usd_ok, bs_ok, totales_ok)
     if inventados:
