@@ -1003,6 +1003,87 @@ def _texto_previo_del_agente(historial: list | None) -> str:
     )
 
 
+# ─── RED DEL BUCLE: el bot preguntando lo mismo una y otra vez ────────────────────────
+#
+# 🔴 POR QUÉ EXISTE (simulacro con el bot real, 2026-08-06). Una clienta pidió 2 panes keto. El
+# bot le preguntó si era para el viernes 8 o el 15. Ella preguntó el total → el bot repitió la
+# MISMA pregunta. Ella preguntó cómo pagar → el bot la repitió OTRA VEZ. Tres turnos, dos
+# preguntas distintas de ella, la misma evasiva. Ahí se pierde la venta.
+#
+# El candado que lo causa es CORRECTO y deliberado: sin fecha no se cotiza. Lo que faltaba era la
+# salida cuando el cliente no la da. El bot no tiene forma de saber que ya lo intentó: cada turno
+# nace sin memoria de sus propios intentos.
+#
+# Y es también la raíz del "pedido fantasma" del mismo simulacro: la clienta se fue creyendo que
+# había encargado porque el bot le dijo "te dejo 2 panes keto" y después NUNCA llegó a registrar,
+# atascado en este bucle. No se arregla ensanchando la regex del pedido fantasma — "te dejo 2
+# panes" es un acuse conversacional legítimo mientras junta la fecha, y frenarlo mataría ventas
+# buenas. Se arregla aquí, sacando al bot del bucle.
+_VACIAS = {
+    "que", "qué", "cual", "cuál", "cuales", "cuáles", "para", "por", "con", "sin", "los", "las",
+    "del", "una", "uno", "unos", "unas", "es", "el", "la", "de", "en", "y", "o", "a", "te", "le",
+    "lo", "se", "su", "tu", "mi", "al", "eso", "esa", "ese", "esta", "este", "prefieres", "quieres",
+}
+
+
+def _nucleo_pregunta(frase: str) -> frozenset[str]:
+    """Las palabras con contenido de una pregunta, sin tildes ni relleno."""
+    plano = unicodedata.normalize("NFKD", frase.lower())
+    plano = "".join(c for c in plano if not unicodedata.combining(c))
+    palabras = re.findall(r"[a-z0-9]+", plano)
+    return frozenset(p for p in palabras if len(p) > 2 and p not in _VACIAS)
+
+
+def _preguntas_de(texto: str) -> list[frozenset[str]]:
+    """El núcleo de cada pregunta del texto. Las muy cortas ('¿algo más?') NO cuentan: son
+    coletillas de cierre, no intentos de obtener un dato."""
+    fuera = []
+    for frase in re.split(r"(?<=[.!?\n])\s+", texto or ""):
+        limpia = frase.strip()
+        if not (limpia.endswith("?") or limpia.startswith("¿")):
+            continue
+        # 🔴 EL PREÁMBULO NO ES LA PREGUNTA. El modelo escribe "Antes de darte el total,
+        # confirma: ¿es para el viernes 8 o el 15?" — y como los dos puntos NO parten la frase,
+        # el núcleo se llenaba de "antes/darte/total/confirma" y la comparación con la MISMA
+        # pregunta hecha sin preámbulo caía de 1.0 a 0.5: el bucle real del simulacro no
+        # disparaba. Si hay '¿', la pregunta empieza ahí.
+        if "¿" in limpia:
+            limpia = limpia[limpia.rindex("¿"):]
+        nucleo = _nucleo_pregunta(limpia)
+        if len(nucleo) >= 3:
+            fuera.append(nucleo)
+    return fuera
+
+
+def _pregunta_repetida(texto: str, historial: list | None, veces: int = 2) -> bool:
+    """True si el bot lleva `veces` turnos ANTERIORES haciendo la misma pregunta que ahora.
+
+    Con el default (2), dispara en el TERCER intento: preguntar dos veces es insistir, tres es
+    un bucle. Se compara por NÚCLEO de palabras y no por texto literal, porque el modelo
+    reformula ('¿para el viernes 8 o el 15?' / '¿confirma: viernes 8 o viernes 15?').
+    """
+    ahora = _preguntas_de(texto)
+    if not ahora:
+        return False
+    previos = [
+        _preguntas_de(str(h.get("content") or ""))
+        for h in (historial or [])
+        if isinstance(h, dict) and h.get("role") == "assistant"
+    ]
+    for nucleo in ahora:
+        repeticiones = 0
+        for turno in previos:
+            # Jaccard: dos preguntas son "la misma" si comparten la mayoría de su contenido.
+            if any(
+                len(nucleo & otro) / max(1, len(nucleo | otro)) >= 0.6
+                for otro in turno
+            ):
+                repeticiones += 1
+        if repeticiones >= veces:
+            return True
+    return False
+
+
 def _asegurar_resumenes_exactos(
     texto: str,
     historial: list | None,
@@ -1423,6 +1504,20 @@ async def responder(
                     ejecutar, telefono, "no_se",
                     'el bot le prometió al cliente que le confirma algo que NO sabe. '
                     f'El cliente preguntó: "{(pregunta_cliente or "")[:160]}"',
+                    ya_fallo=relevo_imposible,
+                )
+                relevo_imposible = relevo_imposible or not pidio_ayuda
+
+            # RED DEL BUCLE: si es la TERCERA vez que pregunta lo mismo, el cliente no se la va a
+            # contestar. El texto SÍ sale —callarlo dejaría al cliente con menos que antes— pero la
+            # dueña se entera y entra a destrabarlo. Motivo 'no_se': avisa sin pausar el chat.
+            if _pregunta_repetida(texto, historial) and not pidio_ayuda:
+                logger.warning("BUCLE: %s lleva 3 turnos preguntando lo mismo", telefono)
+                pidio_ayuda = await _escalar(
+                    ejecutar, telefono, "no_se",
+                    "el bot lleva TRES turnos preguntando lo mismo y el cliente no se lo contesta: "
+                    "está atascado y la venta se está cayendo. Entra tú y destrábalo. "
+                    f'Lo último que preguntó el cliente: "{(pregunta_cliente or "")[:160]}"',
                     ya_fallo=relevo_imposible,
                 )
                 relevo_imposible = relevo_imposible or not pidio_ayuda
@@ -1947,6 +2042,20 @@ async def _responder_dos_agentes(
     # está mal escrita — es su test.
     if _suena_a_sistema(texto):
         logger.warning("VOZ: sonó a sistema (¿la hoja está mal escrita?) — %r", texto[:90])
+
+    # LA RED DEL BUCLE, igual que en el modo uno: el bot no puede quedarse preguntando lo mismo
+    # para siempre. Aquí la Voz redacta pero es el Operador quien se atasca; el síntoma es el
+    # mismo y el aviso también.
+    if _pregunta_repetida(texto, historial) and not hoja.escalado:
+        logger.warning("BUCLE (modo dos): %s lleva 3 turnos preguntando lo mismo", telefono)
+        hoja.escalado = await _escalar(
+            ejecutar, telefono, "no_se",
+            "el bot lleva TRES turnos preguntando lo mismo y el cliente no se lo contesta: está "
+            "atascado y la venta se está cayendo. Entra tú y destrábalo. "
+            f'Lo último que preguntó el cliente: "{(pregunta_cliente or "")[:160]}"',
+            ya_fallo=relevo_imposible,
+        )
+        relevo_imposible = relevo_imposible or not hoja.escalado
 
     texto = await _asegurar_catalogo(
         texto, hoja.catalogo_enviado, telefono, ejecutar,

@@ -22,6 +22,88 @@
 
 ---
 
+## 2026-08-06 (2) — 🗣️ LO QUE ENCONTRÓ UN SIMULACRO CON EL BOT REAL
+
+Erwin pidió ver si el bot conversa bien de verdad. Se corrió una conversación de **12 turnos contra
+Haiku 4.5 real**, con el catálogo (32 productos), zonas, métodos de pago y la **personalidad real**
+(9.835 car., "Alejandra") copiados del taller a una BD local en Docker. `META_TOKEN` falso: no salió
+ni un mensaje. Costó $0,055.
+
+**Lo que aguantó:** ni un precio, tamaño o producto inventado. Las redes del dinero, intactas los 12
+turnos. No mintió con las fotos, no inventó cobertura en Caracas, y el reclamo escaló.
+
+**Lo que falló, y la RAÍZ COMÚN que tenían dos de los tres.**
+
+### 🔴 1. El prompt le daba la CONCLUSIÓN sin la EVIDENCIA (salud y alérgenos)
+
+Una clienta preguntó por su **mamá diabética**. El bot respondió *"Sí, es apto para diabéticos"* **sin
+llamar a ninguna herramienta**. Acertó — pero por casualidad, y siendo **estructuralmente ciego** a
+que ese pan lleva **harina de almendra**.
+
+La causa no era descuido del modelo: `_catalogo_bloque` metía en el prompt `apto diabéticos: sí` pero
+**NO la descripción** (los ingredientes se excluyen a propósito, para que el bot no ofrezca de memoria
+un producto que no lleva lo que le piden). O sea, el prompt entregaba el veredicto sin los hechos. La
+regla @info_producto ya ordenaba consultar; esta línea daba una vía para no hacerlo.
+
+→ **`apto_diabeticos` ya no viaja en el catálogo del prompt**, y se añadió la regla `2b` (salud y
+alérgenos): para eso hay que llamar a `info_producto`, que devuelve el apto **y** la descripción
+juntos, y hay que **nombrar los ingredientes que importan**. Cuesta una llamada más, en el único
+carril donde el error se paga con la salud de alguien.
+
+**Comprobado con el mismo simulacro después del arreglo:** `tools: ['info_producto']` y la respuesta
+pasó a *"Sí, es apto. Está hecho con **harina de almendra** y coco, aceite de aguacate…"*.
+
+### 🔴 2. El bucle — y por qué el "pedido fantasma" NO se arregla donde parecía
+
+El bot preguntó *"¿viernes 8 o viernes 15?"*. La clienta pidió el TOTAL → repitió la pregunta. Pidió
+CÓMO PAGAR → la repitió otra vez. **Tres turnos, dos preguntas distintas de ella, la misma evasiva.**
+Y de ahí salió el "pedido fantasma": ella creía haber encargado porque el bot dijo *"te dejo 2 panes
+keto"*, y el pedido **nunca se registró** porque seguía atascado (`SELECT count(*) FROM pedidos` → 0).
+
+🔴 **Se descartó ensanchar la regex del pedido fantasma, y conviene saber por qué.** El primer impulso
+fue meter *"te dejo"* en `_AFIRMA_PEDIDO`. Sería un error: mirando el turno completo, el bot dijo *"te
+dejo 2 panes keto"* **y acto seguido preguntó la fecha y la zona** — que es justo lo que
+`registrar_pedido` exige y aún no tenía. Es un acuse conversacional legítimo mientras junta los datos;
+una persona diría lo mismo. Frenarlo **mataría ventas buenas**. El pedido fantasma no lo creó la
+frase: lo creó el bucle.
+
+→ **Red nueva `_pregunta_repetida`** (`agent.py`, en los DOS modos). Si el bot lleva **tres** turnos
+haciendo la misma pregunta, escala a la dueña. Compara por **núcleo de palabras** (sin tildes ni
+relleno, Jaccard ≥ 0.6) porque el modelo reformula cada vez. El texto **sí sale** —callarlo dejaría al
+cliente con menos que antes—; lo que cambia es que la dueña se entera y entra a destrabarlo.
+
+⚠️ **El equilibrio era todo el problema:** hay una regla del prompt que ordena cerrar SIEMPRE con
+pregunta, así que **los 12 turnos terminaban preguntando algo**. Si la red confundiera "cerrar con
+pregunta" con "estar atascado", avisaría en cada conversación — y *un detector que grita en falso se
+acaba ignorando* (lección ya pagada dos veces en este repo). Por eso 8 de los 15 tests nuevos son
+casos que **NO** deben disparar: coletillas ("¿algo más?"), preguntas distintas, cerrar con pregunta,
+y lo que escribe el cliente.
+
+**Un detalle que costó y vale anotar:** la primera versión no cazaba el bucle REAL. El modelo escribe
+*"Antes de darte el total, confirma: ¿es para el viernes 8…?"* — y los **dos puntos no parten la
+frase**, así que el preámbulo entraba al núcleo y la similitud caía de 1.0 a 0.5. → Si hay `¿`, la
+pregunta empieza ahí.
+
+**Comprobado tras el arreglo:** turno 8 pregunta, turno 9 repite (no escala: insistir ≠ bucle), turno
+10 → `pedir_ayuda` y la fila queda en la bandeja.
+
+### 🟡 Lo que queda abierto (no es código)
+
+- **11 de 12 respuestas terminan en pregunta** y **8 de 12 turnos no consultaron ninguna herramienta**.
+  Con 41 reglas, 8 copias de la anti-invención y 3 que se autodeclaran "la más importante", lo que sale
+  es un bot obedeciendo un reglamento. Consolidar eso es la siguiente palanca de naturalidad — y es
+  decisión de producto, no de código.
+- **El saludo inyectado** («Buenas tardes 💚 / ¿Qué te gustaría pedir hoy?») suena a formulario después
+  de 9.835 caracteres de personalidad.
+- **Sigue sin respuesta si la masa madre lleva almendra** (pendiente del 2026-08-03). El arreglo de
+  arriba hace que el bot diga los ingredientes que SÍ están en la ficha; los 5 productos que no la
+  declaran siguen sin declararla.
+
+**Verificado:** ruff · compileall · **134 tests** (119 + 15 de la red nueva) · y el simulacro re-corrido
+contra el modelo real demostrando los dos arreglos.
+
+---
+
 ## 2026-08-06 — 🔓 LOS TRES BLOQUEADORES DEL MODO DOS (sin migración, sin desplegar)
 
 Lo pidió Erwin tras decidir quedarse en **Haiku 4.5** y descartar montar el sistema `neuronas` de

@@ -473,8 +473,22 @@ async def _catalogo_bloque() -> str:
                 interno.append(f"dura {p.duracion}")
             if p.se_congela:
                 interno.append(f"se congela: {p.se_congela}")
-            if p.apto_diabeticos:
-                interno.append(f"apto diabéticos: {p.apto_diabeticos}")
+            # 🔴 `apto_diabeticos` NO VIAJA AQUÍ, Y ES EL ARREGLO DEL 2026-08-06.
+            #
+            # Hasta hoy esta ficha traía `apto diabéticos: sí` pero NO los ingredientes (la
+            # `descripcion` se excluye a propósito, tres líneas más arriba, para que el bot no
+            # ofrezca de memoria un producto que no lleva lo que el cliente pidió).
+            #
+            # O sea: el prompt le entregaba la CONCLUSIÓN sin la EVIDENCIA. En el simulacro del
+            # 2026-08-06 una clienta preguntó por su MAMÁ DIABÉTICA y el bot respondió "Sí, es apto"
+            # sin llamar a ninguna herramienta — acertó, porque el dato estaba aquí, pero era
+            # estructuralmente CIEGO a que ese pan lleva HARINA DE ALMENDRA. No omitió el alérgeno:
+            # no lo tenía. Y la regla @info_producto ya le ordenaba consultar; esta línea le daba
+            # una vía para no hacerlo.
+            #
+            # Quitándola, una pregunta de salud SOLO se puede responder tras `info_producto` — que
+            # devuelve el apto Y la descripción JUNTOS. Cuesta una llamada más; en el único carril
+            # donde el error se paga con la salud de alguien, se paga.
             if p.info:
                 interno.append(f"otro: {p.info}")
             cab += "\n    [SOLO PARA TI, NO lo digas salvo que lo pregunten]: " + " | ".join(interno)
@@ -491,6 +505,13 @@ async def _catalogo_bloque() -> str:
             "pregunto a la dueña y te aviso', que suena a call center).\n"
             "2) NO mezcles datos entre productos: cada ficha es SOLO de ESE producto (la duración "
             "o los ingredientes de uno NO valen para otro).\n"
+            "2b) SALUD Y ALÉRGENOS — si te preguntan si un producto es apto para alguien (diabetes, "
+            "celiaquía, alergia, embarazo, un niño) o qué lleva dentro: NO contestes desde este "
+            "catálogo, que NO trae los ingredientes. Llama SIEMPRE a info_producto de ESE producto: "
+            "te devuelve a la vez si es apto Y de qué está hecho. Y al responder, di también los "
+            "ingredientes que importan para lo que te preguntaron (frutos secos, huevo, lácteos, "
+            "semillas). Un 'sí, es apto' a secas, sin decir qué lleva, es la respuesta que NO "
+            "queremos: la persona está preguntando por la salud de alguien.\n"
             "3) Usa el nombre EXACTO. Si piden algo que no está, dilo y ofrece de esta lista.\n"
             "4) Si el cliente pide un producto por TIPO, INGREDIENTE, MASA o RELLENO (empanada de "
             "plátano, pan de almendra, galleta de chocolate, algo de yuca…): SIEMPRE llama PRIMERO "
