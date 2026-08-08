@@ -54,6 +54,49 @@ pero en la pantalla equivocada (el hilo `__simulador__` en **Conversaciones**, q
 ⚠️ **La media NO entra en el `historial`** que se le manda al agente. El historial es conversación;
 la media ya la narra el propio texto del bot. Meterla ahí le ensuciaría el contexto cada turno.
 
+### Desplegado al taller (bot + panel), y verificado
+
+- `router.py` → BOT API **y** WORKER (mismo checksum `330d73e2…` en los dos). Antes tenían
+  `7cc23826…`, idéntico a `master`: no se pisó nada desconocido.
+- Panel: build con Docker `node:22-slim` pasando `NEXT_PUBLIC_API_URL` en **build-time**, borrando el
+  `.next` viejo. Verificado sobre el JS **que sirve el dominio**, no sobre el build local: el chunk de
+  `/bot` trae el render de la media y hay **0** ocurrencias de `localhost:8000`.
+- Copia de seguridad del panel entero antes de tocarlo: `/root/panel_app_BACKUP_2026-08-08.tar` (80 MB).
+
+## 🔴 EL HALLAZGO GORDO DEL DÍA: las imágenes son de JULIO, no de agosto
+
+Buscando por qué hacía falta Coolify si `docker cp` es más rápido, salió esto:
+
+| | Contenedor vivo | Su imagen |
+|---|---|---|
+| Migraciones | **33** (hasta `032`) | **26** (hasta `025`) |
+| Fecha | hoy | **2026-07-23** |
+| Tag | — | `bb7447aca4b4…` = **`bb7447a`** |
+
+**Los ~100 arreglos del 08-02, las 4 tandas del 08-03, las migraciones 026→032 y lo de hoy existen
+SOLO en la capa de escritura de los contenedores.** `docker cp` escribe encima de la imagen, nunca
+dentro: por eso es rápido — no construye nada.
+
+**Lo que aguanta:** los tres contenedores están en `unless-stopped`, así que un reinicio del VPS los
+**reinicia** (no los recrea) y la capa sobrevive.
+
+**Lo que lo borra todo:** un `docker rm`, un `--force-recreate`, o **apretar Deploy en Coolify** — que
+reconstruiría desde `bb7447a` y devolvería el bot del 23 de julio. Ahí está el porqué real de no
+reconectar Coolify: no es que ayude, es que es el gatillo.
+
+**Red de seguridad puesta hoy** (`docker commit` del estado que corre, ~1 GB, sin downtime), y
+verificada arrancando **desde la imagen**, no leyendo el contenedor:
+
+```
+masvida-bot:estado-2026-08-08     → 33 migraciones · router.py 330d73e2…
+masvida-worker:estado-2026-08-08  → 33 migraciones · router.py 330d73e2…
+masvida-panel:estado-2026-08-08   → chunk de /bot con la media · 0 localhost:8000
+```
+
+⚠️ Esto es un **paracaídas, no una solución**: `docker commit` congela un estado, no lo hace
+reproducible desde el código. La solución de verdad sigue siendo integrar el trabajo en la org y
+reconstruir la imagen desde el repo.
+
 ---
 
 ## 2026-08-03 — 🔒 CONTACTOS PRIVADOS, TELEMETRÍA Y DOS SONDAS MÁS (migraciones 031 y 032)
