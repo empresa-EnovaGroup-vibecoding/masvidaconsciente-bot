@@ -15,7 +15,222 @@
 
 - 🧪 **Taller:** unificación completa, arquitectura de **UN agente**, modelo **Claude Haiku**, bot encendido para todos los números, 17 bancos verdes.
 - 🏪 **Producción real (netcup):** no se ha tocado; sigue en la versión anterior y con lista blanca.
-- 🔴 **Modo DOS (Operador + Voz):** NO activar hasta cerrar el hueco del reintento de dinero, completar `precio_texto` y añadir la prueba de regresión end-to-end.
+- 🟡 **Modo DOS (Operador + Voz):** los **tres bloqueadores están cerrados** (2026-08-06: el hueco del
+  reintento del dinero, el `precio_texto` de `info_producto` y la prueba de regresión). Sigue en
+  `agente_modo='uno'` a propósito: falta probarlo con **tráfico real**, y hay que decidirlo sabiendo
+  que **añade una llamada al LLM por turno** — es palanca de calidad, no de ahorro.
+
+---
+
+## 2026-08-06 (2) — 🗣️ LO QUE ENCONTRÓ UN SIMULACRO CON EL BOT REAL
+
+Erwin pidió ver si el bot conversa bien de verdad. Se corrió una conversación de **12 turnos contra
+Haiku 4.5 real**, con el catálogo (32 productos), zonas, métodos de pago y la **personalidad real**
+(9.835 car., "Alejandra") copiados del taller a una BD local en Docker. `META_TOKEN` falso: no salió
+ni un mensaje. Costó $0,055.
+
+**Lo que aguantó:** ni un precio, tamaño o producto inventado. Las redes del dinero, intactas los 12
+turnos. No mintió con las fotos, no inventó cobertura en Caracas, y el reclamo escaló.
+
+**Lo que falló, y la RAÍZ COMÚN que tenían dos de los tres.**
+
+### 🔴 1. El prompt le daba la CONCLUSIÓN sin la EVIDENCIA (salud y alérgenos)
+
+Una clienta preguntó por su **mamá diabética**. El bot respondió *"Sí, es apto para diabéticos"* **sin
+llamar a ninguna herramienta**. Acertó — pero por casualidad, y siendo **estructuralmente ciego** a
+que ese pan lleva **harina de almendra**.
+
+La causa no era descuido del modelo: `_catalogo_bloque` metía en el prompt `apto diabéticos: sí` pero
+**NO la descripción** (los ingredientes se excluyen a propósito, para que el bot no ofrezca de memoria
+un producto que no lleva lo que le piden). O sea, el prompt entregaba el veredicto sin los hechos. La
+regla @info_producto ya ordenaba consultar; esta línea daba una vía para no hacerlo.
+
+**PRIMER INTENTO, Y SALIÓ PEOR — vale contarlo entero.** Se quitó `apto diabéticos` del catálogo del
+prompt para *forzar* la consulta, y se añadió la regla `2b`. El caso del pan mejoró:
+`tools: ['info_producto']` y la respuesta pasó a *"Sí, es apto. Está hecho con **harina de almendra**
+y coco…"*.
+
+🔴 **Pero un segundo simulacro lo rompió por el otro lado.** Preguntada por la **Kombucha**
+(`apto_diabeticos = 'no'`), sin el dato delante el modelo **no consultó: improvisó** — *"Sí, es apta,
+es fermentada y no lleva azúcar refinada"*. **Le dijo que SÍ a una diabética sobre un producto
+marcado que NO.** Antes del cambio habría leído `apto diabéticos: no` del prompt y habría acertado.
+
+**Quitar información no obliga a buscarla: solo deja un hueco que el modelo rellena razonando.**
+
+→ **Lo que quedó, y es la doctrina del repo (*"el prompt SUGIERE, el código IMPIDE"*):** el dato
+**vuelve** al prompt —así el peor caso es una respuesta incompleta, nunca una FALSA— y quien obliga a
+consultar es una **RED nueva**, `_dictamina_salud_sin_ficha` (`agent.py`): si el cliente pregunta si
+algo le conviene a un cuerpo (diabetes, celiaquía, alergia, embarazo, un niño…) y el bot **sentencia**
+sin haber abierto `info_producto` en ese turno, se le corrige una vez y, si insiste, **no sale y
+escala**. La regla `2b` se queda como refuerzo.
+
+**Comprobado con el bot real, los tres casos:**
+- Kombucha (apto=**no**) → `['info_producto']` + *"**No**, la kombucha no es apta para diabéticos"* ✅
+- Empanadas (apto=**sí**) → `['info_producto']` + *"Son aptas… masa de yuca o plátano, relleno de…"* ✅
+- Venta normal y saludo → la red **no se mete** (sin llamadas de más) ✅
+
+⚠️ Y un detalle de regex que costó y volverá a morder: `\b(diabet|celiac)\b` **no** calza con
+"diabeticos" ni "celiacos" — el `\b` de cierre exige que la palabra termine ahí. Son **raíces**, no
+palabras: el `\b` va solo al principio.
+
+### 🔴 2. El bucle — y por qué el "pedido fantasma" NO se arregla donde parecía
+
+El bot preguntó *"¿viernes 8 o viernes 15?"*. La clienta pidió el TOTAL → repitió la pregunta. Pidió
+CÓMO PAGAR → la repitió otra vez. **Tres turnos, dos preguntas distintas de ella, la misma evasiva.**
+Y de ahí salió el "pedido fantasma": ella creía haber encargado porque el bot dijo *"te dejo 2 panes
+keto"*, y el pedido **nunca se registró** porque seguía atascado (`SELECT count(*) FROM pedidos` → 0).
+
+🔴 **Se descartó ensanchar la regex del pedido fantasma, y conviene saber por qué.** El primer impulso
+fue meter *"te dejo"* en `_AFIRMA_PEDIDO`. Sería un error: mirando el turno completo, el bot dijo *"te
+dejo 2 panes keto"* **y acto seguido preguntó la fecha y la zona** — que es justo lo que
+`registrar_pedido` exige y aún no tenía. Es un acuse conversacional legítimo mientras junta los datos;
+una persona diría lo mismo. Frenarlo **mataría ventas buenas**. El pedido fantasma no lo creó la
+frase: lo creó el bucle.
+
+→ **Red nueva `_pregunta_repetida`** (`agent.py`, en los DOS modos). Si el bot lleva **tres** turnos
+haciendo la misma pregunta, escala a la dueña. Compara por **núcleo de palabras** (sin tildes ni
+relleno, Jaccard ≥ 0.6) porque el modelo reformula cada vez. El texto **sí sale** —callarlo dejaría al
+cliente con menos que antes—; lo que cambia es que la dueña se entera y entra a destrabarlo.
+
+⚠️ **El equilibrio era todo el problema:** hay una regla del prompt que ordena cerrar SIEMPRE con
+pregunta, así que **los 12 turnos terminaban preguntando algo**. Si la red confundiera "cerrar con
+pregunta" con "estar atascado", avisaría en cada conversación — y *un detector que grita en falso se
+acaba ignorando* (lección ya pagada dos veces en este repo). Por eso 8 de los 15 tests nuevos son
+casos que **NO** deben disparar: coletillas ("¿algo más?"), preguntas distintas, cerrar con pregunta,
+y lo que escribe el cliente.
+
+**Un detalle que costó y vale anotar:** la primera versión no cazaba el bucle REAL. El modelo escribe
+*"Antes de darte el total, confirma: ¿es para el viernes 8…?"* — y los **dos puntos no parten la
+frase**, así que el preámbulo entraba al núcleo y la similitud caía de 1.0 a 0.5. → Si hay `¿`, la
+pregunta empieza ahí.
+
+**Comprobado tras el arreglo:** turno 8 pregunta, turno 9 repite (no escala: insistir ≠ bucle), turno
+10 → `pedir_ayuda` y la fila queda en la bandeja.
+
+### 🟡 Lo que queda abierto (no es código)
+
+- **11 de 12 respuestas terminan en pregunta** y **8 de 12 turnos no consultaron ninguna herramienta**.
+  Con 41 reglas, 8 copias de la anti-invención y 3 que se autodeclaran "la más importante", lo que sale
+  es un bot obedeciendo un reglamento. Consolidar eso es la siguiente palanca de naturalidad — y es
+  decisión de producto, no de código.
+- **El saludo inyectado** («Buenas tardes 💚 / ¿Qué te gustaría pedir hoy?») suena a formulario después
+  de 9.835 caracteres de personalidad.
+- **Sigue sin respuesta si la masa madre lleva almendra** (pendiente del 2026-08-03). El arreglo de
+  arriba hace que el bot diga los ingredientes que SÍ están en la ficha; los 5 productos que no la
+  declaran siguen sin declararla.
+
+**Verificado:** ruff · compileall · **154 tests** (119 + 15 del bucle + 20 de la salud) · y el simulacro re-corrido
+contra el modelo real demostrando los dos arreglos.
+
+---
+
+## 2026-08-06 — 🔓 LOS TRES BLOQUEADORES DEL MODO DOS (sin migración, sin desplegar)
+
+Lo pidió Erwin tras decidir quedarse en **Haiku 4.5** y descartar montar el sistema `neuronas` de
+BBM. `ROADMAP.md` bloqueaba encender `agente_modo='dos'` por tres cosas; están las tres cerradas.
+**Nada se desplegó y `agente_modo` sigue en `'uno'`.**
+
+### 🔴 1. El reintento del dinero reautorizaba el monto que acababa de rechazar
+
+`agent.py`, el re-prompt del dinero. La línea era:
+
+```python
+hoja.encargo = (msg.get("content") or "").strip() or hoja.encargo
+```
+
+Cuando la red caza un monto inventado, se le rebota un `[SISTEMA]` al Operador para que llame a la
+herramienta y reescriba. **Si el reintento traía solo `tool_calls` y el contenido vacío —el patrón
+NORMAL de un modelo que decide ir a buscar el dato— ese `or` dejaba el encargo VIEJO**, el rechazado.
+Y veinte líneas más abajo:
+
+```python
+u_enc, b_enc = autorizados_por_moneda(hoja.encargo)   # ← del MISMO texto rechazado
+hoja.montos_usd |= u_enc                              # ← a la LISTA BLANCA
+```
+
+O sea: **el monto inventado se autorizaba a sí mismo**, y la Voz podía repetirlo con la red mirando.
+Y por el camino de degradación (`texto or hoja.encargo`), si la Voz fallaba, ese texto le salía al
+cliente **sin que ninguna red lo mirara**.
+
+→ Ahora, si el reintento no trae texto nuevo, **el encargo se vacía**. No se pierde nada: las tools
+del reintento sí quedaron anotadas (con el precio de verdad), así que la Voz conserva los hechos y
+`render()` cae a "Responde con naturalidad". Y se añadió una **segunda pasada de la red** con la
+lista blanca ya enriquecida: si el Operador inventó dinero dos veces, su texto tampoco se hereda.
+
+**No se escala desde ahí a propósito** — el cliente no queda esperando (la Voz escribe desde los
+hechos) y las 5 redes de abajo siguen vigilando la salida. Escalar ahí sería avisar dos veces.
+
+### 🔴 2. Y de paso: el único camino del modo dos que salía MUDO
+
+Arreglar lo de arriba vuelve más alcanzable el caso "ni Voz ni encargo", que terminaba en
+`or RESPUESTA_SEGURA` y **se devolvía sin avisarle a nadie**: comprobado que *"Dame un momentito y te
+confirmo 😊"* no dispara ninguna de las 5 redes, así que el cliente quedaba esperando para siempre.
+Es el mismo hueco que el sexto `return RESPUESTA_SEGURA` del modo uno tuvo hasta el 2026-08-03.
+Cerrarlo era parte del mismo arreglo, no un extra: ahora escala.
+
+### 🔴 3. `info_producto` no daba `precio_texto`: la Voz recibía el precio VACÍO
+
+`hoja.py:_renderizar` busca literalmente la clave `precio_texto`. `ver_catalogo` la traía;
+`info_producto` **no** — devolvía `precio_usd: 25.0` pelado, que no lleva marca de dinero y por tanto
+ni entra en la lista blanca ni se puede mostrar. El bug **solo aparecía al preguntar por UN producto**,
+no al ver el catálogo. Añadida por tamaño e izada a la ficha cuando hay un tamaño único, calcando lo
+que ya hacía `ver_catalogo`.
+
+Y como la hoja solo izaba el precio con **un** tamaño, un producto de varios (las Empanadas: 4u $12 /
+8u $14) le llegaba a la Voz **sin un solo precio**. Se renderizan los tamaños, con vocabulario cerrado:
+presentación y precio, **nunca el `id_para_pedir`** (ese es el bug del "$23" que le llegó a una
+clienta real). Los tamaños agotados no se le ofrecen.
+
+### 🧪 La prueba: primero ROJA contra el código roto
+
+`tests/test_modo_dos.py`, 8 casos. Va en `tests/` y no en un banco **a propósito**: el job `verificar`
+del CI corre `pytest` en CADA push, y los bancos solo tras un despliegue manual. Un bug del carril del
+dinero que solo se caza después de desplegar no está cazado. No hace falta contenedor: `responder`
+deja inyectar `llm`, `voz` y `ejecutar`.
+
+**Se validó revirtiendo el arreglo** — el paso que de verdad importa, porque una prueba que pasa con
+el código roto no vale nada:
+
+```
+CON EL BUG:     2 failed, 6 passed
+  AssertionError: el monto rechazado llegó al cliente: '¡Claro! Son $99 💚'
+  AssertionError: assert '$99' not in 'Son $99, te espero'
+CON EL ARREGLO: 8 passed
+```
+
+Las 6 que siguieron verdes con el bug son el control: incluyen *"si el reintento SÍ reescribe el
+encargo, la venta sigue"* — frenar de más rompe el cobro, y eso también se prueba.
+
+**Verificado:** ruff limpio · compileall · **119 tests de pytest en verde** (111 + 8) · **20 bancos
+corridos contra Postgres 16 + Redis 7.2 locales en Docker** con las 33 migraciones aplicadas, 15 en
+verde · y una prueba de integración por la puerta REAL (`responder()` con `agente_modo='dos'` en la
+BD) donde los tres escenarios pasan y los logs muestran la secuencia esperada.
+
+### 🟡 Un banco que era frágil, no un bug (arreglado)
+
+`probar_dos_agentes` afirmaba `"son $999"` a mano y salía **rojo con el catálogo de la semilla**. No
+era el código: `_lecturas_del_monto("10.00")` devuelve `{10.0, 1000.0}` —la lectura ×100 existe por la
+ambigüedad del decimal español ("1.400" = mil cuatrocientos)—, así que un producto de $10 mete
+`1000.0` en la lista blanca de dólares, y `_calza` tolera el 1%: la banda **990–1010** queda
+autorizada. 999 cae justo ahí. Pasaba en el taller por **suerte de sus precios**. Para un producto que
+se replica cliente por cliente eso no es una red. → Ahora el monto falso **se calcula**: se busca uno
+que la propia red declare fuera de la lista blanca.
+
+⚠️ **Queda anotado el hallazgo de fondo, sin tocarlo:** la tolerancia del 1% alrededor de las lecturas
+×100 abre una banda ciega en montos de 3-4 cifras. Cambiar `_calza` o `_lecturas_del_monto` es tocar el
+núcleo del carril del dinero y merece su propia sesión con A/B — *dejar un bug documentado es mejor que
+romper el cobro*.
+
+### 🟡 Cinco bancos rojos EN LOCAL que no son regresiones (verificado)
+
+Se comprobó con `git stash`: fallan **idénticos** sin mis cambios. Todos se quejan de **datos que la
+dueña cargó a mano en el taller** y la semilla no trae: `probar_media` (ningún producto tiene fotos),
+`probar_datos_bancarios` (Zelle no está en `metodos_pago`), `probar_conocimiento_activo` (ninguna fila
+retirada), `probar_cobro` (no existe "Torta keto"). Y uno que merece mirada aparte:
+`probar_buscador` espera que `_buscar_producto('Empanadas')` devuelva `None` por ambigüedad, pero
+devuelve el producto **exacto** — que es justo lo que `CLAUDE.md` documenta como el arreglo del bug
+$12/$14 ("exacto primero"). **El banco y la regla documentada se contradicen; alguien tiene que decidir
+cuál gana.** No se tocó: `_buscar_producto` es LA función del incidente del cobro.
 
 ---
 

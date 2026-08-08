@@ -209,6 +209,21 @@ def _renderizar(nombre: str, r: dict) -> str:
             v = p.get(campo)
             if v:
                 trozos.append(f"{etiqueta}: {v}" if etiqueta else str(v))
+        # LOS TAMAÑOS, cuando hay MÁS DE UNO. `precio_texto` de arriba solo existe con un tamaño
+        # único (así lo iza `info_producto`, igual que `ver_catalogo`); sin este bloque, preguntar
+        # por un producto de varios tamaños le dejaba a la Voz la ficha SIN UN SOLO PRECIO, y ella
+        # no puede ir a buscarlo. Vocabulario cerrado: solo presentación y precio — el
+        # `id_para_pedir` se queda fuera (es el bug del "$23" y la cabecera de este archivo lo
+        # prohíbe).
+        tamanos = p.get("tamanos") or []
+        if isinstance(tamanos, list) and len(tamanos) > 1:
+            lineas = [
+                f"{t.get('tamano') or 'tamaño'} {t['precio_texto']}"
+                for t in tamanos
+                if isinstance(t, dict) and t.get("precio_texto") and not t.get("agotado")
+            ]
+            if lineas:
+                trozos.append("tamaños: " + ", ".join(lineas))
         return " · ".join(t for t in trozos if t)
 
     if nombre == "registrar_pedido":

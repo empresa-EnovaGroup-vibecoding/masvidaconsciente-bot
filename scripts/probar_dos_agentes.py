@@ -174,10 +174,33 @@ async def main() -> None:
         len(usd_cat) >= 5,
         f"solo {len(usd_cat)} precios ⇒ el bot no podría cotizar nada",
     )
+    # 🔴 EL MONTO FALSO SE **CALCULA**, NO SE HARDCODEA (2026-08-06).
+    #
+    # Esta comprobación tenía escrito `"son $999"` a mano, y con el catálogo de la semilla salía
+    # ROJA — pero NO por un bug del código: por los DATOS.
+    #   · `_lecturas_del_monto("10.00")` devuelve {10.0, **1000.0**} — la lectura ×100 existe para
+    #     la ambigüedad del decimal español ("1.400" = mil cuatrocientos, no 1,4).
+    #   · Un producto de $10.00 mete entonces 1000.0 en la lista blanca de DÓLARES.
+    #   · `_calza` tolera el 1%: max(0.5, 1000×0.01) = 10 ⇒ la banda 990–1010 queda autorizada.
+    #   · Y 999 cae justo ahí.
+    #
+    # O sea: el banco pasaba en el taller por SUERTE de sus precios, y se ponía rojo con cualquier
+    # catálogo que tuviera un ítem de $10. Para un producto que se replica cliente por cliente
+    # (ENOVA_BLUEPRINT), un banco que depende de los datos del cliente no sirve de red.
+    #
+    # Ahora se busca un monto que la propia red declare fuera de la lista blanca, y se comprueba
+    # con ÉSE. Si no hubiera ninguno, el banco lo dice en vez de callarse.
+    falso = next(
+        (c for c in range(31, 400) if ag._dinero_inventado(f"son ${c}", usd_cat, set(), set())),
+        None,
+    )
     check(
-        "y un `id_para_pedir` NO se cuela (exige marca de dinero: el bug del '$23' sigue muerto)",
+        "y un monto que NO está en el catálogo SÍ se caza (el bug del '$23' sigue muerto)",
         not ag._dinero_inventado("cuesta $14", {14.0}, set(), set())
-        and bool(ag._dinero_inventado("son $999", usd_cat, set(), set())),
+        and falso is not None
+        and bool(ag._dinero_inventado(f"son ${falso}", usd_cat, set(), set())),
+        f"no se encontró ningún monto inventable entre $31 y $400 con {len(usd_cat)} precios "
+        "autorizados: la lista blanca del catálogo es demasiado ancha",
     )
 
     print("\n8) LA BANDERA: volver atrás es un UPDATE")

@@ -43,14 +43,22 @@ Las **FASES 0 a 3 ya están hechas y desplegadas**:
 
 ### 🔴 LO QUE FALTA AHORA (en orden)
 
+> ✅ **CERRADO EL 2026-08-06 — los tres bloqueadores del modo DOS (puntos 2, 3 y 4 de esta lista).**
+> El hueco del reintento del dinero, el `precio_texto` que le faltaba a `info_producto`, y la prueba
+> de regresión end-to-end. La prueba se escribió **primero contra el código roto y se comprobó que
+> salía ROJA** (el `$99` inventado llegaba al cliente), y verde después. Detalle y evidencia en
+> `SESIONES.md`, entrada del 2026-08-06.
+>
+> ⚠️ **Eso NO significa "enciendan el modo dos".** Queda una decisión de producto, no de código: el
+> modo dos **añade una llamada al LLM por turno** (~28.200 tokens contra ~26.000 del modo uno), así
+> que es una palanca de CALIDAD y de seguridad —la Voz no puede inventar un precio porque no ve el
+> catálogo—, **no de ahorro**. Y sigue sin haberse probado con tráfico real ni un solo turno.
+
 1. **Mantener el taller en modo UN agente + Haiku.** Es la base activa y estable; no cambiar la arquitectura durante las pruebas actuales.
-2. **Corregir el hueco del modo DOS antes de activarlo:** si el Operador inventa un monto, el reintento puede llamar una herramienta sin redactar un encargo nuevo; el código conserva el monto rechazado y después lo autoriza. Mientras no se arregle, **Operador + Voz queda DESACTIVADO**.
-3. **Completar la Hoja de Hechos del modo DOS:** `info_producto` debe entregar `precio_texto`, igual que `ver_catalogo`, para que la Voz reciba el precio marcado y verificable.
-4. **Crear una prueba de regresión end-to-end para ese caso exacto** (monto falso → reintento con tool call sin texto → precio real) y exigir que falle antes del arreglo y quede verde después. Luego correr de nuevo los **17 bancos**.
-5. **Probar Haiku en conversaciones reales controladas del taller:** cierre, delivery, fotos, datos de pago, comprobante y retomar chat. Revisar la BD/pedido y no solo el texto del chat.
-6. **Antes de promover a producción:** respaldar BD + personalidad viva de netcup; no usar `promover_a_produccion.sh` tal como está; revisar/aplicar las migraciones pendientes; desplegar manualmente en hora valle; conservar inicialmente la lista blanca y hacer pruebas de humo.
-7. **Pendientes de negocio que siguen abiertos:** ordenar Conocimiento y confirmar si el 20% de descuento en divisas aplica también al envío.
-8. **Mantener separados los entornos:** un push a `master` despliega solo el taller; producción se toca únicamente con aprobación humana explícita.
+2. **Probar Haiku en conversaciones reales controladas del taller:** cierre, delivery, fotos, datos de pago, comprobante y retomar chat. Revisar la BD/pedido y no solo el texto del chat.
+3. **Antes de promover a producción:** respaldar BD + personalidad viva de netcup; no usar `promover_a_produccion.sh` tal como está; revisar/aplicar las migraciones pendientes; desplegar manualmente en hora valle; conservar inicialmente la lista blanca y hacer pruebas de humo.
+4. **Pendientes de negocio que siguen abiertos:** ordenar Conocimiento y confirmar si el 20% de descuento en divisas aplica también al envío.
+5. **Mantener separados los entornos:** un push a `master` despliega solo el taller; producción se toca únicamente con aprobación humana explícita.
 
 ---
 

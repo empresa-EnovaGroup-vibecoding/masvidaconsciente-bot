@@ -1003,6 +1003,142 @@ def _texto_previo_del_agente(historial: list | None) -> str:
     )
 
 
+# ─── RED DE LA SALUD: no se dictamina sobre el cuerpo de alguien sin mirar la ficha ────
+#
+# 🔴 EL CASO REAL (simulacro con el bot real, 2026-08-06). Una clienta preguntó "¿es apta para
+# diabéticos la kombucha?" y el bot respondió **"Sí, es apta"** SIN llamar a ninguna herramienta,
+# razonando por su cuenta ("es fermentada y no lleva azúcar refinada").
+# **La ficha dice `apto_diabeticos = 'no'`.** Le dijo que sí a una diabética sobre un producto
+# marcado que no.
+#
+# Y la lección de cómo se llegó aquí: el primer intento fue QUITAR `apto diabéticos` del catálogo
+# del prompt para forzar la consulta. Salió PEOR — sin el dato delante, el modelo no consultó:
+# improvisó. Quitar información no obliga a buscarla, solo deja un hueco que el modelo rellena.
+#
+# Por eso esto es una RED y no una regla: en este repo "el prompt SUGIERE, el código IMPIDE". El
+# dato vuelve al prompt (así el peor caso es una respuesta incompleta, nunca una FALSA) y esta red
+# frena el mensaje si el bot dictamina sobre salud sin haber abierto la ficha en ESTE turno.
+# Se piden DOS señales a la vez, sin exigir orden: el español las coloca en cualquiera
+# ("¿es apto para diabéticos?" pero también "mi mamá es diabética, ¿puede comer eso?").
+# Exigir las dos es lo que evita que salte con "¿tienen algo sin gluten?", que es una pregunta
+# de catálogo y no un dictamen sobre una persona.
+# ⚠️ SIN `\b` AL FINAL, y no es un descuido: estas son RAÍCES, no palabras. Con el `\b` de cierre
+# `diabet` NO calza con "diabeticos" ni `celiac` con "celiacos" — que es justo como escribe la
+# gente. El `\b` inicial sí se queda, para no cazar la raíz dentro de otra palabra.
+_APTITUD = re.compile(
+    r"\b(apt[oa]|pued[eoa]|podr[íi]a|sirve|recomend|buen[oa]|segur[oa]|conviene|"
+    r"da[ñn]a|afecta|perjudic|riesgo|toler)",
+    re.IGNORECASE,
+)
+_CONDICION = re.compile(
+    r"\b(diabet|celiac|cel[íi]ac|gluten|al[eé]rgi|intoleran|embaraz|lactancia|"
+    r"ni[ñn][oa]|beb[ée]|hipertens|presi[óo]n|ri[ñn][óo]n|h[íi]gado|tiroid|colon|gastritis|"
+    r"az[úu]car\s+alta|mi\s+condici[óo]n|mi\s+enfermedad)",
+    re.IGNORECASE,
+)
+_DICTAMINA_APTO = re.compile(
+    r"\b(s[íi]|no)\b[^.?!]{0,40}\b(apt[oa]|puede|sirve|problema)\b"
+    r"|\bes\s+apt[oa]\b|\bno\s+es\s+apt[oa]\b|\bs[íi],?\s+(la|lo|el)\s+puede\b",
+    re.IGNORECASE,
+)
+
+
+def _dictamina_salud_sin_ficha(mensaje_cliente: str, texto: str, consulto_ficha: bool) -> bool:
+    """True si el cliente preguntó si algo le conviene a un cuerpo y el bot SENTENCIÓ sin abrir
+    la ficha del producto en este turno.
+
+    Solo mira el par PREGUNTA→VEREDICTO. Si el bot responde "eso te lo confirmo" no dictamina
+    nada y la red no se mete: prefiere quedarse corta antes que frenar una respuesta honesta.
+    """
+    if consulto_ficha:
+        return False
+    pregunta = mensaje_cliente or ""
+    if not (_APTITUD.search(pregunta) and _CONDICION.search(pregunta)):
+        return False
+    return bool(_DICTAMINA_APTO.search(texto or ""))
+
+
+# ─── RED DEL BUCLE: el bot preguntando lo mismo una y otra vez ────────────────────────
+#
+# 🔴 POR QUÉ EXISTE (simulacro con el bot real, 2026-08-06). Una clienta pidió 2 panes keto. El
+# bot le preguntó si era para el viernes 8 o el 15. Ella preguntó el total → el bot repitió la
+# MISMA pregunta. Ella preguntó cómo pagar → el bot la repitió OTRA VEZ. Tres turnos, dos
+# preguntas distintas de ella, la misma evasiva. Ahí se pierde la venta.
+#
+# El candado que lo causa es CORRECTO y deliberado: sin fecha no se cotiza. Lo que faltaba era la
+# salida cuando el cliente no la da. El bot no tiene forma de saber que ya lo intentó: cada turno
+# nace sin memoria de sus propios intentos.
+#
+# Y es también la raíz del "pedido fantasma" del mismo simulacro: la clienta se fue creyendo que
+# había encargado porque el bot le dijo "te dejo 2 panes keto" y después NUNCA llegó a registrar,
+# atascado en este bucle. No se arregla ensanchando la regex del pedido fantasma — "te dejo 2
+# panes" es un acuse conversacional legítimo mientras junta la fecha, y frenarlo mataría ventas
+# buenas. Se arregla aquí, sacando al bot del bucle.
+_VACIAS = {
+    "que", "qué", "cual", "cuál", "cuales", "cuáles", "para", "por", "con", "sin", "los", "las",
+    "del", "una", "uno", "unos", "unas", "es", "el", "la", "de", "en", "y", "o", "a", "te", "le",
+    "lo", "se", "su", "tu", "mi", "al", "eso", "esa", "ese", "esta", "este", "prefieres", "quieres",
+}
+
+
+def _nucleo_pregunta(frase: str) -> frozenset[str]:
+    """Las palabras con contenido de una pregunta, sin tildes ni relleno."""
+    plano = unicodedata.normalize("NFKD", frase.lower())
+    plano = "".join(c for c in plano if not unicodedata.combining(c))
+    palabras = re.findall(r"[a-z0-9]+", plano)
+    return frozenset(p for p in palabras if len(p) > 2 and p not in _VACIAS)
+
+
+def _preguntas_de(texto: str) -> list[frozenset[str]]:
+    """El núcleo de cada pregunta del texto. Las muy cortas ('¿algo más?') NO cuentan: son
+    coletillas de cierre, no intentos de obtener un dato."""
+    fuera = []
+    for frase in re.split(r"(?<=[.!?\n])\s+", texto or ""):
+        limpia = frase.strip()
+        if not (limpia.endswith("?") or limpia.startswith("¿")):
+            continue
+        # 🔴 EL PREÁMBULO NO ES LA PREGUNTA. El modelo escribe "Antes de darte el total,
+        # confirma: ¿es para el viernes 8 o el 15?" — y como los dos puntos NO parten la frase,
+        # el núcleo se llenaba de "antes/darte/total/confirma" y la comparación con la MISMA
+        # pregunta hecha sin preámbulo caía de 1.0 a 0.5: el bucle real del simulacro no
+        # disparaba. Si hay '¿', la pregunta empieza ahí.
+        if "¿" in limpia:
+            limpia = limpia[limpia.rindex("¿"):]
+        nucleo = _nucleo_pregunta(limpia)
+        if len(nucleo) >= 3:
+            fuera.append(nucleo)
+    return fuera
+
+
+def _pregunta_repetida(texto: str, historial: list | None, veces: int = 2) -> bool:
+    """True si el bot lleva `veces` turnos ANTERIORES haciendo la misma pregunta que ahora.
+
+    Con el default (2), dispara en el TERCER intento: preguntar dos veces es insistir, tres es
+    un bucle. Se compara por NÚCLEO de palabras y no por texto literal, porque el modelo
+    reformula ('¿para el viernes 8 o el 15?' / '¿confirma: viernes 8 o viernes 15?').
+    """
+    ahora = _preguntas_de(texto)
+    if not ahora:
+        return False
+    previos = [
+        _preguntas_de(str(h.get("content") or ""))
+        for h in (historial or [])
+        if isinstance(h, dict) and h.get("role") == "assistant"
+    ]
+    for nucleo in ahora:
+        repeticiones = 0
+        for turno in previos:
+            # Jaccard: dos preguntas son "la misma" si comparten la mayoría de su contenido.
+            if any(
+                len(nucleo & otro) / max(1, len(nucleo | otro)) >= 0.6
+                for otro in turno
+            ):
+                repeticiones += 1
+        if repeticiones >= veces:
+            return True
+    return False
+
+
 def _asegurar_resumenes_exactos(
     texto: str,
     historial: list | None,
@@ -1107,6 +1243,8 @@ async def responder(
         (mensaje_usuario or "")[:60],
     )
     catalogo_ok = False
+    consulto_ficha = False   # ¿se abrió info_producto/buscar_info en este turno? (red de la salud)
+    corregido_salud = False  # ya se le pidió una vez que consulte antes de dictaminar
     # Montos AUTORIZADOS de este turno, YA SEPARADOS POR MONEDA: los precios reales del catálogo
     # (van inyectados en el prompt como "$12.00"), lo que escribió el cliente, y lo que vayan
     # devolviendo las herramientas (el total, el monto en bolívares, la tasa).
@@ -1221,6 +1359,40 @@ async def responder(
                     ejecutar, telefono, "no_se",
                     "el bot iba a decir un monto que no salió del sistema "
                     f"({inventados}); NO se le envió al cliente",
+                    ya_fallo=relevo_imposible,
+                )
+                return RESPUESTA_SEGURA
+
+            # 🔴 RED DE LA SALUD: un veredicto sobre el cuerpo de alguien exige haber abierto la
+            # ficha. El caso real: "¿es apta para diabéticos la kombucha?" → "Sí, es apta", sin
+            # consultar, cuando la ficha dice `apto_diabeticos = 'no'`.
+            if _dictamina_salud_sin_ficha(mensaje_usuario, texto, consulto_ficha):
+                logger.error(
+                    "SALUD SIN FICHA para %s: dictaminó sin abrir info_producto — texto=%r",
+                    telefono, texto[:160],
+                )
+                if not corregido_salud:
+                    corregido_salud = True
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "[SISTEMA] Acabas de decirle a una persona si un producto le conviene "
+                            "para su salud SIN abrir la ficha. No lo deduzcas de que sea fermentado, "
+                            "keto o sin azúcar refinada: eso NO determina si es apto. Llama a "
+                            "`info_producto` de ESE producto y responde con lo que diga su campo "
+                            "'apto para diabéticos' —aunque sea NO— y con sus ingredientes reales. "
+                            "Si la ficha no lo dice, dile con cariño que se lo confirmas. No le "
+                            "menciones al cliente este aviso."
+                        ),
+                    })
+                    continue
+                # Insistió: NO sale un dictamen de salud que nadie verificó.
+                logger.error("SALUD SIN FICHA 2 veces para %s: se escala a la dueña", telefono)
+                await _escalar(
+                    ejecutar, telefono, "reclamo",
+                    "el bot iba a decirle a un cliente si un producto es apto para su condición "
+                    "(diabetes, alergia, celiaquía…) SIN mirar la ficha, y ya se le corrigió una "
+                    "vez. NO se envió. Contéstale tú.",
                     ya_fallo=relevo_imposible,
                 )
                 return RESPUESTA_SEGURA
@@ -1427,6 +1599,20 @@ async def responder(
                 )
                 relevo_imposible = relevo_imposible or not pidio_ayuda
 
+            # RED DEL BUCLE: si es la TERCERA vez que pregunta lo mismo, el cliente no se la va a
+            # contestar. El texto SÍ sale —callarlo dejaría al cliente con menos que antes— pero la
+            # dueña se entera y entra a destrabarlo. Motivo 'no_se': avisa sin pausar el chat.
+            if _pregunta_repetida(texto, historial) and not pidio_ayuda:
+                logger.warning("BUCLE: %s lleva 3 turnos preguntando lo mismo", telefono)
+                pidio_ayuda = await _escalar(
+                    ejecutar, telefono, "no_se",
+                    "el bot lleva TRES turnos preguntando lo mismo y el cliente no se lo contesta: "
+                    "está atascado y la venta se está cayendo. Entra tú y destrábalo. "
+                    f'Lo último que preguntó el cliente: "{(pregunta_cliente or "")[:160]}"',
+                    ya_fallo=relevo_imposible,
+                )
+                relevo_imposible = relevo_imposible or not pidio_ayuda
+
             texto = await _asegurar_catalogo(
                 texto, catalogo_ok, telefono, ejecutar,
                 pidio_catalogo=_pide_catalogo(pregunta_cliente),
@@ -1488,6 +1674,10 @@ async def responder(
                 )
             if nombre_tool == "enviar_catalogo" and isinstance(resultado, dict) and resultado.get("ok"):
                 catalogo_ok = True
+            # ¿Abrió la ficha del producto en ESTE turno? Es lo que la red de la salud exige antes
+            # de dejar pasar un veredicto sobre si algo le conviene al cuerpo de alguien.
+            if nombre_tool in ("info_producto", "buscar_info"):
+                consulto_ficha = True
             if nombre_tool == "pedir_ayuda":
                 # 🔴 SE MIRA EL RESULTADO, NO EL NOMBRE. Hasta hoy bastaba con que el modelo
                 # LLAMARA a la tool para dar el relevo por hecho: si `pedir_ayuda` reventaba a
@@ -1772,13 +1962,49 @@ async def _responder_dos_agentes(
                     n, telefono, str(r_tool["error"])[:200],
                 )
             hoja.anotar_tool(n, r_tool)   # ← el CÓDIGO anota, no el modelo
-        hoja.encargo = (msg.get("content") or "").strip() or hoja.encargo
+        # 🔴 AQUÍ ESTABA EL AGUJERO, Y ERA UN `or`. La línea decía:
+        #
+        #     hoja.encargo = (msg.get("content") or "").strip() or hoja.encargo
+        #
+        # Si el reintento traía SOLO tool_calls y el contenido vacío —que es el patrón NORMAL de un
+        # modelo que decide llamar a una herramienta—, ese `or` dejaba el encargo VIEJO: justo el
+        # que la red acababa de rechazar por inventar dinero. Y veinte líneas más abajo el código
+        # volvía a extraer montos de ESE MISMO texto para meterlos en la lista blanca:
+        # **el monto rechazado se autorizaba a sí mismo.** Y si la Voz fallaba, el texto inventado
+        # le salía al cliente por el camino de degradación.
+        #
+        # Ahora, si el reintento no trae texto nuevo, el encargo se VACÍA. No se pierde nada: las
+        # tools del reintento SÍ quedaron anotadas arriba (con el precio de verdad), así que la Voz
+        # conserva los hechos y `render()` cae a "Responde con naturalidad" — lo correcto.
+        nuevo_encargo = (msg.get("content") or "").strip()
+        if not nuevo_encargo:
+            logger.error(
+                "RE-PROMPT DEL DINERO: el Operador de %s no reescribió el encargo (solo tools). "
+                "Se DESCARTA el encargo rechazado en vez de heredarlo.", telefono,
+            )
+        hoja.encargo = nuevo_encargo
         usd_ok, bs_ok, totales_ok, datos_ok = hoja.listas_blancas()
+        # LA SEGUNDA PASADA DE LA RED, ahora con la lista blanca enriquecida por las tools del
+        # reintento (si el Operador fue a buscar el precio bueno, aquí ya está autorizado). Si
+        # inventó dinero DOS VECES, su texto no se hereda. No se escala desde aquí a propósito: el
+        # cliente NO queda esperando —la Voz escribe desde los hechos de la hoja— y las 5 redes de
+        # abajo siguen vigilando lo que de verdad sale. Escalar acá sería avisar dos veces.
+        if hoja.encargo and _dinero_inventado(
+            hoja.encargo, usd_ok | usd_op, bs_ok | bs_op, totales_ok
+        ):
+            logger.error(
+                "DINERO INVENTADO DOS VECES en el encargo de %s: se descarta %r",
+                telefono, hoja.encargo[:120],
+            )
+            hoja.encargo = ""
 
     # 🔑 EL ENCARGO VALIDADO **PASA A SER VERDAD**. Sin esto, la Voz no podría repetir un precio
     # que el Operador leyó del catálogo (ella no lo ve) y el turno moriría en `RESPUESTA_SEGURA`.
     # Solo entran MONTOS SUELTOS: un TOTAL sigue naciendo únicamente de `registrar_pedido` o
     # `generar_datos_pago`, nunca de una frase.
+    #
+    # ⚠️ Y solo entra un encargo que PASÓ la red: si vino inventado y el Operador no lo arregló,
+    # arriba quedó en "" — así que este bloque ya no puede blanquear un monto rechazado.
     u_enc, b_enc = autorizados_por_moneda(hoja.encargo)
     hoja.montos_usd |= u_enc
     hoja.montos_bs |= b_enc
@@ -1799,7 +2025,7 @@ async def _responder_dos_agentes(
     except Exception:  # noqa: BLE001
         logger.exception("La VOZ falló para %s: sale el encargo del Operador", telefono)
         texto = ""
-    texto = (texto or "").strip() or hoja.encargo.strip() or RESPUESTA_SEGURA
+    texto = (texto or "").strip() or hoja.encargo.strip()
 
     # ── LAS REDES, sobre lo que de verdad le llega al cliente ───────────────────────────
     #
@@ -1812,6 +2038,27 @@ async def _responder_dos_agentes(
     # mira el resultado, reintenta con una sesión nueva y, si tampoco, avisa fuera de la base.
     # Un solo sitio que escala en TODO el archivo: modo uno y modo dos comparten la red.
     relevo_imposible = False  # ¿ya falló la escalada contra la base en ESTE turno?
+
+    # 🔴 NI VOZ NI ENCARGO: el único camino del modo dos que salía MUDO.
+    #
+    # Hasta hoy la línea de arriba terminaba en `or RESPUESTA_SEGURA`, así que este caso devolvía
+    # "Dame un momentito y te confirmo 😊" por el final del turno **sin avisarle a nadie**: ninguna
+    # de las 5 redes de abajo dispara con esa frase (comprobado contra sus regex), y el cliente
+    # quedaba esperando para siempre una confirmación que nadie tenía encargo de mandar. Es el
+    # mismo hueco que el sexto `return RESPUESTA_SEGURA` del modo uno tuvo hasta el 2026-08-03.
+    #
+    # Y el arreglo del re-prompt del dinero (arriba) lo vuelve MÁS alcanzable: ahora el encargo se
+    # vacía cuando el Operador no lo reescribe, en vez de heredar el texto rechazado. Cerrarlo es
+    # parte del mismo arreglo, no un extra.
+    if not texto:
+        logger.error("MODO DOS: sin Voz y sin encargo utilizable para %s", telefono)
+        await _escalar(
+            ejecutar, telefono, "no_se",
+            "el bot se quedó sin nada que decirle al cliente: la Voz no respondió y el encargo del "
+            "Operador no era utilizable. El cliente preguntó: "
+            f'"{(pregunta_cliente or "")[:160]}"',
+        )
+        return RESPUESTA_SEGURA
 
     inventados = _dinero_inventado(texto, usd_ok, bs_ok, totales_ok)
     if inventados:
@@ -1890,6 +2137,20 @@ async def _responder_dos_agentes(
     # está mal escrita — es su test.
     if _suena_a_sistema(texto):
         logger.warning("VOZ: sonó a sistema (¿la hoja está mal escrita?) — %r", texto[:90])
+
+    # LA RED DEL BUCLE, igual que en el modo uno: el bot no puede quedarse preguntando lo mismo
+    # para siempre. Aquí la Voz redacta pero es el Operador quien se atasca; el síntoma es el
+    # mismo y el aviso también.
+    if _pregunta_repetida(texto, historial) and not hoja.escalado:
+        logger.warning("BUCLE (modo dos): %s lleva 3 turnos preguntando lo mismo", telefono)
+        hoja.escalado = await _escalar(
+            ejecutar, telefono, "no_se",
+            "el bot lleva TRES turnos preguntando lo mismo y el cliente no se lo contesta: está "
+            "atascado y la venta se está cayendo. Entra tú y destrábalo. "
+            f'Lo último que preguntó el cliente: "{(pregunta_cliente or "")[:160]}"',
+            ya_fallo=relevo_imposible,
+        )
+        relevo_imposible = relevo_imposible or not hoja.escalado
 
     texto = await _asegurar_catalogo(
         texto, hoja.catalogo_enviado, telefono, ejecutar,
