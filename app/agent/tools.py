@@ -1049,8 +1049,39 @@ def _frase_comparable(texto: str) -> str:
     return _singular(" ".join(plano.split()))
 
 
+def _formas_de_un_nombre(nombre: str) -> list[str]:
+    """Las formas comparables en que un texto puede nombrar este producto.
+
+    Para un nombre simple es una sola: el nombre entero. Para un nombre COMPUESTO con ' o '
+    —UN producto con varias versiones, como el REAL del taller: "Empanadas de masa de yuca o
+    de masa de plátano" (un solo producto, dos fotos etiquetadas)— el bot nunca lo dice entero:
+    confirma "las Empanadas de masa de plátano". Sin estas formas, la red de la foto era CIEGA
+    justo al producto estrella (hueco encontrado por Erwin con el bot real, 2026-08-08). Se
+    aceptan además del nombre entero:
+    - cada alternativa con la CABEZA del nombre delante ("empanada de masa de platano");
+    - la alternativa sola, SOLO si trae ≥2 palabras de contenido (con una sola, " de yuca "
+      calzaría con cualquier frase que mencione yuca);
+    - la cabeza sola ("las Empanadas" = este producto)… si ningún OTRO producto la reclama:
+      esa colisión la resuelve `_productos_nombrados_en`, no esta función.
+    """
+    base = _frase_comparable(nombre)
+    if not base:
+        return []
+    formas = {base}
+    if " o " in base:
+        partes = [p.strip() for p in base.split(" o ") if p.strip()]
+        cabeza = base.split()[0]
+        for p in partes:
+            formas.add(p if p.startswith(f"{cabeza} ") or p == cabeza else f"{cabeza} {p}")
+            if len(_palabras_busqueda(p)) >= 2:
+                formas.add(p)
+        if len(cabeza) >= 4:
+            formas.add(cabeza)
+    return sorted(formas)
+
+
 def _productos_nombrados_en(texto: str, nombres: list[str]) -> list[str]:
-    """Qué nombres COMPLETOS de producto aparecen en un texto libre. El más específico primero.
+    """Qué productos aparecen NOMBRADOS en un texto libre. El más específico primero.
 
     Es la semántica del bug $12/$14 (`_buscar_producto`, CLAUDE.md §8) aplicada al texto del
     BOT en vez de al pedido del cliente:
@@ -1061,22 +1092,74 @@ def _productos_nombrados_en(texto: str, nombres: list[str]) -> list[str]:
       Pero "tenemos Empanadas y Empanadas Keto" sí son DOS menciones: cada una tiene su trozo.
     - Singular/plural con `_singular`: el bot escribe "la empanada keto" y el producto se llama
       'Empanadas Keto'.
+    - Un nombre COMPUESTO con ' o ' cuenta por CUALQUIERA de sus formas (`_formas_de_un_nombre`)
+      y sus dos versiones son EL MISMO producto: "de plátano" y "de yuca" en la misma frase NO
+      son ambigüedad — ambigüedad es solo entre productos DISTINTOS.
+    - Una forma que reclaman DOS productos distintos se DESCARTA entera: con "Empanadas" y
+      "Empanadas de masa de yuca o …" en el mismo catálogo, "las empanadas" a secas no calza
+      con ninguno — mejor ninguna foto que la del producto equivocado.
     """
     campo = f" {_frase_comparable(texto)} "
+    # forma comparable → índice del ÚNICO producto que la reclama (colisiones fuera).
+    duenos: dict[str, int] = {}
+    repetidas: set[str] = set()
+    for i, nombre in enumerate(nombres):
+        for forma in _formas_de_un_nombre(nombre):
+            if forma in duenos and duenos[forma] != i:
+                repetidas.add(forma)
+            else:
+                duenos[forma] = i
     encontrados: list[str] = []
-    # Orden: nombre comparable más LARGO primero (más específico), y alfabético de desempate
-    # para que el resultado no dependa del orden en que llegó la lista.
-    for nombre in sorted(nombres, key=lambda n: (-len(_frase_comparable(n)), n)):
-        objetivo = _frase_comparable(nombre)
-        if not objetivo:
+    vistos: set[int] = set()
+    # Orden: forma más LARGA primero (más específica), y alfabético de desempate para que el
+    # resultado no dependa del orden en que llegó la lista.
+    for forma in sorted(duenos, key=lambda f: (-len(f), f)):
+        if forma in repetidas:
             continue
-        marca = f" {objetivo} "
+        marca = f" {forma} "
         if marca in campo:
             # Se TACHA lo calzado (todas sus apariciones): ese trozo ya es de ESTE producto y
-            # un nombre más corto no puede volver a calzar dentro.
+            # una forma más corta no puede volver a calzar dentro.
             campo = campo.replace(marca, " § ")
-            encontrados.append(nombre)
+            i = duenos[forma]
+            if i not in vistos:
+                vistos.add(i)
+                encontrados.append(nombres[i])
     return encontrados
+
+
+def etiqueta_del_cliente(nombre: str, mensaje_cliente: str) -> str | None:
+    """Si el producto es COMPUESTO (' o ') y las palabras del CLIENTE calzan con UNA sola de
+    sus versiones, devuelve esas palabras distintivas — listas para `enviar_fotos_producto`
+    (parámetro `etiqueta`: "las PALABRAS DEL CLIENTE", dice su docstring, y `_calza_etiqueta`
+    las compara por prefijo de palabra contra el nombre que la dueña le puso a cada foto).
+
+    Se devuelven SOLO los tokens distintivos ("platano"), no el mensaje crudo: `_calza_etiqueta`
+    exige que TODAS las palabras del pedido calcen, así que un "la de platano porfa" entero
+    haría fallar el filtro por el "porfa" y el cliente recibiría la foto general (o ninguna).
+
+    None cuando no aplica — producto simple, el cliente no dijo versión, o nombró LAS DOS
+    ("mejor la de yuca… no, la de plátano"): ahí van las fotos sin filtrar, como siempre.
+    La CABEZA del nombre no distingue ("las empanadas" no elige masa), y los tokens que
+    comparten todas las versiones tampoco ("masa" está en ambas).
+    """
+    base = _frase_comparable(nombre or "")
+    if " o " not in base:
+        return None
+    partes = [p.strip() for p in base.split(" o ") if p.strip()]
+    if len(partes) < 2:
+        return None
+    cabeza = base.split()[0]
+    tokens_por_version = [set(_palabras_busqueda(p)) for p in partes]
+    comunes = set.intersection(*tokens_por_version)
+    distintivos = [(t - comunes) - {cabeza} for t in tokens_por_version]
+    pedido = set(_palabras_busqueda(_frase_comparable(mensaje_cliente or "")))
+    if not pedido:
+        return None
+    calzadas = [d for d in distintivos if pedido & d]
+    if len(calzadas) != 1:
+        return None
+    return " ".join(sorted(pedido & calzadas[0]))
 
 
 async def producto_enfocado(texto: str) -> str | None:

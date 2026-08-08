@@ -81,6 +81,40 @@ RESTAURADAS:      208 passed (154 + 54) · ruff limpio · compileall OK
 turnos contra el taller con la rama puesta — misma máquina, una variable — y mirar
 `SELECT items, total FROM pedidos`, no el texto.
 
+### 🔁 Segunda ronda el mismo día: Erwin probó la rama con el bot real y salieron DOS huecos
+
+La conversación que los destapó (simulador): el bot ofreció las dos masas, la clienta dijo
+*"de platano"*, y la respuesta fue *"Listo. Las Empanadas de masa de plátano vienen en paquete
+de 8 unidades. ¿Cuántos paquetes quieres y de qué relleno?"* — **sin foto y sin un solo dato de
+la ficha**. Confirma como recepcionista, no vende.
+
+**1. La red de la foto era CIEGA a los nombres compuestos.** En la BD del taller el producto se
+llama **"Empanadas de masa de yuca o de masa de plátano"** (UNO solo, dos fotos etiquetadas), y
+el bot nunca lo dice entero: confirma una VERSIÓN. → `_formas_de_un_nombre` (tools.py): un
+nombre con " o " calza además por cada alternativa con la cabeza delante ("empanada de masa de
+platano"), la alternativa sola si trae ≥2 palabras de contenido, y la cabeza sola ("las
+empanadas"). Las dos versiones son EL MISMO producto (una mención, no ambigüedad — ambigüedad
+es solo entre productos DISTINTOS), y una forma que reclaman DOS productos distintos se
+descarta entera (doctrina $12/$14: mejor ninguna foto que la equivocada). Y cuando el CLIENTE
+dijo cuál versión quiere, `etiqueta_del_cliente` extrae el token distintivo ("platano" — no el
+mensaje crudo: `_calza_etiqueta` exige que TODAS las palabras calcen y un "porfa" lo rompería)
+y viaja como `etiqueta` a `enviar_fotos_producto`, que ya sabía filtrar por el nombre que la
+dueña le puso a cada foto.
+
+**2. RED DEL PITCH (`_elige_entre_opciones` + `_confirma_sin_pitch`, la tercera hermana del
+mecanismo).** Cliente que ELIGE (el bot acababa de preguntar "¿cuál…?" y él contesta corto — una
+pregunta pide un dato, un número contesta CUÁNTOS) + confirmación PLANA (afirma algo y ningún
+dato de ficha; la presentación "paquete de 8" es transaccional y NO cuenta, y "masa"/"harina" a
+secas tampoco porque viven en el NOMBRE del producto) + sin `info_producto` en el turno → UNA
+corrección [SISTEMA]: abrir la ficha y tejer 1-2 datos REALES, corto y sin listas, manteniendo
+el avance. Si insiste, sale igual — venta, no salud. Una sola corrección conversacional por
+turno (si la asesoría ya gastó la suya, esta no se apila).
+
+**Validación por reversión, las dos:** formas compuestas anuladas → `4 failed, 33 passed`
+(`assert [] == ['Empanadas d…a de plátano']`); etiqueta anulada → `4 failed, 33 passed`;
+elección anulada → `3 failed, 43 passed` (`assert salida == CONFIRMACION_CON_PITCH` rojo).
+Restauradas: **237 en verde** (208 + 29) · ruff limpio · compileall OK.
+
 ---
 
 ## 2026-08-06 (2) — 🗣️ LO QUE ENCONTRÓ UN SIMULACRO CON EL BOT REAL

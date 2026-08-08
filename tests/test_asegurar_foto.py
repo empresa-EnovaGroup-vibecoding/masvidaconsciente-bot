@@ -18,9 +18,14 @@ import pytest
 
 from app.agent import agent as ag
 from app.agent.agent import _asegurar_foto, _es_charla_pura
-from app.agent.tools import _productos_nombrados_en
+from app.agent.tools import _productos_nombrados_en, etiqueta_del_cliente
 
 NOMBRES = ["Empanadas", "Empanadas Keto", "Pan de Sándwich", "Quesillo", "Galletas New York"]
+
+# El nombre REAL del taller: UN producto, dos versiones, dos fotos etiquetadas. El bot jamás lo
+# dice entero — confirma "las Empanadas de masa de plátano" — y la primera versión de esta red
+# era CIEGA a eso (hueco encontrado por Erwin con el bot real, 2026-08-08).
+COMPUESTO = "Empanadas de masa de yuca o de masa de plátano"
 
 
 # ══════════════════════════════════════════════════════════════════════════════════
@@ -60,6 +65,52 @@ def test_palabra_completa_jamas_substring():
 def test_sin_menciones_lista_vacia():
     assert _productos_nombrados_en("no tenemos eso, mira el catálogo 💚", NOMBRES) == []
     assert _productos_nombrados_en("", NOMBRES) == []
+
+
+def test_el_caso_real_del_taller_nombre_compuesto():
+    """El turno EXACTO en que la foto no salió: el bot confirma una VERSIÓN del nombre
+    compuesto ("las Empanadas de masa de plátano") y eso tiene que resolver al producto."""
+    frase = "Listo. Las Empanadas de masa de plátano vienen en paquete de 8 unidades. ¿Cuántos paquetes quieres y de qué relleno?"
+    assert _productos_nombrados_en(frase, [COMPUESTO, "Pan Keto", "Quesillo"]) == [COMPUESTO]
+
+
+def test_las_dos_versiones_del_mismo_producto_no_son_ambiguedad():
+    """El primer turno real: el bot ofrece las DOS masas. Son EL MISMO producto — una sola
+    mención, no dos (ambigüedad es solo entre productos DISTINTOS). Que ahí no salga foto lo
+    decide el guard del "¿cuál…?", no un falso empate."""
+    frase = (
+        "Tengo Empanadas de masa de plátano y Empanadas de masa de yuca — ambas son "
+        "saludables y sin gluten. ¿De cuál prefieres?"
+    )
+    assert _productos_nombrados_en(frase, [COMPUESTO, "Pan Keto"]) == [COMPUESTO]
+
+
+def test_la_cabeza_sola_tambien_resuelve_el_compuesto():
+    """"las empanadas" a secas = el producto compuesto, cuando nadie más reclama ese nombre."""
+    assert _productos_nombrados_en("Perfecto, las empanadas entonces 💚", [COMPUESTO, "Quesillo"]) == [COMPUESTO]
+
+
+def test_forma_en_colision_entre_productos_distintos_se_descarta():
+    """Si además del compuesto existiera un producto "Empanadas" a secas, "las empanadas" la
+    reclamarían LOS DOS: la forma se descarta entera. Mejor ninguna foto que la equivocada
+    (la doctrina del bug $12/$14)."""
+    assert _productos_nombrados_en("Perfecto, las empanadas entonces 💚", ["Empanadas", COMPUESTO]) == []
+
+
+@pytest.mark.parametrize(("mensaje", "esperada"), [
+    ("de platano", "platano"),                    # el turno real de Erwin
+    ("la de yuca porfa 🙏", "yuca"),              # con relleno alrededor: solo el token distintivo
+    ("las empanadas", None),                      # la cabeza no elige versión
+    ("mejor la de yuca no la de platano", None),  # nombró las dos: van las generales
+    ("", None),
+])
+def test_etiqueta_del_cliente_en_nombre_compuesto(mensaje: str, esperada: str | None):
+    assert etiqueta_del_cliente(COMPUESTO, mensaje) == esperada
+
+
+def test_etiqueta_solo_existe_en_nombres_compuestos():
+    """En un producto simple no hay versiones que elegir: nunca se filtra nada."""
+    assert etiqueta_del_cliente("Pan Keto", "de platano") is None
 
 
 @pytest.mark.parametrize(("mensaje", "es_charla"), [
@@ -120,6 +171,19 @@ async def test_dispara_y_manda_la_foto_del_producto_exacto(monkeypatch):
     código, con el nombre EXACTO resuelto (jamás uno parecido)."""
     llamadas, _ = await _correr_red(monkeypatch)
     assert llamadas == [("enviar_fotos_producto", {"nombre": "Quesillo"})]
+
+
+async def test_cuando_el_cliente_dijo_la_version_la_etiqueta_viaja(monkeypatch):
+    """EL CASO DE ERWIN: producto compuesto, el cliente eligió "de platano" → la llamada lleva
+    `etiqueta` y la herramienta manda la foto que la dueña nombró así, jamás la de la otra
+    masa. Sin versión elegida no se filtra nada (el caso de arriba: sin `etiqueta`)."""
+    llamadas, _ = await _correr_red(
+        monkeypatch,
+        texto="Listo. Las Empanadas de masa de plátano vienen en paquete de 8 unidades. ¿Cuántos paquetes quieres y de qué relleno?",
+        mensaje="de platano",
+        enfocado=COMPUESTO,
+    )
+    assert llamadas == [("enviar_fotos_producto", {"nombre": COMPUESTO, "etiqueta": "platano"})]
 
 
 async def test_con_la_tool_apagada_la_red_no_existe(monkeypatch):
@@ -229,7 +293,10 @@ def modo_uno(monkeypatch):
     return None
 
 
-async def _correr_turno(monkeypatch, *, activas=None, ya_mostrada=False, enfocado="Quesillo"):
+async def _correr_turno(
+    monkeypatch, *, activas=None, ya_mostrada=False, enfocado="Quesillo",
+    mensaje="ok esa quiero",
+):
     """Un turno real de modo uno cuyo texto final queda enfocado en el Quesillo."""
     llamadas: list[tuple[str, dict]] = []
 
@@ -258,7 +325,7 @@ async def _correr_turno(monkeypatch, *, activas=None, ya_mostrada=False, enfocad
         return {"enviadas": 2, "producto": "Quesillo"}
 
     salida = await ag.responder(
-        "584240000000", "ok esa quiero", list(HISTORIAL), "Ana",
+        "584240000000", mensaje, list(HISTORIAL), "Ana",
         llm=llm, ejecutar=ejecutar,
     )
     return salida, llamadas
@@ -268,6 +335,13 @@ async def test_por_la_puerta_real_la_foto_sale_y_el_texto_no_se_toca(monkeypatch
     salida, llamadas = await _correr_turno(monkeypatch)
     assert ("enviar_fotos_producto", {"nombre": "Quesillo"}) in llamadas
     assert salida == TEXTO_ENFOCADO, "la red suma una foto: el texto JAMÁS se toca"
+
+
+async def test_por_la_puerta_real_la_etiqueta_del_compuesto_viaja(monkeypatch):
+    """El flujo completo del caso de Erwin: cliente "de platano", producto compuesto → la
+    llamada sale con `etiqueta` para que la foto sea la de ESA masa."""
+    _, llamadas = await _correr_turno(monkeypatch, enfocado=COMPUESTO, mensaje="de platano")
+    assert ("enviar_fotos_producto", {"nombre": COMPUESTO, "etiqueta": "platano"}) in llamadas
 
 
 async def test_por_la_puerta_real_apagada_no_existe(monkeypatch):
