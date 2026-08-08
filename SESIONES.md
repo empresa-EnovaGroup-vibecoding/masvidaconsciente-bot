@@ -45,13 +45,33 @@ La causa no era descuido del modelo: `_catalogo_bloque` metía en el prompt `apt
 un producto que no lleva lo que le piden). O sea, el prompt entregaba el veredicto sin los hechos. La
 regla @info_producto ya ordenaba consultar; esta línea daba una vía para no hacerlo.
 
-→ **`apto_diabeticos` ya no viaja en el catálogo del prompt**, y se añadió la regla `2b` (salud y
-alérgenos): para eso hay que llamar a `info_producto`, que devuelve el apto **y** la descripción
-juntos, y hay que **nombrar los ingredientes que importan**. Cuesta una llamada más, en el único
-carril donde el error se paga con la salud de alguien.
+**PRIMER INTENTO, Y SALIÓ PEOR — vale contarlo entero.** Se quitó `apto diabéticos` del catálogo del
+prompt para *forzar* la consulta, y se añadió la regla `2b`. El caso del pan mejoró:
+`tools: ['info_producto']` y la respuesta pasó a *"Sí, es apto. Está hecho con **harina de almendra**
+y coco…"*.
 
-**Comprobado con el mismo simulacro después del arreglo:** `tools: ['info_producto']` y la respuesta
-pasó a *"Sí, es apto. Está hecho con **harina de almendra** y coco, aceite de aguacate…"*.
+🔴 **Pero un segundo simulacro lo rompió por el otro lado.** Preguntada por la **Kombucha**
+(`apto_diabeticos = 'no'`), sin el dato delante el modelo **no consultó: improvisó** — *"Sí, es apta,
+es fermentada y no lleva azúcar refinada"*. **Le dijo que SÍ a una diabética sobre un producto
+marcado que NO.** Antes del cambio habría leído `apto diabéticos: no` del prompt y habría acertado.
+
+**Quitar información no obliga a buscarla: solo deja un hueco que el modelo rellena razonando.**
+
+→ **Lo que quedó, y es la doctrina del repo (*"el prompt SUGIERE, el código IMPIDE"*):** el dato
+**vuelve** al prompt —así el peor caso es una respuesta incompleta, nunca una FALSA— y quien obliga a
+consultar es una **RED nueva**, `_dictamina_salud_sin_ficha` (`agent.py`): si el cliente pregunta si
+algo le conviene a un cuerpo (diabetes, celiaquía, alergia, embarazo, un niño…) y el bot **sentencia**
+sin haber abierto `info_producto` en ese turno, se le corrige una vez y, si insiste, **no sale y
+escala**. La regla `2b` se queda como refuerzo.
+
+**Comprobado con el bot real, los tres casos:**
+- Kombucha (apto=**no**) → `['info_producto']` + *"**No**, la kombucha no es apta para diabéticos"* ✅
+- Empanadas (apto=**sí**) → `['info_producto']` + *"Son aptas… masa de yuca o plátano, relleno de…"* ✅
+- Venta normal y saludo → la red **no se mete** (sin llamadas de más) ✅
+
+⚠️ Y un detalle de regex que costó y volverá a morder: `\b(diabet|celiac)\b` **no** calza con
+"diabeticos" ni "celiacos" — el `\b` de cierre exige que la palabra termine ahí. Son **raíces**, no
+palabras: el `\b` va solo al principio.
 
 ### 🔴 2. El bucle — y por qué el "pedido fantasma" NO se arregla donde parecía
 
@@ -99,7 +119,7 @@ pregunta empieza ahí.
   arriba hace que el bot diga los ingredientes que SÍ están en la ficha; los 5 productos que no la
   declaran siguen sin declararla.
 
-**Verificado:** ruff · compileall · **134 tests** (119 + 15 de la red nueva) · y el simulacro re-corrido
+**Verificado:** ruff · compileall · **154 tests** (119 + 15 del bucle + 20 de la salud) · y el simulacro re-corrido
 contra el modelo real demostrando los dos arreglos.
 
 ---

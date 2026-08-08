@@ -1003,6 +1003,61 @@ def _texto_previo_del_agente(historial: list | None) -> str:
     )
 
 
+# ─── RED DE LA SALUD: no se dictamina sobre el cuerpo de alguien sin mirar la ficha ────
+#
+# 🔴 EL CASO REAL (simulacro con el bot real, 2026-08-06). Una clienta preguntó "¿es apta para
+# diabéticos la kombucha?" y el bot respondió **"Sí, es apta"** SIN llamar a ninguna herramienta,
+# razonando por su cuenta ("es fermentada y no lleva azúcar refinada").
+# **La ficha dice `apto_diabeticos = 'no'`.** Le dijo que sí a una diabética sobre un producto
+# marcado que no.
+#
+# Y la lección de cómo se llegó aquí: el primer intento fue QUITAR `apto diabéticos` del catálogo
+# del prompt para forzar la consulta. Salió PEOR — sin el dato delante, el modelo no consultó:
+# improvisó. Quitar información no obliga a buscarla, solo deja un hueco que el modelo rellena.
+#
+# Por eso esto es una RED y no una regla: en este repo "el prompt SUGIERE, el código IMPIDE". El
+# dato vuelve al prompt (así el peor caso es una respuesta incompleta, nunca una FALSA) y esta red
+# frena el mensaje si el bot dictamina sobre salud sin haber abierto la ficha en ESTE turno.
+# Se piden DOS señales a la vez, sin exigir orden: el español las coloca en cualquiera
+# ("¿es apto para diabéticos?" pero también "mi mamá es diabética, ¿puede comer eso?").
+# Exigir las dos es lo que evita que salte con "¿tienen algo sin gluten?", que es una pregunta
+# de catálogo y no un dictamen sobre una persona.
+# ⚠️ SIN `\b` AL FINAL, y no es un descuido: estas son RAÍCES, no palabras. Con el `\b` de cierre
+# `diabet` NO calza con "diabeticos" ni `celiac` con "celiacos" — que es justo como escribe la
+# gente. El `\b` inicial sí se queda, para no cazar la raíz dentro de otra palabra.
+_APTITUD = re.compile(
+    r"\b(apt[oa]|pued[eoa]|podr[íi]a|sirve|recomend|buen[oa]|segur[oa]|conviene|"
+    r"da[ñn]a|afecta|perjudic|riesgo|toler)",
+    re.IGNORECASE,
+)
+_CONDICION = re.compile(
+    r"\b(diabet|celiac|cel[íi]ac|gluten|al[eé]rgi|intoleran|embaraz|lactancia|"
+    r"ni[ñn][oa]|beb[ée]|hipertens|presi[óo]n|ri[ñn][óo]n|h[íi]gado|tiroid|colon|gastritis|"
+    r"az[úu]car\s+alta|mi\s+condici[óo]n|mi\s+enfermedad)",
+    re.IGNORECASE,
+)
+_DICTAMINA_APTO = re.compile(
+    r"\b(s[íi]|no)\b[^.?!]{0,40}\b(apt[oa]|puede|sirve|problema)\b"
+    r"|\bes\s+apt[oa]\b|\bno\s+es\s+apt[oa]\b|\bs[íi],?\s+(la|lo|el)\s+puede\b",
+    re.IGNORECASE,
+)
+
+
+def _dictamina_salud_sin_ficha(mensaje_cliente: str, texto: str, consulto_ficha: bool) -> bool:
+    """True si el cliente preguntó si algo le conviene a un cuerpo y el bot SENTENCIÓ sin abrir
+    la ficha del producto en este turno.
+
+    Solo mira el par PREGUNTA→VEREDICTO. Si el bot responde "eso te lo confirmo" no dictamina
+    nada y la red no se mete: prefiere quedarse corta antes que frenar una respuesta honesta.
+    """
+    if consulto_ficha:
+        return False
+    pregunta = mensaje_cliente or ""
+    if not (_APTITUD.search(pregunta) and _CONDICION.search(pregunta)):
+        return False
+    return bool(_DICTAMINA_APTO.search(texto or ""))
+
+
 # ─── RED DEL BUCLE: el bot preguntando lo mismo una y otra vez ────────────────────────
 #
 # 🔴 POR QUÉ EXISTE (simulacro con el bot real, 2026-08-06). Una clienta pidió 2 panes keto. El
@@ -1188,6 +1243,8 @@ async def responder(
         (mensaje_usuario or "")[:60],
     )
     catalogo_ok = False
+    consulto_ficha = False   # ¿se abrió info_producto/buscar_info en este turno? (red de la salud)
+    corregido_salud = False  # ya se le pidió una vez que consulte antes de dictaminar
     # Montos AUTORIZADOS de este turno, YA SEPARADOS POR MONEDA: los precios reales del catálogo
     # (van inyectados en el prompt como "$12.00"), lo que escribió el cliente, y lo que vayan
     # devolviendo las herramientas (el total, el monto en bolívares, la tasa).
@@ -1302,6 +1359,40 @@ async def responder(
                     ejecutar, telefono, "no_se",
                     "el bot iba a decir un monto que no salió del sistema "
                     f"({inventados}); NO se le envió al cliente",
+                    ya_fallo=relevo_imposible,
+                )
+                return RESPUESTA_SEGURA
+
+            # 🔴 RED DE LA SALUD: un veredicto sobre el cuerpo de alguien exige haber abierto la
+            # ficha. El caso real: "¿es apta para diabéticos la kombucha?" → "Sí, es apta", sin
+            # consultar, cuando la ficha dice `apto_diabeticos = 'no'`.
+            if _dictamina_salud_sin_ficha(mensaje_usuario, texto, consulto_ficha):
+                logger.error(
+                    "SALUD SIN FICHA para %s: dictaminó sin abrir info_producto — texto=%r",
+                    telefono, texto[:160],
+                )
+                if not corregido_salud:
+                    corregido_salud = True
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "[SISTEMA] Acabas de decirle a una persona si un producto le conviene "
+                            "para su salud SIN abrir la ficha. No lo deduzcas de que sea fermentado, "
+                            "keto o sin azúcar refinada: eso NO determina si es apto. Llama a "
+                            "`info_producto` de ESE producto y responde con lo que diga su campo "
+                            "'apto para diabéticos' —aunque sea NO— y con sus ingredientes reales. "
+                            "Si la ficha no lo dice, dile con cariño que se lo confirmas. No le "
+                            "menciones al cliente este aviso."
+                        ),
+                    })
+                    continue
+                # Insistió: NO sale un dictamen de salud que nadie verificó.
+                logger.error("SALUD SIN FICHA 2 veces para %s: se escala a la dueña", telefono)
+                await _escalar(
+                    ejecutar, telefono, "reclamo",
+                    "el bot iba a decirle a un cliente si un producto es apto para su condición "
+                    "(diabetes, alergia, celiaquía…) SIN mirar la ficha, y ya se le corrigió una "
+                    "vez. NO se envió. Contéstale tú.",
                     ya_fallo=relevo_imposible,
                 )
                 return RESPUESTA_SEGURA
@@ -1583,6 +1674,10 @@ async def responder(
                 )
             if nombre_tool == "enviar_catalogo" and isinstance(resultado, dict) and resultado.get("ok"):
                 catalogo_ok = True
+            # ¿Abrió la ficha del producto en ESTE turno? Es lo que la red de la salud exige antes
+            # de dejar pasar un veredicto sobre si algo le conviene al cuerpo de alguien.
+            if nombre_tool in ("info_producto", "buscar_info"):
+                consulto_ficha = True
             if nombre_tool == "pedir_ayuda":
                 # 🔴 SE MIRA EL RESULTADO, NO EL NOMBRE. Hasta hoy bastaba con que el modelo
                 # LLAMARA a la tool para dar el relevo por hecho: si `pedir_ayuda` reventaba a

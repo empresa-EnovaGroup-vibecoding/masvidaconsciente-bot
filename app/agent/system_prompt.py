@@ -473,22 +473,27 @@ async def _catalogo_bloque() -> str:
                 interno.append(f"dura {p.duracion}")
             if p.se_congela:
                 interno.append(f"se congela: {p.se_congela}")
-            # 🔴 `apto_diabeticos` NO VIAJA AQUÍ, Y ES EL ARREGLO DEL 2026-08-06.
+            # 🔴 `apto_diabeticos` SE QUEDA — y el intento de quitarlo, del mismo 2026-08-06, es
+            # la razón por la que este comentario existe. Vale contarlo entero.
             #
-            # Hasta hoy esta ficha traía `apto diabéticos: sí` pero NO los ingredientes (la
-            # `descripcion` se excluye a propósito, tres líneas más arriba, para que el bot no
-            # ofrezca de memoria un producto que no lleva lo que el cliente pidió).
+            # EL PROBLEMA REAL: esta ficha trae el veredicto (`apto diabéticos: sí`) pero NO los
+            # ingredientes (la `descripcion` se excluye a propósito, arriba, para que el bot no
+            # ofrezca de memoria un producto que no lleva lo que le piden). Con eso, una clienta
+            # preguntó por su MAMÁ DIABÉTICA y el bot contestó "Sí, es apto" sin consultar nada:
+            # acertó, pero era ciego a que ese pan lleva HARINA DE ALMENDRA.
             #
-            # O sea: el prompt le entregaba la CONCLUSIÓN sin la EVIDENCIA. En el simulacro del
-            # 2026-08-06 una clienta preguntó por su MAMÁ DIABÉTICA y el bot respondió "Sí, es apto"
-            # sin llamar a ninguna herramienta — acertó, porque el dato estaba aquí, pero era
-            # estructuralmente CIEGO a que ese pan lleva HARINA DE ALMENDRA. No omitió el alérgeno:
-            # no lo tenía. Y la regla @info_producto ya le ordenaba consultar; esta línea le daba
-            # una vía para no hacerlo.
+            # EL INTENTO FALLIDO: quitar esta línea para forzar la consulta. Se probó con el bot
+            # real y salió PEOR. Preguntada por la Kombucha (`apto_diabeticos = 'no'`), sin el dato
+            # delante el modelo NO llamó a la herramienta: improvisó —"es fermentada y no lleva
+            # azúcar refinada"— y respondió **SÍ a una pregunta cuya respuesta es NO**. Quitar el
+            # dato no obliga a consultar: solo deja un hueco que el modelo rellena razonando.
             #
-            # Quitándola, una pregunta de salud SOLO se puede responder tras `info_producto` — que
-            # devuelve el apto Y la descripción JUNTOS. Cuesta una llamada más; en el único carril
-            # donde el error se paga con la salud de alguien, se paga.
+            # LO QUE SÍ FUNCIONA, y es la doctrina del repo ("el prompt SUGIERE, el código IMPIDE"):
+            # el dato se queda —así el peor caso es una respuesta incompleta, nunca una FALSA— y
+            # quien obliga a consultar es una RED en `agent.py` (`_afirma_apto_salud`), que frena el
+            # mensaje si el bot dictamina sobre salud sin haber llamado a `info_producto`.
+            if p.apto_diabeticos:
+                interno.append(f"apto diabéticos: {p.apto_diabeticos}")
             if p.info:
                 interno.append(f"otro: {p.info}")
             cab += "\n    [SOLO PARA TI, NO lo digas salvo que lo pregunten]: " + " | ".join(interno)
