@@ -22,6 +22,67 @@
 
 ---
 
+## 2026-08-08 (2) — 🛒 LA ASESORÍA DEJA DE SER DE MEMORIA Y LA FOTO SALE SOLA (rama `fix/asesoria-proactiva`, sin desplegar)
+
+Lo motivó el **smoke medido de 7 turnos contra el bot real** (`ASESORIA_smoke_2026-08-08.md`,
+carpeta padre), corrido DOS veces con el mismo resultado: **6 de 7 turnos sin consultar ninguna
+herramienta**, **0 fotos de producto**, **0 pedidos en la BD**. La clienta dijo *"es para
+compartir en familia el domingo, algo dulce"* y el bot recitó ocho categorías del prompt y
+preguntó *"¿cuántas personas?"*; después dijo *"ok esa quiero"*, *"1"*, *"para el domingo,
+retiro yo"* — **estaba comprando** — y le preguntaron "¿cuál te gustó?" cuatro veces. Las tres
+quejas ("asesoría pobre", "no manda fotos", "no cierra") eran el mismo fallo.
+
+**Por qué en CÓDIGO y no en el prompt:** las reglas que ordenan consultar y mostrar YA están en
+el prompt, en mayúsculas y con 🔥 (la 57 y la de FOTOS/VIDEO) — y el modelo las ignora, medido.
+Es la doctrina del repo: *el prompt SUGIERE, el código IMPIDE*. No se añadió ni una regla nueva
+al prompt, ni se tocó la personalidad, ni la temperatura, ni ninguna red existente. Todo ADITIVO.
+
+### 🧭 RED DE LA ASESORÍA (`_pide_asesoria` + hook en `responder`, modo uno)
+
+Si el cliente pide recomendación (patrones venezolanos: "qué me recomiendas", "no sé qué
+llevar", "algo dulce", "para compartir/regalar/un cumpleaños"…) y el bot produce su respuesta
+final con **CERO herramientas ejecutadas en el turno**, se le corrige UNA vez con un `[SISTEMA]`
+(el mecanismo exacto de `_dictamina_salud_sin_ficha`): que llame a `ver_catalogo`/`info_producto`
+y recomiende 1-2 productos CONCRETOS por nombre. **Si insiste, el texto sale IGUAL** — esto es
+venta, no salud: jamás se bloquea ni se escala por esto, y eso también está probado. Guardas:
+producto concreto nombrado, saludo/gracias, pedir el catálogo (ese turno es del PDF, regla 59),
+cualquier tool usada (incluida `enviar_catalogo`), tools de consulta apagadas (la lección de
+"EL REGAÑO SABE SI LA HERRAMIENTA EXISTE"), una sola corrección por turno. ⚠️ "para el domingo,
+retiro yo" (turno 6 del smoke) NO dispara: los días de la semana no son ocasión — es la fecha
+de entrega de alguien que ya eligió.
+
+### 🖼️ RED DE LA FOTO (`_asegurar_foto`, familia de `_asegurar_catalogo`)
+
+Con el texto final ya en la mano: si el turno quedó enfocado en **UN** producto (el texto lo
+nombra completo y `producto_enfocado` lo resuelve vía `_buscar_producto`, exacto-primero — dos
+menciones distintas o un "¿cuál…?" del bot = sigue eligiendo, no dispara), no salió media este
+turno y ese producto **no se le mostró antes** (`media_ya_mostrada`, sobre la tabla `mensajes`:
+la media nunca entra al historial de Redis —decisión del 08-08— y las filas de
+`_guardar_media_saliente` son el único registro durable de lo que el cliente recibió), el
+código llama `enviar_fotos_producto` por la MISMA puerta que el modelo: las guardas de
+simulador y relevo de la tool se respetan, no se duplican. Si no hay fotos, no pasa nada; una
+excepción suya jamás tumba el turno. Con la tool apagada en la config, la red no existe.
+
+### 🧪 Validación POR REVERSIÓN (una prueba que pasa con el código roto no vale nada)
+
+54 tests nuevos (`test_red_de_la_asesoria.py`, `test_asegurar_foto.py`), **más de la mitad son
+NO-disparos** — un detector que grita en falso se acaba ignorando. Se anuló cada red y se vio
+el rojo, se restauró y quedó verde:
+
+```
+ASESORÍA anulada:  11 failed, 18 passed   (los 18 verdes son los no-disparos: el control)
+  AssertionError: el segundo texto tenía que salir tal cual
+FOTO anulada:       4 failed, 21 passed
+  assert ('enviar_fotos_producto', {'nombre': 'Quesillo'}) in []
+RESTAURADAS:      208 passed (154 + 54) · ruff limpio · compileall OK
+```
+
+**Nada desplegado, nada mergeado.** El siguiente paso honesto es repetir el MISMO smoke de 7
+turnos contra el taller con la rama puesta — misma máquina, una variable — y mirar
+`SELECT items, total FROM pedidos`, no el texto.
+
+---
+
 ## 2026-08-06 (2) — 🗣️ LO QUE ENCONTRÓ UN SIMULACRO CON EL BOT REAL
 
 Erwin pidió ver si el bot conversa bien de verdad. Se corrió una conversación de **12 turnos contra
