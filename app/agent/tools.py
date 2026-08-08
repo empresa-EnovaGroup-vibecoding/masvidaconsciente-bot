@@ -7,6 +7,7 @@ import json
 import logging
 import math
 import mimetypes
+import re
 import unicodedata
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -1035,6 +1036,83 @@ async def _buscar_producto(session, nombre: str, solo_disponibles: bool = False)
         session, nombre, limite=1, umbral=0.6, solo_disponibles=solo_disponibles
     )
     return candidatos[0] if candidatos else None
+
+
+def _frase_comparable(texto: str) -> str:
+    """Un texto en la forma en que se compara contra nombres de producto: minúsculas, sin
+    acentos, SOLO letras y números (la puntuación se vuelve espacio) y en singular.
+
+    La puntuación se limpia ANTES de `_singular` a propósito: en "te recomiendo las empanadas,"
+    la coma pegada hace que la palabra no termine en 's' y el singular no se aplique — y ahí
+    'Empanadas' no calzaría con su propia mención. Mismo `_singular` que usa `_buscar_producto`."""
+    plano = re.sub(r"[^a-z0-9]+", " ", _sin_acentos(texto or ""))
+    return _singular(" ".join(plano.split()))
+
+
+def _productos_nombrados_en(texto: str, nombres: list[str]) -> list[str]:
+    """Qué nombres COMPLETOS de producto aparecen en un texto libre. El más específico primero.
+
+    Es la semántica del bug $12/$14 (`_buscar_producto`, CLAUDE.md §8) aplicada al texto del
+    BOT en vez de al pedido del cliente:
+    - Palabra completa, jamás substring: 'Pan' NO calza dentro de em-PAN-adas (la limpieza de
+      `_frase_comparable` deja las palabras separadas por espacios y se busca " pan ").
+    - El más específico se queda con su trozo de texto: 'Empanadas Keto' en la frase NO cuenta
+      también como 'Empanadas' (el trozo calzado se tacha antes de buscar los nombres cortos).
+      Pero "tenemos Empanadas y Empanadas Keto" sí son DOS menciones: cada una tiene su trozo.
+    - Singular/plural con `_singular`: el bot escribe "la empanada keto" y el producto se llama
+      'Empanadas Keto'.
+    """
+    campo = f" {_frase_comparable(texto)} "
+    encontrados: list[str] = []
+    # Orden: nombre comparable más LARGO primero (más específico), y alfabético de desempate
+    # para que el resultado no dependa del orden en que llegó la lista.
+    for nombre in sorted(nombres, key=lambda n: (-len(_frase_comparable(n)), n)):
+        objetivo = _frase_comparable(nombre)
+        if not objetivo:
+            continue
+        marca = f" {objetivo} "
+        if marca in campo:
+            # Se TACHA lo calzado (todas sus apariciones): ese trozo ya es de ESTE producto y
+            # un nombre más corto no puede volver a calzar dentro.
+            campo = campo.replace(marca, " § ")
+            encontrados.append(nombre)
+    return encontrados
+
+
+async def producto_enfocado(texto: str) -> str | None:
+    """El ÚNICO producto disponible que un texto del bot nombra con todas sus letras — o None.
+
+    Para la RED DE LA FOTO (`_asegurar_foto`, agent.py): si el texto nombra DOS o más productos,
+    el cliente sigue eligiendo y no hay foco (no se dispara); si no nombra ninguno con su nombre
+    completo, no hay certeza de cuál es (tampoco). El nombre que queda se resuelve con
+    `_buscar_producto` —exacto primero, el camino del DINERO— para que la foto que salga sea la
+    de ESE producto y jamás la de uno parecido.
+
+    Solo productos DISPONIBLES: empujar la foto de algo que no se vende hoy es empujar una venta
+    que no puede cerrarse.
+
+    Abre su propia sesión (mismo patrón que `avisar_relevo_caido`: la llama el agente directo,
+    no el dispatch). Ante cualquier fallo devuelve None — sin producto no hay red y el texto del
+    bot sale igual: esta red es un empujón de venta, nunca puede tumbar un turno.
+    """
+    if not (texto or "").strip():
+        return None
+    try:
+        factory = get_session_factory()
+        async with factory() as session:
+            nombres = (
+                await session.execute(
+                    select(Producto.nombre).where(Producto.disponible.is_(True))
+                )
+            ).scalars().all()
+            menciones = _productos_nombrados_en(texto, list(nombres))
+            if len(menciones) != 1:
+                return None
+            prod = await _buscar_producto(session, menciones[0])
+            return prod.nombre if prod is not None else None
+    except Exception:  # noqa: BLE001 — sin producto no hay red; el turno sigue intacto
+        logger.exception("producto_enfocado: no se pudo resolver; la red de la foto no dispara")
+        return None
 
 
 async def info_producto(session, telefono, nombre):
@@ -2589,6 +2667,50 @@ async def _guardar_media_saliente(
             await session.commit()
     except Exception:  # noqa: BLE001 — la burbuja es cosmética; el envío YA ocurrió
         logger.exception("No se pudo meter en el hilo la media saliente de %s", telefono)
+
+
+async def media_ya_mostrada(telefono: str, nombre: str) -> bool:
+    """¿Este cliente YA recibió una foto/video de ESTE producto? (candado de la RED DE LA FOTO)
+
+    POR QUÉ SE MIRA LA TABLA `mensajes` Y NO EL HISTORIAL DE REDIS: la media NUNCA entra al
+    historial (decisión del 2026-08-08 — el historial es conversación, y la media ya la narra
+    el propio texto del bot), así que ahí no hay nada que buscar. En cambio
+    `_guardar_media_saliente` escribe UNA fila por cada foto/video que sale, con el nombre del
+    producto en el pie —"(foto de Pan Keto)"— y también en el simulador. Es el único registro
+    durable de lo que el cliente de verdad RECIBIÓ, y sobrevive al recorte del historial.
+
+    Que el candado abarque TODO el hilo (no solo "esta conversación") es a propósito y es el
+    lado barato del error: repetir una foto no pedida es spam que le baja la calidad al número;
+    si el cliente la quiere otra vez, la PIDE y el modelo se la reenvía por su cuenta (la regla
+    de FOTOS del prompt ya lo contempla). Esta red solo empuja la PRIMERA vez.
+
+    Ante cualquier fallo devuelve True (= NO se envía): el lado seguro de una red que EMPUJA
+    media es callarse — el mismo criterio que `_la_duena_tomo_el_chat`.
+    """
+    if not (telefono or "") or not (nombre or "").strip():
+        return True
+    # El nombre del producto lo escribió la dueña: se escapan los comodines de LIKE por si un
+    # día un nombre trae '%' o '_' (el patrón lo armamos nosotros, no ella).
+    escapado = nombre.replace("\\", r"\\").replace("%", r"\%").replace("_", r"\_")
+    try:
+        factory = get_session_factory()
+        async with factory() as session:
+            fila = (
+                await session.execute(
+                    select(Mensaje.id)
+                    .where(
+                        Mensaje.cliente_telefono == telefono,
+                        Mensaje.rol == "assistant",
+                        Mensaje.tipo.in_(("image", "video")),
+                        Mensaje.contenido.ilike(f"%{escapado}%", escape="\\"),
+                    )
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            return fila is not None
+    except Exception:  # noqa: BLE001 — ante la duda, no repetir: la foto es un extra
+        logger.exception("media_ya_mostrada: no se pudo leer mensajes; se asume que SÍ se mostró")
+        return True
 
 
 async def enviar_catalogo(session, telefono):

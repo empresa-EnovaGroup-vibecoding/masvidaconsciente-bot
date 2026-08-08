@@ -23,6 +23,8 @@ from app.agent.tools import (
     TOOL_SCHEMAS,
     avisar_relevo_caido,
     ejecutar_tool,
+    media_ya_mostrada,
+    producto_enfocado,
     schemas_para,
 )
 from app.config import get_settings
@@ -99,6 +101,90 @@ async def _asegurar_catalogo(
         "(resultado=%r) — se le manda el texto de reemplazo", telefono, resultado,
     )
     return "Déjame mostrarte lo que tenemos 😊 ¿Qué estás buscando?"
+
+
+# ─── RED DE LA FOTO: ver vende, y el modelo describe en vez de mostrar ────────────────
+#
+# 🔴 POR QUÉ EXISTE (smoke de 7 turnos contra el bot real, 2026-08-08, corrido DOS veces con el
+# mismo resultado): CERO fotos de producto en toda la conversación, con una clienta que llegó a
+# decir "ok esa quiero". La regla que ordena mostrarlas YA existe en el prompt (la de
+# FOTOS/VIDEO, enorme, con 🔥 y "ÚSALA PROACTIVA") — y el modelo la ignora. Esa regla ignorada
+# es exactamente la evidencia de que esto va en código: el prompt SUGIERE, el código IMPIDE.
+# Familia de `_asegurar_catalogo`: corre cuando el texto final ya existe, y lo que garantiza es
+# que el CLIENTE VEA lo que el bot le está vendiendo.
+#
+# Solo palabras de pura cortesía: si TODAS las palabras del mensaje están aquí, no hay intención
+# de producto ("hola buenas tardes", "gracias!", "chao"). "ok esa quiero" NO es charla pura
+# ("esa" y "quiero" no están) — y ese es justo el turno del smoke donde la foto tenía que salir.
+_CHARLA_PURA = frozenset({
+    "hola", "holaa", "holaaa", "buenas", "buenos", "dias", "dia", "tardes", "noches",
+    "que", "tal", "saludos", "epale", "hey", "como", "estas", "esta", "andas", "va", "todo",
+    "bien", "muy", "gracias", "mil", "muchas", "chao", "chaito", "adios", "hasta", "luego",
+    "pronto", "feliz", "amen", "bendiciones", "dios", "ok", "okey", "oki", "dale", "vale",
+    "listo", "perfecto", "genial", "excelente", "chevere", "fino", "y", "tu", "usted",
+})
+
+
+def _es_charla_pura(texto: str) -> bool:
+    """True si el mensaje del cliente es SOLO saludo/gracias/despedida (o solo emojis):
+    ahí no se empuja ninguna foto. Cualquier palabra con contenido lo saca de esta lista."""
+    palabras = re.findall(r"[a-z0-9]+", _sin_acentos(texto or ""))
+    return not palabras or all(p in _CHARLA_PURA for p in palabras)
+
+
+# Si el bot pregunta "¿cuál…?" está ofreciendo a ELEGIR: el cliente sigue entre varios y
+# todavía no hay UN producto que mostrar. `\b` a ambos lados porque 'cual'/'cuales' son
+# palabras completas, no raíces ("cualquiera" no calza y no debe calzar).
+_OFRECE_OPCIONES = re.compile(r"\bcual(es)?\b")
+
+
+async def _asegurar_foto(
+    texto: str, telefono: str, mensaje_cliente: str, ejecutar,
+    *, puede_fotos: bool, hubo_media: bool,
+) -> None:
+    """Red de seguridad: si el turno quedó ENFOCADO en un solo producto y no salió ninguna
+    media, la foto la manda el código. No toca el texto JAMÁS (ya es el final y es válido):
+    esta red suma una foto o no hace nada.
+
+    Guardas, en orden de lo barato a lo caro:
+    - la herramienta apagada o media ya enviada en este turno ⇒ la red no existe;
+    - saludo/gracias/despedida o pedir el catálogo ⇒ no es un turno de producto;
+    - el bot pregunta "¿cuál…?" ⇒ el cliente sigue eligiendo entre varios;
+    - el texto no nombra UN único producto resoluble (`producto_enfocado`, con la semántica
+      exacto-primero de `_buscar_producto`) ⇒ sin certeza no se dispara;
+    - ese producto ya se le mostró en este chat (`media_ya_mostrada`) ⇒ repetirla es spam.
+
+    Las guardas de SIMULADOR y de RELEVO (la dueña tomó el chat) NO se duplican aquí a
+    propósito: viven dentro de `enviar_fotos_producto` y se respetan llamándola por la misma
+    puerta que usa el modelo (`ejecutar`). Si la herramienta responde "no hay fotos", no pasa
+    nada: el texto ya salió con la verdad y esta red no promete nada que no hizo.
+    """
+    if not puede_fotos or hubo_media:
+        return
+    if _es_charla_pura(mensaje_cliente) or _pide_catalogo(mensaje_cliente):
+        return
+    if _OFRECE_OPCIONES.search(_sin_acentos(texto or "")):
+        return
+    # De aquí en adelante TODO va envuelto: esta red corre justo antes del `return texto` y una
+    # excepción suya se llevaría por delante un turno entero que ya estaba bueno.
+    try:
+        nombre = await producto_enfocado(texto)
+        if not nombre:
+            return
+        if await media_ya_mostrada(telefono, nombre):
+            logger.info(
+                "RED DE LA FOTO: '%s' ya se le mostró a %s — no se repite", nombre, telefono
+            )
+            return
+        resultado = await ejecutar("enviar_fotos_producto", {"nombre": nombre}, telefono)
+    except Exception:  # noqa: BLE001 — la foto es un empujón de venta, jamás tumba el turno
+        logger.exception("RED DE LA FOTO: falló el envío proactivo para %s", telefono)
+        return
+    enviadas = resultado.get("enviadas") if isinstance(resultado, dict) else None
+    logger.info(
+        "RED DE LA FOTO: el modelo no mostró '%s' a %s y el código lo intentó → enviadas=%s",
+        nombre, telefono, enviadas,
+    )
 
 
 async def _escalar(
@@ -1058,6 +1144,60 @@ def _dictamina_salud_sin_ficha(mensaje_cliente: str, texto: str, consulto_ficha:
     return bool(_DICTAMINA_APTO.search(texto or ""))
 
 
+# ─── RED DE LA ASESORÍA: no se recomienda de memoria, se consulta ─────────────────────
+#
+# 🔴 EL CASO REAL (smoke de 7 turnos contra el bot real, 2026-08-08, corrido DOS veces con el
+# mismo resultado). La clienta dio una necesidad clarísima — "es para compartir en familia el
+# domingo, algo dulce" — y el bot le recitó OCHO categorías desde el catálogo del prompt y le
+# preguntó "¿cuántas personas van a ser?". En 6 de 7 turnos no consultó NINGUNA herramienta:
+# sin ficha no hay con qué asesorar, sin producto concreto no hay foto, y el pedido nunca
+# existió. Las tres quejas ("asesoría pobre", "no manda fotos", "no cierra") eran el mismo
+# fallo, y las reglas que ordenan consultar YA están en el prompt (con mayúsculas) — el modelo
+# las ignora. Por eso esto es una RED: el prompt SUGIERE, el código IMPIDE.
+#
+# Es la hermana de `_dictamina_salud_sin_ficha` (mismo mecanismo: detectar el par
+# pregunta→respuesta-sin-herramienta y re-preguntar UNA vez con un [SISTEMA]), con UNA
+# diferencia deliberada: esto es VENTA, no salud. Si tras la corrección sigue sin consultar,
+# el texto SALE IGUAL — aquí jamás se bloquea ni se escala: frenar la venta para exigir mejor
+# asesoría sería matar justo lo que se quiere salvar.
+#
+# ⚠️ Regex con RAÍCES: `\b` solo DELANTE (lección del 2026-08-06: `\b(diabet)\b` no calza
+# "diabeticos"). Y la lista de OCASIONES es CERRADA a propósito: "para el domingo, retiro yo"
+# (turno 6 del mismo smoke) es una FECHA de entrega de alguien que YA está comprando, no una
+# petición de consejo — dispararle ahí empujaría recomendaciones a quien ya eligió. Los días de
+# la semana NO son ocasión.
+_PIDE_ASESORIA = re.compile(
+    # pedir consejo con todas sus letras: "qué me recomiendas", "recomiéndame", "sugiéreme",
+    # "alguna recomendación", "qué me aconsejas"
+    r"\b(recomiend|recomend|sugier|suger|aconsej)"
+    # no saber qué elegir: "no sé qué llevar/pedir", "no sé cuál", "no sabría qué"
+    r"|\bno\s+(se|sabria)\s+(que|cual|cuales)\b"
+    # "algo <cualidad>": "algo dulce/dulcito", "algo salado", "algo rico", "algo ligero"…
+    r"|\balgo\s+(dulc|salad|ric|sabros|liger|light|san[oa]\b|saludabl|especial|diferent|"
+    r"distint|barat|economic)"
+    # pedir el ranking: "cuál es (el) mejor", "qué es lo más rico", "el más vendido",
+    # "cuál me conviene". OJO: nada de un `\bmejor` suelto — "mejor dame 2" es otra cosa.
+    r"|\bcual(es)?\b[^.?!\n]{0,15}\bmejor"
+    r"|\bque\s+es\s+((el|la|lo)\s+)?mejor"
+    r"|\bmas\s+(ric[oa]|vendid|pedid|popular|buscad|gustad)"
+    r"|\b(cual|que)\s+me\s+(conviene|sirve|queda)"
+    # "para <ocasión o persona>": compartir, regalar, un cumpleaños, la merienda, los niños…
+    # (con artículo/posesivo opcional; "pa'" también, que así se escribe aquí)
+    r"|\b(para|pa)'?\s+((el|la|los|las|un|una|unos|unas|mi|mis|tu|tus)\s+)?"
+    r"(compartir|regal|celebra|picar|merendar|merienda|desayun|cenar|cena\b|cumplean|"
+    r"fiesta|reunion|parrilla|visita|invitad|familia|nin[oa]|bebe|antoj|evento|ocasion|"
+    r"diabet|celiac|vegan|intoleran|alergi)"
+    r"|\ben\s+familia\b",
+)
+
+
+def _pide_asesoria(texto_cliente: str) -> bool:
+    """True si el CLIENTE está pidiendo una recomendación (o dando una necesidad para que se
+    la recomienden). Nombrar un producto o tipo concreto ("pan keto", "las de plátano"), pedir
+    el precio o dar un dato de entrega NO es pedir asesoría — esos turnos no son de esta red."""
+    return bool(_PIDE_ASESORIA.search(_sin_acentos(texto_cliente or "")))
+
+
 # ─── RED DEL BUCLE: el bot preguntando lo mismo una y otra vez ────────────────────────
 #
 # 🔴 POR QUÉ EXISTE (simulacro con el bot real, 2026-08-06). Una clienta pidió 2 panes keto. El
@@ -1245,6 +1385,15 @@ async def responder(
     catalogo_ok = False
     consulto_ficha = False   # ¿se abrió info_producto/buscar_info en este turno? (red de la salud)
     corregido_salud = False  # ya se le pidió una vez que consulte antes de dictaminar
+    # ¿Ejecutó ALGUNA herramienta en este turno? (red de la asesoría). Cualquiera cuenta —
+    # incluida enviar_catalogo o pedir_ayuda: lo que la red persigue es al bot contestando DE
+    # MEMORIA, no a uno que decidió mal qué consultar.
+    uso_herramienta = False
+    corregido_asesoria = False  # ya se le pidió una vez que consulte y concrete (cero bucles)
+    # Las herramientas con las que se puede ASESORAR. Si la dueña las apagó, la red de la
+    # asesoría no existe este turno: ordenar consultar una tool apagada es el bucle que la red
+    # del envío fantasma ya pagó (ver "EL REGAÑO SABE SI LA HERRAMIENTA EXISTE").
+    tools_de_consulta = [t for t in ("ver_catalogo", "info_producto") if t in activas]
     # Montos AUTORIZADOS de este turno, YA SEPARADOS POR MONEDA: los precios reales del catálogo
     # (van inyectados en el prompt como "$12.00"), lo que escribió el cliente, y lo que vayan
     # devolviendo las herramientas (el total, el monto en bolívares, la tasa).
@@ -1285,6 +1434,7 @@ async def responder(
     registro_ok = False  # ¿registrar_pedido devolvió OK en este turno? (red del pedido fantasma)
     reclamo_pedido = False  # ya se le llamó la atención una vez por decir que agendó sin agendar
     fotos_ok = False  # ¿enviar_fotos_producto ENVIÓ algo de verdad en este turno?
+    fotos_intentadas = False  # ¿se LLAMÓ a enviar_fotos_producto este turno? (aunque no enviara)
     reclamo_fotos = False  # ya se le llamó la atención por afirmar un envío de fotos falso
     # 🔴 EL GUARD DEL COMPROBANTE, TRAÍDO AL MODO QUE CORRE HOY (auditoría 2026-08-02, PRM-3).
     # La regla 79 del prompt ORDENA: "al registrar el comprobante… dile que RECIBISTE su pago".
@@ -1584,6 +1734,44 @@ async def responder(
                 )
                 return RESPUESTA_SEGURA
 
+            # 🔴 RED DE LA ASESORÍA: pidió una recomendación y el bot contestó DE MEMORIA (cero
+            # herramientas en el turno) — el fallo raíz del smoke del 2026-08-08 (6/7 turnos así,
+            # "¿cuántas personas?" ante "algo dulce para compartir el domingo"). UNA pasada
+            # correctiva, el mismo mecanismo que la red de la salud. Va DESPUÉS de las redes que
+            # vetan (dinero/honestidad juzgan primero el texto original) y ANTES de las que
+            # avisan a la dueña — avisar por un borrador que esta corrección va a reemplazar
+            # sería gritar en falso. Se mira `mensaje_usuario` (no `pregunta_cliente`) igual que
+            # la salud: en el RETOMAR el turno es una orden interna y ahí no se dispara.
+            if (
+                tools_de_consulta
+                and not uso_herramienta
+                and not corregido_asesoria
+                and _pide_asesoria(mensaje_usuario)
+                and not _pide_catalogo(mensaje_usuario)
+            ):
+                corregido_asesoria = True
+                logger.warning(
+                    "ASESORÍA SIN CONSULTA para %s: recomendó de memoria, se le pide consultar "
+                    "y concretar — texto=%r", telefono, texto[:140],
+                )
+                consultables = " o ".join(f"`{t}`" for t in tools_de_consulta)
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        "[SISTEMA] El cliente te está pidiendo una RECOMENDACIÓN y le "
+                        "respondiste de memoria, sin consultar NINGUNA herramienta. No le "
+                        "recites categorías ni le devuelvas la pregunta: llama AHORA a "
+                        f"{consultables}, elige 1 o 2 productos CONCRETOS que calcen con lo "
+                        "que pidió y recomiéndaselos POR NOMBRE, con su gancho real (lo que "
+                        "diga su ficha o el catálogo: de qué es, cuántas trae). Después remata "
+                        "hacia el cierre. No le menciones al cliente este aviso."
+                    ),
+                })
+                # Si tras esta corrección sigue sin consultar, el texto SALE tal cual (el
+                # `corregido_asesoria` de arriba garantiza una sola pasada): esto es venta,
+                # no salud — aquí no se bloquea ni se escala JAMÁS.
+                continue
+
             # RED DEL RELEVO: si PROMETE averiguar algo y no avisó a nadie, el aviso lo crea
             # el código. Una promesa sin aviso deja al cliente esperando para siempre.
             if _promete_averiguar(texto) and not pidio_ayuda:
@@ -1613,9 +1801,25 @@ async def responder(
                 )
                 relevo_imposible = relevo_imposible or not pidio_ayuda
 
+            pidio_catalogo = _pide_catalogo(pregunta_cliente)
             texto = await _asegurar_catalogo(
                 texto, catalogo_ok, telefono, ejecutar,
-                pidio_catalogo=_pide_catalogo(pregunta_cliente),
+                pidio_catalogo=pidio_catalogo,
+            )
+            # 🖼️ RED DE LA FOTO — va DESPUÉS de `_asegurar_catalogo` y con el texto YA final:
+            # así la foto sale ANTES que el texto (el mismo orden que ve el cliente cuando la
+            # manda el modelo). `hubo_media` incluye `_afirma_envio_catalogo` a propósito: si el
+            # bot afirmó el PDF, o ya salió (catalogo_ok) o lo acaba de mandar la red de arriba
+            # — que no nos cuenta el resultado —; en ese turno ya viaja media y sumarle fotos
+            # sería bombardear. `pregunta_cliente` y no `mensaje_usuario`: en el RETOMAR lo que
+            # importa es lo que el CLIENTE estaba mirando, no la orden interna.
+            await _asegurar_foto(
+                texto, telefono, pregunta_cliente, ejecutar,
+                puede_fotos=puede_fotos,
+                hubo_media=(
+                    catalogo_ok or fotos_ok or fotos_intentadas
+                    or _afirma_envio_catalogo(texto, pidio_catalogo)
+                ),
             )
             if _es_inicio_conversacion(historial):
                 texto = _asegurar_saludo(texto, mensaje_usuario, nombre_cliente)
@@ -1660,6 +1864,16 @@ async def responder(
             except json.JSONDecodeError:
                 args = {}
             resultado = await ejecutar(nombre_tool, args, telefono)
+            # El bot SÍ consultó algo (red de la asesoría). Cuenta aunque la tool devuelva
+            # `{"error": ...}`: el modelo fue a buscar — si la herramienta reventó, eso ya queda
+            # logueado abajo, y regañarlo por "no consultar" sería regañarlo por lo que sí hizo.
+            # Las llamadas a tools APAGADAS no llegan aquí (el `continue` de arriba): esas no
+            # encienden nada, como ya avisa su comentario.
+            uso_herramienta = True
+            if nombre_tool == "enviar_fotos_producto":
+                # La red de la foto no re-empuja si el modelo YA lo intentó este turno, haya
+                # salido algo o no: si la tool dijo "no hay fotos", repetir la llamada da lo mismo.
+                fotos_intentadas = True
             if isinstance(resultado, dict) and resultado.get("error"):
                 # 🔴 Hasta hoy este error viajaba SOLO dentro del mensaje `role=tool`: lo veía el
                 # modelo y NADIE más. `{"error": ...}` es un shape exclusivo del `except` de
