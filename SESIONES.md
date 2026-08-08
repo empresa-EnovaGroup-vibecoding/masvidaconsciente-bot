@@ -19,6 +19,43 @@
 
 ---
 
+## 2026-08-08 — 🖼️ EL SIMULADOR YA ENSEÑA LA MEDIA (lo que faltaba era el cable de vuelta)
+
+Erwin probó el bot desde el panel, escribió *"¿qué nomás venden?"* y el bot contestó *"te acabo de
+enviar el catálogo"* — **y no apareció nada**. Parecía que la media estaba rota.
+
+**No lo estaba.** El trabajo pesado ya existía: `enviar_catalogo` (`tools.py`) y
+`enviar_fotos_producto` detectan el teléfono `__simulador__`, simulan el envío y **guardan la fila**
+con `_guardar_media_saliente` — con un comentario que dice literal *"para que la dueña las VEA en el
+simulador"*. Verificado en la BD del taller: la fila del catálogo de esa prueba estaba ahí
+(`id 3980`, `tipo='document'`, con `media_url`).
+
+**El corte estaba en el cable de vuelta, en dos sitios:**
+1. `POST /api/probar` devolvía `{"respuesta": <texto>}` y **nunca miraba** esas filas.
+2. El simulador del panel tipaba sus mensajes como `{rol, texto}` — solo texto — y pintaba `{texto}`.
+
+O sea: se construyó la mitad de abajo y la de arriba nunca se conectó. La media **sí se veía** hoy,
+pero en la pantalla equivocada (el hilo `__simulador__` en **Conversaciones**, que sí la renderiza).
+
+### Lo que se hizo
+
+- `/api/probar` marca el **id máximo** de `mensajes` para ese teléfono ANTES de llamar al agente y
+  devuelve las filas con media creadas después. **Por id, no por fecha**: varias filas del mismo
+  turno comparten el segundo, y comparar timestamps colaría las del turno anterior.
+- La lectura va en un `try` que traga la excepción: el turno **ya ocurrió** y la respuesta del bot es
+  válida. Un fallo cosmético del panel no puede tumbar la prueba entera (mismo criterio que
+  `_guardar_media_saliente`).
+- El panel pinta la media **ANTES** del texto, en el mismo orden en que le llega al cliente por
+  WhatsApp: la herramienta la envía y después el bot la comenta.
+- `Adjunto` se movió de `conversaciones/page.tsx` a `components/adjunto.tsx`: ahora lo usan **dos**
+  pantallas. Ya resolvía imagen, video y PDF con el token de auth — duplicarlo habría garantizado que
+  un día divergen.
+
+⚠️ **La media NO entra en el `historial`** que se le manda al agente. El historial es conversación;
+la media ya la narra el propio texto del bot. Meterla ahí le ensuciaría el contexto cada turno.
+
+---
+
 ## 2026-08-03 — 🔒 CONTACTOS PRIVADOS, TELEMETRÍA Y DOS SONDAS MÁS (migraciones 031 y 032)
 
 Tercera y última tanda del repaso del taller.

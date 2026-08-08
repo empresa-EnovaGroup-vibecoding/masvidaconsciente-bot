@@ -1488,7 +1488,17 @@ async def guardar_personalidad(datos: PersonalidadIn, _: str = Depends(usuario_a
 @router.post("/probar")
 async def probar_bot(datos: ProbarIn, _: str = Depends(usuario_actual)):
     """Simulador: corre el agente con un mensaje de prueba y devuelve su respuesta,
-    SIN enviar nada por WhatsApp. Usa un teléfono de prueba ('__simulador__…')."""
+    SIN enviar nada por WhatsApp. Usa un teléfono de prueba ('__simulador__…').
+
+    Devuelve TAMBIÉN la media que el bot "envió" en ese turno (fotos, videos, el catálogo
+    en PDF). Sin eso el simulador mentía por omisión: el bot decía *"te acabo de enviar el
+    catálogo"* y en el panel no aparecía nada, así que la dueña concluía que la media estaba
+    rota cuando en WhatsApp real SÍ le llega. Las tools ya la guardaban en el hilo
+    (`_guardar_media_saliente` en tools.py) — lo que faltaba era devolverla.
+
+    El corte se marca por **id**, no por fecha: varias filas del mismo turno comparten el
+    segundo, y comparar timestamps colaría las del turno anterior.
+    """
     from app.agent.agent import responder
 
     telefono = (datos.telefono or SIMULADOR).strip()
@@ -1498,13 +1508,43 @@ async def probar_bot(datos: ProbarIn, _: str = Depends(usuario_actual)):
             detail="El simulador solo puede usar teléfonos de prueba (empiezan por __simulador__).",
         )
 
+    factory = get_session_factory()
+    async with factory() as session:
+        corte = (
+            await session.execute(
+                select(func.max(Mensaje.id)).where(Mensaje.cliente_telefono == telefono)
+            )
+        ).scalar() or 0
+
     respuesta = await responder(
         telefono=telefono,
         mensaje_usuario=datos.mensaje,
         historial=datos.historial or [],
         nombre_cliente="Prueba",
     )
-    return {"respuesta": respuesta}
+
+    # ⚠️ Igual que la burbuja del hilo: esto es COSMÉTICO. Si la consulta fallara, el turno ya
+    # ocurrió y la respuesta del bot es válida — se devuelve sin media antes que romper la
+    # prueba entera.
+    media: list[dict] = []
+    try:
+        async with factory() as session:
+            filas = (
+                await session.execute(
+                    select(Mensaje)
+                    .where(
+                        Mensaje.cliente_telefono == telefono,
+                        Mensaje.id > corte,
+                        Mensaje.media_url.is_not(None),
+                    )
+                    .order_by(Mensaje.id)
+                )
+            ).scalars().all()
+        media = [{"id": m.id, "tipo": m.tipo, "contenido": m.contenido} for m in filas]
+    except Exception:  # noqa: BLE001
+        logger.exception("No se pudo leer la media del turno del simulador (%s)", telefono)
+
+    return {"respuesta": respuesta, "media": media}
 
 
 # ─── Modelos de OpenRouter (para el selector del panel) ──────────────
