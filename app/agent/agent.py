@@ -24,6 +24,7 @@ from app.agent.tools import (
     avisar_relevo_caido,
     ejecutar_tool,
     etiqueta_del_cliente,
+    etiqueta_recordada,
     media_ya_mostrada,
     producto_enfocado,
     schemas_para,
@@ -141,7 +142,7 @@ _OFRECE_OPCIONES = re.compile(r"\bcual(es)?\b")
 
 async def _asegurar_foto(
     texto: str, telefono: str, mensaje_cliente: str, ejecutar,
-    *, puede_fotos: bool, hubo_media: bool,
+    *, puede_fotos: bool, hubo_media: bool, historial: list | None = None,
 ) -> None:
     """Red de seguridad: si el turno quedó ENFOCADO en un solo producto y no salió ninguna
     media, la foto la manda el código. No toca el texto JAMÁS (ya es el final y es válido):
@@ -183,6 +184,13 @@ async def _asegurar_foto(
         # manda la foto que la dueña nombró así y JAMÁS la de la otra masa (hueco encontrado
         # por Erwin con el bot real: salía la confirmación de la de plátano y ninguna foto).
         etiqueta = etiqueta_del_cliente(nombre, mensaje_cliente)
+        if not etiqueta:
+            # …y si en ESTE mensaje no la dijo, la que eligió hace pocos turnos. La foto sale
+            # en el turno del CIERRE ("de carne mechada, 1 paquete"), y para entonces la
+            # elección de masa quedó dos turnos atrás: sin memoria salían LAS DOS masas
+            # (medido contra el bot real, 2026-08-09). El turno actual siempre gana: esto solo
+            # corre cuando aquí no hubo elección — ver `etiqueta_recordada`.
+            etiqueta = await etiqueta_recordada(nombre, mensaje_cliente, historial)
         if etiqueta:
             args["etiqueta"] = etiqueta
         resultado = await ejecutar("enviar_fotos_producto", args, telefono)
@@ -1943,6 +1951,9 @@ async def responder(
                     catalogo_ok or fotos_ok or fotos_intentadas
                     or _afirma_envio_catalogo(texto, pidio_catalogo)
                 ),
+                # El historial va SOLO para recordar qué versión eligió el cliente hace pocos
+                # turnos (`etiqueta_recordada`). No entra en ninguna otra decisión de la red.
+                historial=historial,
             )
             if _es_inicio_conversacion(historial):
                 texto = _asegurar_saludo(texto, mensaje_usuario, nombre_cliente)

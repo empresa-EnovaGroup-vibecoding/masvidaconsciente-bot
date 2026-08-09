@@ -22,6 +22,81 @@
 
 ---
 
+## 2026-08-09 (2) — 🖼️ LA FOTO RECUERDA QUÉ MASA ELIGIÓ EL CLIENTE (rama `fix/etiqueta-recordada`, sin desplegar)
+
+**Medido contra el bot real del taller**, producto "Empanadas de masa de yuca o de masa de
+plátano" (UNO solo, dos fotos que la dueña etiquetó "de yuca" / "de plátano"):
+
+```
+turno A  cliente: "de platano"                  → el bot confirma la de plátano
+turno B  cliente: "que relleno hay?"
+turno C  cliente: "de carne mechada, 1 paquete" → aquí dispara `_asegurar_foto`
+         y salieron LAS DOS fotos (yuca y plátano) ❌
+```
+
+**El porqué:** `etiqueta_del_cliente` (la pieza de ayer) saca el token distintivo — "platano" —
+**solo del mensaje del turno ACTUAL**. La foto sale en el turno del CIERRE, y para entonces la
+elección de masa quedó dos turnos atrás. No es una mentira (sin etiqueta,
+`enviar_fotos_producto` ya avisa al modelo de que mostró las generales y de que NO diga que es
+la variante pedida), pero el cliente eligió plátano y recibía también la de yuca.
+
+### 🧠 EL ARREGLO: memoria DERIVADA del historial, cero estado nuevo
+
+`etiqueta_recordada_en` (tools.py, PURA, el catálogo entra por parámetro) + su envoltorio
+`etiqueta_recordada`. **Se descartó guardarla en Redis**: el `historial` YA viaja al turno, así
+que derivarla de ahí no puede desincronizarse, no hay que invalidarla al cambiar de producto y
+no hay una clave más que muera cuando la dueña borra el chat. Menos estado, menos que se rompa.
+
+Las reglas de precedencia, todas probadas:
+- **El turno ACTUAL manda.** Si en este mensaje tocó alguna versión, decide
+  `etiqueta_del_cliente`: una ⇒ esa; **las dos ⇒ generales A PROPÓSITO** — rellenar esa duda con
+  lo de hace dos turnos es exactamente adivinar. Para distinguir "no dijo nada" de "dijo las
+  dos" se partió la pieza en `_versiones_distintivas` + `_versiones_tocadas` (mismo
+  comportamiento de ayer, ni un caso cambiado).
+- **La más reciente gana:** se recorre el historial hacia atrás, así que un "mejor la de yuca"
+  tapa al "de platano" de antes.
+- **La memoria NO CRUZA un cambio de producto.** Un turno —del cliente **o del bot**— que
+  nombre otro producto corta el recorrido. Sin esto, el "de yuca" de las empanadas se le pegaría
+  al siguiente producto que también se haga de yuca.
+- **Ventana de 3 turnos del cliente.** Recordar de hace 20 no es memoria, es adivinar.
+- **Jamás se inventa una etiqueta:** solo salen tokens que DISTINGUEN una versión de ESE nombre;
+  y si además ninguna foto se llama así, `_elegir_medios` manda las generales como hoy.
+- **Ante cualquier fallo, None** (las generales). Doctrina $12/$14 en su forma barata: el peor
+  resultado posible de esta red sigue siendo el comportamiento de ayer.
+
+**El caso normal no paga una consulta:** las guardas baratas (sin historial · producto sin
+versiones · el turno actual ya eligió) van ANTES de abrir sesión, así que en un producto simple
+—la inmensa mayoría— esto no consulta NADA. No se tocó el camino del dinero, ni el prompt, ni la
+personalidad, ni `temperature`/`max_tokens`. Aditivo.
+
+### 🧪 Validación POR REVERSIÓN (7 piezas, 7 rojos) — y una prueba que NO probaba nada
+
+**30 tests nuevos** (`tests/test_etiqueta_recordada.py`), **23 de ellos son casos que NO deben
+recordar** — una memoria que se equivoca manda la foto EQUIVOCADA, y eso sí sería peor que el
+bug. Se anuló cada pieza y se vio el rojo:
+
+```
+R1 la memoria fuera:        2 failed, 293 passed → At index 0 diff: (…{'nombre': 'Empanadas…'}) != (…{'nombre': 'Empanadas…', 'etiqueta': 'platano'})
+R2 el turno actual no manda:2 failed, 293 passed → AssertionError: assert 'platano' is None
+R3 cruza de producto:       3 failed, 292 passed → assert ('enviar_fotos_producto', {'nombre': 'Empanadas…'}) in [(…, {'etiqueta': 'platano', …})]
+R4 sin ventana:             1 failed, 294 passed → AssertionError: assert 'platano' is None
+R5 duda vieja por mayoría:  1 failed, 294 passed → AssertionError: assert 'yuca' is None
+R6 sin los atajos:          5 failed, 290 passed → AssertionError: no hay nada que recordar: la BD ni se toca
+R7 el historial no viaja:   1 failed, 294 passed → assert (…{'etiqueta': 'platano'}) in [(…{'nombre': 'Empanadas…'})]
+RESTAURADO:               295 passed (265 + 30) · ruff limpio · compileall OK
+```
+
+🔴 **R6 salió VERDE la primera vez y esa es la lección del día.** El test de los atajos solo
+miraba el resultado, y el `except Exception` del envoltorio se traga la excepción de la BD
+falseada y devuelve `None` igual: **pasaba con el código roto**. Se cambió por un espía que
+CUENTA los intentos de consulta (`intentos == []` cuando hay atajo, `== ["consulta"]` en el test
+del fallo de BD). Sin la disciplina de revertir, ese test se habría quedado ahí para siempre
+fingiendo que probaba algo.
+
+**Nada desplegado, nada mergeado.** Ningún banco tocado ni corrido.
+
+---
+
 ## 2026-08-09 — ⏳ EL BUFFER YA NO CONTESTA A TROZOS: DEBOUNCE DE VERDAD (rama `fix/buffer-debounce`, sin desplegar)
 
 **La evidencia, medida en el taller el 2026-08-08** (tel …9792, logs del worker + tabla

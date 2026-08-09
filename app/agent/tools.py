@@ -1128,6 +1128,39 @@ def _productos_nombrados_en(texto: str, nombres: list[str]) -> list[str]:
     return encontrados
 
 
+def _versiones_distintivas(nombre: str) -> list[set[str]]:
+    """Los tokens que DISTINGUEN cada versión de un nombre COMPUESTO (' o '), una entrada por
+    versión: "Empanadas de masa de yuca o de masa de plátano" → `[{'yuca'}, {'platano'}]`.
+
+    Fuera la CABEZA del nombre ("las empanadas" no elige masa) y fuera lo COMÚN a todas las
+    versiones ("masa" está en las dos). Lista VACÍA si el producto no tiene versiones: ahí no
+    hay nada que elegir — ni, por tanto, nada que recordar.
+    """
+    base = _frase_comparable(nombre or "")
+    if " o " not in base:
+        return []
+    partes = [p.strip() for p in base.split(" o ") if p.strip()]
+    if len(partes) < 2:
+        return []
+    cabeza = base.split()[0]
+    tokens_por_version = [set(_palabras_busqueda(p)) for p in partes]
+    comunes = set.intersection(*tokens_por_version)
+    return [(t - comunes) - {cabeza} for t in tokens_por_version]
+
+
+def _versiones_tocadas(distintivos: list[set[str]], mensaje: str) -> list[set[str]]:
+    """Qué versiones TOCA un mensaje, y con qué palabras. Una entrada por versión mencionada.
+
+    Vacío = el mensaje no habla de ninguna versión. DOS entradas = las nombró las dos ("mejor
+    la de yuca… no, la de plátano") y no hay elección que leer. Distinguir esos dos casos es lo
+    que permite que el turno ACTUAL mande sobre lo recordado incluso cuando es ambiguo.
+    """
+    pedido = set(_palabras_busqueda(_frase_comparable(mensaje or "")))
+    if not pedido:
+        return []
+    return [pedido & d for d in distintivos if pedido & d]
+
+
 def etiqueta_del_cliente(nombre: str, mensaje_cliente: str) -> str | None:
     """Si el producto es COMPUESTO (' o ') y las palabras del CLIENTE calzan con UNA sola de
     sus versiones, devuelve esas palabras distintivas — listas para `enviar_fotos_producto`
@@ -1142,24 +1175,106 @@ def etiqueta_del_cliente(nombre: str, mensaje_cliente: str) -> str | None:
     ("mejor la de yuca… no, la de plátano"): ahí van las fotos sin filtrar, como siempre.
     La CABEZA del nombre no distingue ("las empanadas" no elige masa), y los tokens que
     comparten todas las versiones tampoco ("masa" está en ambas).
+
+    ⚠️ Mira SOLO el mensaje de ESTE turno. Lo que el cliente eligió turnos atrás lo recuerda
+    `etiqueta_recordada` — y el turno actual siempre le gana.
     """
-    base = _frase_comparable(nombre or "")
-    if " o " not in base:
+    tocadas = _versiones_tocadas(_versiones_distintivas(nombre), mensaje_cliente)
+    if len(tocadas) != 1:
         return None
-    partes = [p.strip() for p in base.split(" o ") if p.strip()]
-    if len(partes) < 2:
+    return " ".join(sorted(tocadas[0]))
+
+
+# Cuántos turnos del CLIENTE hacia atrás se recuerda la versión que eligió. CORTO A PROPÓSITO:
+# recordar "de plátano" de hace 20 turnos es peor que no recordar nada — a esa distancia ya no
+# es memoria, es adivinar. Con 3 sobra para el caso real (la elección quedó 2 turnos atrás) y
+# el peor error posible sigue siendo el de hoy: mandar las fotos generales.
+_TURNOS_ETIQUETA_RECORDADA = 3
+
+
+def etiqueta_recordada_en(
+    nombre: str, mensaje_actual: str, historial: list | None, nombres_catalogo: list[str]
+) -> str | None:
+    """La versión que el cliente eligió HACE POCO y que sigue valiendo para ESTE producto.
+    Función PURA (el catálogo entra por parámetro): así el test la prueba sin tocar la BD.
+
+    🔴 POR QUÉ EXISTE (medido contra el bot real, 2026-08-09). `etiqueta_del_cliente` solo mira
+    el turno actual, y la conversación real no repite la elección:
+
+        cliente: "de platano"  ·  cliente: "que relleno hay?"  ·  cliente: "de carne mechada,
+        1 paquete"  → aquí dispara la foto y salían LAS DOS masas, porque en ESE mensaje ya no
+        aparecía "platano".
+
+    Las reglas, en el orden en que se aplican:
+    1. **El turno ACTUAL manda.** Si en este mensaje el cliente tocó alguna versión, la decisión
+       ya la tomó `etiqueta_del_cliente` — una sola ⇒ esa; las dos ⇒ generales A PROPÓSITO.
+       Aquí se devuelve None para no pisarla con memoria vieja.
+    2. **La más reciente gana:** se recorre el historial de atrás hacia delante, así que un
+       "mejor la de yuca" posterior tapa al "de platano" de antes.
+    3. **La memoria NO CRUZA un cambio de producto.** Un turno (de quien sea) que nombre otro
+       producto CORTA el recorrido: una etiqueta solo vale para su producto. Sin esto, el
+       "de yuca" de las empanadas se le pegaría al siguiente producto que también tenga yuca.
+    4. **Ventana corta** (`_TURNOS_ETIQUETA_RECORDADA` turnos del cliente). En el RETOMAR el
+       mensaje del cliente ya viene DENTRO del historial, así que ahí la ventana efectiva es un
+       turno más corta — y está bien: recordar de menos es el error barato.
+    5. **Nunca se inventa una etiqueta:** solo salen tokens que DISTINGUEN una versión de ESTE
+       nombre. Si además ninguna foto se llama así, `_elegir_medios` manda las generales y el
+       resultado avisa al modelo — igual que hoy. Doctrina $12/$14: ante la duda, no adivinar.
+    """
+    distintivos = _versiones_distintivas(nombre)
+    if not distintivos:
         return None
-    cabeza = base.split()[0]
-    tokens_por_version = [set(_palabras_busqueda(p)) for p in partes]
-    comunes = set.intersection(*tokens_por_version)
-    distintivos = [(t - comunes) - {cabeza} for t in tokens_por_version]
-    pedido = set(_palabras_busqueda(_frase_comparable(mensaje_cliente or "")))
-    if not pedido:
+    if _versiones_tocadas(distintivos, mensaje_actual):
         return None
-    calzadas = [d for d in distintivos if pedido & d]
-    if len(calzadas) != 1:
+    vistos = 0
+    for h in reversed(historial or []):
+        if not isinstance(h, dict):
+            continue
+        contenido = str(h.get("content") or "")
+        if any(n != nombre for n in _productos_nombrados_en(contenido, nombres_catalogo)):
+            return None
+        if h.get("role") != "user":
+            continue
+        tocadas = _versiones_tocadas(distintivos, contenido)
+        if tocadas:
+            # Una sola versión ⇒ esa es la que eligió. Dos ⇒ dudó, y una duda vieja no se
+            # resuelve por mayoría: se cae a las generales.
+            return " ".join(sorted(tocadas[0])) if len(tocadas) == 1 else None
+        vistos += 1
+        if vistos >= _TURNOS_ETIQUETA_RECORDADA:
+            return None
+    return None
+
+
+async def etiqueta_recordada(
+    nombre: str, mensaje_actual: str, historial: list | None
+) -> str | None:
+    """`etiqueta_recordada_en` con el catálogo puesto. La usa la RED DE LA FOTO (`_asegurar_foto`).
+
+    Las tres guardas baratas van ANTES de abrir sesión, y no es cosmética: la inmensa mayoría de
+    los productos no son compuestos, así que en el caso normal esta función no consulta NADA.
+    Abre su propia sesión (mismo patrón que `producto_enfocado`) y ante cualquier fallo devuelve
+    None: sin memoria se manda lo de hoy (las fotos generales), que nunca es una mentira.
+    """
+    if not historial:
         return None
-    return " ".join(sorted(pedido & calzadas[0]))
+    distintivos = _versiones_distintivas(nombre)
+    if not distintivos or _versiones_tocadas(distintivos, mensaje_actual):
+        return None
+    try:
+        factory = get_session_factory()
+        async with factory() as session:
+            nombres = (
+                await session.execute(
+                    select(Producto.nombre).where(Producto.disponible.is_(True))
+                )
+            ).scalars().all()
+        return etiqueta_recordada_en(nombre, mensaje_actual, historial, list(nombres))
+    except Exception:  # noqa: BLE001 — sin memoria se sigue como hoy; jamás tumba el turno
+        logger.exception(
+            "etiqueta_recordada: no se pudo leer el catálogo; van las fotos generales"
+        )
+        return None
 
 
 async def producto_enfocado(texto: str) -> str | None:
