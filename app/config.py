@@ -1,11 +1,19 @@
+import logging
 from functools import lru_cache
 
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+logger = logging.getLogger(__name__)
+
 # Valores que NO se aceptan como secretos: placeholders inseguros conocidos.
 # Si jwt_secret o admin_password caen aqui, el proceso no arranca.
 _SECRETOS_INSEGUROS = {"", "cambia-esto-en-produccion", "masvida2026", "changeme"}
+
+# La proporcion de fabrica entre el tope y la ventana del buffer (60 / 15). Es la que se usa para
+# REPARAR una configuracion imposible: conserva la intencion de quien la escribio (el tamaño de su
+# ventana) en vez de imponerle los 60 s del default.
+_PROPORCION_TOPE_BUFFER = 4
 
 
 class Settings(BaseSettings):
@@ -122,6 +130,47 @@ class Settings(BaseSettings):
             raise ValueError(
                 "ADMIN_PASSWORD es demasiado corto: usa al menos 8 caracteres."
             )
+        return self
+
+    @model_validator(mode="after")
+    def _el_tope_del_buffer_por_encima_de_la_ventana(self) -> "Settings":
+        """`buffer_max_segundos` TIENE que ser mayor que `buffer_segundos`, o no hay debounce.
+
+        🔴 POR QUE. `_procesar` (workers/tasks.py) espera a que el cliente lleve `buffer_segundos`
+        CALLADO, pero nunca mas alla de `primero + buffer_max_segundos`. Con el tope por DEBAJO de
+        la ventana, la resta que recorta la espera sale negativa o cero SIEMPRE: el tope dispara en
+        el primer intento, se contesta al instante y el debounce que se construyo el 2026-08-09
+        queda ANULADO. Y no se nota: el bot responde —a trozos, como antes— sin un solo error.
+        Hasta hoy esto solo estaba DOCUMENTADO en el comentario de los dos campos.
+
+        ⚠️ SE REPARA, NO SE LANZA — y es la decision que hay que justificar, porque el otro camino
+        parece el rigoroso:
+          · Los dos `raise` de arriba son de SEGURIDAD: con una contraseña publica, un proceso que
+            no arranca es lo SEGURO. Aqui es al reves. `Settings` se construye al importar
+            `app.config`, o sea en el webhook, en el worker, en los bancos y en cada script: un
+            `raise` por una perilla de AFINADO deja al negocio SIN VENDER — apaga el bot entero
+            por un ajuste que solo empeora el ritmo de las respuestas. En esta casa se DEGRADA,
+            nunca se bloquea la venta.
+          · Y no queda silencioso, que es el criterio del encargo: sale un `logger.error` con el
+            valor malo, el corregido y el porque. Sin `logging` configurado, el `lastResort` de
+            Python igual lo escribe en stderr (nivel WARNING), asi que se ve en los logs del
+            contenedor desde la primera linea del arranque.
+
+        Se corrige a la PROPORCION de fabrica (x4) y no al default fijo de 60: si alguien puso una
+        ventana de 30 s queria esperar mas, y forzarle 60 le rompe la intencion. El `+1` cubre el
+        borde de `buffer_segundos = 0` (buffer desactivado a proposito), donde x4 seguiria dando 0.
+        """
+        if self.buffer_max_segundos <= self.buffer_segundos:
+            reparado = max(
+                self.buffer_segundos * _PROPORCION_TOPE_BUFFER, self.buffer_segundos + 1
+            )
+            logger.error(
+                "CONFIG: BUFFER_MAX_SEGUNDOS (%s) no puede ser <= BUFFER_SEGUNDOS (%s): el tope "
+                "dispararia siempre y el bot volveria a contestar a trozos (sin debounce). Se "
+                "corrige a %s para arrancar igual; ajusta el valor en el entorno.",
+                self.buffer_max_segundos, self.buffer_segundos, reparado,
+            )
+            self.buffer_max_segundos = reparado
         return self
 
 

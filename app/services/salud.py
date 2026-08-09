@@ -6,7 +6,7 @@
 mensaje del cliente se evaporaba, con el contenedor en VERDE. Aquí se TOCAN las dependencias, una
 por una, en vez de suponer que están vivas.
 
-LAS SIETE SONDAS, y por qué cada una está y no otra:
+LAS OCHO SONDAS, y por qué cada una está y no otra:
   1. POSTGRES — se cae y el bot deja de saber quién es nadie.
   2. REDIS ESCRIBIENDO (no PING) — es el que se comió la semana de mensajes.
   3. EL TOKEN DE META — caduca sin avisar; el bot sigue "funcionando" y no sale un solo mensaje.
@@ -28,6 +28,13 @@ LAS SIETE SONDAS, y por qué cada una está y no otra:
      se escribe mal, todas las llamadas fallan, `_llamar_con_fallback` lo tapa con un modelo MÁS
      CARO y el bot sigue hablando con todo en verde. Se apoya en `llamadas_ia` (migración 032) y
      falla ABIERTA: sin esa tabla, esto no puede poner el bot en rojo.
+  8. 🔴 LA TASA BCV (SIL-14, 2026-08-09) — LA ÚNICA QUE MIRA EL CAMINO DEL DINERO. Las siete de
+     arriba vigilan si el bot puede ATENDER; ninguna miraba si está cobrando BIEN. `tasa.py` cae
+     al respaldo cuando la API no responde, y hasta hoy eso era un `logger.warning` y nada más.
+     Medido en el taller ese día: la API daba **756,7083** Bs/$ y el respaldo guardado
+     (`configuracion.tasa_manual`) era **567,68** — un **25% por debajo**. Con la API caída el bot
+     cotiza los Pago Móvil un 25% más baratos EN SILENCIO y el negocio cobra de menos en cada
+     venta. Se apoya en `tasa_resoluciones` (migración 033) y falla ABIERTA, como la 7.
 
 CONTRATO PARA EL MONITOR EXTERNO:
   · 200 + "estado":"ok"        → todo bien.
@@ -117,6 +124,23 @@ _MINIMO_LLAMADAS = 5
 # El testigo del barredor se da por rancio pasado esto. El bucle pasa cada 5 minutos: 15 son tres
 # pasadas perdidas, o sea "esto no es un tropiezo, esto está muerto".
 MINUTOS_BARREDOR_RANCIO = 15
+
+# 🔴 CUÁNDO EL ÚLTIMO DATO BUENO DE LA API DE LA TASA SE DA POR RANCIO.
+#
+# SEIS HORAS, y por qué exactamente seis: la tasa se cachea `tasa_ttl` (hoy 3600 s), así que en
+# operación sana el dato bueno NUNCA pasa de una hora. Seis son SEIS refrescos fallidos seguidos —
+# muy por encima de cualquier hipo de red o mantenimiento de dolarapi— y siguen cabiendo dentro de
+# una jornada, así que la dueña se entera el mismo día en que empieza a cobrar de menos.
+#
+# ⚠️ EL `max(...)` NO ES ADORNO: si alguien sube `TASA_TTL` a 12 h, con el umbral fijo en 6 esta
+# sonda viviría en rojo con TODO funcionando — un detector que grita en falso se acaba ignorando
+# (DAT-10). El umbral se ata al TTL configurado y no puede dispararse sobre una caché sana.
+_HORAS_TASA_RANCIA = 6
+
+
+def _umbral_tasa_rancia() -> float:
+    """Segundos. Nunca menos de 6 h, y nunca menos de dos vidas de la caché."""
+    return max(_HORAS_TASA_RANCIA * 3600.0, 2.0 * float(settings.tasa_ttl or 0))
 
 # Un usuario:contraseña dentro de una URL de error (un DSN que se cuele en el texto de una
 # excepción). `/salud` es PÚBLICO: lo que salga de aquí lo puede leer cualquiera.
@@ -482,6 +506,143 @@ async def _modelo() -> dict:
     return {"ok": True, "llamadas_hora": todas, "fallos_hora": todas - buenas}
 
 
+async def _tasa() -> dict:
+    """🔴 ¿CON QUÉ TASA SE ESTÁ COBRANDO? (SIL-14, migración 033)
+
+    LA AVERÍA QUE NINGUNA OTRA SONDA VE, y es la del DINERO: si la API de la tasa no responde,
+    `services/tasa.py` cae al respaldo (`configuracion.tasa_manual` → `TASA_MANUAL_DEFAULT`) y el
+    bot SIGUE VENDIENDO — que es lo correcto, la venta nunca se bloquea — pero cotizando los pagos
+    en bolívares con un número que puede llevar meses congelado. Medido el 2026-08-09: la API daba
+    756,7083 y el respaldo 567,68, un 25% por debajo. Postgres verde, Redis verde, el token verde,
+    el saldo verde, y el negocio cobrando de menos en cada venta.
+
+    🔴 LEE EL RASTRO, NO RESUELVE LA TASA, y es la decisión de diseño que hace que esto sirva:
+      · Tiene que reportar lo que se le está cobrando A LOS CLIENTES, y quien cobra es el WORKER.
+        Si `/salud` resolviera por su cuenta contaría lo que le pasó A ÉL, que es otra cosa: con
+        la caché de Redis compartida podría darse por bueno un valor que el worker nunca sirvió.
+      · Y `/salud` es PÚBLICO y sin auth: hacer que cada visita dispare una petición HTTP saliente
+        (8 s de timeout) a la API de la tasa lo convierte en un ariete gratis contra un tercero.
+
+    EL VEREDICTO LO DA **LA ÚLTIMA RESOLUCIÓN**, y el umbral de antigüedad ESCALA el mensaje:
+      · último evento ≠ `api` (respaldo_bd, default o sin_tasa) ⇒ FALLO. Se está cobrando con el
+        respaldo AHORA MISMO. Se compara contra `api` y no contra una lista de respaldos a
+        propósito: así un origen nuevo que alguien añada mañana nace en ROJO, no en verde. En el
+        camino del dinero, lo desconocido se presume malo.
+      · Si además el último dato bueno pasa del umbral, el mensaje lo dice con las horas: no es
+        lo mismo un tropiezo de diez minutos que llevar tres días cobrando con el número viejo.
+
+    🔴 POR QUÉ **NO** HAY UNA REGLA DE ANTIGÜEDAD A SECAS, que era lo primero que se escribió y
+    hubo que tirar: la edad del último dato bueno CRECE SOLA cuando nadie cotiza. Un domingo sin
+    ventas, o el candado manual puesto (que ni siquiera llega a esta cadena), la ponen en 8 h con
+    todo perfecto — y `/salud` amanecería en rojo cada lunes. Un detector que grita en falso se
+    acaba ignorando, que es la peor avería posible en un detector (DAT-10). Y no hace falta: si
+    HAY actividad y la API no da un dato bueno, esa actividad son filas de RESPALDO, y esas las
+    caza la regla de arriba. El caso "dato viejo sin actividad" sale como AVISO, con su número.
+
+    LAS PUERTAS POR LAS QUE ESTO **NO** SE PONE EN ROJO:
+      · Sin ninguna fila ⇒ aviso: es el estado normal de un despliegue recién hecho y de una caja
+        donde todavía no se ha cotizado nada.
+      · Postgres caído o la 033 sin aplicar ⇒ aviso, jamás fallo (misma puerta que `_modelo`).
+        Que Postgres esté muerto ya lo dice su propia sonda; esto no lo repite en rojo.
+
+    ⚠️ AQUÍ NO SALE NI UNA CIFRA DE LA TASA, igual que `_modelo` no publica el gasto: `/salud` es
+    público. Salen el ORIGEN, las EDADES en minutos y un booleano. El número va por el WhatsApp
+    privado a la dueña (`tasa._texto_del_aviso`), que es donde sirve de algo.
+    """
+    from app.services.db import get_session_factory
+    from app.services.tasa import ORIGEN_API, ORIGEN_SIN_TASA, _leer_ajustes_tasa
+
+    try:
+        factory = get_session_factory()
+        async with factory() as s:
+            fila = (
+                await s.execute(
+                    # UNA sola consulta con tres subselects escalares. Los DOS primeros salen por
+                    # la PK (id DESC, gratis) y el tercero por el índice PARCIAL de la 033. Los
+                    # alias NO son cosmética: sin ellos las dos columnas de `extract` se llamarían
+                    # igual, y una fila con nombres repetidos es de las cosas que el driver
+                    # resuelve como quiere.
+                    text(
+                        "SELECT (SELECT origen FROM tasa_resoluciones ORDER BY id DESC LIMIT 1)"
+                        "         AS origen,"
+                        "       (SELECT extract(epoch FROM now() - created_at) "
+                        "          FROM tasa_resoluciones ORDER BY id DESC LIMIT 1) AS hace,"
+                        "       (SELECT extract(epoch FROM now() - max(created_at)) "
+                        "          FROM tasa_resoluciones WHERE origen = 'api') AS api_hace"
+                    )
+                )
+            ).first()
+    except Exception as e:  # noqa: BLE001 — sin la 033 aplicada, o con Postgres caído (que ya lo
+        # dice su propia sonda), esto NO puede poner el bot en rojo.
+        return {"ok": True, "aviso": f"no se pudo leer el rastro de la tasa ({_limpio(e)[:120]})"}
+
+    origen = fila[0] if fila else None
+    hace = float(fila[1]) if fila and fila[1] is not None else None
+    api_hace = float(fila[2]) if fila and fila[2] is not None else None
+
+    # El candado manual es COLOR, no veredicto: explica por qué no hay filas (con la tasa fijada a
+    # mano la cadena de la API ni se toca) para que nadie salga a buscar una avería que no existe.
+    manual_activa = False
+    try:
+        _, _, manual_activa = await _leer_ajustes_tasa()
+    except Exception:  # noqa: BLE001 — es un adorno; que no decida nada ni rompa nada
+        pass
+
+    dato: dict = {
+        "ok": True,
+        "origen": origen,
+        "hace_minutos": int(hace // 60) if hace is not None else None,
+        "api_hace_minutos": int(api_hace // 60) if api_hace is not None else None,
+        "candado_manual": manual_activa,
+    }
+    umbral = _umbral_tasa_rancia()
+
+    api_viejo = api_hace is None or api_hace > umbral
+    desde_cuando = "NUNCA (la API no ha dado un solo dato bueno)" if api_hace is None else (
+        f"hace {int(api_hace // 3600)} h"
+    )
+
+    if origen is None:
+        dato["aviso"] = (
+            "todavía no se ha resuelto ninguna tasa desde que existe el rastro (migración 033): "
+            + ("el candado manual está puesto, así que la API no se consulta."
+               if manual_activa else "nadie ha cotizado todavía.")
+        )
+        return dato
+
+    if origen != ORIGEN_API:
+        dato["ok"] = False
+        if origen == ORIGEN_SIN_TASA:
+            dato["error"] = (
+                "NO HAY TASA NINGUNA: ni la API responde ni hay respaldo configurado, así que el "
+                "bot no puede cotizar en bolívares. Pon 'tasa_manual' en el panel o "
+                "TASA_MANUAL_DEFAULT en el entorno."
+            )
+            return dato
+        escalada = (
+            f" Y EL ÚLTIMO DATO BUENO PASA DEL UMBRAL ({int(umbral // 3600)} h): esto no es un "
+            "tropiezo, lleva así un buen rato."
+        ) if api_viejo else ""
+        dato["error"] = (
+            "SE ESTÁ COBRANDO CON LA TASA DE RESPALDO: la API del BCV no responde y el último "
+            f"dato bueno es de {desde_cuando}.{escalada} Los pagos en bolívares salen con el "
+            "número guardado a mano, que puede estar MUY por debajo del real (el 2026-08-09 "
+            "estaba un 25% abajo): el negocio cobra de menos en cada venta. Revísala en el panel."
+        )
+        return dato
+
+    # Último evento bueno, pero viejo: nadie ha cotizado desde entonces. AVISO, no fallo (ver el
+    # bloque "POR QUÉ NO HAY UNA REGLA DE ANTIGÜEDAD A SECAS" de arriba).
+    if api_viejo:
+        dato["aviso"] = (
+            f"el último dato bueno de la API es de {desde_cuando} (umbral "
+            f"{int(umbral // 3600)} h) y nadie ha vuelto a pedir la tasa desde entonces. No es "
+            "una avería: sin ventas, la edad crece sola. Lo será si la próxima cotización cae "
+            "al respaldo."
+        )
+    return dato
+
+
 # ─── El veredicto ────────────────────────────────────────────────────
 
 async def revisar() -> tuple[dict, int]:
@@ -510,9 +671,14 @@ async def revisar() -> tuple[dict, int]:
     #    en el panel CONTESTA. Son tres averías distintas y ninguna tapa a las otras.
     dn = await _duena_contactable()
     md = await _modelo()
+    # 🔴 LA DEL DINERO (SIL-14, 2026-08-09). Las siete de arriba miran si el bot puede ATENDER;
+    # esta es la única que mira si está cobrando BIEN. Sale como `degradado` y NUNCA como `caido`:
+    # con el respaldo el bot sigue vendiendo (degradar, nunca bloquear la venta) y reiniciar el
+    # contenedor no revive la API del BCV.
+    ts = await _tasa()
     piezas = (
         ("postgres", pg), ("redis", rd), ("meta", mt), ("saldo_ia", sd),
-        ("barredor", bd), ("duena_contactable", dn), ("modelo_ia", md),
+        ("barredor", bd), ("duena_contactable", dn), ("modelo_ia", md), ("tasa", ts),
     )
     fallos = [n for n, d in piezas if not d["ok"]]
     estado = "caido" if (not pg["ok"] or not rd["ok"]) else ("degradado" if fallos else "ok")
@@ -527,6 +693,7 @@ async def revisar() -> tuple[dict, int]:
         "barredor": bd,
         "duena_contactable": dn,
         "modelo_ia": md,
+        "tasa": ts,
         "negocio": settings.negocio_nombre,
     }
     _CACHE.update(en=ahora, cuerpo=cuerpo)

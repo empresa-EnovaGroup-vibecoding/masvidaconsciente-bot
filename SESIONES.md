@@ -22,6 +22,108 @@
 
 ---
 
+## 2026-08-09 (3) — 💸 EL RESPALDO DE LA TASA DEJA DE SER MUDO (rama `fix/tasa-visible`, sin desplegar)
+
+**Medido hoy en el taller, y es el dato que justifica todo lo demás:**
+
+```
+API en vivo (ve.dolarapi.com) ......... 756,7083 Bs/$
+configuracion.tasa_manual (el respaldo)  567,68      (tasa_manual_activa = 0, tasa_margen_pct = 0.0)
+                                         ↑ un 25% POR DEBAJO
+```
+
+`obtener_tasa_bcv()` resuelve en cadena: caché → API en vivo → `tasa_manual` (BD) →
+`TASA_MANUAL_DEFAULT`. Si la API se cae, cae al respaldo **con un solo `logger.warning`**: sin
+sonda en `/salud`, sin telemetría y **sin marca de tiempo**. Traducido: con la API caída el bot
+cotiza los Pago Móvil un 25% más baratos EN SILENCIO —el negocio cobra de menos en CADA venta— con
+Postgres verde, Redis verde, el token verde y el saldo verde. Es el camino del DINERO y era la
+única cosa que `/salud` no miraba: las siete sondas existentes vigilan si el bot puede ATENDER,
+ninguna si está cobrando BIEN.
+
+### 🔦 EL ARREGLO: SOLO observabilidad, ni una coma del cobro
+
+Ni el valor de la tasa, ni el margen, ni `tasa_manual`, ni `registrar_pedido`, ni `_calza`. La
+venta sigue saliendo con la API muerta: **degradar, nunca bloquear**.
+
+- **`Resolucion(valor, origen)`** (`tasa.py`). `_resolver_base()` devuelve de dónde salió:
+  `cache` | `api` | `respaldo_bd` | `default` | `sin_tasa` (este último, el peor estado de todos
+  —ni API ni respaldo—, era el que menos rastro dejaba). `_tasa_base()` conserva su firma exacta.
+- **El rastro vive en Postgres** (`tasa_resoluciones`, migración **033**), y esa fue la decisión:
+  tiene que cruzar de PROCESO (resuelve el WORKER, publica la API), sobrevivir al reinicio **y a
+  un Redis vaciado**, y la MISMA fila responde las dos preguntas ("qué se sirve ahora" y "cuándo
+  contestó la API por última vez"). Dos mecanismos paralelos —una marca para la sonda y otra para
+  la telemetría— pueden CONTRADECIRSE; uno solo, no. **El carril normal no paga nada:** la caché
+  sale por el primer `return` sin un solo INSERT; solo se anota al hablar de verdad con la API
+  (1/hora) o al caer al respaldo.
+- **Sonda `tasa` en `/salud`** (la octava). Sale `degradado`+200 y **nunca** 503: con el respaldo
+  el bot sigue vendiendo y reiniciar el contenedor no revive la API del BCV. Publica origen,
+  antigüedad del último dato bueno y el candado manual — **y ni una cifra de la tasa** (`/salud`
+  es público, misma regla que `_modelo` con el gasto).
+- **Aviso a la dueña con candado** (`aviso_unico("tasa_respaldo", 6 h)`): bandeja PRIMERO
+  (META-15: con su ventana de 24h cerrada `enviar_texto` LANZA y el WhatsApp no sale) y después el
+  WhatsApp, que **sí lleva el número** — "estoy usando el respaldo" no le dice a nadie si está
+  cobrando bien; "a 567,68" sí. `_anotar` copia la disciplina de `telemetria.py`: se traga todo,
+  tope de 2 s y fusible de 60 s.
+
+### ⚖️ Las dos decisiones que se pueden discutir, y por qué se tomaron así
+
+1. **NO hay regla de "el dato bueno es viejo ⇒ rojo" a secas.** Fue lo primero que se escribió y
+   hubo que tirarlo: esa edad **crece sola cuando nadie cotiza**. Un domingo sin ventas la pone en
+   40 h con todo perfecto y `/salud` amanecería en rojo cada lunes — y un detector que grita en
+   falso se acaba ignorando (DAT-10). No hace falta: si HAY actividad y la API no da un dato
+   bueno, esa actividad son filas de RESPALDO, y esas ya ponen la sonda en rojo. El umbral (6 h, o
+   `2 × tasa_ttl` si alguien sube el TTL) **escala el mensaje** y convierte el caso tranquilo en
+   AVISO con su número. La sonda compara contra `api` y no contra una lista de respaldos: **un
+   origen nuevo que alguien añada mañana nace en ROJO**, no en verde.
+2. **Con Redis caído NO se avisa** (el aviso se cierra, no se abre). Sin Redis no hay candado…
+   pero tampoco hay caché, así que cada cotización va a la API y, con la API caída, cada una cae
+   al respaldo: avisar "por si acaso" sería un WhatsApp **por venta**. Queda el log, y Redis caído
+   ya provoca el 503. El rastro en Postgres se escribe igual.
+
+### 🧯 ENCARGO 2 — el validador del buffer (`config.py`)
+
+`buffer_max_segundos <= buffer_segundos` anula el debounce de esta mañana (el tope dispararía
+siempre) y **no se nota**: el bot contesta a trozos, como antes, sin un solo error. Ahora un
+`@model_validator` lo **REPARA con un `logger.error`**, no lanza: los dos `raise` de ese fichero
+son de SEGURIDAD (una contraseña pública ⇒ no arrancar es lo seguro), y esto es una perilla de
+AFINADO — tumbar el arranque dejaría al negocio SIN VENDER por un ajuste que solo empeora el ritmo
+de las respuestas. Se corrige a la proporción de fábrica (×4, no al 60 fijo: quien puso 30 quería
+esperar más) y el `+1` cubre el borde de `buffer_segundos = 0`.
+
+### 🧪 Validación POR REVERSIÓN (13 arreglos, 13 rojos)
+
+**34 tests nuevos** (`tests/test_tasa_visible.py`), **la mitad son casos que NO deben avisar** — la
+caché, la API sana, la recuperación, el segundo fallo dentro del candado, el domingo sin ventas y
+el candado manual — más los que exigen que **la venta siga** con la observabilidad rota:
+
+```
+R1  el origen no se marca:        3 failed, 326 passed → AssertionError: assert 'cache' == 'respaldo_bd'
+R2  la caída no deja rastro:      2 failed, 327 passed → AssertionError: pero el RASTRO se escribe siempre, que para eso está
+R3  sin aviso a la dueña:         5 failed, 324 passed → AssertionError: la dueña tiene que enterarse de que se cobra con el respaldo
+R4  sin candado anti-spam:        1 failed, 328 passed → AssertionError: cinco cotizaciones, UN aviso · assert 5 == 1
+R5  la sonda fuera del veredicto: 1 failed, 328 passed → AssertionError: assert 'tasa' in []
+R6  la sonda no ve el respaldo:   6 failed, 323 passed → assert True is False
+R7  el apunte tumba la venta:     1 failed, 328 passed → ValueError: no hay tasa de respaldo… / RuntimeError: Postgres no responde
+R8  bandeja después del WhatsApp: 1 failed, 328 passed → AssertionError: el aviso sobrevive en el panel aunque WhatsApp lo rechace
+R9  sin validador del buffer:     3 failed, 326 passed → AssertionError: assert 20 > 30
+R10 antigüedad a secas:           1 failed, 328 passed → AssertionError: sin ventas no hay avería que reportar
+R11 Redis caído tumba la venta:   2 failed, 327 passed → ConnectionError: Redis no responde
+R12 la sonda revienta sin BD:     1 failed, 328 passed → RuntimeError: Postgres no responde
+R13 sin Redis se avisa igual:     1 failed, 328 passed → AssertionError: sin candado no se avisa: un aviso por venta se acaba ignorando
+RESTAURADO:                     329 passed (295 + 34) · ruff limpio · compileall OK
+```
+
+R7 y R11 son los que había que comprobar de verdad, porque son los que un `except` de más volvería
+verdes: **sin la tragadera de `_anotar`, un hipo de Postgres convierte una tasa de la API
+perfectamente buena en "ahora mismo no puedo calcular el monto en bolívares"** — o sea, la
+observabilidad matando la venta que vino a vigilar.
+
+**Nada desplegado, nada mergeado.** Ningún banco tocado ni corrido. La migración 033 **NO está
+aplicada** en ningún contenedor: hasta que lo esté, la sonda devuelve su aviso de "no se pudo leer
+el rastro" y **no puede poner el bot en rojo** (falla ABIERTA, igual que la del modelo con la 032).
+
+---
+
 ## 2026-08-09 (2) — 🖼️ LA FOTO RECUERDA QUÉ MASA ELIGIÓ EL CLIENTE (rama `fix/etiqueta-recordada`, sin desplegar)
 
 **Medido contra el bot real del taller**, producto "Empanadas de masa de yuca o de masa de
