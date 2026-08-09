@@ -40,10 +40,13 @@ from celery.exceptions import MaxRetriesExceededError
 from sqlalchemy import delete, select
 
 import app.services.db as dbmod
+from app.config import get_settings
 from app.models import Cliente, Intervencion, Mensaje
 from app.services import redis_client as rc
 from app.services.db import get_session_factory
 from app.workers import tasks
+
+settings = get_settings()
 
 TEL = "__prueba_evapora__"
 DUENA = "__duena_evapora__"  # solo para `_hueco_en_el_panel`, que lee la VARIABLE DE ENTORNO
@@ -101,6 +104,25 @@ async def _soltar_candados() -> None:
     ningún aviso y parecería una regresión (mismo patrón que `probar_retomar._soltar_candado`)."""
     await rc._client().delete(
         f"aviso:sin_respuesta:{TEL}", "aviso:panel_incompleto", f"lock:{TEL}"
+    )
+
+
+async def _llega_y_calla(texto: str) -> None:
+    """Mete el texto en el buffer y DA POR PASADOS los segundos de silencio del debounce.
+
+    Desde el DEBOUNCE (2026-08-09) `_procesar` no vacía el buffer si el cliente acaba de escribir:
+    devuelve 'esperando' y se reprograma. Este banco llena el buffer a mano y procesa en el mismo
+    milisegundo, así que sin envejecer la marca `ultimo` probaría el debounce en vez de lo suyo
+    (SIL-10: que el turno no se evapore). Lo que se simula es lo único que aquí no interesa: los
+    15 segundos que el cliente sí deja en la vida real.
+
+    ⚠️ El caso 1 (el del lock) NO usa esto a propósito: allí el buffer se llena y se procesa igual
+    de rápido, y tiene que salir 'ocupado' — 'ocupado' manda sobre 'esperando' (SIL-1). Si un día
+    ese caso empieza a devolver 'esperando', el banco está avisando de una regresión de verdad.
+    """
+    await rc.agregar_a_buffer(TEL, texto)
+    await rc._client().hset(
+        f"buffer_ts:{TEL}", "ultimo", rc._ahora() - settings.buffer_segundos - 1
     )
 
 
@@ -241,7 +263,7 @@ async def caso_402() -> None:
 
     tasks.responder = _ia_caida
     try:
-        await rc.agregar_a_buffer(TEL, "quiero 2 cajas de empanadas")
+        await _llega_y_calla("quiero 2 cajas de empanadas")
         veredicto = await tasks._procesar(TEL, "Rosa")
         check("el turno termina con veredicto 'error' (no con un traceback suelto)",
               veredicto == "error", f"devolvió {veredicto!r}")
@@ -262,7 +284,7 @@ async def caso_402() -> None:
 
         # El candado: una caída de una hora NO puede ser 200 WhatsApps.
         enviados.clear()
-        await rc.agregar_a_buffer(TEL, "sigo esperando")
+        await _llega_y_calla("sigo esperando")
         await tasks._procesar(TEL, "Rosa")
         check("🔒 el segundo turno perdido NO manda otro WhatsApp (candado de 15 min)",
               not bool(a_la_duena()), str(enviados))
@@ -280,7 +302,7 @@ async def caso_402() -> None:
 
     tasks.responder = _ia_buena
     try:
-        await rc.agregar_a_buffer(TEL, "quiero una torta")
+        await _llega_y_calla("quiero una torta")
         veredicto = await tasks._procesar(TEL, "Rosa")
     finally:
         tasks.responder = real_responder

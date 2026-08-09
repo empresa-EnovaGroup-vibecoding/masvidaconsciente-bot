@@ -13,6 +13,9 @@ x-bot-env: &bot-env
   OPENROUTER_MODEL: ${OPENROUTER_MODEL}
   OPENROUTER_MODEL_FALLBACK: ${OPENROUTER_MODEL_FALLBACK}
   BUFFER_SEGUNDOS: ${BUFFER_SEGUNDOS}
+  # Con `:-60` a propósito (como COMPROBANTES_DIR): si el .env del servidor no la trae, docker
+  # pasaría la cadena VACÍA y pydantic no arrancaría el contenedor por no poder leerla como int.
+  BUFFER_MAX_SEGUNDOS: ${BUFFER_MAX_SEGUNDOS:-60}
   CONVERSACION_TTL: ${CONVERSACION_TTL}
   MAX_ITERACIONES_AGENTE: ${MAX_ITERACIONES_AGENTE}
   NEGOCIO_NOMBRE: ${NEGOCIO_NOMBRE}

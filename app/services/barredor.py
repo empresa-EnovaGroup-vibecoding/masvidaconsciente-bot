@@ -406,6 +406,10 @@ _VISTOS: dict[str, float] = {}
 # Un buffer tiene que sobrevivir DOS pasadas separadas por esto para considerarse huérfano. El
 # countdown normal es `settings.buffer_segundos` (15s): 60s deja margen de sobra para no pisarle
 # el turno a una tarea que simplemente todavía no ha vencido.
+# (Desde el DEBOUNCE del 2026-08-09 un buffer puede esperar legítimamente hasta
+# `settings.buffer_max_segundos` —el tope, 60s desde el primer mensaje—; si alguien sube ese tope
+# por encima de este número, rescatar de más NO rompe nada: la tarea rescatada mira las marcas,
+# ve que el cliente sigue escribiendo y se reprograma sola.)
 SEGUNDOS_HUERFANO = 60
 
 
@@ -421,7 +425,7 @@ async def rescatar_buffers_huerfanos() -> dict:
     CÓMO SE DETECTA, y por qué así: un buffer es huérfano si se le ha visto en DOS pasadas
     separadas por más de 60s y NUNCA tuvo `lock:` (nadie lo está atendiendo). Se hace con memoria
     del proceso en vez de calcular la edad desde el TTL (`3600 - ttl`) porque eso obligaría a
-    copiar el 3600 de `redis_client.agregar_a_buffer:38` aquí: el día que alguien cambie ese
+    copiar el 3600 de `redis_client.agregar_a_buffer:63` aquí: el día que alguien cambie ese
     número, el rescatador empezaría a mentir EN SILENCIO. Un número copiado es una bomba de
     relojería; dos pasadas no dependen de nada.
 

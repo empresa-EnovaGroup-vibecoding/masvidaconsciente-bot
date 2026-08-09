@@ -7,6 +7,7 @@ Patrón tomado del sistema de referencia (clínica), simplificado:
 - lock: que solo un worker procese el buffer de un cliente a la vez
 """
 import json
+import time
 from datetime import UTC, datetime
 from functools import lru_cache
 
@@ -22,6 +23,18 @@ def _client() -> redis.Redis:
     return redis.from_url(settings.redis_url, decode_responses=True)
 
 
+def _ahora() -> float:
+    """El reloj del buffer, en segundos de PARED (epoch UTC).
+
+    Está aparte por dos motivos. (1) Tiene que ser comparable ENTRE PROCESOS: quien escribe la
+    marca es la API (webhook) y quien la lee es el worker, que son dos contenedores distintos —
+    `time.monotonic()` no valdría aquí (cada proceso arranca su cuenta donde quiere), aunque sí
+    valga en el barredor, que compara consigo mismo. (2) Así los tests inyectan el reloj y salen
+    deterministas sin un solo `sleep`.
+    """
+    return time.time()
+
+
 # ─── Idempotencia ────────────────────────────────────────────────────
 
 async def ya_procesado(message_id: str) -> bool:
@@ -33,9 +46,39 @@ async def ya_procesado(message_id: str) -> bool:
 # ─── Buffer de mensajes ──────────────────────────────────────────────
 
 async def agregar_a_buffer(telefono: str, texto: str) -> None:
+    """Mete el texto en el buffer del cliente y DEJA LAS DOS MARCAS DE TIEMPO del buffer actual.
+
+    Las marcas (`buffer_ts:{telefono}`, un hash con `primero` y `ultimo`) son lo que permite el
+    DEBOUNCE de verdad en `_procesar`: `ultimo` se pisa en cada mensaje (la ventana se REINICIA
+    con cada uno) y `primero` solo lo escribe el que estrena el buffer (`HSETNX`), que es contra
+    lo que se mide el TOPE anti-inanición. Mismo TTL que el buffer y muerte conjunta en
+    `vaciar_buffer`: una marca sin buffer haría esperar de más, y un buffer sin marca se procesa
+    ya (que es el fallo seguro, ver `_espera_del_buffer`).
+    """
     c = _client()
-    await c.rpush(f"buffer:{telefono}", texto)
-    await c.expire(f"buffer:{telefono}", 3600)
+    ahora = _ahora()
+    clave, marcas = f"buffer:{telefono}", f"buffer_ts:{telefono}"
+    async with c.pipeline(transaction=True) as pipe:
+        pipe.rpush(clave, texto)
+        pipe.expire(clave, 3600)
+        pipe.hsetnx(marcas, "primero", ahora)
+        pipe.hset(marcas, "ultimo", ahora)
+        pipe.expire(marcas, 3600)
+        await pipe.execute()
+
+
+async def marcas_de_buffer(telefono: str) -> tuple[float, float] | None:
+    """(instante del PRIMER mensaje del buffer actual, instante del ÚLTIMO). None si no hay marca.
+
+    None significa "no sé desde cuándo": buffer de antes de este despliegue, Redis reiniciado o
+    hash a medias. Quien llama tiene que PROCESAR YA en ese caso — nunca dejar un mensaje colgado
+    por un dato ausente.
+    """
+    primero, ultimo = await _client().hmget(f"buffer_ts:{telefono}", ["primero", "ultimo"])
+    try:
+        return float(primero), float(ultimo)
+    except (TypeError, ValueError):
+        return None
 
 
 async def vaciar_buffer(telefono: str) -> list[str]:
@@ -44,7 +87,8 @@ async def vaciar_buffer(telefono: str) -> list[str]:
     async with c.pipeline(transaction=True) as pipe:
         pipe.lrange(clave, 0, -1)
         pipe.delete(clave)
-        mensajes, _ = await pipe.execute()
+        pipe.delete(f"buffer_ts:{telefono}")
+        mensajes, _, _ = await pipe.execute()
     return mensajes or []
 
 
@@ -83,6 +127,7 @@ async def borrar_memoria(telefono: str) -> None:
     await _client().delete(
         f"hist:{telefono}",
         f"buffer:{telefono}",
+        f"buffer_ts:{telefono}",  # las marcas mueren con el buffer que describen
         f"lock:{telefono}",
         f"abuso:{telefono}:{_hoy()}",
         f"abuso_avisado:{telefono}:{_hoy()}",

@@ -48,7 +48,13 @@ class Settings(BaseSettings):
     r2_public_url: str = ""
 
     # Comportamiento
+    # Ventana del buffer: se contesta cuando el cliente lleva ESTOS segundos CALLADO (debounce:
+    # cada mensaje nuevo la reinicia), no a los 15s del primero.
     buffer_segundos: int = 15
+    # TOPE ANTI-INANICIÓN del buffer, medido desde el PRIMER mensaje del buffer actual. Un
+    # cliente que escribe sin parar reiniciaría la ventana para siempre y se quedaría sin
+    # respuesta: pasado este tope se le contesta aunque siga escribiendo.
+    buffer_max_segundos: int = 60
     conversacion_ttl: int = 86400
     max_iteraciones_agente: int = 6
     # Anti-abuso / tope de gasto: maximo de mensajes por cliente al dia antes de

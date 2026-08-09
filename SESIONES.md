@@ -22,6 +22,87 @@
 
 ---
 
+## 2026-08-09 — ⏳ EL BUFFER YA NO CONTESTA A TROZOS: DEBOUNCE DE VERDAD (rama `fix/buffer-debounce`, sin desplegar)
+
+**La evidencia, medida en el taller el 2026-08-08** (tel …9792, logs del worker + tabla
+`mensajes`). Tres mensajes en ráfaga, DOS respuestas:
+
+```
+22:25:40  "Como son las que tienes? Variada."   → tarea para 22:25:55
+22:25:47  "Tienes tortas?"                      → tarea para 22:26:02
+22:25:55  la 1ª tarea vacía el buffer: consolida esos DOS ✅   (mensajes.id 4009)
+22:25:57  "De chocolate"
+22:26:02  la 2ª tarea se lo lleva con solo 5s de espera ❌     (id 4013 + respuesta 4014)
+```
+
+**El porqué:** el buffer consolidaba solo A MEDIAS. Cada mensaje programaba su tarea a
+`+buffer_segundos` (15s) y la tarea, al vencer, se llevaba TODO lo que hubiera
+(`vaciar_buffer` = LRANGE+DELETE atómico). O sea: la ventana estaba anclada al PRIMER mensaje y
+**no se reiniciaba**, así que cualquier tarea pendiente ANTERIOR barría lo recién llegado. Un
+mensaje que entra 1 segundo antes de que salte una tarea vieja se procesa con ~0s de espera. El
+cliente ve al bot contestándole a trozos — y cada trozo es un turno más de modelo pagado.
+
+### ⏱️ EL ARREGLO: se contesta cuando el cliente lleva 15s CALLADO
+
+`agregar_a_buffer` deja ahora **dos marcas de tiempo** (`buffer_ts:{telefono}`, hash con
+`primero` y `ultimo`, mismo TTL que el buffer y muerte conjunta en `vaciar_buffer`). `ultimo` se
+pisa con cada mensaje —**la ventana se REINICIA**— y `primero` solo lo escribe el que estrena el
+buffer (`HSETNX`). `_procesar`, **después** de tomar el lock y **antes** de vaciar, mira cuánto
+silencio lleva: si falta, **no toca el buffer**, se reprograma con `apply_async(countdown=lo que
+falte)` y devuelve el veredicto nuevo `"esperando"`.
+
+- **`"esperando"` NO es `"ocupado"` (SIL-1 intacto).** El lock tomado sigue significando
+  REENCOLAR con sus 8 reintentos de 20s. El camino nuevo va por `apply_async`, no por
+  `self.retry`: si gastara ese presupuesto, al agotarlo dispararía la falsa alarma de
+  `_avisar_turno_perdido` sobre un turno que no se ha perdido — sencillamente aún no toca.
+- **El lock se suelta SIEMPRE por el camino nuevo.** El `return "esperando"` va DENTRO del `try`,
+  así que lo suelta el mismo `finally` de siempre. Anular esto en las pruebas deja al cliente
+  **mudo del todo** (ver el rojo de abajo): la siguiente tarea ve "ocupado" contra un turno que
+  no existe.
+- **TOPE ANTI-INANICIÓN: `buffer_max_segundos` (nuevo en `config.py`, 60s)**, medido desde el
+  PRIMER mensaje. Quien escribe sin parar reiniciaría la ventana para siempre: pasado el tope se
+  le contesta aunque siga. La espera se recorta para no pisarlo, así que **nunca** se responde
+  más tarde de `primero + 60s`.
+- **Sin marca ⇒ se procesa YA** (buffer de antes del despliegue, Redis reiniciado, hash a
+  medias). Nunca dejar un mensaje colgado por un dato ausente: anular esta regla provoca un
+  **bucle infinito de reprogramaciones**, y las pruebas lo cazan.
+- **SIL-10 intacto:** el turno del cliente se sigue anotando en Postgres antes de llamar al
+  modelo, y el rescate del `except` no se tocó.
+
+### 🧪 Validación POR REVERSIÓN (7 arreglos, 7 rojos)
+
+**28 tests nuevos** (`tests/test_buffer_debounce.py`), con la línea de tiempo entera simulada y
+el reloj inyectado (`rc._ahora`): ni un `sleep`, 0,2s la suite. **La mitad son casos que NO deben
+esperar** — un buffer que frena de más deja al cliente mirando el chat, que es peor que el bug.
+Se anuló cada pieza y se vio el rojo:
+
+```
+R1 marcas de tiempo fuera:     6 failed, 22 passed  → AssertionError: la ráfaga tenía que consolidarse en UN solo turno
+R2 debounce fuera:             4 failed, 24 passed  → At index 0 diff: '…Variada.\nTienes tortas?' != '…Variada.\nTienes tortas?\nDe chocolate'
+R3 tope fuera:                 3 failed, 25 passed  → assert 14 == 0.0   (el que escribe sin parar se queda sin respuesta)
+R4 el lock no se suelta:       5 failed, 23 passed  → AssertionError: 🔴 INANICIÓN: el cliente escribió 12 veces y nadie le contestó
+R5 vaciar deja las marcas:     1 failed, 27 passed  → assert (100.0, 100.0) is None
+R6 "esperando" con self.retry: 1 failed, 27 passed  → assert [{'countdown': 20}] == []
+R7 sin marca ⇒ esperar:        7 failed, 21 passed  → AssertionError: bucle infinito de reprogramaciones (eso sería el bug al revés)
+RESTAURADO:                  265 passed (237 + 28) · ruff limpio · compileall OK
+```
+
+### ⚠️ Un banco había que tocarlo (y NO se pudo correr)
+
+`scripts/probar_no_se_evapora.py` llena el buffer A MANO y llama a `_procesar` en el mismo
+milisegundo: con el debounce eso es "el cliente sigue escribiendo" y habría salido rojo por el
+motivo equivocado. Sus 3 llamadas del carril SIL-10 pasan por `_llega_y_calla()`, que envejece la
+marca `ultimo` (simula los 15s que el cliente sí deja de verdad). **El caso 1 —el del lock— se
+dejó a propósito sin envejecer:** ahí tiene que salir "ocupado", y si algún día devuelve
+"esperando" el banco estará avisando de una regresión real. 🔴 **Ese banco no se corrió** (necesita
+contenedor vivo y le manda WhatsApp a la dueña si sale rojo): queda pendiente correrlo al
+desplegar. `probar_vigilante.py` no se toca — empuja al buffer con `rpush` a pelo (sin marcas), y
+sin marcas se procesa ya.
+
+**Nada desplegado, nada mergeado.**
+
+---
+
 ## 2026-08-08 (2) — 🛒 LA ASESORÍA DEJA DE SER DE MEMORIA Y LA FOTO SALE SOLA (rama `fix/asesoria-proactiva`, sin desplegar)
 
 Lo motivó el **smoke medido de 7 turnos contra el bot real** (`ASESORIA_smoke_2026-08-08.md`,

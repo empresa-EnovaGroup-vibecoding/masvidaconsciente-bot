@@ -597,6 +597,49 @@ _REINTENTOS_BUFFER = 8
 _ESPERA_BUFFER = 20
 
 
+# ─── EL DEBOUNCE DEL BUFFER (la ráfaga se contesta UNA vez) ──────────
+#
+# 🔴 EL BUG (medido en el taller el 2026-08-08, tel …9792, logs del worker + tabla `mensajes`):
+# la ventana de 15s estaba anclada al PRIMER mensaje y NO se reiniciaba, así que una tarea vieja
+# barría los mensajes recién llegados. 22:25:40 "Como son las que tienes? Variada." (tarea para
+# 22:25:55) · 22:25:47 "Tienes tortas?" (tarea para 22:26:02) · 22:25:55 la 1ª tarea consolida
+# esos dos (`mensajes.id 4009`) ✅ · 22:25:57 "De chocolate" · 22:26:02 la 2ª tarea se lo lleva
+# con solo 5s de espera ❌ → turno aparte (id 4013) y respuesta propia (id 4014). Tres mensajes
+# en ráfaga, dos respuestas: el cliente ve al bot contestándole a trozos.
+#
+# EL ARREGLO es un debounce de verdad: se procesa cuando el cliente lleva `buffer_segundos`
+# CALLADO, y cada mensaje nuevo reinicia la cuenta (`agregar_a_buffer` pisa la marca `ultimo`).
+# La tarea que llega antes de tiempo NO vacía el buffer: se reprograma para lo que falte.
+
+
+def _espera_restante(primero: float, ultimo: float, ahora: float) -> float:
+    """Segundos que faltan para contestar. 0 = procesar YA. Pura a propósito (tests sin reloj).
+
+    Dos relojes a la vez: el SILENCIO desde el último mensaje (la ventana que se reinicia) y el
+    TOPE desde el primero (`buffer_max_segundos`), que manda siempre — un cliente que escribe sin
+    parar no puede quedarse sin respuesta jamás. La espera se recorta para no pisar el tope, así
+    que la respuesta nunca sale más tarde que `primero + buffer_max_segundos`.
+    """
+    falta_para_el_tope = (primero + settings.buffer_max_segundos) - ahora
+    if falta_para_el_tope <= 0:
+        return 0.0  # TOPE: lleva demasiado rato escribiendo, se le contesta aunque siga
+    silencio = ahora - ultimo
+    restante = settings.buffer_segundos - silencio
+    if restante <= 0:
+        return 0.0  # ya lleva callado la ventana entera
+    # El `min` con `buffer_segundos` es cinturón contra una marca del FUTURO (relojes torcidos
+    # entre contenedores): un dato raro puede hacer esperar, nunca colgar.
+    return min(restante, falta_para_el_tope, float(settings.buffer_segundos))
+
+
+async def _espera_del_buffer(telefono: str) -> float:
+    """Lo mismo pero leyendo las marcas de Redis. SIN MARCA ⇒ 0 (procesar ya, nunca colgar)."""
+    marcas = await rc.marcas_de_buffer(telefono)
+    if marcas is None:
+        return 0.0
+    return _espera_restante(marcas[0], marcas[1], rc._ahora())
+
+
 @celery_app.task(name="procesar_buffer", bind=True, max_retries=_REINTENTOS_BUFFER)
 def procesar_buffer(self, telefono: str, nombre: str | None = None):
     """Tarea Celery: procesa los mensajes acumulados de un cliente y responde.
@@ -608,6 +651,12 @@ def procesar_buffer(self, telefono: str, nombre: str | None = None):
     quiero" se pudría en el buffer hasta expirar (1 h). Ni el cliente, ni la dueña, ni el log.
     Reintentar aquí es GRATIS y no duplica nada: en esa rama no se vació el buffer, no se llamó
     al modelo y no se envió un solo globo.
+
+    ⚠️ "ESPERANDO" NO ES "OCUPADO" (debounce, 2026-08-09). El camino nuevo —el cliente todavía
+    está escribiendo— se reprograma DENTRO de `_procesar` con `apply_async` y sale por este mismo
+    `return`. A propósito no pasa por `self.retry`: gastaría el presupuesto de 8 reintentos que
+    está reservado para el lock tomado y, al agotarlo, dispararía la falsa alarma de
+    `_avisar_turno_perdido` sobre un turno que no se ha perdido — sencillamente aún no toca.
     """
     if _run(_procesar(telefono, nombre)) != "ocupado":
         return
@@ -630,7 +679,8 @@ def procesar_buffer(self, telefono: str, nombre: str | None = None):
 
 async def _procesar(telefono: str, nombre: str | None) -> str:
     """Un turno de texto de punta a punta. Devuelve el veredicto para que el que llama decida:
-    "ocupado" (hay que REENCOLAR), "vacio", "apagado", "sin_envio", "error", "ok"."""
+    "ocupado" (hay que REENCOLAR), "esperando" (ya se reprogramó sola), "vacio", "apagado",
+    "sin_envio", "error", "ok"."""
     # Solo un worker procesa el buffer de este cliente a la vez. Ver SIL-1: "ocupado" NO es
     # "listo" — el que llama REENCOLA.
     if not await rc.adquirir_lock(telefono):
@@ -640,6 +690,16 @@ async def _procesar(telefono: str, nombre: str | None) -> str:
     texto = ""
     guardado = False  # ¿el turno del cliente ya quedó ESCRITO en Postgres?
     try:
+        # DEBOUNCE: ¿el cliente sigue escribiendo? Va DESPUÉS del lock (si hay un turno en curso
+        # manda SIL-1, que es otra cosa) y ANTES de `vaciar_buffer` (que es atómico: una vez
+        # vaciado ya no hay marcha atrás). El `finally` suelta el lock también por aquí — si no,
+        # la siguiente tarea vería "ocupado" contra un turno que no existe.
+        espera = await _espera_del_buffer(telefono)
+        if espera > 0:
+            logger.info("Buffer de %s: sigue escribiendo; se reprograma en %.1fs", telefono, espera)
+            procesar_buffer.apply_async((telefono, nombre), countdown=espera)
+            return "esperando"
+
         mensajes = await rc.vaciar_buffer(telefono)
         if not mensajes:
             return "vacio"  # otra tarea ya lo procesó
