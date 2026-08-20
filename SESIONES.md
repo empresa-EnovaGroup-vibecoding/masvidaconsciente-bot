@@ -13,12 +13,228 @@
 > *"Pendiente: redeploy"* o describen el estado del 14-jul son HISTÓRICAS. La fuente actual es
 > `ROADMAP.md` → **ESTADO REAL A 2026-07-23** + la entrada de esta fecha.
 
-- 🧪 **Taller:** unificación completa, arquitectura de **UN agente**, modelo **Claude Haiku**, bot encendido para todos los números, 17 bancos verdes.
+- 🧪 **Taller:** unificación completa, arquitectura de **UN agente**, 17 bancos verdes. 🔴 Lo de
+  "modelo Claude Haiku, bot encendido para todos los números" de esta línea **ya NO es cierto**:
+  ver la entrada 2026-08-20 de abajo (modelo cambiado a GPT-4o-mini + lista blanca SÍ activa).
 - 🏪 **Producción real (netcup):** no se ha tocado; sigue en la versión anterior y con lista blanca.
 - 🟡 **Modo DOS (Operador + Voz):** los **tres bloqueadores están cerrados** (2026-08-06: el hueco del
   reintento del dinero, el `precio_texto` de `info_producto` y la prueba de regresión). Sigue en
   `agente_modo='uno'` a propósito: falta probarlo con **tráfico real**, y hay que decidirlo sabiendo
   que **añade una llamada al LLM por turno** — es palanca de calidad, no de ahorro.
+
+---
+
+## 2026-08-20 — 🔍 AUDITORÍA DE ARRANQUE: 3 cambios de DATOS que nadie registró (cero código tocado)
+
+**Contexto:** nueva sesión, se corrió el §0 de `prompt_proxima_sesion.md` completo antes de tocar
+nada — `git fetch` + auditoría por checksum de los 6 ficheros clave contra los 2 contenedores +
+consultas directas a la BD del taller. **Resultado: cero drift de código** (mismo md5 en local,
+BOT y WORKER para `agent.py`, `tools.py`, `system_prompt.py`, `tasks.py`, `tasa.py`, `config.py`;
+**329 tests** pasan local). Pero **entre el 08-09 y hoy pasaron 3 cosas de datos/config que ningún
+documento registraba**, porque no fueron un deploy — fueron uso real del panel y del propio bot:
+
+### 1 · 🔴 El modelo activo cambió de Haiku a GPT-4o-mini, sin registrar quién ni por qué
+`configuracion.modelo_ia` = `openai/gpt-4o-mini-2024-07-18`, `updated_at = 2026-08-18 18:29:13`.
+Antes era `anthropic/claude-haiku-4.5` (confirmado: las últimas 3 filas de `llamadas_ia` con
+`modelo_pedido = modelo_real = anthropic/claude-haiku-4.5` son del mismo 08-18 pero a las 15:04,
+**tres horas antes** del cambio). Mismo `updated_at` en `agente_modo` (sigue en `'uno'`, sin
+cambiar de valor) — encaja con alguien guardando la pantalla de Configuración completa desde el
+panel, no con una edición directa a la BD. **Ninguna conversación real ha corrido todavía contra
+GPT-4o-mini**: las redes de asesoría/pitch/foto de las entradas de abajo (08-08 y 08-09) se
+construyeron y midieron TODAS contra Haiku. Por `CLAUDE.md` §5 el selector es palanca de Maired —
+queda **confirmar con ella si el cambio fue intencional** antes de asumir que es un descuido.
+
+### 2 · 🔴 La lista blanca del taller SÍ está activa (la tabla de `ROADMAP.md` decía lo contrario)
+`docker exec <bot/worker> env` → `NUMEROS_PERMITIDOS=584264399792,573005690062` en **los dos**
+contenedores, más `numeros_permitidos_extra = 593993314532` en `configuracion` (BD). Tres números
+permitidos — la fila "el taller no tiene lista blanca activa" de `ROADMAP.md` (fechada 07-23) ya
+era falsa hoy y quedó corregida en el propio archivo.
+
+### 3 · 🔴🔴 Un desconocido le escribió al bot del taller — y el bot contestó con silencio total
+`SELECT * FROM mensajes WHERE cliente_telefono = '584247490499'` da **una sola fila**: *"Hola. Buen
+día. Tienes empanadas?"*, 2026-08-12 12:40:25 (prefijo venezolano 0424). Cero filas en
+`llamadas_ia` para ese teléfono en esa fecha, cero mensaje `assistant` de respuesta: el mensaje se
+guardó (el webhook y el registro en Postgres funcionan) pero `_numero_permitido` lo cortó antes de
+llegar al agente, sin error, sin aviso a nadie — exactamente el comportamiento documentado en el
+docstring de la función (`tasks.py`). `META_VERIFY_TOKEN` del taller es `enova-prueba-2026`, así
+que lo más probable es que no sea el número público real del negocio — pero **nadie ha investigado
+quién es ni cómo llegó a escribir**, y es la primera vez que alguien fuera del equipo le habla al
+bot. Es el escenario del §3.1 del prompt de sesión, con un matiz: no fue el bot fallando en vivo,
+fue el bot **ni siquiera intentándolo**.
+
+### Lo que SÍ se reconfirmó igual que el 08-09 (nada de esto cambió)
+Push a la org sigue en 403 (probado con `git push --dry-run` real, no de memoria). Coolify sigue
+con las 3 apps (`bot`, `worker`, `dashboard`) en `running:unknown` en su propia BD — nadie las ha
+tocado. La sonda de la tasa (SIL-14, migración 033) ya tiene **2 filas reales** en
+`tasa_resoluciones` (756,71 el 08-09 y 773,31 el 08-18), las DOS con `origen = 'api'` — nunca cayó
+al respaldo desde que se desplegó. `/salud` sigue `estado: ok, fallos: []`. La personalidad sigue
+diciendo *"Alejandra, la asesora"*. Fotos etiquetadas subió de 5/34 a **7/34** (alguien —
+presumiblemente Whuilianny— etiquetó 2 más). Saldo OpenRouter: **$4,81** (era $5,13; sigue la
+cuenta compartida, vigilar). `system_prompt.py` creció de 913 a 939 líneas (21 NUNCA · 13 SIEMPRE,
+antes 12 · 10 JAMÁS) — diferencia menor, no se investigó la causa exacta línea por línea.
+
+**Nada de código tocado. Nada desplegado.** Se corrigió `prompt_proxima_sesion.md` (nota nueva +
+tabla del §2 + P0) y la fila de `ROADMAP.md` que ya no era cierta, según la regla del propio
+documento ("si algo no te cuadra con lo que ves, corrígelo en el momento").
+
+---
+
+## 2026-08-20 (2) — 🔴🔴 CAUSA RAÍZ DEL FALLO QUE REPORTÓ MAIRED: EL BOT OLVIDA TODO A LAS 24 H
+
+**Lo que reportó Maired** (captura de WhatsApp del 08-18): el bot le ofreció empanadas de plátano
+con relleno de *carne mechada, pollo o queso de cabra*, la clienta contestó **"De queso de cabra.
+Por favor. Cuanto es?"** y el bot respondió con el **Kéfir de Leche de cabra ($8)**, con foto
+incluida, saludando como si fuera el primer contacto. Sus tres quejas: *"no es capaz de seguir la
+conversación"*, *"esa conversación quedó hace días y debe retomarla"* y *"¿por qué dice déjame
+verificar eso para ti?"*.
+
+### 🎯 LA CAUSA RAÍZ (una sola, y explica las TRES quejas)
+
+**El historial de conversación vive SOLO en Redis con un TTL de 24 h. Postgres guarda los mensajes
+para siempre —la dueña los ve en el panel y la clienta los ve en su WhatsApp— pero el agente NUNCA
+los lee.** Pasadas 24 h de silencio el bot no "pierde un poco de contexto": arranca **de cero**,
+convencido de que nunca ha hablado con esa persona.
+
+- `redis_client.py:113` → `await c.expire(clave, settings.conversacion_ttl)`
+- `config.py:66` → `conversacion_ttl: int = 86400` · env de los DOS contenedores: `CONVERSACION_TTL=86400`
+- Los **5** puntos que leen historial (`tasks.py:716, 939, 1115, 1742, 2096`) llaman
+  exclusivamente a `rc.obtener_historial()` = Redis. **No existe ni un fallback a Postgres.**
+
+**El hueco real fue de 5 días 15 h 27 min** (08-12 23:36 → 08-18 15:04), casi seis veces el TTL.
+
+### 🔬 La evidencia, medida (no deducida)
+
+```
+Redis EN VIVO hoy:   KEYS hist:*  →  (vacío)      TTL hist:584264399792 → -2 (no existe)
+llamadas_ia id 207:  tokens_entrada 22.022 · tokens_cache 0 · UNA sola llamada al modelo
+llamadas_ia id 205:  tokens_entrada 22.099 (turno del 08-12)
+   ↑ el turno del 08-18 pesa MENOS que el del 08-12, cuando debería traer el historial encima
+log worker 1313:  responder: modelo=anthropic/claude-haiku-4.5 tools=12/12 msg='De queso de cabra…'
+log worker 1314:  UN solo POST a openrouter  ⇒  el modelo NO llamó a NINGUNA herramienta
+```
+
+🔴 Y el dato que mata la hipótesis fácil: **este fallo ocurrió con Haiku 4.5** (`llamadas_ia` id
+207 lo prueba), a las **15:04**. El modelo se cambió a GPT-4o-mini a las **18:29 del mismo día**,
+3 h 25 min DESPUÉS. Encaja con que alguien viera este fallo y cambiara el modelo para arreglarlo.
+**No lo arregla:** la causa es el TTL, no el modelo — y de paso deja las redes de agosto corriendo
+sobre un modelo contra el que nunca se midieron.
+
+### ⛓️ La cadena de 5 eslabones (por qué salió el Kéfir y no un error visible)
+
+1. **Historial expirado** ⇒ *"De queso de cabra. Por favor. Cuanto es?"* llega al modelo como un
+   mensaje huérfano, sin las empanadas delante.
+2. **"queso de cabra" no es un producto: es un RELLENO.** El único producto del catálogo con
+   "cabra" en el nombre es el **Kéfir de Leche de cabra de libre pastoreo (id 25, $8.00)**.
+   Verificado: `SELECT … WHERE nombre ILIKE '%cabra%'` devuelve esa fila y nada más. Match léxico.
+3. **CERO herramientas.** El precio salió del bloque `[SOLO PARA TI]` del propio prompt, que la
+   **regla 5 del catálogo le AUTORIZA a usar "para responder al instante"** cuando preguntan
+   "¿cuánto?" — mientras la regla 4 le ordenaba llamar a `ver_catalogo` justamente porque le
+   pidieron por RELLENO. Ganó la regla que le dejaba contestar de memoria. **De ahí el "Déjame
+   verificar eso para ti": dijo que verificaba y no verificó nada.** Esa frase es la huella
+   textual de que no usó herramientas, no un tic inocente.
+4. 🔴 **Las redes que existían para atajar ESTO estaban ciegas por la misma causa.** Reproducido en
+   frío con el mensaje real: `_elige_entre_opciones("De queso de cabra", historial_vivo)` → **True**;
+   con `[]` → **False**. La RED DEL PITCH construida el 08-08 exactamente para "el cliente elige y
+   el bot confirma pelado" **habría disparado** si el historial hubiera estado vivo. Igual quedan
+   ciegas `_es_inicio_conversacion` (→True: de ahí el *"Buenos días, Enova 💚"*, que salió **del
+   modelo**, no de `_asegurar_saludo` — el cliente no saludó, comprobado), `etiqueta_recordada` y
+   `_pregunta_repetida`. **El TTL no solo ciega al modelo: apaga cuatro redes de seguridad.**
+5. **La RED DE LA FOTO amplificó el error hasta hacerlo convincente.** Log 1321: *"RED DE LA FOTO:
+   el modelo no mostró 'Kéfir…' y el código lo intentó → enviadas=1"*. La red funcionó
+   **perfectamente** — y por eso mandó la foto del producto equivocado. Una red no puede saber que
+   el producto enfocado es el que no era. Sin ella el error habría sido un texto raro; con ella
+   llegó con foto y precio, con toda la apariencia de certeza.
+
+### 🩹 Daños colaterales del mismo turno
+
+- **Aviso falso a la dueña.** Log 1315: `PROMESA SIN AVISO … 'Déjame verificar eso para ti'` — la
+  red de la honestidad leyó esa frase como una promesa pendiente y **creó un aviso automático**.
+  Falso positivo generado por el tic verbal del eslabón 3.
+- **Cotización errónea de cara a la clienta:** pidió empanadas de queso de cabra (**$12**,
+  producto id 5) y recibió *"son $8"*. No hubo pedido, así que no se cobró mal — pero el número
+  que vio era el de otro producto.
+- **El hilo del panel muestra la foto ANTES de la pregunta que la provocó.** `_guardar_media_saliente`
+  escribe al enviar (15:04:06) y `_guardar_en_panel` escribe el turno entero al final, en un solo
+  flush (15:04:10.1679xx los cuatro). Pasa **sistemáticamente**: 3033/3034, 3039/3040, 3053-3055,
+  3977/3978, 4037/4038.
+
+### 📊 Cuántas veces ha pasado ya (y por qué nadie lo vio antes)
+
+En **ese solo chat**, el bot ha arrancado sin memoria **6 veces**: huecos de 4d23h (07-28), 6d02h
+(08-04), 1d20h (08-06), 2d02h (08-08), 4d01h (08-12) y 5d15h (08-18). **El bug llevaba semanas
+activo y era invisible** porque los mensajes de vuelta se explicaban solos: el 08-12 el historial
+TAMBIÉN estaba perdido, y no se notó porque *"de repente tengas empanadas de plátano"* nombra el
+producto. El 08-18 la clienta contestó *"De queso de cabra"* — una frase que **solo** tiene sentido
+con el turno anterior delante — y ahí el bug se hizo visible. **Es el patrón real de una clienta:
+escribe hoy, decide en tres días.** Y es exactamente el riesgo §3.1 ("nadie real ha hablado con
+este bot") cobrándose la primera pieza.
+
+### 🔧 EL ARREGLO (rama `fix/memoria-24h`)
+
+**`app/services/memoria.py` (nuevo).** `historial_con_respaldo(telefono, *, sembrar)`: si Redis
+tiene historial MANDA Redis (es la fuente viva y el carril normal no paga una consulta de más); si
+viene vacío, se reconstruye de la tabla `mensajes`. Cuatro filtros, y ninguno es cosmética:
+
+| Filtro | El bug que evita |
+|---|---|
+| `estado != 'fallido'` | **SIL-8.** Postgres guarda los globos fallidos (rojo en el panel); si el bot los recordara, daría por dichos unos datos bancarios que el cliente nunca recibió. **Y NO se filtra por `= 'enviado'`**: los que llegan bien pasan a `entregado`/`leido` cuando Meta avisa (hoy: 29 vs 25) — filtrar por 'enviado' habría tirado la mayoría del historial bueno |
+| `tipo = 'text'` | La media nunca entró al historial de Redis (decisión del 08-08). Las notas de voz NO se pierden: se guardan ya transcritas y con tipo 'text' |
+| `owner → assistant` | Es lo que hace Redis con el eco de la dueña ("una sola voz ante el cliente"). Mandar 'owner' al LLM sería un rol que no conoce; omitirlo, un hueco donde alguien sí habló |
+| ventana de días | Sin ella el bot desentierra un pedido de hace meses y lo trata como vivo. `HISTORIAL_RESPALDO_DIAS=15`: cubre el patrón real (preguntar hoy, decidir en tres días) |
+
+Y las tres decisiones que se pueden discutir:
+
+1. **NO se sube `conversacion_ttl`.** Solo movería la frontera y engordaría la memoria viva de
+   todos. El dato ya estaba en Postgres; lo que faltaba era leerlo.
+2. **`sembrar=True` es CORRECCIÓN, no rendimiento.** Sin dejar lo rescatado en Redis, el turno
+   SIGUIENTE encuentra ahí los 2 mensajes que acaba de escribir este turno, ya no ve `hist:`
+   vacía, no vuelve a rescatar — y el bot olvida otra vez. Se siembra solo desde los carriles que
+   tienen el LOCK del teléfono (`_procesar`, `_responder_y_enviar`); los del dinero (comprobante,
+   confirmar pago) solo LEEN, porque los dispara el worker de visión sin lock. `sembrar_historial`
+   además NO PISA lo que ya hubiera: duplicar el turno en la memoria es peor que no sembrar.
+3. 🔴 **EL RETOMAR (`tasks.py:939`) SE QUEDA FUERA A PROPÓSITO.** Ahí el historial no es contexto:
+   es el GUARD DE HONESTIDAD (`if not historial: return`). Hoy, con la memoria expirada, el bot se
+   CALLA — el fallo seguro. Rescatando de Postgres empezaría a escribirle a quien habló hace días
+   porque su último turno "quedó pendiente", y eso es un envío PROACTIVO: la regla dura de Tech
+   Provider con Meta manda sobre la comodidad de recordar.
+
+**Y el bug del hilo, del mismo incidente:** `_guardar_en_panel` acepta `ts_usuario` — la hora en
+que el cliente ESCRIBIÓ, tomada antes de pensar. Sin eso la pregunta se fechaba al cerrar el turno
+y la media (escrita al enviarla, mitad del turno) la adelantaba en el hilo, que ordena por
+`created_at`. La dueña leía el turno al revés en todos los turnos con foto.
+
+### 🧪 Validación POR REVERSIÓN (17 piezas, 17 rojas)
+
+**26 tests nuevos** (`test_memoria_respaldo.py` + 2 en `test_buffer_debounce.py`), **la mayoría son
+casos que NO deben rescatar** — una memoria que trae lo que no debe es peor que no tener memoria.
+
+```
+R1  el respaldo entero fuera        R7  la guarda de internos fuera    R13 el ltrim de la siembra
+R2  la siembra fuera                R8  el orden (reversed) fuera      R14 el expire de la siembra
+R3  SIL-8 (fallido) fuera           R9  la tragadera de Postgres       R15 la guarda de lista vacía
+R4  el filtro de tipo fuera         R10 la tragadera de la siembra     R16 el ts_usuario no se aplica
+R5  la ventana de días fuera        R11 'Redis manda' fuera            R17 _procesar no pasa el ts
+R6  owner->assistant fuera          R12 la guarda anti-duplicado
+RESTAURADO: 355 passed (329 + 26) · ruff limpio · compileall OK
+```
+
+🔴 **DOS reversiones salieron VERDES la primera vez, y ahí estuvo el valor del método** (van dos
+sesiones seguidas que pasa — L15): **R12** porque todos los tests mockeaban `sembrar_historial` y su
+lógica real no se ejecutaba NUNCA, y **R17** porque el test del sello de hora probaba
+`_guardar_en_panel` en aislamiento y nadie comprobaba que `_procesar` se lo pasara. Se taparon con
+6 tests más (3 que ejercitan `sembrar_historial` de verdad contra un Redis falso, 2 que ejercitan
+`_procesar` con su andamiaje real, y el del pipeline). **Sin revertir, esas dos piezas se habrían
+desplegado sin una sola prueba encima.**
+
+Dos correcciones más que salieron del repaso del propio código, antes de desplegar: el pipeline de
+la siembra usa `async with … transaction=True` como el resto del fichero (sin el context manager la
+conexión no vuelve al pool), y el monkeypatch de los tests apunta a `app.services.db` y no al
+namespace de `tasks`, porque `_guardar_en_panel` re-importa `get_session_factory` DENTRO de la
+función y el import local sombrea el global — parchear `tasks` dejaba pasar la llamada a Postgres
+de verdad.
+
+**Sin migración** (no se tocó el esquema: el dato ya estaba ahí). Sin tocar el prompt, la
+personalidad, `temperature`, `max_tokens`, ni el camino del dinero. Aditivo.
 
 ---
 

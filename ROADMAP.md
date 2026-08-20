@@ -35,8 +35,8 @@ Las **FASES 0 a 3 ya están hechas y desplegadas**:
 |---|---|
 | 🧪 **TALLER (Hostinger `2.25.139.106`)** | Tiene la unificación completa del trabajo de Maired/Haiku + los 22 commits de Erwin. Bot `2ba7e29` (el commit posterior `671503d` solo documenta) y panel `b8651a0`, construidos desde GitHub. |
 | 🤖 **Arquitectura activa en el taller** | **UN agente (`agente_modo = uno`)**, el comportamiento estable de siempre. El modo Operador + Voz existe en el código y en el panel, pero **NO está activo**. |
-| 🧠 **Modelo activo en el taller** | **Claude Haiku**, seleccionado desde Configuración. |
-| 📲 **Quién puede recibir respuesta en el taller** | El bot está **ENCENDIDO para todos los números**; el taller no tiene lista blanca activa. Vigilar las conversaciones porque cualquier número que escriba al número del taller puede recibir respuesta. |
+| 🧠 **Modelo activo en el taller** | 🔴 **`openai/gpt-4o-mini-2024-07-18`** (verificado en vivo 2026-08-20; era Claude Haiku hasta el 08-18 18:29, ver `prompt_proxima_sesion.md`). Seleccionado desde Configuración. |
+| 📲 **Quién puede recibir respuesta en el taller** | 🔴 **CORREGIDO 2026-08-20 (esta fila estaba mal):** el taller SÍ tiene lista blanca activa — `NUMEROS_PERMITIDOS` (env, en bot y worker) + `numeros_permitidos_extra` (BD) suman **3 números**. Un desconocido escribió el 08-12 y no fue contestado por esto. Ver detalle en `prompt_proxima_sesion.md`. |
 | 🛡️ **Calidad del taller** | Último flujo de código en verde y **17/17 bancos automáticos en verde** después del despliegue. `api-masvida.enovagroup.tech` apunta hoy al taller. |
 | 🏪 **PRODUCCIÓN REAL (netcup `152.53.89.118`)** | Atiende a las clientas reales. **NO se ha tocado ni promovido la unificación.** El último despliegue oficial del bot sigue en `7e80b8a` (14-jul). Tiene **lista blanca activa**. |
 | 🔒 **Decisión operativa** | Seguir trabajando y probando en el taller. Producción permanece intacta hasta una promoción coordinada y aprobada expresamente por Maired. |

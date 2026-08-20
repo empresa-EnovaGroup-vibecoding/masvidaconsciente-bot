@@ -64,6 +64,13 @@ class Settings(BaseSettings):
     # respuesta: pasado este tope se le contesta aunque siga escribiendo.
     buffer_max_segundos: int = 60
     conversacion_ttl: int = 86400
+    # 🔴 CUÁNTOS DÍAS ATRÁS se rescata la conversación de Postgres cuando el historial de Redis ya
+    # expiró (`services/memoria.py`). `conversacion_ttl` son 24 h: sin este respaldo, una clienta
+    # que pregunta hoy y decide en tres días le habla a un bot que no recuerda NADA — y encima con
+    # cuatro redes de seguridad ciegas. Aquí NO se sube el TTL de Redis a propósito: eso solo
+    # movería la frontera y engordaría la memoria viva de todos. 15 días cubre de sobra el patrón
+    # real de compra sin desenterrar pedidos de hace meses como si estuvieran vivos.
+    historial_respaldo_dias: int = 15
     max_iteraciones_agente: int = 6
     # Anti-abuso / tope de gasto: maximo de mensajes por cliente al dia antes de
     # pausar las respuestas automaticas con el (y avisar a la duena). 0 = sin tope.

@@ -105,17 +105,50 @@ async def liberar_lock(telefono: str) -> None:
 
 # ─── Historial de conversación ───────────────────────────────────────
 
+# Cuántos mensajes recuerda el agente. Vive aquí porque aquí está el `ltrim` que lo aplica, y
+# `services/memoria.py` lo importa para que el historial RESCATADO de Postgres tenga exactamente
+# el mismo tamaño que el vivo (dos límites distintos = dos comportamientos según de dónde venga).
+MAX_TURNOS_HISTORIAL = 20
+
+
 async def guardar_historial(telefono: str, rol: str, contenido: str) -> None:
     c = _client()
     clave = f"hist:{telefono}"
     await c.rpush(clave, json.dumps({"role": rol, "content": contenido}))
-    await c.ltrim(clave, -20, -1)  # solo los últimos 20 turnos
+    await c.ltrim(clave, -MAX_TURNOS_HISTORIAL, -1)  # solo los últimos 20 turnos
     await c.expire(clave, settings.conversacion_ttl)
 
 
 async def obtener_historial(telefono: str) -> list[dict]:
     filas = await _client().lrange(f"hist:{telefono}", 0, -1)
     return [json.loads(f) for f in filas]
+
+
+async def sembrar_historial(telefono: str, mensajes: list[dict]) -> None:
+    """Deja en Redis un historial reconstruido desde Postgres (ver `services/memoria.py`).
+
+    🔴 NO PISA lo que ya hubiera: si entre la lectura y esta llamada alguien escribió en `hist:`,
+    la siembra se ABANDONA. Sembrar encima duplicaría los mismos mensajes en la memoria del
+    agente, que es peor que no sembrar (el bot leería dos veces el mismo turno). El caso normal
+    está protegido por el LOCK del teléfono; esto cubre el borde.
+
+    Se usa el MISMO `ltrim` + `expire` que `guardar_historial`: lo sembrado no es un ciudadano de
+    segunda, envejece y se recorta igual que lo vivo.
+    """
+    if not mensajes:
+        return
+    c = _client()
+    clave = f"hist:{telefono}"
+    if await c.exists(clave):
+        return
+    # `async with … transaction=True`, igual que `agregar_a_buffer`: el context manager devuelve
+    # la conexión al pool (sin él se queda colgada) y MULTI/EXEC evita que otro proceso vea la
+    # lista a medio sembrar.
+    async with c.pipeline(transaction=True) as pipe:
+        pipe.rpush(clave, *[json.dumps(m) for m in mensajes])
+        pipe.ltrim(clave, -MAX_TURNOS_HISTORIAL, -1)
+        pipe.expire(clave, settings.conversacion_ttl)
+        await pipe.execute()
 
 
 async def borrar_memoria(telefono: str) -> None:

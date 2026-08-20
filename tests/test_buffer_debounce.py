@@ -487,3 +487,50 @@ async def test_buffer_vacio_no_llama_al_modelo(turno, reloj, servidor):
     reloj.t = 100.0
     assert await tasks._procesar(TEL, NOMBRE) == "vacio"
     assert turno["respuestas"] == []
+
+
+# ══════════════════════════════════════════════════════════════════════════════════
+# EL SELLO DE HORA DEL TURNO (arreglo del 2026-08-20)
+#
+# Estos dos viven aquí, y no junto al resto del arreglo del hilo, porque el andamiaje REAL de
+# `_procesar` está en este fichero: duplicar `RedisDeMentira` en otro sitio sería peor. Los pidió
+# la REVERSIÓN — anular el `ts_usuario=ts_turno` de `_procesar` dejaba la suite entera en verde,
+# porque el otro test prueba `_guardar_en_panel` en aislamiento y nadie comprobaba que el carril
+# se lo pasara de verdad.
+# ══════════════════════════════════════════════════════════════════════════════════
+
+async def test_el_turno_se_fecha_CUANDO_escribio_el_cliente(turno, reloj, servidor, monkeypatch):
+    """`_procesar` tiene que pasarle a `_guardar_en_panel` la hora del turno. Sin eso la
+    pregunta se fecha al CERRAR el turno y la media (enviada antes) la adelanta en el hilo."""
+    visto = {}
+
+    async def _capturar(_tel, _nombre, _texto, _partes, ts_usuario=None):
+        visto["ts"] = ts_usuario
+        return True
+
+    monkeypatch.setattr(tasks, "_guardar_en_panel", _capturar)
+    reloj.t = 100.0
+    await rc.agregar_a_buffer(TEL, "De queso de cabra. Cuanto es?")
+    reloj.t = 100.0 + settings.buffer_segundos
+    await tasks._procesar(TEL, NOMBRE)
+    assert visto.get("ts") is not None, "el carril no le pasó la hora del turno al panel"
+
+
+async def test_la_hora_del_turno_se_toma_ANTES_de_pensar(turno, reloj, servidor, monkeypatch):
+    """No basta con que llegue: tiene que ser anterior a la respuesta. Si se tomara al final,
+    volvería a quedar por detrás de la media de ese mismo turno."""
+    from datetime import UTC, datetime
+
+    visto = {}
+
+    async def _capturar(_tel, _nombre, _texto, _partes, ts_usuario=None):
+        visto["ts"] = ts_usuario
+        return True
+
+    monkeypatch.setattr(tasks, "_guardar_en_panel", _capturar)
+    antes = datetime.now(UTC)
+    reloj.t = 100.0
+    await rc.agregar_a_buffer(TEL, "hola")
+    reloj.t = 100.0 + settings.buffer_segundos
+    await tasks._procesar(TEL, NOMBRE)
+    assert antes <= visto["ts"] <= datetime.now(UTC)

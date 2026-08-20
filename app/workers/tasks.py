@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import re
+from datetime import datetime
 
 from celery.exceptions import MaxRetriesExceededError
 
@@ -15,6 +16,7 @@ from app.agent.agent import (
 from app.config import get_settings
 from app.services import redis_client as rc
 from app.services.db import get_session_factory
+from app.services.memoria import historial_con_respaldo
 from app.services.meta_client import (
     MAX_MEDIA_BYTES,
     MediaDemasiadoGrande,
@@ -142,7 +144,8 @@ async def _hueco_en_el_panel(telefono: str, texto_usuario: str, dichos: list) ->
 
 
 async def _guardar_en_panel(
-    telefono: str, nombre: str | None, texto_usuario: str, partes: list[dict]
+    telefono: str, nombre: str | None, texto_usuario: str, partes: list[dict],
+    ts_usuario: datetime | None = None,
 ) -> bool:
     """Persiste la conversacion en Postgres para que aparezca en el panel.
 
@@ -159,6 +162,14 @@ async def _guardar_en_panel(
     viejo decía "no critico: la respuesta ya se envio" —cierto para el CLIENTE, falso para la
     DUEÑA—, y ahora hay una red (SIL-10) que escribe el turno del cliente cuando nadie más pudo.
     Esa red solo funciona si aquí se dice la VERDAD sobre si se guardó o no.
+
+    🔴 `ts_usuario` (2026-08-20): CUÁNDO escribió el cliente, no cuándo terminamos de guardar.
+    Esta función corre al FINAL del turno y los `default=now_utc` se evalúan todos en el mismo
+    flush, mientras que la media saliente se escribe DURANTE el turno, al enviarla. Resultado: en
+    el hilo del panel —que ordena por `created_at` (`detalle_conversacion`)— la foto aparecía
+    ANTES de la pregunta que la provocó. Pasaba en todos los turnos con media: el 08-18 la foto
+    quedó a las 15:04:06 y la pregunta del cliente a las 15:04:10. Sin este dato la dueña lee el
+    hilo al revés justo en los turnos donde el bot mandó algo.
     """
     from sqlalchemy import select
 
@@ -178,9 +189,10 @@ async def _guardar_en_panel(
                 if nombre and not cliente.nombre:
                     cliente.nombre = nombre
             if texto_usuario:
-                session.add(
-                    Mensaje(cliente_telefono=telefono, rol="user", contenido=texto_usuario)
-                )
+                fila = Mensaje(cliente_telefono=telefono, rol="user", contenido=texto_usuario)
+                if ts_usuario is not None:
+                    fila.created_at = ts_usuario
+                session.add(fila)
             for p in partes:
                 session.add(Mensaje(
                     cliente_telefono=telefono,
@@ -705,6 +717,12 @@ async def _procesar(telefono: str, nombre: str | None) -> str:
             return "vacio"  # otra tarea ya lo procesó
 
         texto = "\n".join(mensajes)
+        # CUÁNDO escribió el cliente (para el orden del hilo en el panel, ver `_guardar_en_panel`).
+        # Se toma aquí, antes de pensar y antes de enviar nada: cualquier media de este turno sale
+        # después, así que en el hilo la pregunta queda por delante de la foto que la provocó.
+        from app.models import now_utc
+
+        ts_turno = now_utc()
 
         if not await _bot_activo() or await _cliente_pausado(telefono) or not await _numero_permitido(telefono):
             # Bot apagado (global o solo en este chat): guarda lo que escribió el
@@ -713,7 +731,13 @@ async def _procesar(telefono: str, nombre: str | None) -> str:
             guardado = await _guardar_entrante(telefono, nombre, texto)
             return "apagado"
 
-        historial = await rc.obtener_historial(telefono)
+        # 🔴 CON RESPALDO EN POSTGRES (fallo del 2026-08-18): si el historial de Redis ya expiró
+        # (24 h de `conversacion_ttl`), se reconstruye desde la tabla `mensajes`. Sin esto el bot
+        # arranca de cero con una clienta que le escribió hace tres días — y con cuatro redes
+        # ciegas, porque reciben `historial` por parámetro. Ver `services/memoria.py`.
+        # `sembrar=True`: aquí tenemos el LOCK del teléfono, y sin dejarlo en Redis el turno
+        # SIGUIENTE volvería a olvidarlo todo (ya no encontraría `hist:` vacía).
+        historial = await historial_con_respaldo(telefono, sembrar=True)
 
         # 🔴 EL TURNO DEL CLIENTE SE ANOTA ANTES DE PENSAR (auditoría 2026-08-02, SIL-10).
         # `vaciar_buffer` es LRANGE+DELETE atómico: desde esa línea, lo que el cliente escribió
@@ -739,7 +763,7 @@ async def _procesar(telefono: str, nombre: str | None) -> str:
         # "recuerda" haber dicho algo que el cliente nunca recibió (`_lo_que_llego`, SIL-8).
         if _algo_llego(partes):
             await rc.guardar_historial(telefono, "assistant", _lo_que_llego(partes, respuesta))
-        guardado = await _guardar_en_panel(telefono, nombre, texto, partes)
+        guardado = await _guardar_en_panel(telefono, nombre, texto, partes, ts_usuario=ts_turno)
         await _avisar_turno_a_medias(telefono, nombre, partes)
     except Exception:  # noqa: BLE001
         logger.exception("Error procesando el buffer de %s (texto=%r)", telefono, texto[:200])
@@ -936,6 +960,13 @@ async def _retomar(telefono: str, nombre: str | None, pausado_por: str | None = 
             logger.info("Retomar %s: el chat está pausado otra vez; el bot no habla", telefono)
             return
 
+        # 🔴 ESTE CARRIL SE QUEDA SIN RESPALDO DE POSTGRES, A PROPÓSITO (decisión del 08-20).
+        # Aquí el historial no es contexto: es el GUARD DE HONESTIDAD de tres líneas más abajo
+        # (`if not historial: return`). Hoy, con la memoria expirada, el bot se CALLA — que es el
+        # fallo seguro. Rescatando de Postgres empezaría a hablarle a quien escribió hace días
+        # porque su último turno "quedó pendiente", y eso es un envío PROACTIVO: la regla dura de
+        # Tech Provider con Meta (ningún proactivo sin aprobación humana) manda por encima de la
+        # comodidad de recordar. Si algún día se quiere, va con su propio diseño y su propio A/B.
         historial = await rc.obtener_historial(telefono)
 
         # ¿El bot había ESCALADO? Entonces su último mensaje ("te lo confirmo enseguida") NO es una
@@ -1112,7 +1143,11 @@ async def _responder_situacion(
     if not await _numero_permitido(telefono) or not await _bot_activo():
         return []  # bot apagado o fuera de la lista blanca: se registra el pago, pero no se habla
     try:
-        historial = await rc.obtener_historial(telefono)
+        # Con respaldo (fallo del 08-18), pero `sembrar=False`: este carril lo dispara el worker
+        # de VISIÓN y no siempre tiene el lock del teléfono. Aquí el historial es solo CONTEXTO
+        # para redactar — los montos viajan aparte, en `montos_usd`/`montos_bs`—, así que leer de
+        # más no toca el camino del dinero; sembrar sin lock sí podría duplicar.
+        historial = await historial_con_respaldo(telefono)
         _usd, _bs = await _montos_decibles(telefono)
         mensaje = await redactar_mensaje(
             situacion, historial, nombre, telefono, montos_usd=_usd, montos_bs=_bs
@@ -1734,12 +1769,19 @@ async def _responder_y_enviar(telefono: str, texto: str, nombre: str | None) -> 
         return "ocupado"
 
     guardado = False  # ¿el turno del cliente ya quedó ESCRITO en Postgres?
+    # CUÁNDO habló el cliente, para el orden del hilo (el gemelo de `_procesar`): una nota de voz
+    # que provoca una foto tenía el mismo hilo invertido en el panel.
+    from app.models import now_utc
+
+    ts_turno = now_utc()
     try:
         if not await _bot_activo() or await _cliente_pausado(telefono) or not await _numero_permitido(telefono):
             await rc.guardar_historial(telefono, "user", texto)
             guardado = await _guardar_entrante(telefono, nombre, texto)
             return "apagado"
-        historial = await rc.obtener_historial(telefono)
+        # Con respaldo en Postgres, igual que `_procesar` (fallo del 08-18): una nota de voz
+        # después de tres días de silencio tenía el mismo agujero de memoria que un texto.
+        historial = await historial_con_respaldo(telefono, sembrar=True)
         # EL TURNO DEL CLIENTE SE ANOTA ANTES DE PENSAR — el gemelo de `_procesar` (SIL-10).
         # Aquí es todavía más grave: lo que se pierde es una transcripción que NO está en ningún
         # buffer ni en ningún webhook. Si `responder()` revienta, esto es lo único que queda.
@@ -1757,7 +1799,7 @@ async def _responder_y_enviar(telefono: str, texto: str, nombre: str | None) -> 
         # "recuerda" haber dicho algo que el cliente nunca recibió (`_lo_que_llego`, SIL-8).
         if _algo_llego(partes):
             await rc.guardar_historial(telefono, "assistant", _lo_que_llego(partes, respuesta))
-        guardado = await _guardar_en_panel(telefono, nombre, texto, partes)
+        guardado = await _guardar_en_panel(telefono, nombre, texto, partes, ts_usuario=ts_turno)
         await _avisar_turno_a_medias(telefono, nombre, partes)
     except Exception:  # noqa: BLE001
         logger.exception("Error respondiendo a %s (texto=%r)", telefono, texto[:200])
@@ -2093,7 +2135,8 @@ async def _notificar_cliente_pago(telefono, situacion) -> None:
         )
         return
     try:
-        historial = await rc.obtener_historial(telefono)
+        # Con respaldo, `sembrar=False` por el mismo motivo que el carril del comprobante.
+        historial = await historial_con_respaldo(telefono)
         _usd, _bs = await _montos_decibles(telefono)
         mensaje = await redactar_mensaje(
             situacion, historial, None, telefono, montos_usd=_usd, montos_bs=_bs
