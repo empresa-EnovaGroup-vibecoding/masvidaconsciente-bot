@@ -236,6 +236,45 @@ de verdad.
 **Sin migración** (no se tocó el esquema: el dato ya estaba ahí). Sin tocar el prompt, la
 personalidad, `temperature`, `max_tokens`, ni el camino del dinero. Aditivo.
 
+### 🚀 DESPLEGADO Y VERIFICADO EN VIVO (mismo día)
+
+`docker cp` a BOT y WORKER con `COPYFILE_DISABLE=1` (0 AppleDouble dentro de los contenedores),
+`__pycache__` purgado, **9/9 ficheros con el mismo md5 en `master` local, BOT y WORKER**, ambos
+reiniciados. `/salud`: `estado: ok, fallos: []`, las **8 sondas** en verde, **0 errores** en los
+logs de los dos contenedores tras el reinicio.
+
+**La prueba end-to-end contra Postgres y Redis REALES (15/15)**, con un teléfono ficticio fuera de
+la lista blanca y borrando todo lo insertado:
+
+```
+Redis expirado + Postgres con 6 filas  →  rescata 3 (las que debe)
+  ✅ SIL-8: el globo 'fallido' queda fuera      ✅ la media queda fuera
+  ✅ fuera de ventana queda fuera               ✅ el 'entregado' SÍ entra
+  ✅ RED DEL PITCH dispara con la memoria rescatada  (sin ella: False — el bug del 08-18)
+  ✅ el bot ya NO cree que es el primer contacto
+  ✅ Redis queda sembrado con su TTL, y la 2ª llamada ya viene de Redis
+  ✅ __simulador__ sigue aislado                ✅ 0 filas de prueba sin borrar
+```
+
+**Un turno real del agente** (carril del simulador, sin tocar WhatsApp) con el mismo guion del
+fallo: *"De queso de cabra. Cuanto es?"* → **"Las Empanadas de masa de plátano con relleno de queso
+de cabra vienen en paquete de 8 unidades y tienen un precio de $12"**. El 08-18 esa misma frase
+devolvió *"El Kéfir de Leche de cabra… es $8"*. Producto correcto, precio correcto.
+
+**Bancos, UNO POR UNO** (nunca `correr_bancos.py`): `probar_no_se_evapora` ✅ (el del buffer y
+SIL-10, que es el que toca `_procesar`) · `probar_drift` ✅ · `probar_migraciones` ✅ ·
+`probar_cobro` ✅ (30/30) · `probar_retomar` ✅ · `probar_honestidad` ✅ · `probar_telemetria` ✅ ·
+`probar_relevo` ✅ · `probar_bandeja` ✅.
+
+### 🧹 Y un error PREEXISTENTE que destapó `probar_drift` (no era de este arreglo)
+
+*"la tabla `tasa_resoluciones` existe en la BD y models.py no la declara"*. La migración 033 la
+creó el 08-09 y nadie añadió el modelo — `tasa.py` escribe con SQL directo, así que no rompía nada,
+pero es justo el hueco que `probar_drift` vino a cazar. **Un aviso permanente en un detector se
+acaba ignorando, y con él el siguiente, que sí importe** (ya pasó con el AppleDouble y
+`probar_telemetria`). Declarado `TasaResolucion` en `models.py` con sus 5 columnas; el banco pasó de
+`[⚠️]` a **`models.py está al día con la base`**.
+
 ---
 
 ## 2026-08-09 (3) — 💸 EL RESPALDO DE LA TASA DEJA DE SER MUDO (rama `fix/tasa-visible`, sin desplegar)

@@ -471,3 +471,23 @@ class LlamadaIA(Base):
     # El PORQUÉ del fallo (402 sin saldo, 429, timeout, modelo inexistente), recortado.
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+class TasaResolucion(Base):
+    """El rastro de DE DÓNDE salió la tasa BCV de cada cotización (SIL-14, migración 033).
+
+    Lo declara este fichero desde el 2026-08-20: la migración creó la tabla el 08-09 pero nadie
+    añadió el modelo, así que `probar_drift` venía avisando *"existe en la BD y models.py no la
+    declara"*. No rompía nada —`tasa.py` escribe con SQL directo— pero es justo el hueco que
+    `probar_drift` vino a cazar: un aviso permanente en un detector se acaba ignorando, y con él
+    se ignoraría el siguiente, que sí importe.
+    """
+
+    __tablename__ = "tasa_resoluciones"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    # cache | api | respaldo_bd | default | sin_tasa (el peor de todos: ni API ni respaldo).
+    origen: Mapped[str] = mapped_column(Text)
+    valor: Mapped[Decimal | None] = mapped_column(Numeric(18, 6), nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
