@@ -66,7 +66,7 @@ def _falsear_redis(monkeypatch, vivo, *, sembrado=None, explota_al_sembrar=False
     async def _obtener(_tel):
         return list(vivo)
 
-    async def _sembrar(_tel, mensajes):
+    async def _sembrar(_tel, mensajes, *, reemplazar=False):  # noqa: ARG001 — la firma real la lleva
         if explota_al_sembrar:
             raise RuntimeError("Redis no responde")
         if sembrado is not None:
@@ -161,14 +161,15 @@ async def test_trae_los_ULTIMOS_no_los_primeros(monkeypatch):
 # NO RESCATA / NO TOCA — los controles (más de la mitad del banco)
 # ══════════════════════════════════════════════════════════════════════════════════
 
-async def test_si_redis_tiene_memoria_POSTGRES_NI_SE_TOCA(monkeypatch):
-    """Redis es la fuente VIVA: si tiene algo, manda. Y no se paga una consulta de más en el
-    99% de los turnos — que es el carril normal."""
+async def test_si_redis_tiene_CONVERSACION_postgres_ni_se_toca(monkeypatch):
+    """Redis es la fuente VIVA: si hay conversación (algún mensaje del bot), manda. Y no se paga
+    una consulta de más en el 99% de los turnos — que es el carril normal."""
     espia = _falsear_postgres(monkeypatch, list(reversed(FILAS_REALES)))
-    vivo = [{"role": "user", "content": "hola"}]
+    vivo = [{"role": "user", "content": "hola"},
+            {"role": "assistant", "content": "Hola, buenas tardes 💚"}]
     _falsear_redis(monkeypatch, vivo)
     assert await mem.historial_con_respaldo(TEL) == vivo
-    assert espia == [], "con Redis vivo la BD no se consulta"
+    assert espia == [], "con conversación viva la BD no se consulta"
 
 
 async def test_los_telefonos_internos_no_rescatan_NI_CONSULTAN(monkeypatch):
@@ -305,6 +306,7 @@ class _RedisFalso:
         self.datos = list(ya_hay or [])
         self.ltrim_pedido = None
         self.expire_pedido = None
+        self.borrado = False
         self._cola = []
 
     async def exists(self, _clave):
@@ -328,6 +330,9 @@ class _RedisFalso:
     def expire(self, _clave, ttl):
         self._cola.append(("expire", ttl))
 
+    def delete(self, _clave):
+        self._cola.append(("delete", None))
+
     async def execute(self):
         for op, arg in self._cola:
             if op == "rpush":
@@ -336,6 +341,9 @@ class _RedisFalso:
                 self.ltrim_pedido = arg
             elif op == "expire":
                 self.expire_pedido = arg
+            elif op == "delete":
+                self.datos.clear()
+                self.borrado = True
         self._cola = []
 
 
@@ -444,3 +452,114 @@ async def test_sin_ts_se_deja_el_default_de_siempre(monkeypatch):
     comportamiento: el `default=now_utc` del modelo sigue mandando. Aditivo."""
     filas = await _guardar_con(monkeypatch, None)
     assert filas and filas[0].created_at is None  # lo rellena el default en el INSERT
+
+
+# ══════════════════════════════════════════════════════════════════════════════════
+# 🔴 LA PUERTA DE ATRÁS: `hist:` EXISTE pero NO es una conversación
+#
+# Bug encontrado AUDITANDO el arreglo (2026-08-20), no diseñándolo. Cuatro caminos dejan la clave
+# con mensajes del cliente y ninguna respuesta —bot apagado, chat pausado porque la dueña lo tomó,
+# número fuera de la lista blanca, y `responder()` reventando (OpenRouter sin saldo)—. Preguntar
+# solo "¿está vacía?" hacía que el bug original volviera justo después de que la dueña interviene
+# en un chat, que es el flujo central del producto.
+# ══════════════════════════════════════════════════════════════════════════════════
+
+async def test_hist_con_SOLO_mensajes_del_cliente_SI_rescata(monkeypatch):
+    """El caso del bot apagado / la dueña atendiendo: la clave existe, pero no hay hilo."""
+    _falsear_postgres(monkeypatch, list(reversed(FILAS_REALES)))
+    _falsear_redis(monkeypatch, [{"role": "user", "content": "hola otra vez"}])
+    hist = await mem.historial_con_respaldo(TEL)
+    assert len(hist) > 1, "con la clave ocupada por mensajes del cliente seguía sin rescatar"
+    assert any("empanadas" in h["content"].lower() for h in hist)
+
+
+async def test_lo_ultimo_que_dijo_el_cliente_NO_se_pierde(monkeypatch):
+    """Si `_guardar_entrante` falló, ese mensaje solo existe en Redis. Rescatar no puede tirarlo:
+    sería cambiar lo último que dijo el cliente por historia vieja."""
+    _falsear_postgres(monkeypatch, list(reversed(FILAS_REALES)))
+    _falsear_redis(monkeypatch, [{"role": "user", "content": "solo esta en redis"}])
+    hist = await mem.historial_con_respaldo(TEL)
+    assert hist[-1] == {"role": "user", "content": "solo esta en redis"}
+
+
+async def test_no_se_duplica_lo_que_ya_venia_en_el_rescate(monkeypatch):
+    """El caso normal: los cuatro caminos escriben también en Postgres, así que el rescate YA
+    contiene el mensaje. No puede aparecer dos veces."""
+    _falsear_postgres(monkeypatch, list(reversed(FILAS_REALES)))
+    repetido = {"role": "user", "content": FILAS_REALES[0][1]}
+    _falsear_redis(monkeypatch, [repetido])
+    hist = await mem.historial_con_respaldo(TEL)
+    assert [h["content"] for h in hist].count(FILAS_REALES[0][1]) == 1
+    assert len(hist) == 3
+
+
+async def test_se_siembra_REEMPLAZANDO_o_el_turno_siguiente_vuelve_a_olvidar(monkeypatch):
+    """La guarda anti-duplicado de `sembrar_historial` abandonaría la siembra porque la clave
+    existe. Con `reemplazar=True` no: si no, el turno siguiente tampoco vería conversación."""
+    visto = {}
+
+    async def _sembrar(_tel, mensajes, *, reemplazar=False):
+        visto["reemplazar"] = reemplazar
+        visto["n"] = len(mensajes)
+
+    _falsear_postgres(monkeypatch, list(reversed(FILAS_REALES)))
+    monkeypatch.setattr(mem, "obtener_historial",
+                        lambda _t: _corrutina([{"role": "user", "content": "apilado"}]))
+    monkeypatch.setattr(mem, "sembrar_historial", _sembrar)
+    await mem.historial_con_respaldo(TEL, sembrar=True)
+    assert visto.get("reemplazar") is True
+    assert visto.get("n") == 4  # los 3 rescatados + el que solo estaba en Redis
+
+
+async def test_si_postgres_no_tiene_nada_se_QUEDA_lo_de_redis(monkeypatch):
+    """Nunca devolver MENOS memoria de la que ya había: si el rescate viene vacío (cliente nuevo,
+    o la consulta falló), lo que hubiera en Redis se conserva."""
+    _falsear_postgres(monkeypatch, [])
+    vivo = [{"role": "user", "content": "lo unico que hay"}]
+    _falsear_redis(monkeypatch, vivo)
+    assert await mem.historial_con_respaldo(TEL, sembrar=True) == vivo
+
+
+async def test_una_conversacion_de_verdad_no_se_toca(monkeypatch):
+    """El control: en cuanto hay UN mensaje del bot, es hilo vivo y Redis manda."""
+    espia = _falsear_postgres(monkeypatch, list(reversed(FILAS_REALES)))
+    vivo = [{"role": "user", "content": "hola"},
+            {"role": "assistant", "content": "buenas tardes"},
+            {"role": "user", "content": "de queso"}]
+    _falsear_redis(monkeypatch, vivo)
+    assert await mem.historial_con_respaldo(TEL) == vivo
+    assert espia == []
+
+
+async def test_si_el_rescate_viene_vacio_NO_se_siembra_ni_se_miente_en_el_log(monkeypatch):
+    """R23 lo pidió: la guarda `if not rescatado` parecía redundante (la fusión ya devuelve lo
+    vivo), pero sin ella se sembraría en Redis lo que YA está en Redis y se registraría un
+    "MEMORIA RESCATADA" que no ocurrió. Un log que miente es peor que no tener log."""
+    sembrado = []
+    _falsear_postgres(monkeypatch, [])
+    vivo = [{"role": "user", "content": "lo unico que hay"}]
+    _falsear_redis(monkeypatch, vivo, sembrado=sembrado)
+    assert await mem.historial_con_respaldo(TEL, sembrar=True) == vivo
+    assert sembrado == [], "no hay nada rescatado: sembrar es escribir lo mismo dos veces"
+
+
+async def test_sembrar_REEMPLAZANDO_borra_lo_viejo_de_verdad(monkeypatch):
+    """R24 lo pidió: ningún test ejercitaba `reemplazar=True` contra el doble de Redis, así que
+    quitar el `delete` del MULTI dejaba la suite en verde. Sin ese borrado, los mensajes apilados
+    del cliente quedarían DUPLICADOS bajo los rescatados."""
+    from app.services import redis_client as rcm
+
+    falso = _RedisFalso(ya_hay=['{"role": "user", "content": "apilado"}'])
+    monkeypatch.setattr(rcm, "_client", lambda: falso)
+    await rcm.sembrar_historial(
+        TEL, [{"role": "user", "content": "apilado"},
+              {"role": "assistant", "content": "rescatado"}], reemplazar=True,
+    )
+    assert len(falso.datos) == 2, f"quedaron {len(falso.datos)}: el viejo no se borró"
+    assert falso.borrado is True
+
+
+def _corrutina(valor):
+    async def _f():
+        return valor
+    return _f()

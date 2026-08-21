@@ -124,13 +124,22 @@ async def obtener_historial(telefono: str) -> list[dict]:
     return [json.loads(f) for f in filas]
 
 
-async def sembrar_historial(telefono: str, mensajes: list[dict]) -> None:
+async def sembrar_historial(
+    telefono: str, mensajes: list[dict], *, reemplazar: bool = False
+) -> None:
     """Deja en Redis un historial reconstruido desde Postgres (ver `services/memoria.py`).
 
-    🔴 NO PISA lo que ya hubiera: si entre la lectura y esta llamada alguien escribió en `hist:`,
-    la siembra se ABANDONA. Sembrar encima duplicaría los mismos mensajes en la memoria del
-    agente, que es peor que no sembrar (el bot leería dos veces el mismo turno). El caso normal
+    Por defecto **NO PISA** lo que ya hubiera: si entre la lectura y esta llamada alguien escribió
+    en `hist:`, la siembra se ABANDONA. Sembrar encima duplicaría los mismos mensajes en la memoria
+    del agente, que es peor que no sembrar (el bot leería dos veces el mismo turno). El caso normal
     está protegido por el LOCK del teléfono; esto cubre el borde.
+
+    `reemplazar=True` para el caso en que `hist:` **existe pero no es una conversación** — los
+    mensajes del cliente apilados con el bot apagado, el chat pausado o el modelo caído. Ahí lo que
+    se siembra ya viene FUSIONADO con esos mensajes (`memoria._fusionar`), así que reemplazar no
+    pierde nada; y abandonar la siembra sí costaría: el turno siguiente volvería a no ver
+    conversación y el bot arrancaría otra vez sin memoria. El `delete` va DENTRO del MULTI, para
+    que nadie lea la lista a medias.
 
     Se usa el MISMO `ltrim` + `expire` que `guardar_historial`: lo sembrado no es un ciudadano de
     segunda, envejece y se recorta igual que lo vivo.
@@ -139,12 +148,14 @@ async def sembrar_historial(telefono: str, mensajes: list[dict]) -> None:
         return
     c = _client()
     clave = f"hist:{telefono}"
-    if await c.exists(clave):
+    if not reemplazar and await c.exists(clave):
         return
     # `async with … transaction=True`, igual que `agregar_a_buffer`: el context manager devuelve
     # la conexión al pool (sin él se queda colgada) y MULTI/EXEC evita que otro proceso vea la
     # lista a medio sembrar.
     async with c.pipeline(transaction=True) as pipe:
+        if reemplazar:
+            pipe.delete(clave)
         pipe.rpush(clave, *[json.dumps(m) for m in mensajes])
         pipe.ltrim(clave, -MAX_TURNOS_HISTORIAL, -1)
         pipe.expire(clave, settings.conversacion_ttl)

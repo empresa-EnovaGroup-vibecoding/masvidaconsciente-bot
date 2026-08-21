@@ -29,7 +29,12 @@ from decimal import Decimal
 
 from sqlalchemy import delete, select
 
-from app.agent.tools import generar_datos_pago, registrar_pedido
+from app.agent.tools import (
+    _dias_de_entrega,
+    _primera_fecha_valida,
+    generar_datos_pago,
+    registrar_pedido,
+)
 from app.models import Cliente, Pago, Pedido, Producto, ProductoVariante, ZonaEntrega, now_utc
 from app.services.db import get_session_factory
 
@@ -106,7 +111,20 @@ async def main() -> None:
         await s.commit()
         await s.refresh(retiro); await s.refresh(cerca); await s.refresh(lejos)
 
-        manana = (now_utc() + timedelta(days=30)).date().isoformat()
+        # 🔴 NO un offset fijo (auditoría 2026-08-21). Esto decía `+30 días` a pelo, y 30 días
+        # después de un VIERNES es DOMINGO — día en que el negocio NO entrega (`dias_entrega` =
+        # lunes..sabado). O sea: el banco entero se caía **un día de cada siete**, y con un
+        # `KeyError: 'pedido_id'` que parecía un bug del cobro cuando en realidad era el sistema
+        # RECHAZANDO BIEN una fecha imposible. Un banco que falla por el calendario se acaba
+        # ignorando — y con él el siguiente, que sí importe (la lección del AppleDouble).
+        #
+        # Se pide la fecha a la MISMA función que usa el bot (`_primera_fecha_valida`), así que si
+        # mañana la dueña cambia los días de entrega o mete un feriado, el banco sigue en verde sin
+        # que nadie lo toque.
+        dias_ok = await _dias_de_entrega(s)
+        manana = (
+            await _primera_fecha_valida(s, (now_utc() + timedelta(days=30)).date(), dias_ok, 0)
+        ).isoformat()
         items = [{"variante_id": var.id, "cantidad": 1}]
 
         print(f"\n   (producto real: {prod.nombre} {var.presentacion} = ${precio})")

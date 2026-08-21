@@ -38,7 +38,12 @@ from decimal import Decimal
 import httpx
 from sqlalchemy import delete, select
 
-from app.agent.tools import generar_datos_pago, registrar_pedido
+from app.agent.tools import (
+    _dias_de_entrega,
+    _primera_fecha_valida,
+    generar_datos_pago,
+    registrar_pedido,
+)
 from app.api.security import crear_token
 from app.config import get_settings
 from app.main import app
@@ -117,7 +122,17 @@ async def main() -> None:
             await s.commit()
             await s.refresh(zona)
 
-            manana = (now_utc() + timedelta(days=30)).date().isoformat()
+            # 🔴 NO un offset fijo (auditoría 2026-08-21, el gemelo del de `probar_delivery`).
+            # `+30 días` desde un VIERNES cae en DOMINGO, y el negocio no entrega los domingos:
+            # `registrar_pedido` rechazaba BIEN la fecha, el banco se quedaba sin `pedido_id` y
+            # reventaba con un KeyError que parecía un bug del cobro. Un día de cada siete.
+            # La fecha la da la MISMA función que usa el bot, así que aguanta cambios de
+            # `dias_entrega` y feriados nuevos sin que nadie toque el banco.
+            dias_ok = await _dias_de_entrega(s)
+            fecha_ok = await _primera_fecha_valida(
+                s, (now_utc() + timedelta(days=30)).date(), dias_ok, 0
+            )
+            manana = fecha_ok.isoformat()
             print(f"\n   (producto real: {prod.nombre} {var.presentacion} = ${precio} · zona $3)")
 
             # El bot toma el pedido: 1 unidad + envío.
@@ -208,7 +223,7 @@ async def main() -> None:
                 # Antes ganaba siempre el id: la dueña elegía otro producto, salía "Guardado" sin
                 # error, y al recargar reaparecía el de antes. Corregir un producto mal tomado por
                 # el bot era IMPOSIBLE desde el panel, y sin ningún aviso.
-                ped3.entrega_fecha = (now_utc() + timedelta(days=30)).date()  # fecha usable otra vez
+                ped3.entrega_fecha = fecha_ok  # fecha usable otra vez (validada arriba)
                 await s.commit()
                 otro = (await s.execute(
                     select(Producto, ProductoVariante)

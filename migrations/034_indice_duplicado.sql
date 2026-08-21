@@ -1,0 +1,25 @@
+-- 034 — FUERA EL ÍNDICE DUPLICADO DE `mensajes`
+--
+-- Encontrado auditando el 2026-08-20 (`pg_indexes` agrupado por definición): la tabla `mensajes`
+-- tenía DOS índices con exactamente la misma definición `(cliente_telefono, created_at)`:
+--
+--   idx_mensajes_cliente        ← 001_init.sql:61
+--   idx_mensajes_cliente_fecha  ← 021_hilo_completo.sql:41
+--
+-- El `CREATE INDEX IF NOT EXISTS` de la 021 no lo detectó porque **compara el NOMBRE, no la
+-- definición**: dos nombres distintos para el mismo índice pasan las dos veces. Es el único
+-- duplicado de toda la base (se comprobó tabla por tabla).
+--
+-- Lo que costaba: cada INSERT en `mensajes` mantenía los dos árboles, y `mensajes` es la tabla que
+-- más escribe del sistema — una fila por cada globo que manda el bot, más una por cada mensaje del
+-- cliente. Todo eso por un índice que no aportaba nada que el otro no diera ya.
+--
+-- Se BORRA el de la 001 y se conserva `idx_mensajes_cliente_fecha`, que es el que nombra el
+-- comentario de `028_barredor.sql:48` — así el código y la base siguen contando la misma historia.
+-- Si alguien recrea la base desde cero, la 001 lo vuelve a crear y esta migración lo vuelve a
+-- borrar: idempotente en los dos sentidos.
+--
+-- 🔴 NO se toca `idx_mensajes_cliente_fecha`: el barredor y el rescate de la memoria
+-- (`services/memoria.py`, que filtra por `cliente_telefono`) se apoyan en él.
+
+DROP INDEX IF EXISTS idx_mensajes_cliente;

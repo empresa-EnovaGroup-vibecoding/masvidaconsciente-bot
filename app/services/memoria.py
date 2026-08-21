@@ -42,9 +42,39 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
+def _hay_conversacion(historial: list[dict]) -> bool:
+    """True si en Redis hay una CONVERSACIÓN, no solo mensajes del cliente apilados.
+
+    🔴 LA GUARDA NO PUEDE SER "¿hay algo en Redis?" (bug encontrado auditando el 2026-08-20, en
+    este mismo fichero). Cuatro caminos dejan `hist:` con mensajes del cliente y NINGUNA respuesta:
+    el bot apagado, el chat pausado porque la dueña lo tomó, el número fuera de la lista blanca, y
+    `responder()` reventando (OpenRouter sin saldo — ya costó una semana de mensajes mudos). En los
+    cuatro, la clave EXISTE pero no hay conversación viva, y preguntar solo si está vacía hacía que
+    el bug original volviera por la puerta de atrás: el bot arrancaba sin memoria justo después de
+    que la dueña interviene en un chat, que es el flujo central del producto.
+
+    Sin un solo mensaje del bot no hay hilo que continuar: eso es la misma señal que usa
+    `_es_inicio_conversacion` en `agent.py`.
+    """
+    return any((m or {}).get("role") == "assistant" for m in historial)
+
+
+def _fusionar(rescatado: list[dict], vivo: list[dict]) -> list[dict]:
+    """Lo de Postgres + lo que hubiera en Redis y NO esté ya ahí, en ese orden.
+
+    Normalmente el rescate ya CONTIENE lo vivo (los cuatro caminos de arriba escriben también en
+    Postgres, vía `_guardar_entrante`), así que esto no añade nada. Pero si esa escritura falló
+    —el mismo hipo de Postgres que SIL-10 vino a cubrir—, el mensaje solo existe en Redis: tirarlo
+    sería perder lo último que dijo el cliente para ganar historia vieja. Se compara por
+    (role, content) porque es lo único que hay: el historial de Redis no lleva id ni fecha.
+    """
+    vistos = {(m.get("role"), m.get("content")) for m in rescatado}
+    return rescatado + [m for m in vivo if (m.get("role"), m.get("content")) not in vistos]
+
+
 async def historial_con_respaldo(telefono: str, *, sembrar: bool = False) -> list[dict]:
-    """El historial del agente. Si Redis lo tiene, MANDA Redis (es la fuente viva); si viene
-    vacío, se reconstruye desde Postgres.
+    """El historial del agente. Si Redis tiene una CONVERSACIÓN, manda Redis (es la fuente viva);
+    si no, se reconstruye desde Postgres y se fusiona con lo que hubiera.
 
     `sembrar=True` deja lo reconstruido de vuelta en Redis. 🔴 NO es un lujo de rendimiento, es
     CORRECCIÓN: sin sembrar, el turno siguiente encuentra en Redis los 2 mensajes que acaba de
@@ -56,20 +86,27 @@ async def historial_con_respaldo(telefono: str, *, sembrar: bool = False) -> lis
     (L16) — una memoria incompleta es el bug de siempre; una excepción aquí mataría el turno.
     """
     vivo = await obtener_historial(telefono)
-    if vivo:
+    if _hay_conversacion(vivo):
         return vivo
     rescatado = await historial_desde_postgres(telefono)
-    if rescatado and sembrar:
+    if not rescatado:
+        # Postgres no tiene nada mejor que ofrecer (cliente nuevo, o la consulta falló): se sigue
+        # con lo que hubiera en Redis. Nunca se devuelve MENOS memoria de la que ya había.
+        return vivo
+    fusionado = _fusionar(rescatado, vivo)
+    if sembrar:
         try:
-            await sembrar_historial(telefono, rescatado)
+            # `reemplazar=True`: aquí `hist:` puede EXISTIR (los mensajes apilados del cliente) y
+            # la guarda anti-duplicado la abandonaría, dejando al bot sin la memoria rescatada en
+            # el turno siguiente — el bug de la puerta de atrás otra vez.
+            await sembrar_historial(telefono, fusionado, reemplazar=True)
         except Exception:  # noqa: BLE001 — sin siembra el bot recuerda ESTE turno; con excepción, ninguno
             logger.exception("No se pudo sembrar en Redis el historial rescatado de %s", telefono)
-    if rescatado:
-        logger.info(
-            "MEMORIA RESCATADA de Postgres para %s: %d mensajes (Redis venía vacío)",
-            telefono, len(rescatado),
-        )
-    return rescatado
+    logger.info(
+        "MEMORIA RESCATADA de Postgres para %s: %d mensajes (en Redis no había conversación%s)",
+        telefono, len(fusionado), f", solo {len(vivo)} del cliente" if vivo else " ",
+    )
+    return fusionado
 
 
 async def historial_desde_postgres(telefono: str) -> list[dict]:
