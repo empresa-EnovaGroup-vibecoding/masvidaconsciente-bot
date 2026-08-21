@@ -84,6 +84,92 @@ documento ("si algo no te cuadra con lo que ves, corrígelo en el momento").
 
 ---
 
+## 2026-08-21 (2) — 🛒 ¿ASESORA Y VENDE? MEDIDO: asesora bien, NO CIERRA (y un bug que apagaba las fotos)
+
+Erwin preguntó si el bot es "una bestia estratégica, empática y proactiva asesorando y vendiendo".
+Se midió con el smoke del 08-08 (una clienta que NO sabe qué quiere) por el carril REAL, contando
+herramientas y verificando la venta en `pedidos` — jamás en el texto.
+
+### 🔴 Primero: la MEDICIÓN estaba mal, y por poco reporto un dato falso
+
+El primer intento dio **0/5 turnos con herramientas** y casi lo di por bueno: cuadraba con el
+fallo histórico. Pero el bot decía "te acabo de enviar el catálogo" y el espía marcaba cero — uno
+de los dos mentía. Era el espía: `responder(..., ejecutar=ejecutar_tool)` toma la referencia como
+**VALOR POR DEFECTO**, resuelto al importar el módulo, así que parchear `agent.ejecutar_tool`
+después no toca nada. Hay que **inyectarlo por parámetro**. **Una medición que no mide vale lo
+mismo que un test que no puede ponerse rojo.**
+
+### ✅ ASESORANDO: sí, y bien (medido con el espía arreglado)
+
+```
+turnos con herramientas .... 5/5      (el 08-08 fue 1/7)
+```
+
+Y no es solo que consulte: **recomienda concreto y adapta a la ocasión.** Con "somos como 6
+personas" respondió *"te recomiendo las Mini New York: traen 10 unidades con sabores variados, así
+todos prueban de todo y duran 2 semanas"* — datos REALES de la ficha, atados a lo que la clienta
+dijo. Las dos redes del 08-08 (`ASESORÍA SIN CONSULTA` y `CONFIRMACIÓN SIN PITCH`) disparan y se
+ven en los logs.
+
+### 🔴 VENDIENDO: NO. Cero pedidos en la base
+
+```
+🔴 PEDIDOS EN LA BD ....... 0
+```
+
+El bot dijo *"Listo, 1 paquete de Mini New York para el domingo"* y luego *"Perfecto, 1 paquete de
+Mini New York para el domingo en retiro"* — con **producto, cantidad, fecha y zona** — y **no llamó
+a `registrar_pedido` ni una vez**. Se queda preguntando los sabores: los pidió en el turno 2, la
+clienta aceptó los variados en el 3, y volvió a preguntarlos en el 4 y en el 5.
+
+**Y ninguna red lo caza**, por dos razones distintas:
+1. `_afirma_pedido_registrado` no incluye "te dejo" / "listo, 1 paquete" — y eso fue **deliberado
+   el 08-06** (L3: entonces el bot pedía fecha y zona después, así que era un acuse legítimo y
+   frenarlo mataba ventas). Aquí ya tenía fecha y zona.
+2. **No existe ninguna red de CIERRE**: nada dice "tienes producto + cantidad + fecha + zona ⇒
+   REGISTRA". Es el hueco que queda, y no es un parche de una línea: forzar el registro antes de
+   que el cliente confirme sería peor (lo advierte el propio comentario de `_AFIRMA_PEDIDO`).
+   **Merece su diseño y su A/B, en sesión propia.**
+
+Detalle menor del mismo turno: pidió *"me confirmas tu número de teléfono"* — a alguien que le
+está escribiendo por WhatsApp.
+
+### 🔧 Y un bug REAL que apagaba las fotos: las dos redes se peleaban
+
+El smoke salió con **0 fotos** teniendo el producto elegido y con foto en la base. La causa:
+
+```
+el bot escribió: "Galletas New York, vienen con HARINA DE ALMENDRA y coco"
+_productos_nombrados_en -> ['Harina de Almendra', 'Galletas New York']   ← DOS
+producto_enfocado       -> None    (cree que el cliente sigue eligiendo)
+⇒ la RED DE LA FOTO no dispara
+```
+
+**"Harina de Almendra" es un producto del catálogo** y a la vez el ingrediente de media carta. Y lo
+perverso: la **RED DEL PITCH** obliga al bot a tejer datos de la ficha —o sea, ingredientes—, y eso
+**apagaba la RED DE LA FOTO**. Cuanto mejor vendía, menos fotos mandaba.
+
+→ `_solo_como_ingrediente` (tools.py): una mención que va detrás de un marcador de ingrediente
+("vienen **con**", "**llevan**", "**endulzadas** con", "**relleno** de", "a **base** de") no cuenta
+como oferta. Conservador: basta UNA aparición fuera de ese contexto para que sí cuente ("quieres las
+galletas **o** la harina de almendra?"). Mira DOS palabras atrás, no una, porque el artículo se
+cuela en medio ("con **la** harina de almendra") — eso lo pidió una reversión que salió verde.
+
+**Verificado tras desplegar:** `producto_enfocado` ya devuelve `Galletas New York`, y en el smoke
+nuevo el turno 4 llamó a `enviar_fotos_producto` y mandó la foto de las Mini New York.
+
+```
+396 passed (385 + 11) · 35 reversiones, 35 rojas · ruff limpio · compileall OK
+checksum tools.py idéntico en local, BOT y WORKER
+```
+
+⚠️ **Dos avisos de método de esta tanda:** el contador de fotos del script sigue diciendo 0 porque
+limpia la lista en cada turno y la lee al final — la foto del turno 4 SÍ salió, está en el log del
+turno. Y dos de mis propias reversiones (R34, R35) salieron verdes por estar mal escritas:
+`frozenset(set()) or frozenset({...})` no cambia nada en Python. **Van tres veces hoy.**
+
+---
+
 ## 2026-08-21 — 💵 LA BANDA CIEGA DEL 1% Y LOS ARGS QUE EL MODELO COLABA (los dos bugs del P5, cerrados)
 
 Eran los dos que el ROADMAP tenía como *"conocidos y NO tocados a propósito"*. Se cerraron después

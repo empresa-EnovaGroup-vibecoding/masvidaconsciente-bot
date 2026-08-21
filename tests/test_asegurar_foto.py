@@ -358,3 +358,63 @@ async def test_por_la_puerta_real_no_repite_el_producto(monkeypatch):
     salida, llamadas = await _correr_turno(monkeypatch, ya_mostrada=True)
     assert not any(n == "enviar_fotos_producto" for n, _ in llamadas)
     assert salida == TEXTO_ENFOCADO
+
+
+# ══════════════════════════════════════════════════════════════════════════════════
+# 🔴 UN INGREDIENTE NO ES UNA OFERTA (bug medido el 2026-08-21 con el smoke de asesoría)
+#
+# El bot cerró con "Galletas New York, vienen con harina de almendra y coco" — y "Harina de
+# Almendra" ES un producto del catálogo. `producto_enfocado` veía DOS menciones, creía que el
+# cliente seguía eligiendo, y la RED DE LA FOTO no disparaba: 0 fotos en 5 turnos con el producto
+# ya elegido. Las dos redes se peleaban: la del PITCH obliga a decir ingredientes, y eso apagaba
+# la de la foto — cuanto mejor vendía, menos fotos mandaba.
+# ══════════════════════════════════════════════════════════════════════════════════
+
+CATALOGO_INSUMOS = ["Galletas New York", "Harina de Almendra", "Harina de Yuca", "Quesillo"]
+
+
+@pytest.mark.parametrize(("texto", "esperado"), [
+    # El caso REAL del smoke: un solo producto ofrecido, el resto son ingredientes
+    ("Listo, 1 paquete de Galletas New York, vienen con harina de almendra y coco",
+     ["Galletas New York"]),
+    ("El Quesillo lleva harina de yuca y azúcar de coco", ["Quesillo"]),
+    ("Las Galletas New York están hechas con harina de almendra", ["Galletas New York"]),
+    ("Galletas New York, endulzadas con azúcar de coco", ["Galletas New York"]),
+    # …y cuando SÍ se ofrece el insumo, sigue contando (una aparición fuera de contexto basta)
+    ("Tenemos Harina de Almendra y Harina de Yuca", ["Harina de Almendra", "Harina de Yuca"]),
+    ("Quieres las Galletas New York o la Harina de Almendra?",
+     ["Galletas New York", "Harina de Almendra"]),
+    # el control: un texto sin ingredientes no cambia de comportamiento
+    ("Te recomiendo el Quesillo", ["Quesillo"]),
+])
+def test_un_ingrediente_no_cuenta_como_producto_ofrecido(texto, esperado):
+    from app.agent.tools import _productos_nombrados_en
+
+    assert sorted(_productos_nombrados_en(texto, CATALOGO_INSUMOS)) == sorted(esperado)
+
+
+def test_el_texto_del_smoke_deja_UN_solo_foco():
+    """La consecuencia que importa: con una sola mención, `producto_enfocado` puede resolver y la
+    red de la foto vuelve a disparar."""
+    from app.agent.tools import _productos_nombrados_en
+
+    real = ("Listo, 1 paquete de Galletas New York, vienen con harina de almendra y coco, "
+            "endulzadas con azúcar de coco, y duran 2 semanas. Perfectas para compartir.")
+    assert len(_productos_nombrados_en(real, CATALOGO_INSUMOS)) == 1
+
+
+@pytest.mark.parametrize("texto", [
+    # 🔴 R34 lo pidió: con un ARTÍCULO en medio, el marcador queda a DOS palabras del producto.
+    # Mirando solo una atrás, "la"/"el"/"su" tapaba el "con" y el ingrediente volvía a contar
+    # como oferta — es decir, la red de la foto se apagaba igual.
+    "Las Galletas New York vienen con la harina de almendra que usamos siempre",
+    "El Quesillo lleva su harina de yuca artesanal",
+    "Galletas New York hechas con esa harina de almendra",
+])
+def test_un_articulo_en_medio_no_devuelve_el_bug(texto):
+    from app.agent.tools import _productos_nombrados_en
+
+    assert _productos_nombrados_en(texto, CATALOGO_INSUMOS) == ["Galletas New York"] or \
+           _productos_nombrados_en(texto, CATALOGO_INSUMOS) == ["Quesillo"], (
+        f"volvió a ver dos productos: {_productos_nombrados_en(texto, CATALOGO_INSUMOS)}"
+    )

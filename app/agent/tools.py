@@ -1080,6 +1080,45 @@ def _formas_de_un_nombre(nombre: str) -> list[str]:
     return sorted(formas)
 
 
+# Palabras que convierten lo que viene detrás en un INGREDIENTE, no en una oferta:
+# "vienen CON harina de almendra", "LLEVAN azúcar de coco", "ENDULZADAS con alulosa",
+# "RELLENO de queso de cabra", "a BASE de yuca".
+_MARCA_INGREDIENTE = frozenset({
+    "con", "lleva", "llevan", "lleve", "lleven", "base", "hecho", "hecha", "hechos", "hechas",
+    "contiene", "contienen", "endulzado", "endulzada", "endulzados", "endulzadas",
+    "relleno", "rellenos", "rellena", "rellenas", "sabor", "sabores",
+})
+
+
+def _solo_como_ingrediente(campo: str, marca: str) -> bool:
+    """True si TODAS las apariciones de `marca` en el texto van detrás de un marcador de
+    ingrediente — o sea, el bot la nombró describiendo de qué está hecho algo, no ofreciéndola.
+
+    🔴 EL BUG QUE TAPA (medido el 2026-08-21 con el smoke de asesoría). El bot cerró así:
+
+        "Listo, 1 paquete de Galletas New York, vienen con HARINA DE ALMENDRA y coco…"
+
+    Y "Harina de Almendra" **es un producto del catálogo**. `producto_enfocado` encontraba DOS
+    menciones, concluía "el cliente sigue eligiendo" y **la RED DE LA FOTO no disparaba**: 0 fotos
+    en las 5 vueltas del smoke, con el producto ya elegido y con foto en la base.
+
+    Lo peor es que las dos redes se PELEABAN: la del PITCH (08-08) obliga al bot a tejer datos
+    REALES de la ficha —o sea, ingredientes—, y justo eso apagaba la de la foto. Cuanto mejor
+    vendía, menos fotos mandaba. Y el catálogo está lleno de insumos que son a la vez producto e
+    ingrediente ("Harina de Almendra", "Harina de Yuca"), así que no era un caso raro.
+
+    Conservador a propósito: basta UNA aparición fuera de contexto de ingrediente para que cuente
+    como oferta ("quieres las galletas o la harina de almendra?"). Mejor no mandar una foto que
+    mandar la equivocada — doctrina $12/$14.
+    """
+    trozos = campo.split(marca)
+    for antes in trozos[:-1]:            # el texto que precede a cada aparición
+        previas = antes.split()[-2:]     # las dos palabras de delante
+        if not any(p in _MARCA_INGREDIENTE for p in previas):
+            return False                 # esta aparición SÍ es una oferta
+    return True
+
+
 def _productos_nombrados_en(texto: str, nombres: list[str]) -> list[str]:
     """Qué productos aparecen NOMBRADOS en un texto libre. El más específico primero.
 
@@ -1117,6 +1156,11 @@ def _productos_nombrados_en(texto: str, nombres: list[str]) -> list[str]:
         if forma in repetidas:
             continue
         marca = f" {forma} "
+        if marca in campo and _solo_como_ingrediente(campo, marca):
+            # Nombrado SOLO como ingrediente: se tacha para que no vuelva a calzar, pero NO
+            # cuenta como producto ofrecido.
+            campo = campo.replace(marca, " § ")
+            continue
         if marca in campo:
             # Se TACHA lo calzado (todas sus apariciones): ese trozo ya es de ESTE producto y
             # una forma más corta no puede volver a calzar dentro.
