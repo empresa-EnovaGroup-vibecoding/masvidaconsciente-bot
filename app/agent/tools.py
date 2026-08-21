@@ -1321,6 +1321,40 @@ async def etiqueta_recordada(
         return None
 
 
+async def horas_de_silencio(telefono: str) -> float:
+    """Cuántas HORAS lleva callado este cliente (según `clientes.ultima_interaccion`).
+
+    Para la red del saludo (`_asegurar_saludo`, agent.py): un "buenas tardes" después de un día
+    de silencio merece que se le devuelva; el mismo "hola" dos minutos después, no.
+
+    Se lee `ultima_interaccion`, que en mitad de un turno todavía tiene la marca del turno
+    ANTERIOR: `_guardar_en_panel` la pisa al FINAL, cuando el turno ya se contestó. Por eso vale
+    para medir el hueco sin guardar nada nuevo.
+
+    Cliente que no existe todavía, o cualquier fallo ⇒ **0.0** (como si acabara de escribir). El
+    fallo seguro es NO forzar el saludo: si la red se equivoca por exceso, el bot saluda dos veces
+    en la misma conversación, y eso se lee como un bot.
+    """
+    if not telefono:
+        return 0.0
+    try:
+        factory = get_session_factory()
+        async with factory() as session:
+            ultima = (
+                await session.execute(
+                    select(Cliente.ultima_interaccion).where(Cliente.telefono == telefono)
+                )
+            ).scalars().first()
+        if ultima is None:
+            return 0.0
+        if ultima.tzinfo is None:
+            ultima = ultima.replace(tzinfo=UTC)
+        return max(0.0, (datetime.now(UTC) - ultima).total_seconds() / 3600.0)
+    except Exception:  # noqa: BLE001 — medir el silencio jamás puede tumbar un turno
+        logger.exception("No se pudo medir el silencio de %s", telefono)
+        return 0.0
+
+
 async def producto_enfocado(texto: str) -> str | None:
     """El ÚNICO producto disponible que un texto del bot nombra con todas sus letras — o None.
 

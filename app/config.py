@@ -71,6 +71,12 @@ class Settings(BaseSettings):
     # movería la frontera y engordaría la memoria viva de todos. 15 días cubre de sobra el patrón
     # real de compra sin desenterrar pedidos de hace meses como si estuvieran vivos.
     historial_respaldo_dias: int = 15
+    # 🔴 Tras cuántas HORAS de silencio se le DEVUELVE el saludo a un cliente que saluda.
+    # Lo pidió Maired el 2026-08-21: escribió "Buenas tardes, ¿cómo estás?" un día después de su
+    # último mensaje y el bot no le devolvió las buenas tardes, porque la red del saludo solo
+    # corría en el PRIMER contacto. 4 h: cubre el "vuelvo al día siguiente" y el "vuelvo por la
+    # tarde" sin saludar dos veces dentro de la misma conversación (eso se lee como un bot).
+    saludo_tras_horas: float = 4.0
     max_iteraciones_agente: int = 6
     # Anti-abuso / tope de gasto: maximo de mensajes por cliente al dia antes de
     # pausar las respuestas automaticas con el (y avisar a la duena). 0 = sin tope.

@@ -25,6 +25,7 @@ from app.agent.tools import (
     ejecutar_tool,
     etiqueta_del_cliente,
     etiqueta_recordada,
+    horas_de_silencio,
     media_ya_mostrada,
     producto_enfocado,
     schemas_para,
@@ -396,6 +397,18 @@ def _bot_respondio_estado(texto: str) -> bool:
     """True si la respuesta del bot ya dice que está bien (para no duplicar)."""
     t = _sin_acentos(texto or "")
     return any(p in t for p in ("bien", "gracias a dios", "excelente", "de maravilla"))
+
+
+def _falta_devolver_saludo(texto: str, mensaje_usuario: str) -> bool:
+    """True si el cliente saludó (o preguntó cómo estás) y el bot NO se lo devolvió.
+
+    Es la MISMA condición que decide dentro de `_asegurar_saludo`, sacada aparte para poder
+    preguntarla ANTES de pagar la consulta del silencio: así el turno normal —el 99%, donde no hay
+    saludo pendiente— no toca la base de datos.
+    """
+    quiere_saludo = _cliente_saludo(mensaje_usuario) and not _bot_ya_saludo(texto)
+    quiere_estado = _pregunta_como_estas(mensaje_usuario) and not _bot_respondio_estado(texto)
+    return quiere_saludo or quiere_estado
 
 
 def _asegurar_saludo(texto: str, mensaje_usuario: str, nombre_cliente: str | None) -> str:
@@ -1979,7 +1992,29 @@ async def responder(
                 # turnos (`etiqueta_recordada`). No entra en ninguna otra decisión de la red.
                 historial=historial,
             )
-            if _es_inicio_conversacion(historial):
+            # 🔴 EL SALUDO TAMBIÉN SE DEVUELVE AL VOLVER (lo reportó Maired el 2026-08-21).
+            #
+            # Esta condición era solo `_es_inicio_conversacion(historial)`, y eso dejó pasar el
+            # caso más normal del mundo: la clienta había escrito el DÍA ANTERIOR, así que el
+            # historial de Redis (TTL 24 h) traía un mensaje del bot, `_es_inicio_conversacion`
+            # daba False y la red NO CORRÍA. Escribió *"Buenas tardes, ¿cómo estás? Me gustaría
+            # saber si tienen empanadas de plátano"* y el bot le contestó el "¿cómo estás?" pero
+            # NUNCA le devolvió las buenas tardes. Su queja, textual: *"Debería de decir buenas
+            # tardes. Espejear lo que yo estoy haciendo."* Y tenía razón.
+            #
+            # Un saludo después de horas de silencio merece respuesta; el mismo "hola" dos minutos
+            # después, no —ahí saludar dos veces se lee como un bot—. Así que la puerta se abre
+            # por INICIO **o** por SILENCIO, y el umbral vive en la config.
+            #
+            # El coste se paga solo cuando hace falta: la consulta del silencio va DETRÁS de
+            # comprobar que el cliente saludó y que el bot no le devolvió el saludo, así que en el
+            # turno normal —donde no hay saludo que devolver— no se toca la BD.
+            if not _es_inicio_conversacion(historial) and _falta_devolver_saludo(
+                texto, mensaje_usuario
+            ):
+                if await horas_de_silencio(telefono) >= settings.saludo_tras_horas:
+                    texto = _asegurar_saludo(texto, mensaje_usuario, nombre_cliente)
+            elif _es_inicio_conversacion(historial):
                 texto = _asegurar_saludo(texto, mensaje_usuario, nombre_cliente)
             return texto
 

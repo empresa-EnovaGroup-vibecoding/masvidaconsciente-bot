@@ -259,3 +259,65 @@ async def test_ejecutar_tool_USA_el_filtro_de_verdad():
     # `referencia` es el ÚNICO parámetro que el schema de esta tool declara (lo enseñó este
     # mismo test al fallar: el filtro descartó un `pedido_id` que la firma ni tiene).
     assert recibido.get("referencia") == "0012", "y el parámetro bueno sí tiene que llegar"
+
+
+# ══════════════════════════════════════════════════════════════════════════════════
+# 🔴 EL SALUDO SE DEVUELVE TAMBIÉN AL VOLVER (lo reportó Maired el 2026-08-21)
+#
+# Ella escribió "Buenas tardes, ¿cómo estás? Me gustaría saber si tienen empanadas de plátano" UN
+# DÍA después de su último mensaje. El bot le contestó el "¿cómo estás?" pero NO le devolvió las
+# buenas tardes, porque `_asegurar_saludo` solo corría si `_es_inicio_conversacion` — y el historial
+# de Redis (TTL 24 h) traía el turno del día anterior, así que daba False.
+# Su queja textual: "Debería de decir buenas tardes. Espejear lo que yo estoy haciendo."
+# ══════════════════════════════════════════════════════════════════════════════════
+
+MSG_MAIRED = "Buenas tardes, ¿cómo estás? Me gustaría saber si tienen empanadas de plátano"
+RESP_MAIRED = "Muy bien, gracias a Dios 💚\n\nClaro que sí, tenemos empanadas de plátano."
+HIST_DEL_DIA_ANTES = [
+    {"role": "user", "content": "Cuales son los horarios de atención"},
+    {"role": "assistant", "content": "Buenas tardes, Enova 💚 Nuestro horario es de 8 a 6."},
+]
+
+
+def test_el_caso_de_maired_falta_devolver_el_saludo():
+    """La condición que abre la puerta: el cliente saludó y el bot no le devolvió el saludo."""
+    from app.agent.agent import _es_inicio_conversacion, _falta_devolver_saludo
+
+    # no es primer contacto (ahí estaba el bug: la red no corría)
+    assert _es_inicio_conversacion(HIST_DEL_DIA_ANTES) is False
+    # …pero SÍ falta devolver el saludo
+    assert _falta_devolver_saludo(RESP_MAIRED, MSG_MAIRED) is True
+
+
+def test_y_la_red_lo_arregla_metiendo_las_buenas_tardes():
+    from app.agent.agent import _asegurar_saludo
+
+    arreglado = _asegurar_saludo(RESP_MAIRED, MSG_MAIRED, "Enova")
+    assert arreglado != RESP_MAIRED
+    assert "buenas" in arreglado.lower() or "buenos" in arreglado.lower()
+    # y NO repite el "muy bien, gracias a Dios" que el bot ya había dicho
+    assert arreglado.lower().count("gracias a dios") == 1
+
+
+@pytest.mark.parametrize(("texto", "mensaje", "falta"), [
+    # el control que importa: si el bot YA saludó, no hay nada que devolver
+    ("Hola, buenas tardes 💚 Claro que sí", "Buenas tardes, tienen empanadas?", False),
+    # el cliente no saludó ⇒ no se fuerza nada (no saludar a media conversación)
+    ("Tenemos empanadas de plátano", "tienen empanadas de platano?", False),
+    ("Son $12 el paquete", "cuanto cuesta?", False),
+    # el cliente saluda y el bot no ⇒ SÍ falta
+    ("Tenemos empanadas de plátano", "Buenas tardes, tienen empanadas?", True),
+    ("Claro que sí", "hola, como estas?", True),
+])
+def test_cuando_falta_devolver_el_saludo_y_cuando_no(texto, mensaje, falta):
+    from app.agent.agent import _falta_devolver_saludo
+
+    assert _falta_devolver_saludo(texto, mensaje) is falta
+
+
+def test_el_umbral_de_silencio_esta_configurado():
+    """Sin umbral, o el bot no saluda al volver (el bug) o saluda dos veces seguidas."""
+    from app.config import get_settings
+
+    h = get_settings().saludo_tras_horas
+    assert 0 < h <= 12, f"umbral raro: {h}h"

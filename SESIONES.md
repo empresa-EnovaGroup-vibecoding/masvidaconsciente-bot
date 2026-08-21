@@ -84,6 +84,85 @@ documento ("si algo no te cuadra con lo que ves, corrígelo en el momento").
 
 ---
 
+## 2026-08-21 (3) — 👋 EL SALUDO SE DEVUELVE TAMBIÉN AL VOLVER (lo reportó Maired, y tenía razón)
+
+**Su reporte, textual:** *"Debería de decir buenas tardes. Espejear lo que yo estoy haciendo. Y lo
+que le estoy preguntando."* + *"No le has cambiado nada"*. Escribió:
+
+```
+👤 Buenas tardes, ¿cómo estás? Me gustaría saber si tienen empanadas de plátano
+🤖 Muy bien, gracias a Dios 💚          ← contestó el "¿cómo estás?"…
+🤖 Claro que sí, tenemos empanadas…      ← …y NUNCA le devolvió las buenas tardes
+```
+
+### 🔎 La causa (y NO era una regresión del arreglo de la memoria — se comprobó)
+
+`_asegurar_saludo` estaba tras una sola condición: `if _es_inicio_conversacion(historial)`. Y ella
+**había escrito el día anterior**, así que el historial de Redis (TTL 24 h, 21,5 h de hueco) traía un
+mensaje del bot ⇒ `_es_inicio_conversacion` = **False** ⇒ **la red no corrió**. Medido:
+
+```
+el cliente SÍ saludó:            True
+el bot ya saludó en su texto:    False
+_es_inicio_conversacion(hist)    False   ← por esto la red NO corre
+y si corriera, ¿lo arreglaba?    SÍ → "Hola, Enova, buenas tardes 💚"
+```
+
+⚠️ **Se verificó que el arreglo de la memoria del 08-20 NO lo causó:** el TTL es de 24 h y el hueco
+fue de 21,5 h, así que el historial de Redis estaba ahí igual **antes** del cambio. El bug llevaba
+desde siempre; lo que hacía falta era que alguien volviera al día siguiente y saludara.
+
+### 🔧 El arreglo: la puerta se abre por INICIO **o** por SILENCIO
+
+- `_falta_devolver_saludo(texto, mensaje)`: la misma condición que decide dentro de
+  `_asegurar_saludo`, sacada aparte **para preguntarla ANTES de pagar la consulta del silencio**.
+  Así el turno normal —el 99%, sin saludo pendiente— no toca la base de datos.
+- `horas_de_silencio(telefono)` (tools.py): lee `clientes.ultima_interaccion`, que en mitad de un
+  turno **todavía tiene la marca del turno anterior** (`_guardar_en_panel` la pisa al final). Ante
+  cliente nuevo o cualquier fallo devuelve **0.0** — el fallo seguro es NO forzar el saludo.
+- `saludo_tras_horas = 4.0` (config): cubre el "vuelvo mañana" y el "vuelvo por la tarde" sin
+  saludar dos veces en la misma conversación, que se lee como un bot.
+
+**Verificado con su mensaje EXACTO, por el carril real:**
+
+```
+tras 21,5 h → "Hola, Maired, buenas tardes. Muy bien, gracias a Dios 💚"   ✅
+tras 3 min  → no vuelve a saludar                                          ✅
+```
+
+### 🧪 Validación POR REVERSIÓN (5 piezas, 5 rojas) — y DOS verdes que enseñaron algo
+
+```
+R36 saludar solo al INICIO · R37 _falta_devolver_saludo=False · R38 umbral 0
+R39 umbral absurdo · R40 horas_de_silencio=0
+RESTAURADO: 415 passed (404 + 11)
+```
+
+🔴 **R36 y R40 salieron VERDES la primera vez, y es la TERCERA vez en el día que aparece el mismo
+hueco** (R17 el 08-20, R29 esta mañana): **los tests probaban las piezas en AISLAMIENTO y nadie
+comprobaba el carril**. Se tapó con `tests/test_saludo_al_volver.py` (11 tests) que ejercita
+`responder()` entero con el andamiaje real y `horas_de_silencio` contra un doble de Postgres.
+**Regla que ya toca escribir en piedra: por cada pieza nueva, un test que la ejercite DESDE el
+carril, no solo desde fuera.**
+
+Y dos detalles de método más:
+- Un test falló enseñando algo: si el bot saluda pero **no** contesta el "¿cómo estás?", la red
+  completa la mitad que falta. Es correcto, y no estaba escrito en ninguna parte.
+- El monkeypatch hay que apuntarlo **al namespace de `tools`**, no a `app.services.db`: `tools.py`
+  importa `get_session_factory` a nivel de módulo. Es el espejo exacto del caso de
+  `_guardar_en_panel`, que lo importa DENTRO de la función y sí exige parchear el origen.
+
+### ⚠️ Lo que Maired pidió y NO se arregló aquí: el ESPEJEO
+
+Su segunda frase —*"espejear lo que yo estoy haciendo"*— es otra cosa. Ella escribió formal y
+completo, y el bot le contestó con un folleto: dos ítems, con paréntesis y saltos de línea
+(*"Empanadas de masa de plátano (vienen congeladas, 8 unidades por paquete)"*). El prompt ya tiene
+reglas de BREVEDAD y ESPEJEA y no se cumplen. **Eso es el P3 del ROADMAP** ("la naturalidad del
+prompt": 913 líneas con 21 `NUNCA`, 12 `SIEMPRE`, 10 `JAMÁS`) y **cambia cómo habla Alejandra**, así
+que es decisión de Maired/Whuilianny, no del código. No se tocó.
+
+---
+
 ## 2026-08-21 (2) — 🛒 ¿ASESORA Y VENDE? MEDIDO: asesora bien, NO CIERRA (y un bug que apagaba las fotos)
 
 Erwin preguntó si el bot es "una bestia estratégica, empática y proactiva asesorando y vendiendo".
