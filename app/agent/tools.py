@@ -3207,6 +3207,15 @@ _TOOLS_CRITICAS = frozenset(
     {"pedir_ayuda", "registrar_pedido", "generar_datos_pago", "registrar_comprobante"}
 )
 
+# Qué parámetros DECLARA cada tool, sacado de los propios `TOOL_SCHEMAS` (una sola fuente: si
+# mañana alguien añade un parámetro al schema, aquí entra solo). Lo usa `_solo_lo_declarado`.
+_PARAMS_DECLARADOS: dict[str, set[str]] = {
+    (t.get("function") or {}).get("name", ""): set(
+        ((t.get("function") or {}).get("parameters") or {}).get("properties", {}) or {}
+    )
+    for t in TOOL_SCHEMAS
+}
+
 
 def _args_para_log(args: dict) -> str:
     """Los args en UNA línea y CORTOS: un `detalle` largo o la URL de un comprobante llenan el
@@ -3215,6 +3224,42 @@ def _args_para_log(args: dict) -> str:
         return json.dumps(args or {}, ensure_ascii=False, default=str)[:200]
     except Exception:  # noqa: BLE001
         return repr(args)[:200]
+
+
+def _solo_lo_declarado(nombre: str, args: dict) -> dict:
+    """Los argumentos del modelo, RECORTADOS a lo que el schema de esa tool declara.
+
+    🔴 EL AGUJERO QUE TAPA (auditoría 2026-08-21, y estaba acotado a UNA tool — la del dinero).
+    `ejecutar_tool` hacía `fn(session, telefono, **args)` con los args TAL CUAL los manda el LLM, y
+    ningún schema lleva `additionalProperties: false` (0 de 12). Se comparó firma por firma contra
+    lo declarado, y solo `registrar_comprobante` acepta parámetros que su schema NO enseña:
+
+        avisar · comprobante_media_id · comprobante_url · monto_leido
+
+    **`monto_leido` es el monto que la VISIÓN leyó del comprobante**: el modelo podía FABRICARLO
+    sin que ninguna visión hubiera mirado la imagen. Y `avisar=False` habría registrado un pago sin
+    avisarle a la dueña. Las otras once tools estaban limpias.
+
+    Va aquí y no en los schemas a propósito: `additionalProperties: false` es una SUGERENCIA al
+    proveedor (y cambia el strict mode del ruteo), mientras que esto lo IMPIDE. Es la doctrina del
+    repo: el prompt sugiere, el código impide.
+
+    ⚠️ Y no le arranca el brazo a nadie, que era el riesgo: el worker de visión llama a
+    `registrar_comprobante` **directo** (`tasks.py`, import de la función), no por esta puerta; y
+    las redes de seguridad que sí entran por aquí (`pedir_ayuda`, `enviar_catalogo`,
+    `enviar_fotos_producto`) solo usan parámetros declarados. Verificado antes de tocar.
+    """
+    declarados = _PARAMS_DECLARADOS.get(nombre)
+    if declarados is None:          # tool sin schema: no hay nada contra lo que recortar
+        return args or {}
+    limpios = {k: v for k, v in (args or {}).items() if k in declarados}
+    descartados = sorted(set(args or {}) - declarados)
+    if descartados:
+        logger.warning(
+            "ARGS NO DECLARADOS: el modelo le pasó %s a %s y se DESCARTARON (schema: %s)",
+            descartados, nombre, sorted(declarados),
+        )
+    return limpios
 
 
 async def ejecutar_tool(nombre: str, args: dict, telefono: str, session_factory=None):
@@ -3226,7 +3271,7 @@ async def ejecutar_tool(nombre: str, args: dict, telefono: str, session_factory=
         session_factory = get_session_factory()
     async with session_factory() as session:
         try:
-            return await fn(session, telefono, **args)
+            return await fn(session, telefono, **_solo_lo_declarado(nombre, args))
         except Exception as e:  # noqa: BLE001 — devolver el error al LLM para que se recupere
             # 🔴 ESTE `except` NO ESCRIBÍA NI UNA LÍNEA, y por eso el sistema podía fallar MUDO.
             # Un timeout de BD dentro de `pedir_ayuda` salía por aquí como un `{"error": ...}`

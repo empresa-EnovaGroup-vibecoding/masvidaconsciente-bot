@@ -478,6 +478,10 @@ _MONTO_RE = re.compile(
 
 _MILES_RE = re.compile(r"^\d{1,3}(\.\d{3})+$")      # 5.000 · 31.936  -> MILES, sin ambigüedad
 _MILES_COMA_RE = re.compile(r"^\d{1,3}(,\d{3})+$")  # 5,000 · 31,936  -> MILES (formato gringo)
+# 🔴 UN SEPARADOR CON 1 o 2 DÍGITOS DETRÁS ES UN DECIMAL, no miles: 10.00 · 22,40 · 0.5 · 1,5
+# El separador de MILES lleva SIEMPRE tres ("1.000"), así que aquí no hay ambigüedad ninguna —
+# nadie escribe mil como "1.00". Ver `_lecturas_del_monto` para lo que costaba tratarlo como dudoso.
+_DECIMAL_RE = re.compile(r"^\d+[.,]\d{1,2}$")
 
 
 def _numeros_de(texto: str) -> set[float]:
@@ -519,7 +523,27 @@ def _lecturas_del_monto(crudo: str) -> set[float]:
         if crudo.rfind(",") > crudo.rfind("."):
             return _num(crudo.replace(".", "").replace(",", "."))
         return _num(crudo.replace(",", ""))
-    # Un solo separador y no es patrón de miles: ambiguo de verdad (22.40 / 22,40) -> las dos.
+    # 🔴 DECIMAL INEQUÍVOCO: un separador con 1 o 2 dígitos detrás (10.00 · 22,40 · 0.5).
+    #
+    # LA BANDA CIEGA DEL 1% (bug del camino del DINERO, cerrado el 2026-08-21 tras reproducirlo).
+    # Esta línea daba LAS DOS lecturas —10.00 ⇒ {10, 1000}— por considerarlo "ambiguo de verdad".
+    # No lo es: el separador de miles lleva SIEMPRE tres dígitos. Y como `autorizados_por_moneda`
+    # usa esta misma función para construir la lista blanca a partir de lo que devuelven las
+    # HERRAMIENTAS, un total de $10.00 autorizaba también el 1000 — y con la tolerancia del 1% de
+    # `_calza`, toda la banda 990–1010. Medido antes del arreglo:
+    #
+    #     herramienta: "Total: $10.00"  ⇒  AUTORIZADOS USD = [10.0, 1000.0]
+    #     el bot escribe "$1000" → PASA · "$995" → PASA · "$1010" → PASA
+    #     el bot escribe "$12"   → frena  ← más estricta con un error de $2 que con uno de $990
+    #
+    # O sea: la red que existe para que el bot no invente dinero autorizaba cobrar CIEN VECES el
+    # precio. Se arregla aquí, en la LECTURA, y no en `_calza`: el 1% de tolerancia es correcto
+    # (los redondeos del modelo existen); lo que estaba mal era meter un número cien veces mayor
+    # en la lista blanca. Tocar `_calza` habría estrechado la tolerancia de TODOS los montos para
+    # tapar un problema que solo tenían los que llevan decimales.
+    if _DECIMAL_RE.match(crudo):
+        return _num(crudo.replace(",", "."))
+    # Lo que queda sí es dudoso de verdad (3+ dígitos detrás sin ser patrón de miles): las dos.
     return _num(crudo.replace(",", ".")) | _num(crudo.replace(",", "").replace(".", ""))
 
 

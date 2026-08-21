@@ -84,6 +84,96 @@ documento ("si algo no te cuadra con lo que ves, corrígelo en el momento").
 
 ---
 
+## 2026-08-21 — 💵 LA BANDA CIEGA DEL 1% Y LOS ARGS QUE EL MODELO COLABA (los dos bugs del P5, cerrados)
+
+Eran los dos que el ROADMAP tenía como *"conocidos y NO tocados a propósito"*. Se cerraron después
+de **reproducirlos** — no de leerlos en un documento.
+
+### 1 · 🔴 LA BANDA CIEGA: un total de $10 autorizaba cobrar $1000
+
+`_lecturas_del_monto` daba **las dos** lecturas de un monto con un separador ("10.00" ⇒ `{10, 1000}`)
+porque el comentario lo consideraba *"ambiguo de verdad"*. **No lo es:** el separador de MILES lleva
+siempre tres dígitos — nadie escribe mil como "1.00".
+
+El agujero estaba en que `autorizados_por_moneda` usa **esa misma función** para construir la lista
+blanca a partir de lo que devuelven las HERRAMIENTAS. Medido contra el contenedor ANTES de tocar:
+
+```
+la herramienta dijo: "Total: $10.00"
+  AUTORIZADOS USD -> [10.0, 1000.0]          ← el x100 entra en la lista blanca
+  el bot escribe "$1000" -> 🔴 PASA
+  el bot escribe "$995"  -> 🔴 PASA          (la tolerancia del 1% de `_calza`: 990–1010)
+  el bot escribe "$1010" -> 🔴 PASA
+  el bot escribe "$12"   -> ✅ frena         ← más estricta con un error de $2 que con uno de $990
+```
+
+O sea: **la red que existe para que el bot no invente dinero autorizaba cobrar cien veces el
+precio.** Después del arreglo, `[10.0]` y los tres inventados frenan.
+
+**Se arregló en la LECTURA, no en `_calza`.** El 1% de tolerancia es correcto (los redondeos del
+modelo existen); lo que estaba mal era meter un número cien veces mayor en la lista blanca. Tocar
+`_calza` habría estrechado la tolerancia de TODOS los montos para tapar un problema que solo tenían
+los que llevan decimales.
+
+⚠️ **Lo que NO se toca:** un separador con **3+ dígitos detrás y 4+ cifras delante** sigue dando las
+dos lecturas ("1234.567" ⇒ `{1234.57, 1234567}`), porque ahí la duda es real (un Bs 1.234.567 mal
+escrito). Estrechar de más habría dado por bueno un x1000 en el carril de bolívares. Lo pidió una
+reversión que salió VERDE.
+
+### 2 · 🔴 LOS ARGS DEL MODELO IBAN SIN FILTRAR (y era el camino del dinero)
+
+`ejecutar_tool` hacía `fn(session, telefono, **args)` con los args **tal cual los manda el LLM**, y
+ningún schema lleva `additionalProperties: false` (0 de 12). Se comparó **firma por firma** contra lo
+declarado, y el agujero estaba en UNA sola tool — la del dinero:
+
+```
+registrar_comprobante  declara: referencia
+                       ACEPTA además: avisar · comprobante_media_id · comprobante_url · monto_leido
+```
+
+**`monto_leido` es el monto que la VISIÓN leyó del comprobante**: el modelo podía **fabricarlo** sin
+que ninguna visión hubiera mirado la imagen. Y `avisar=False` habría registrado un pago sin avisarle
+a la dueña. Las otras once tools estaban limpias.
+
+→ `_solo_lo_declarado(nombre, args)` recorta los args a las `properties` del propio schema (una sola
+fuente: si mañana alguien añade un parámetro al schema, entra solo) y **loguea lo descartado**.
+
+⚠️ **Lo que había que comprobar antes de tocar, y se comprobó:** que esto no le arrancara el brazo a
+nadie. El worker de visión llama a `registrar_comprobante` **directo** (`tasks.py`, import de la
+función), NO por esta puerta; y las redes de seguridad que sí entran por aquí (`pedir_ayuda`,
+`enviar_catalogo`, `enviar_fotos_producto`) solo usan parámetros declarados. Va en el CÓDIGO y no en
+`additionalProperties` a propósito: eso último es una sugerencia al proveedor (y cambia el strict
+mode del ruteo); esto lo IMPIDE.
+
+### 🧪 Validación POR REVERSIÓN (7 piezas nuevas, 7 rojas — y TRES salieron verdes primero)
+
+**24 tests nuevos** en `test_redes.py`. Los rojos: la banda ciega de vuelta · el regex de decimal
+con 3 dígitos · el patrón de MILES fuera · los dos separadores al revés · el filtro fuera de
+`ejecutar_tool` · el filtro que no filtra · el mapa de params vacío.
+
+🔴 **Las tres verdes, y lo que enseñó cada una:**
+- **R26** (decimal con 3 dígitos): el tope de DOS dígitos solo cambia algo con **4+ cifras delante**
+  del separador; con 1-3 manda `_MILES_RE` antes. Faltaba justo el caso donde la duda es real.
+- **R29** (filtro fuera de `ejecutar_tool`): los tests probaban `_solo_lo_declarado` en AISLAMIENTO.
+  Nadie comprobaba que la puerta real lo USARA. Es el gemelo exacto de R17 del 08-20.
+- **R31**: era un fallo de mi script de reversión, no un hueco — `set() or set(...)` y `{} or {...}`
+  no cambian nada en Python. Hubo que vaciar la comprensión de verdad (`for t in []`) para que
+  mordiera. **Una reversión mal escrita miente igual que un test mal escrito.**
+
+Y el test de integración de `ejecutar_tool` **encontró otra cosa al fallar**: el schema de
+`registrar_comprobante` declara SOLO `referencia` — ni siquiera `pedido_id`, que yo había asumido.
+El filtro estaba bien; la suposición era mía.
+
+```
+385 passed (363 + 22) · ruff limpio · compileall OK
+25 BANCOS EN VERDE uno por uno, incluidos los SEIS del dinero (probar_cobro, carril_dinero,
+datos_bancarios, delivery, cobro_panel, recibo_visible) — son los que juzgan si esto frenó de más
+checksum: agent.py y tools.py idénticos en local, BOT y WORKER · /salud ok 8/8 · 0 errores en logs
+el escenario de Maired, revalidado tras tocar el dinero: Empanadas $12, sin Kéfir · 6/6 casos borde
+```
+
+---
+
 ## 2026-08-20 (2) — 🔴🔴 CAUSA RAÍZ DEL FALLO QUE REPORTÓ MAIRED: EL BOT OLVIDA TODO A LAS 24 H
 
 **Lo que reportó Maired** (captura de WhatsApp del 08-18): el bot le ofreció empanadas de plátano
