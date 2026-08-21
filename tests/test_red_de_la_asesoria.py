@@ -119,7 +119,10 @@ def modo_uno(monkeypatch):
     monkeypatch.setattr(ag, "leer_modelo_ia", _modelo)
     monkeypatch.setattr(ag, "leer_tools_activas", _activas)
     monkeypatch.setattr(ag, "construir_partes_prompt", _partes)
-    monkeypatch.setattr(ag, "producto_enfocado", _sin_producto)
+    async def _sin_productos(_t, _max=2):
+        return []   # plural desde el 2026-08-21; la red de la FOTO tiene su propio archivo
+
+    monkeypatch.setattr(ag, "productos_enfocados", _sin_productos)
     monkeypatch.setattr(ag, "media_ya_mostrada", _ya_mostrada)
     return None
 

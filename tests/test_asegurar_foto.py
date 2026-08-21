@@ -136,7 +136,8 @@ async def _correr_red(
     mensaje: str = "ok esa quiero",
     puede_fotos: bool = True,
     hubo_media: bool = False,
-    enfocado: str | None = "Quesillo",
+    enfocado: str | list | None = "Quesillo",
+    enfocado_cliente: str | list | None = "__igual__",
     ya_mostrada: bool = False,
     resultado_tool: dict | Exception | None = None,
 ):
@@ -144,9 +145,23 @@ async def _correr_red(
     llamadas: list[tuple[str, dict]] = []
     resoluciones: list[str] = []
 
-    async def _enfocado(t):
+    def _como_lista(v):
+        if v is None:
+            return []
+        return list(v) if isinstance(v, list) else [v]
+
+    async def _enfocado(t, maximo=2):
+        """El doble de `productos_enfocados`. Devuelve LISTA (la red pasó a plural el 08-21) y
+        distingue si le preguntan por el TEXTO DEL BOT o por el MENSAJE DEL CLIENTE — la red
+        consulta los dos, y sin distinguirlos no se puede probar la ceguera que se arregló."""
         resoluciones.append(t)
-        return enfocado
+        lista = (_como_lista(enfocado_cliente)
+                 if (t == mensaje and enfocado_cliente != "__igual__")
+                 else _como_lista(enfocado))
+        # 🔴 El doble RESPETA el tope, como la pieza real: por encima devuelve VACÍO (no recorta,
+        # que mostrar 2 de 5 sería elegir por el cliente). Sin esto, bajar
+        # `_MAX_FOTOS_POR_TURNO` a 1 no rompía ningún test — R44 salía verde.
+        return [] if len(lista) > maximo else lista
 
     async def _mostrada(telefono, nombre):
         return ya_mostrada
@@ -157,7 +172,7 @@ async def _correr_red(
             raise resultado_tool
         return resultado_tool if resultado_tool is not None else {"enviadas": 2, "producto": enfocado}
 
-    monkeypatch.setattr(ag, "producto_enfocado", _enfocado)
+    monkeypatch.setattr(ag, "productos_enfocados", _enfocado)
     monkeypatch.setattr(ag, "media_ya_mostrada", _mostrada)
     await _asegurar_foto(
         texto, "584240000000", mensaje, ejecutar,
@@ -232,15 +247,67 @@ async def test_si_pidio_el_catalogo_ese_turno_no_es_de_fotos(monkeypatch):
     assert resoluciones == []
 
 
-async def test_si_el_bot_ofrece_a_elegir_todavia_no_hay_foco(monkeypatch):
-    """"¿cuál prefieres?" = el cliente sigue entre varios. Mandar la foto de uno sería
-    decidir por él (y el prompt ordena UN producto a la vez)."""
-    llamadas, resoluciones = await _correr_red(
+async def test_con_TRES_o_mas_productos_no_se_manda_nada(monkeypatch):
+    """El cliente sigue entre varios: mandarle 3 fotos es spam y quema el número con Meta.
+
+    🔴 ESTE TEST CAMBIÓ DE MECANISMO EL 2026-08-21, no de intención. Antes comprobaba que la
+    guarda `_OFRECE_OPCIONES` (`\bcual\b`) cortara la red ANTES de resolver nada — y esa guarda se
+    quitó porque apagaba la foto también cuando el producto YA estaba elegido y el bot preguntaba
+    por el RELLENO ("Tenemos de carne mechada, pollo o queso de cabra. ¿Cuál prefieres?" → cero
+    fotos en el turno de más interés). Quien decide ahora es el TOPE de productos, que es la señal
+    de verdad: 3+ nombrados ⇒ `productos_enfocados` devuelve lista vacía ⇒ la red no dispara.
+    Lo que se protege sigue siendo lo mismo: NO bombardear."""
+    llamadas, _ = await _correr_red(
         monkeypatch,
         texto="tengo pan de sándwich, de hamburguesa y keto 😊 cuál prefieres?",
+        enfocado=None,   # lo que devuelve el tope con 3+ nombrados
     )
     assert llamadas == []
-    assert resoluciones == []
+
+
+async def test_el_TOPE_de_verdad_con_tres_productos_en_el_texto(monkeypatch):
+    """El de arriba usa el doble; este ejercita `productos_enfocados` REAL contra un catálogo
+    falso — si no, quitar el tope dejaría la suite en verde (la lección de R36/R29/R17)."""
+    from app.agent import tools as tl
+
+    catalogo = ["Pan de Sándwich", "Pan de Hamburguesa", "Pan Keto", "Quesillo"]
+
+    class _R:
+        def scalars(self):
+            return self
+
+        def all(self):
+            return catalogo
+
+    class _S:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *e):
+            return False
+
+        async def execute(self, _q):
+            return _R()
+
+    class _Prod:
+        def __init__(self, nombre):
+            self.nombre = nombre
+
+    async def _resolver(_session, mencion):
+        """`_buscar_producto` de verdad hace SU propia consulta; aquí solo interesa el TOPE."""
+        return _Prod(mencion)
+
+    monkeypatch.setattr(tl, "get_session_factory", lambda: (lambda: _S()))
+    monkeypatch.setattr(tl, "_buscar_producto", _resolver)
+
+    # tres productos nombrados ⇒ por encima del tope ⇒ nada (corta ANTES de resolver)
+    assert await tl.productos_enfocados(
+        "tengo Pan de Sándwich, Pan de Hamburguesa y Pan Keto", 2
+    ) == []
+    # y con DOS sí resuelve — para eso se cambió
+    assert len(await tl.productos_enfocados("tengo Pan Keto y Quesillo", 2)) == 2
+    # con UNO, uno (el caso mayoritario no cambia)
+    assert len(await tl.productos_enfocados("te recomiendo el Quesillo", 2)) == 1
 
 
 async def test_si_no_hay_fotos_cargadas_no_pasa_nada(monkeypatch):
@@ -308,13 +375,13 @@ async def _correr_turno(
 
         monkeypatch.setattr(ag, "leer_tools_activas", _activas)
 
-    async def _enfocado(texto):
-        return enfocado
+    async def _enfocado(texto, maximo=2):
+        return [] if enfocado is None else [enfocado]
 
     async def _mostrada(telefono, nombre):
         return ya_mostrada
 
-    monkeypatch.setattr(ag, "producto_enfocado", _enfocado)
+    monkeypatch.setattr(ag, "productos_enfocados", _enfocado)
     monkeypatch.setattr(ag, "media_ya_mostrada", _mostrada)
 
     async def llm(messages, tools, model):
@@ -418,3 +485,104 @@ def test_un_articulo_en_medio_no_devuelve_el_bug(texto):
            _productos_nombrados_en(texto, CATALOGO_INSUMOS) == ["Quesillo"], (
         f"volvió a ver dos productos: {_productos_nombrados_en(texto, CATALOGO_INSUMOS)}"
     )
+
+
+# ══════════════════════════════════════════════════════════════════════════════════
+# 🔴 LAS TRES CEGUERAS QUE SE ARREGLARON EL 2026-08-21 — probadas DESDE LA RED
+#
+# Cinco reversiones (R41, R42, R44, R45, R46) salieron VERDES con los tests de las piezas: se
+# podía deshacer el arreglo entero y la suite no se enteraba. Es la CUARTA vez en el día que pasa
+# lo mismo (R17, R29, R36): probar la pieza no es probar el carril.
+# ══════════════════════════════════════════════════════════════════════════════════
+
+async def test_con_un_CUAL_en_el_texto_pero_producto_claro_SI_manda_la_foto(monkeypatch):
+    """🔴 R41. El turno REAL que reportó Erwin: el producto ya está elegido y el bot pregunta por
+    el RELLENO. Antes, cualquier "cuál" apagaba la red y no salía ninguna foto."""
+    llamadas, _ = await _correr_red(
+        monkeypatch,
+        texto="Tenemos de carne mechada, pollo o queso de cabra. Cuál prefieres?",
+        mensaje="me gustaría saber si tienen empanadas de plátano",
+        enfocado=None,                                  # el bot NO nombra el producto…
+        enfocado_cliente="Empanadas de masa de plátano",  # …pero el cliente sí
+    )
+    assert llamadas == [("enviar_fotos_producto", {"nombre": "Empanadas de masa de plátano"})], (
+        f"no mandó la foto con el producto ya elegido: {llamadas}"
+    )
+
+
+async def test_si_el_bot_no_nombra_el_producto_se_mira_al_CLIENTE(monkeypatch):
+    """🔴 R42. El bot no repite el nombre cuando ya se sobreentiende: eso dejaba la red ciega."""
+    llamadas, resoluciones = await _correr_red(
+        monkeypatch,
+        texto="Vienen en paquete de 8 unidades. Cuántos quieres?",
+        mensaje="quiero las empanadas de plátano",
+        enfocado=None,
+        enfocado_cliente="Empanadas de masa de plátano",
+    )
+    assert len(llamadas) == 1
+    # y se consultó PRIMERO el texto del bot, y solo después el del cliente
+    assert resoluciones == ["Vienen en paquete de 8 unidades. Cuántos quieres?",
+                            "quiero las empanadas de plátano"]
+
+
+async def test_con_DOS_opciones_manda_LAS_DOS_fotos(monkeypatch):
+    """🔴 R44/R45. Lo pidió Erwin: a puro texto no engancha. Con dos opciones, las dos fotos."""
+    llamadas, _ = await _correr_red(
+        monkeypatch,
+        texto="Tenemos Empanadas de masa de plátano y Empanadas Horneadas. Cuál te llama más?",
+        enfocado=["Empanadas de masa de plátano", "Empanadas Horneadas"],
+    )
+    assert [a["nombre"] for _, a in llamadas] == [
+        "Empanadas de masa de plátano", "Empanadas Horneadas",
+    ], f"no mandó las dos: {llamadas}"
+
+
+async def test_un_STRING_suelto_no_se_convierte_en_una_llamada_POR_LETRA(monkeypatch):
+    """🔴 R46. Si la pieza devolviera un string, `for nombre in nombres` iteraría sus CARACTERES:
+    45 llamadas a WhatsApp por un error de tipo. Pasó de verdad con un doble mal escrito."""
+    from app.agent import agent as agente
+
+    llamadas: list = []
+
+    async def _string(_t, maximo=2):
+        return "Quesillo"          # ← un str, no una lista
+
+    async def _no_mostrada(_tel, _n):
+        return False
+
+    async def ejecutar(nombre, args, telefono):
+        llamadas.append(args["nombre"])
+        return {"enviadas": 1}
+
+    monkeypatch.setattr(agente, "productos_enfocados", _string)
+    monkeypatch.setattr(agente, "media_ya_mostrada", _no_mostrada)
+    await _asegurar_foto(
+        "Te recomiendo el Quesillo", "584240000000", "algo dulce", ejecutar,
+        puede_fotos=True, hubo_media=False,
+    )
+    assert llamadas == ["Quesillo"], f"iteró caracteres: {llamadas[:6]}…"
+
+
+async def test_de_dos_productos_la_ya_mostrada_se_cae_pero_la_otra_SALE(monkeypatch):
+    """El filtro de repetidas no puede matar la foto que sí falta (antes un `return` seco lo hacía)."""
+    from app.agent import agent as agente
+
+    llamadas: list = []
+
+    async def _dos(_t, maximo=2):
+        return ["Quesillo", "Empanadas Horneadas"]
+
+    async def _ya_vista(_tel, nombre):
+        return nombre == "Quesillo"      # el primero ya se mostró
+
+    async def ejecutar(nombre, args, telefono):
+        llamadas.append(args["nombre"])
+        return {"enviadas": 1}
+
+    monkeypatch.setattr(agente, "productos_enfocados", _dos)
+    monkeypatch.setattr(agente, "media_ya_mostrada", _ya_vista)
+    await _asegurar_foto(
+        "Tenemos Quesillo y Empanadas Horneadas", "584240000000", "que tienes", ejecutar,
+        puede_fotos=True, hubo_media=False,
+    )
+    assert llamadas == ["Empanadas Horneadas"]

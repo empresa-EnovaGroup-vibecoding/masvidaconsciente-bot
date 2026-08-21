@@ -1321,6 +1321,44 @@ async def etiqueta_recordada(
         return None
 
 
+async def productos_enfocados(texto: str, maximo: int = 2) -> list[str]:
+    """Los productos DISPONIBLES que un texto nombra con todas sus letras, resueltos — hasta
+    `maximo`. Lista VACÍA si no nombra ninguno **o si nombra más de `maximo`**.
+
+    Es el hermano en plural de `producto_enfocado`, y existe por lo que pidió Erwin el 2026-08-21:
+    cuando el bot ofrece DOS opciones ("Empanadas de masa de plátano o Empanadas Horneadas"),
+    enseñar las dos fotos ayuda a decidir — a puro texto no engancha. Con TRES o más sí es spam, y
+    encima quema la calidad del número con Meta: por eso el tope, y por eso pasado el tope se
+    devuelve vacío en vez de recortar (mostrar 2 de 5 sería elegir por el cliente).
+
+    Cada nombre se resuelve con `_buscar_producto` —exacto primero, el camino del DINERO— para que
+    la foto que salga sea la de ESE producto y jamás la de uno parecido. Un nombre que no resuelve
+    se cae de la lista sin tumbar el resto.
+    """
+    if not (texto or "").strip() or maximo < 1:
+        return []
+    try:
+        factory = get_session_factory()
+        async with factory() as session:
+            nombres = (
+                await session.execute(
+                    select(Producto.nombre).where(Producto.disponible.is_(True))
+                )
+            ).scalars().all()
+            menciones = _productos_nombrados_en(texto, list(nombres))
+            if not menciones or len(menciones) > maximo:
+                return []
+            resueltos = []
+            for mencion in menciones:
+                prod = await _buscar_producto(session, mencion)
+                if prod is not None:
+                    resueltos.append(prod.nombre)
+            return resueltos
+    except Exception:  # noqa: BLE001 — sin producto no hay red, y el texto del bot sale igual
+        logger.exception("No se pudieron resolver los productos enfocados")
+        return []
+
+
 async def horas_de_silencio(telefono: str) -> float:
     """Cuántas HORAS lleva callado este cliente (según `clientes.ultima_interaccion`).
 

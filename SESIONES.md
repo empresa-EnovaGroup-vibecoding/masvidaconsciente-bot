@@ -84,6 +84,94 @@ documento ("si algo no te cuadra con lo que ves, corrígelo en el momento").
 
 ---
 
+## 2026-08-21 (4) — 📸 LAS FOTOS: tres cegueras que dejaban la venta a puro texto
+
+**Lo que preguntó Erwin, viendo un turno real:** *"¿en qué parte le envía las imágenes de esos
+productos? A puro texto es poco profesional, ¿cómo va a enganchar de manera estratégica?"* Tenía
+razón: se auditó la red de la foto y estaba apagada en los turnos que más venden.
+
+### 🔎 Las TRES cegueras, medidas contra los cierres REALES del bot
+
+| Cierre real del bot | ¿salía foto? | |
+|---|---|---|
+| *"…las Mini New York duran 2 semanas. ¿De qué sabores?"* | ✅ | correcto |
+| *"Las Empanadas… paquete de 8. ¿Cuántos?"* | ✅ | correcto |
+| **"Tenemos de carne mechada, pollo o queso de cabra. ¿Cuál prefieres?"** | 🔴 **NO** | **BUG** |
+| *"…dos opciones: Empanadas de plátano y Horneadas. ¿Cuál?"* | 🔴 NO | era a propósito |
+
+**1 · Un `"cuál"` apagaba la red entera.** La guarda era `_OFRECE_OPCIONES = re.compile(r"\bcual(es)?\b")`
+y no distinguía *"¿cuál de estos PRODUCTOS?"* (sigue eligiendo, correcto callar) de *"¿cuál
+RELLENO?"* (el producto YA está elegido). Y pesa muchísimo porque **el bot cierra con pregunta casi
+siempre** (11 de 12 turnos, L5). Se quitó como guarda: ahora decide el TOPE de productos, que es la
+señal de verdad. ⚠️ La constante **NO se borró**: la RED DEL PITCH la sigue usando, y allí sí hace
+lo que fue diseñada. Se descubrió al compilar, no al leer.
+
+**2 · La red solo miraba lo que decía el BOT.** El bot no repite el nombre cuando ya se
+sobreentiende — que es lo natural al hablar — y eso la dejaba ciega:
+
+```
+producto_enfocado(texto del BOT)      -> None
+producto_enfocado(mensaje del CLIENTE) -> Empanadas de masa de yuca o de masa de plátano
+```
+
+Ahora se mira el mensaje del cliente **solo si el bot no nombra ninguno**. Si el bot nombra dos, eso
+manda: el cliente sigue eligiendo.
+
+**3 · Con dos opciones no mandaba fotos** — eso era **deliberado** (el prompt dice "NO BOMBARDEES —
+UN producto a la vez"). **Erwin decidió cambiarlo:** con DOS opciones van las DOS fotos, porque
+ayudan a decidir. Con **TRES o más NO se manda nada** (ni recortado a dos: elegir 2 de 5 es decidir
+por el cliente), porque ahí sí es spam y quema la calidad del número con Meta, que es regla dura.
+Pieza nueva: `productos_enfocados(texto, maximo)`.
+
+### ✅ Verificado tras desplegar, contra el catálogo REAL
+
+```
+"…dos opciones: Empanadas de masa de plátano y Empanadas Horneadas…"  -> 2 fotos ✅
+"Te recomiendo el Quesillo, es cremosito."                            -> 1 foto  ✅
+"Tenemos Quesillo, Galletas New York y Ponquesitos. ¿Cuál?"           -> 0 fotos ✅ (tope)
+```
+
+Y el turno EXACTO que lo destapó, por el carril real: *"Tenemos relleno de carne mechada, pollo o
+queso de cabra. ¿Cuál prefieres?"* → **ahora sale la foto de las empanadas**. Antes, nada.
+
+### 🛡️ Un blindaje que salió de un doble de test mal escrito
+
+Si `productos_enfocados` devolviera un **string** en vez de una lista, `for nombre in nombres`
+iteraría sus **CARACTERES**: una llamada a WhatsApp **por letra** (45 en la primera prueba). La red
+que existe para no hacer spam no puede ser la que lo provoque — ahora un `str` suelto se trata como
+lista de uno.
+
+### 🧪 Reversión (7 piezas, 7 rojas) — y 🔴 EL FALLO DE MÉTODO MÁS IMPORTANTE DEL DÍA
+
+Cinco de las siete salieron VERDES al principio y se escribieron 5 tests de red para taparlas. Pero
+**dos (R44 y, antes, R38) eran FALSOS VERDES**, y la causa vale más que el arreglo:
+
+> **Python valida el `.pyc` por (mtime, TAMAÑO) del `.py`.** Una reversión que **no cambia el
+> tamaño del fichero** —`"= 2"` → `"= 1"`, `"4.0"` → `"0.0"`— y que cae en el mismo segundo que la
+> escritura anterior **reutiliza el bytecode viejo: el código revertido NUNCA se ejecuta** y la
+> suite pasa. Se reporta como "hueco de tests" algo que estaba perfectamente cubierto.
+
+Se confirmó midiendo: a mano la suite daba `1 failed`; dentro del script, `421 passed`. Con
+`find app -name __pycache__ -delete` antes de cada corrida: **7/7 rojas**.
+
+**→ REGLA NUEVA PARA TODA REVERSIÓN: borrar `__pycache__` antes de correr, y comprobar releyendo el
+fichero que el cambio llegó a disco.** Sin eso, el método miente justo en las reversiones de un
+carácter, que son las más fáciles de escribir. *(Los ROJOS nunca son falsos, así que ninguna pieza
+dada por validada estaba en duda; lo que hubo fue trabajo de más buscando huecos inexistentes.)*
+
+```
+421 passed (416 + 5) · ruff limpio · compileall OK · 8 bancos en verde · /salud ok
+checksum de agent.py y tools.py idéntico en local, BOT y WORKER
+```
+
+⚠️ **Lo que NO arregla el código:** **8 de los 31 productos disponibles no tienen NI UNA foto**
+(CHOCOLATE, Harina de Almendra, Harina de Merey, Premezclas, Untable de Chocolate, barra proteica de
+chocolate, barra de chocolate con frutos secos, untable de mantequilla de merey con maca). En esos,
+la red dispara y no hay nada que enseñar. **Es contenido de Whuilianny** (L19: una función correcta
+es INERTE si falta el dato).
+
+---
+
 ## 2026-08-21 (3) — 👋 EL SALUDO SE DEVUELVE TAMBIÉN AL VOLVER (lo reportó Maired, y tenía razón)
 
 **Su reporte, textual:** *"Debería de decir buenas tardes. Espejear lo que yo estoy haciendo. Y lo

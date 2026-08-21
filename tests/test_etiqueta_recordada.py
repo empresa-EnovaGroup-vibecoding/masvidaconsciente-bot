@@ -214,8 +214,9 @@ async def _correr_red(monkeypatch, *, mensaje, historial, texto=CIERRE, enfocado
     llamadas: list[tuple[str, dict]] = []
     consultas: list[tuple] = []
 
-    async def _enfocado(t):
-        return enfocado
+    async def _enfocado(t, maximo=2):
+        # LISTA: la red pasó a plural el 2026-08-21 para poder mandar dos fotos.
+        return [] if enfocado is None else [enfocado]
 
     async def _mostrada(telefono, nombre):
         return False
@@ -228,7 +229,7 @@ async def _correr_red(monkeypatch, *, mensaje, historial, texto=CIERRE, enfocado
         llamadas.append((nombre, args))
         return {"enviadas": 1, "producto": enfocado}
 
-    monkeypatch.setattr(ag, "producto_enfocado", _enfocado)
+    monkeypatch.setattr(ag, "productos_enfocados", _enfocado)
     monkeypatch.setattr(ag, "media_ya_mostrada", _mostrada)
     monkeypatch.setattr(ag, "etiqueta_recordada", _recordada)
     await _asegurar_foto(
@@ -381,8 +382,8 @@ def modo_uno(monkeypatch):
 async def _correr_turno(monkeypatch, *, mensaje, historial):
     llamadas: list[tuple[str, dict]] = []
 
-    async def _enfocado(texto):
-        return COMPUESTO
+    async def _enfocado(texto, maximo=2):
+        return [COMPUESTO]
 
     async def _mostrada(telefono, nombre):
         return False
@@ -390,7 +391,7 @@ async def _correr_turno(monkeypatch, *, mensaje, historial):
     async def _recordada(nombre, mensaje_actual, hist):
         return etiqueta_recordada_en(nombre, mensaje_actual, hist, CATALOGO)
 
-    monkeypatch.setattr(ag, "producto_enfocado", _enfocado)
+    monkeypatch.setattr(ag, "productos_enfocados", _enfocado)
     monkeypatch.setattr(ag, "media_ya_mostrada", _mostrada)
     monkeypatch.setattr(ag, "etiqueta_recordada", _recordada)
 

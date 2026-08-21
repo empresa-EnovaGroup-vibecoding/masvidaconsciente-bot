@@ -27,7 +27,7 @@ from app.agent.tools import (
     etiqueta_recordada,
     horas_de_silencio,
     media_ya_mostrada,
-    producto_enfocado,
+    productos_enfocados,
     schemas_para,
 )
 from app.config import get_settings
@@ -138,7 +138,16 @@ def _es_charla_pura(texto: str) -> bool:
 # Si el bot pregunta "¿cuál…?" está ofreciendo a ELEGIR: el cliente sigue entre varios y
 # todavía no hay UN producto que mostrar. `\b` a ambos lados porque 'cual'/'cuales' son
 # palabras completas, no raíces ("cualquiera" no calza y no debe calzar).
+# "¿cuál…?" en el texto del bot. 🔴 YA NO se usa como guarda en la RED DE LA FOTO (ver el porqué
+# dentro de `_asegurar_foto`), pero SÍ la sigue usando la RED DEL PITCH: allí sirve para lo que fue
+# diseñada —si el bot está ofreciendo opciones, no le exijas que venda una que el cliente no eligió—.
 _OFRECE_OPCIONES = re.compile(r"\bcual(es)?\b")
+
+# Cuántas fotos como MÁXIMO manda la red en un turno. DOS porque lo pidió Erwin el 2026-08-21:
+# cuando el bot ofrece dos opciones, enseñar las dos ayuda a decidir — a puro texto no engancha.
+# Con TRES o más NO se manda nada (ni recortado a dos: elegir 2 de 5 es decidir por el cliente),
+# porque ahí sí es spam y quema la calidad del número con Meta, que es una regla dura.
+_MAX_FOTOS_POR_TURNO = 2
 
 
 async def _asegurar_foto(
@@ -166,43 +175,68 @@ async def _asegurar_foto(
         return
     if _es_charla_pura(mensaje_cliente) or _pide_catalogo(mensaje_cliente):
         return
-    if _OFRECE_OPCIONES.search(_sin_acentos(texto or "")):
-        return
-    # De aquí en adelante TODO va envuelto: esta red corre justo antes del `return texto` y una
-    # excepción suya se llevaría por delante un turno entero que ya estaba bueno.
+    # 🔴 AQUÍ ESTABA LA GUARDA `if _OFRECE_OPCIONES.search(texto): return`, Y SE QUITÓ EL
+    # 2026-08-21 tras medirla. Era `re.compile(r"\bcual(es)?\b")`: **cualquier "cuál" en la
+    # respuesta apagaba la red entera**. La intención era buena ("si sigue eligiendo, no
+    # bombardear") pero no distinguía las dos preguntas:
+    #
+    #   "¿CUÁL de estos PRODUCTOS?"  → sigue eligiendo, no mostrar   ✔ (hoy lo cubre el TOPE)
+    #   "¿CUÁL RELLENO?"             → el producto YA está elegido    ✘ y se apagaba igual
+    #
+    # El turno que lo destapó (Erwin, con el bot real): la clienta preguntó *"¿tienen empanadas de
+    # plátano?"* y el bot contestó *"Tenemos de carne mechada, pollo o queso de cabra. ¿Cuál
+    # prefieres?"*. Producto ya elegido, pregunta por el relleno, y CERO fotos — justo en el turno
+    # de más interés. Y pesa mucho, porque el bot cierra con pregunta casi siempre (11 de 12
+    # turnos, L5). Quien decide ahora es el TOPE de productos, que es la señal de verdad: si el
+    # texto nombra 3+ productos, el cliente sigue eligiendo y no sale nada.
     try:
-        nombre = await producto_enfocado(texto)
-        if not nombre:
+        # 1) Lo que nombra el BOT. 2) Si no nombra ninguno, lo que pidió el CLIENTE — el bot no
+        #    repite el nombre cuando ya se sobreentiende, y eso dejaba la red ciega.
+        nombres = await productos_enfocados(texto, _MAX_FOTOS_POR_TURNO)
+        de_donde = "el bot lo nombró"
+        if not nombres:
+            nombres = await productos_enfocados(mensaje_cliente, _MAX_FOTOS_POR_TURNO)
+            de_donde = "lo pidió el cliente"
+        if not nombres:
             return
-        if await media_ya_mostrada(telefono, nombre):
+        # 🔴 Un STRING suelto aquí sería un desastre silencioso: `for nombre in nombres` iteraría
+        # sus CARACTERES y mandaría una llamada por letra (45 en la primera prueba, con un doble
+        # de test mal escrito). La red que evita el spam no puede ser la que lo provoque.
+        if isinstance(nombres, str):
+            nombres = [nombres]
+        # Las que ya se le mostraron se caen aquí: repetirlas es spam, pero no impiden mandar
+        # la otra (antes un `return` seco mataba las dos).
+        pendientes = [n for n in nombres if not await media_ya_mostrada(telefono, n)]
+        if not pendientes:
             logger.info(
-                "RED DE LA FOTO: '%s' ya se le mostró a %s — no se repite", nombre, telefono
+                "RED DE LA FOTO: %s ya se le mostró a %s — no se repite", nombres, telefono
             )
             return
-        args: dict = {"nombre": nombre}
-        # Si el producto es COMPUESTO ("… de masa de yuca o de masa de plátano") y el cliente
-        # dijo cuál versión quiere ("de platano"), la etiqueta va en la llamada: la herramienta
-        # manda la foto que la dueña nombró así y JAMÁS la de la otra masa (hueco encontrado
-        # por Erwin con el bot real: salía la confirmación de la de plátano y ninguna foto).
-        etiqueta = etiqueta_del_cliente(nombre, mensaje_cliente)
-        if not etiqueta:
-            # …y si en ESTE mensaje no la dijo, la que eligió hace pocos turnos. La foto sale
-            # en el turno del CIERRE ("de carne mechada, 1 paquete"), y para entonces la
-            # elección de masa quedó dos turnos atrás: sin memoria salían LAS DOS masas
-            # (medido contra el bot real, 2026-08-09). El turno actual siempre gana: esto solo
-            # corre cuando aquí no hubo elección — ver `etiqueta_recordada`.
-            etiqueta = await etiqueta_recordada(nombre, mensaje_cliente, historial)
-        if etiqueta:
-            args["etiqueta"] = etiqueta
-        resultado = await ejecutar("enviar_fotos_producto", args, telefono)
+        for nombre in pendientes:
+            args: dict = {"nombre": nombre}
+            # Si el producto es COMPUESTO ("… de masa de yuca o de masa de plátano") y el cliente
+            # dijo cuál versión quiere ("de platano"), la etiqueta va en la llamada: la herramienta
+            # manda la foto que la dueña nombró así y JAMÁS la de la otra masa (hueco encontrado
+            # por Erwin con el bot real: salía la confirmación de la de plátano y ninguna foto).
+            etiqueta = etiqueta_del_cliente(nombre, mensaje_cliente)
+            if not etiqueta:
+                # …y si en ESTE mensaje no la dijo, la que eligió hace pocos turnos. La foto sale
+                # en el turno del CIERRE ("de carne mechada, 1 paquete"), y para entonces la
+                # elección de masa quedó dos turnos atrás: sin memoria salían LAS DOS masas
+                # (medido contra el bot real, 2026-08-09). El turno actual siempre gana: esto solo
+                # corre cuando aquí no hubo elección — ver `etiqueta_recordada`.
+                etiqueta = await etiqueta_recordada(nombre, mensaje_cliente, historial)
+            if etiqueta:
+                args["etiqueta"] = etiqueta
+            resultado = await ejecutar("enviar_fotos_producto", args, telefono)
+            enviadas = resultado.get("enviadas") if isinstance(resultado, dict) else None
+            logger.info(
+                "RED DE LA FOTO (%s): el modelo no mostró '%s' a %s y el código lo intentó "
+                "→ enviadas=%s", de_donde, nombre, telefono, enviadas,
+            )
     except Exception:  # noqa: BLE001 — la foto es un empujón de venta, jamás tumba el turno
         logger.exception("RED DE LA FOTO: falló el envío proactivo para %s", telefono)
         return
-    enviadas = resultado.get("enviadas") if isinstance(resultado, dict) else None
-    logger.info(
-        "RED DE LA FOTO: el modelo no mostró '%s' a %s y el código lo intentó → enviadas=%s",
-        nombre, telefono, enviadas,
-    )
 
 
 async def _escalar(
