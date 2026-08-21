@@ -43,6 +43,14 @@ Las **FASES 0 a 3 ya están hechas y desplegadas**:
 
 ### 🔴 LO QUE FALTA AHORA (en orden)
 
+> ✅ **CERRADOS EL 2026-08-21 — los dos bugs del dinero que estaban como "conocidos y no tocados".**
+> La **banda ciega del 1%** (`_lecturas_del_monto` metía un x100 en la lista blanca: un total de
+> $10.00 autorizaba cobrar $1000) y los **args del LLM sin filtrar** (`registrar_comprobante`
+> aceptaba `monto_leido` —el monto que lee la VISIÓN— sin declararlo, así que el modelo podía
+> fabricarlo). Los dos se REPRODUJERON antes de tocarlos y se validaron por reversión (31 piezas,
+> 31 rojas). Evidencia y las tres reversiones que salieron verdes primero, en `SESIONES.md`
+> (entrada del 08-21).
+
 > ✅ **CERRADO EL 2026-08-06 — los tres bloqueadores del modo DOS (puntos 2, 3 y 4 de esta lista).**
 > El hueco del reintento del dinero, el `precio_texto` que le faltaba a `info_producto`, y la prueba
 > de regresión end-to-end. La prueba se escribió **primero contra el código roto y se comprobó que
