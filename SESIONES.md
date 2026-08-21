@@ -50,17 +50,22 @@ contenedores, más `numeros_permitidos_extra = 593993314532` en `configuracion` 
 permitidos — la fila "el taller no tiene lista blanca activa" de `ROADMAP.md` (fechada 07-23) ya
 era falsa hoy y quedó corregida en el propio archivo.
 
-### 3 · 🔴🔴 Un desconocido le escribió al bot del taller — y el bot contestó con silencio total
+### 3 · 🔴🔴 ERA MAIRED, y el bot le contestó con silencio total
 `SELECT * FROM mensajes WHERE cliente_telefono = '584247490499'` da **una sola fila**: *"Hola. Buen
-día. Tienes empanadas?"*, 2026-08-12 12:40:25 (prefijo venezolano 0424). Cero filas en
-`llamadas_ia` para ese teléfono en esa fecha, cero mensaje `assistant` de respuesta: el mensaje se
-guardó (el webhook y el registro en Postgres funcionan) pero `_numero_permitido` lo cortó antes de
-llegar al agente, sin error, sin aviso a nadie — exactamente el comportamiento documentado en el
-docstring de la función (`tasks.py`). `META_VERIFY_TOKEN` del taller es `enova-prueba-2026`, así
-que lo más probable es que no sea el número público real del negocio — pero **nadie ha investigado
-quién es ni cómo llegó a escribir**, y es la primera vez que alguien fuera del equipo le habla al
-bot. Es el escenario del §3.1 del prompt de sesión, con un matiz: no fue el bot fallando en vivo,
-fue el bot **ni siquiera intentándolo**.
+día. Tienes empanadas?"*, 2026-08-12 12:40:25. Cero filas en `llamadas_ia` para ese teléfono, cero
+mensaje `assistant`: el mensaje se guardó (el webhook y Postgres funcionan) pero `_numero_permitido`
+lo cortó antes de llegar al agente, sin error y sin aviso a nadie.
+
+🔴 **CORRECCIÓN del mismo día:** al principio se escribió aquí *"un desconocido"*. **Es MAIRED** —
+`clientes.nombre` para ese teléfono dice **"Maired Hernández"**, y se vio al inventariar la tabla
+antes de limpiarla. O sea: **la persona que decide el producto probó el bot desde su propio móvil y
+el bot la ignoró en silencio**, porque su número no está en la lista blanca
+(`NUMEROS_PERMITIDOS=584264399792,573005690062` + `numeros_permitidos_extra=593993314532`).
+**Sigue sin estarlo.** Si vuelve a probar desde ese teléfono, la vuelven a ignorar — y eso NO lo
+arregla ningún código: es un cambio de configuración.
+
+Lección: `mensajes` da el teléfono, pero el nombre está en `clientes`. Cruzar las dos tablas antes de
+llamar "desconocido" a nadie cuesta una consulta.
 
 ### Lo que SÍ se reconfirmó igual que el 08-09 (nada de esto cambió)
 Push a la org sigue en 403 (probado con `git push --dry-run` real, no de memoria). Coolify sigue
@@ -265,6 +270,45 @@ devolvió *"El Kéfir de Leche de cabra… es $8"*. Producto correcto, precio co
 SIL-10, que es el que toca `_procesar`) · `probar_drift` ✅ · `probar_migraciones` ✅ ·
 `probar_cobro` ✅ (30/30) · `probar_retomar` ✅ · `probar_honestidad` ✅ · `probar_telemetria` ✅ ·
 `probar_relevo` ✅ · `probar_bandeja` ✅.
+
+### ✅ VERIFICACIÓN FORENSE DEL REPORTE DE MAIRED, punto por punto (base LIMPIA)
+
+Se vaciaron las conversaciones (74 mensajes, 3 avisos, 6 clientes; **pg_dump completo antes** en
+`/root/respaldo_antes_limpieza_2026-08-20.sql`, ensayo con ROLLBACK antes del COMMIT) preservando los
+**2 pedidos** —las primeras ventas del proyecto— y las 175 filas de `llamadas_ia`. Redis: fuera
+`hist:`, `buffer:`, `lock:`, `cobro:`, `abuso:`, `retomar:`, `aviso:`.
+
+Luego se reprodujo el escenario EXACTO **por el carril real (`_procesar`)**, no llamando a las piezas
+por separado: conversación del 08-12 fechada 6 días atrás, Redis vacío, y el mensaje
+*"De queso de cabra. Por favor. Cuanto es?"*. Envíos a Meta pinchados, todo borrado al terminar.
+**Tres vueltas, resultado idéntico:**
+
+```
+#  Kéfir   empanada  $12   "verificar"  saluda-de-nuevo  fotos
+1  no ✅    SÍ ✅      SÍ ✅  no ✅         no ✅            1  (la de plátano, la variante correcta)
+2  no ✅    SÍ ✅      SÍ ✅  no ✅         no ✅            1
+3  no ✅    SÍ ✅      SÍ ✅  no ✅         no ✅            1
+```
+
+> *"Listo, empanadas de plátano con queso de cabra. Son $12 el paquete de 8. Cuántos paquetes
+> quieres?"* — contra el *"El Kéfir de Leche de cabra… es $8"* del 08-18.
+
+### ⚠️ Los TRES límites de este arreglo, medidos y declarados
+
+1. **Más allá de `HISTORIAL_RESPALDO_DIAS` (15) NO rescata.** Probado con el mismo guion a **20
+   días**: el bot ya no sabe que hablaban de plátano ni del paquete de 8. **Pero degrada bien** — no
+   se fue al Kéfir: preguntó *"Tengo varias opciones con queso de cabra: Empanadas de yuca o
+   plátano, Keto, Horneadas y Tequeños. De cuál te gustaría saber más?"*. Fallo seguro, no el fallo
+   original. Se ajusta con la variable si se quiere más memoria.
+2. **El *"déjame verificar eso para ti"* NO tiene red que lo impida.** Se buscó: no existe ninguna en
+   `agent.py` — solo reglas en el PROMPT (`system_prompt.py:61` y `:72`), y la doctrina del repo dice
+   que el prompt se desobedece. En las 3 vueltas no salió, pero **como CONSECUENCIA** de que el bot
+   ya tiene contexto y no necesita fingir que consulta, no como garantía. Y la **regla 5 del
+   catálogo sigue autorizándole** a dar el precio de memoria cuando preguntan "¿cuánto?" — no se
+   tocó. Si vuelve a quedarse sin datos, la frase puede reaparecer.
+3. **El bot NO retoma por su cuenta.** Si lo que pide Maired es que el bot ESCRIBA PRIMERO a quien
+   quedó a medias, eso sigue sin hacerse a propósito (el carril RETOMAR, regla de Meta). Lo que está
+   arreglado es que **cuando la clienta vuelve a escribir, el bot retoma el hilo donde quedó**.
 
 ### 🧹 Y un error PREEXISTENTE que destapó `probar_drift` (no era de este arreglo)
 
