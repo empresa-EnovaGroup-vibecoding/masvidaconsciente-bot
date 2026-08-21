@@ -25,6 +25,28 @@ Las **FASES 0 a 3 ya están hechas y desplegadas**:
 
 ---
 
+# 🎯 QUÉ SIGNIFICA "TERMINADO" (la meta — todo lo demás es camino)
+
+> **PROPUESTA del 2026-08-21 — Maired debe confirmarla o corregirla.** Un proyecto sin definición
+> de "terminado" no termina nunca: la lista de pendientes crece más rápido de lo que se achica.
+> **Cuando estas casillas estén marcadas, la v1 ESTÁ TERMINADA** y lo que siga es mejora, no deuda.
+
+- [x] 1. Código de agosto de Erwin unificado en GitHub (hecho 21-ago: 32 commits del bot + 6 del panel).
+- [ ] 2. Reconectar el despliegue (ver la nota de Erwin: el deploy pasó a ser SIEMPRE a mano) y dejar claro en `ESTADO.md` cómo se despliega hoy.
+- [ ] 3. Producción actualizada a la última versión — CON respaldo previo de BD + personalidad de netcup.
+- [ ] 4. Los **17 bancos en verde en producción** (no solo en el taller).
+- [ ] 5. Pruebas de humo con el número real: saludo · catálogo · fotos · pedido · datos de pago · comprobante · delivery — **verificado en la BD, no en el chat**.
+- [ ] 6. La lista blanca se quita (o se amplía por grupos) y **el bot atiende clientas reales**.
+- [ ] 7. La dueña atiende desde la bandeja del panel y el bot escala cuando no sabe.
+- [ ] 8. Saldo de IA recargado + respaldo automático corriendo también en el taller (D4).
+- [ ] 9. **ENTREGA formal a la clienta:** recorrido del panel juntas y **cierre del acuerdo comercial**. Esta casilla convierte a masvida en el primer caso del portafolio de Enova.
+
+**NO entra en la v1** (ya decidido, no re-abrir): las plantillas proactivas de Meta · ordenar
+Conocimiento · el cliente #2 (ya hay candidato). *(El modo DOS agentes ya NO es "no entra": Erwin
+cerró sus 3 bloqueadores el 06-ago — ver abajo.)*
+
+---
+
 # 🚦 ESTADO REAL A 2026-07-23 (fuente actual)
 
 > Este bloque reemplaza como fuente de verdad al estado del 14-jul que se conserva más abajo solo

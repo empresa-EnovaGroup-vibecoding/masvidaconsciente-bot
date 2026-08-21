@@ -4,7 +4,7 @@
 > Léelas SIEMPRE antes de tocar nada.
 
 ## 0. Antes de empezar (OBLIGATORIO)
-1. Lee **`SESIONES.md`** (bitácora: qué se hizo y qué falta) y **`ROADMAP.md`** (el plan y lo que NO se construye).
+1. Lee, EN ESTE ORDEN: **`ESTADO.md`** (qué corre en cada servidor — si contradice a otro documento, manda este) → el bloque "EN QUÉ ESTAMOS AHORA" de **`ROADMAP.md`** → la **ÚLTIMA entrada** de `SESIONES.md` (solo la última; el resto es historial).
 2. **Mapea el código real** antes de cambiar nada. NUNCA hables de memoria vieja ni inventes (alucinar). Si no lo verificaste leyendo, dilo.
 3. Al terminar un cambio, **regístralo en `SESIONES.md`** y súbelo a GitHub.
 
@@ -14,13 +14,14 @@ Sistema de **ventas y cobro por WhatsApp** para *masvidaconsciente* (comida salu
 - **`masvidaconsciente-dashboard`** (carpeta hermana): el panel de la dueña.
 - App de conexión `sistema-recepcion-digital` (en Vercel, usa Supabase): onboarding del número por **coexistencia**.
 
-## 2. Stack REAL (NO es el Trust Stack genérico de Praxis)
+## 2. Stack REAL
 - **Bot:** Python · FastAPI · Celery + Redis · PostgreSQL · SQLAlchemy · OpenRouter (Gemini 2.5 Flash, fallback GPT-4.1).
 - **Dashboard:** Next.js 15 + React 19 + TypeScript + Tailwind.
 - **Infra:** VPS (Hostinger) + Coolify + Docker. Desplegado en `api-masvida.enovagroup.tech`.
 - La BD es **PostgreSQL propio en el VPS** (NO Supabase) → la regla "RLS en Supabase" **no aplica**; la seguridad es la **auth del endpoint** (`usuario_actual`). Supabase solo se usa en la app de onboarding, aparte.
 
 ## 3. Reglas duras (no negociables)
+- **TODO pasa por GitHub. NADA se edita a mano dentro del VPS** (ni `docker cp`, ni tocar archivos en el contenedor). Lo que no está en el repositorio NO existe: el siguiente despliegue lo borra. *(Lección del 2026-08: hubo trabajo atrapado en el servidor sin respaldo — rescatado y unificado en GitHub el 21-ago. Ver `ESTADO.md`.)*
 - **ADITIVO:** nunca borrar/reescribir lo que funciona. Las migraciones **suman** (`00X_*.sql`), nunca tocan las viejas. Avisar antes de cambiar algo real.
 - **No romper el cobro:** los precios salen SIEMPRE de las herramientas (nunca inventados); el agente **NUNCA** afirma que verificó el dinero en el banco ni que un pago quedó "confirmado por el banco". El bot **reconoce** (por visión) si la imagen es un comprobante real —a las cuentas de la dueña; ignora imágenes cualquiera— y, si lo es (o si hay duda), lo **registra** (`reportado`) y **sigue la venta** (recibido + coordina entrega); si la visión está SEGURA de que NO es comprobante, pide la captura y no registra. La **dueña verifica en su banco** (su banco ya le avisa; el panel queda para auditar/**anular**). `pagado` solo se fija desde `/confirmar`. Las **reglas del cobro están blindadas** en el system prompt (no se editan desde el panel). Ver `PRP-cobro.md`.
 - **Humanizar al máximo (agente, no bot):** los mensajes al cliente los **REDACTA el agente** (naturales, variados, con contexto), NUNCA plantillas fijas. Transcribe notas de voz; responde stickers con naturalidad.
@@ -36,18 +37,24 @@ Antes de tocar datos reales, probar el cambio dentro de una transacción y hacer
 - Cobro: Pago Móvil manual; tasa BCV automática (dolarapi oficial) con **margen %** + **candado manual**; manejo de **pago parcial / sobrepago**.
 - Ver la lista completa de "lo que NO se construye" en `ROADMAP.md`.
 
-## 6. Dónde está cada cosa
-- **`CLAUDE.md`** (este archivo) → las reglas del proyecto + este mapa de documentos.
-- **`ROADMAP.md`** → la visión COMPLETA (qué se construye y qué NO) + la sección **"EN QUÉ ESTAMOS AHORA"** (la lista de pendientes, en orden).
-- **`SESIONES.md`** → bitácora: qué se hizo cada día (el historial).
-- **`ENOVA_BLUEPRINT.md`** → cómo montar un cliente nuevo (la fábrica).
-- **`BRIEF-*.md`** → el diseño detallado de UN tema continuo (ej. `BRIEF-closer-masvida.md` = la voz/personalidad del bot).
-- **`PRP-*.md`** → la receta de construcción de UNA mejora, antes de hacerla (**un PRP por mejora**).
+## 6. Dónde está cada cosa — 9 DOCUMENTOS EN LA RAÍZ (no crear más)
+
+**Los 4 del día a día** (en orden de lectura):
+1. **`ESTADO.md`** → qué corre en cada servidor. **Si contradice a otro documento, manda este.**
+2. **`ROADMAP.md`** → qué falta, en orden + "lo que NO se construye".
+3. **`SESIONES.md`** → bitácora (leer solo la última entrada).
+4. **`CLAUDE.md`** (este) → las reglas.
+
+**Los 5 de referencia** (casi no cambian): `ENOVA_BLUEPRINT.md` (montar un cliente nuevo) · `RESPALDO.md` · `BRIEF-personalidad-whuilianny.md` · `BRIEF-closer-masvida.md` · `PRP-cobro.md`.
+
+**`archivo/`** → todo documento CUMPLIDO se mueve ahí (su `LEEME.md` dice qué es cada cosa).
+**Regla dura: un documento nuevo en la raíz solo si reemplaza a otro. Lo cumplido baja a `archivo/`.**
+
 - ⚠️ `BRIEF-*` y `PRP-*` son **LOCALES (gitignored)**: tienen estrategia/datos sensibles, **NO se suben** a GitHub.
-- 🔴 **HOY NO EXISTE NI UNO** (verificado 2026-08-03: `find` no encuentra ningún `BRIEF-*` ni `PRP-*` en `bot/` ni en `dashboard/`). Al ser gitignored no están en el historial: se perdieron con el disco donde vivían. Este documento y `ROADMAP.md` los siguen nombrando (`PRP-cobro.md`, `BRIEF-closer-masvida.md`, `PRP-bandeja.md`…): **son referencias a papeles que ya no hay, no los busques.** Lo que sobrevivió de ellos está en `SESIONES.md`, en `ROADMAP.md` y en los comentarios del código — y **la voz vive en la BD** (clave `personalidad`).
+- 🟢 **SÍ EXISTEN en la máquina de Maired** (verificado 2026-08-21): `BRIEF-personalidad-whuilianny.md`, `BRIEF-closer-masvida.md`, `PRP-cobro.md` en la raíz + 9 más en `archivo/`. *(Nota histórica: el 2026-08-03 se anotó aquí que "no existía ni uno" — cierto desde el servidor/GitHub, donde por ser gitignored NUNCA aparecen; pero la copia local de Maired los conserva. NO se perdieron.)* Aun así, **la voz VIVA manda y vive en la BD** (tabla `configuracion`, clave `personalidad`): léela de ahí antes de tocar la personalidad.
 - Código del bot: `app/` (`webhook/`, `agent/`, `services/`, `workers/`, `api/`). Migraciones: `migrations/`.
 
-## 7. Principios de código (de Praxis, lo que aplica)
+## 7. Principios de código
 KISS · YAGNI · DRY · una responsabilidad por pieza · nombres claros · archivos cortos · nunca `any` en TypeScript.
 
 ## 8. El cerebro del bot: qué vive en el CÓDIGO vs. en el PROMPT (NO duplicar)
@@ -102,7 +109,11 @@ KISS · YAGNI · DRY · una responsabilidad por pieza · nombres claros · archi
 - **Notas de voz y stickers:** responder con naturalidad. → `_REGLAS`.
 - **Dudas del negocio:** ubicación/pago/horarios (`info_negocio`), un producto (`info_producto`), generales (`buscar_info`; distingue envío nacional ≠ entrega local). → `_REGLAS`.
 
-**En la Personalidad (panel/BD) va SOLO:** quién es Whuilianny + su **voz/esencia** + su **bienvenida** + sus **ejemplos de cómo habla** (la dueña los definió: son intocables, no reescribir), los **hechos del producto** (sin gluten, azúcar de coco, alulosa…), **reglas del negocio** (horario, delivery, anticipación), **pagos** y los **datos bancarios**. 🔴 **La ÚNICA copia canónica de la voz es la BD del servidor** (tabla `configuracion`, clave `personalidad`): **léela de ahí antes de tocar nada.** *(Esta línea decía "copia canónica: `BRIEF-personalidad-whuilianny.md`" — ese fichero NO existe, y siendo `BRIEF-*` gitignored tampoco está en el historial de git: mandaba al próximo a buscar durante media hora un respaldo que no hay. Corregido el 2026-08-03.)*
+**En la Personalidad (panel/BD) va SOLO:** quién es Whuilianny + su **voz/esencia** + su **bienvenida** + sus **ejemplos de cómo habla** (la dueña los definió: son intocables, no reescribir), los **hechos del producto** (sin gluten, azúcar de coco, alulosa…), **reglas del negocio** (horario, delivery, anticipación), **pagos** y los **datos bancarios**. 🔴 **La copia VIVA y canónica de la voz es la BD del servidor** (tabla `configuracion`, clave `personalidad`): **léela de ahí antes de tocar nada** — manda sobre cualquier archivo. *(El `BRIEF-personalidad-whuilianny.md` SÍ existe en la máquina de Maired como referencia de diseño —verificado 21-ago—, pero es gitignored: no aparece en el servidor ni en GitHub. Úsalo como contexto, nunca como la verdad actual de la voz.)*
 
 ---
-*Documento vivo. Si algo aquí ya no es cierto, corrígelo. Inspirado en el sistema del mentor (Erwin) y en Praxis, adaptado al stack real de másvida.*
+*Documento vivo. Si algo aquí ya no es cierto, corrígelo.*
+
+*Nota (2026-08-21): las plantillas genéricas de "SaaS Factory / Praxis" se sacaron de este proyecto
+—eran de otro stack (Next.js + Supabase) y contaminaban el contexto de este bot de Python. Viven
+aparte en `projects/saas-factory-setup/`; este proyecto NO depende de nada de ahí.*
