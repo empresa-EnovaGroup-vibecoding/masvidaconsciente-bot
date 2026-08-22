@@ -185,7 +185,7 @@ async def test_dispara_y_manda_la_foto_del_producto_exacto(monkeypatch):
     """EL CASO DEL SMOKE: turno enfocado en UN producto, cero media → la foto la manda el
     código, con el nombre EXACTO resuelto (jamás uno parecido)."""
     llamadas, _ = await _correr_red(monkeypatch)
-    assert llamadas == [("enviar_fotos_producto", {"nombre": "Quesillo"})]
+    assert llamadas == [("enviar_fotos_producto", {"nombre": "Quesillo", "maximo": 3})]
 
 
 async def test_cuando_el_cliente_dijo_la_version_la_etiqueta_viaja(monkeypatch):
@@ -198,7 +198,7 @@ async def test_cuando_el_cliente_dijo_la_version_la_etiqueta_viaja(monkeypatch):
         mensaje="de platano",
         enfocado=COMPUESTO,
     )
-    assert llamadas == [("enviar_fotos_producto", {"nombre": COMPUESTO, "etiqueta": "platano"})]
+    assert llamadas == [("enviar_fotos_producto", {"nombre": COMPUESTO, "maximo": 3, "etiqueta": "platano"})]
 
 
 async def test_con_la_tool_apagada_la_red_no_existe(monkeypatch):
@@ -317,13 +317,13 @@ async def test_si_no_hay_fotos_cargadas_no_pasa_nada(monkeypatch):
         monkeypatch,
         resultado_tool={"enviadas": 0, "nota": "'Quesillo' no tiene fotos ni videos cargados."},
     )
-    assert llamadas == [("enviar_fotos_producto", {"nombre": "Quesillo"})]
+    assert llamadas == [("enviar_fotos_producto", {"nombre": "Quesillo", "maximo": 3})]
 
 
 async def test_si_la_tool_revienta_el_turno_sigue_intacto(monkeypatch):
     """La foto es un empujón de venta: una excepción suya JAMÁS puede tumbar un turno bueno."""
     llamadas, _ = await _correr_red(monkeypatch, resultado_tool=RuntimeError("Meta caída"))
-    assert llamadas == [("enviar_fotos_producto", {"nombre": "Quesillo"})]  # lo intentó y siguió
+    assert llamadas == [("enviar_fotos_producto", {"nombre": "Quesillo", "maximo": 3})]  # lo intentó y siguió
 
 
 # ══════════════════════════════════════════════════════════════════════════════════
@@ -400,7 +400,7 @@ async def _correr_turno(
 
 async def test_por_la_puerta_real_la_foto_sale_y_el_texto_no_se_toca(monkeypatch):
     salida, llamadas = await _correr_turno(monkeypatch)
-    assert ("enviar_fotos_producto", {"nombre": "Quesillo"}) in llamadas
+    assert ("enviar_fotos_producto", {"nombre": "Quesillo", "maximo": 3}) in llamadas
     assert salida == TEXTO_ENFOCADO, "la red suma una foto: el texto JAMÁS se toca"
 
 
@@ -408,7 +408,7 @@ async def test_por_la_puerta_real_la_etiqueta_del_compuesto_viaja(monkeypatch):
     """El flujo completo del caso de Erwin: cliente "de platano", producto compuesto → la
     llamada sale con `etiqueta` para que la foto sea la de ESA masa."""
     _, llamadas = await _correr_turno(monkeypatch, enfocado=COMPUESTO, mensaje="de platano")
-    assert ("enviar_fotos_producto", {"nombre": COMPUESTO, "etiqueta": "platano"}) in llamadas
+    assert ("enviar_fotos_producto", {"nombre": COMPUESTO, "maximo": 3, "etiqueta": "platano"}) in llamadas
 
 
 async def test_por_la_puerta_real_apagada_no_existe(monkeypatch):
@@ -505,7 +505,7 @@ async def test_con_un_CUAL_en_el_texto_pero_producto_claro_SI_manda_la_foto(monk
         enfocado=None,                                  # el bot NO nombra el producto…
         enfocado_cliente="Empanadas de masa de plátano",  # …pero el cliente sí
     )
-    assert llamadas == [("enviar_fotos_producto", {"nombre": "Empanadas de masa de plátano"})], (
+    assert llamadas == [("enviar_fotos_producto", {"nombre": "Empanadas de masa de plátano", "maximo": 3})], (
         f"no mandó la foto con el producto ya elegido: {llamadas}"
     )
 
@@ -586,3 +586,69 @@ async def test_de_dos_productos_la_ya_mostrada_se_cae_pero_la_otra_SALE(monkeypa
         puede_fotos=True, hubo_media=False,
     )
     assert llamadas == ["Empanadas Horneadas"]
+
+
+async def test_con_DOS_productos_manda_UN_archivo_de_cada_uno(monkeypatch):
+    """🔴 Medido con tráfico REAL el 2026-08-21: al mandar dos productos salieron **5 archivos
+    seguidos** por WhatsApp (la tool manda hasta 3 por producto, y 2×3 = 6). Eso es el bombardeo
+    que la regla quería evitar, y arriesga la calidad del número con Meta. Con varios productos va
+    UNO de cada uno; con un solo producto siguen los 3 de siempre (ahí es enseñarlo, no spam)."""
+    from app.agent import agent as agente
+
+    llamadas: list = []
+
+    async def _dos(_t, maximo=2):
+        return ["Tortas keto", "Torta baja en carbohidratos"]
+
+    async def _no_mostrada(_tel, _n):
+        return False
+
+    async def ejecutar(nombre, args, telefono):
+        llamadas.append((args["nombre"], args.get("maximo")))
+        return {"enviadas": 1}
+
+    monkeypatch.setattr(agente, "productos_enfocados", _dos)
+    monkeypatch.setattr(agente, "media_ya_mostrada", _no_mostrada)
+    await _asegurar_foto(
+        "Tenemos Tortas keto y Torta baja en carbohidratos", "584240000000", "tienes tortas?",
+        ejecutar, puede_fotos=True, hubo_media=False,
+    )
+    assert [m for _, m in llamadas] == [1, 1], f"mandó de más: {llamadas}"
+
+
+async def test_con_UN_solo_producto_siguen_los_TRES_de_siempre(monkeypatch):
+    """El control: recortar a 1 en el caso normal sería empeorar lo que ya funcionaba."""
+    llamadas, _ = await _correr_red(monkeypatch, enfocado="Quesillo")
+    assert llamadas[0][1].get("maximo") == 3
+
+
+# ── El tope de archivos, en la TOOL y en el SCHEMA (R50 y R51 lo pidieron) ─────────
+
+def test_el_schema_declara_maximo_o_el_filtro_lo_TIRARÍA():
+    """🔴 R51. `ejecutar_tool` recorta los args a lo que el schema declara (`_solo_lo_declarado`,
+    el arreglo de seguridad del 08-21). Si `maximo` no está en el schema, la red lo pasa… y el
+    filtro lo descarta en silencio: volverían los 3 archivos por producto sin que nada fallara."""
+    from app.agent.tools import _PARAMS_DECLARADOS, _solo_lo_declarado
+
+    assert "maximo" in _PARAMS_DECLARADOS["enviar_fotos_producto"]
+    limpio = _solo_lo_declarado("enviar_fotos_producto", {"nombre": "Quesillo", "maximo": 1})
+    assert limpio.get("maximo") == 1, "el filtro se comió el tope"
+
+
+def test_la_tool_RECORTA_por_maximo_y_no_por_un_3_fijo():
+    """🔴 R50. Los tests de la red mockean `ejecutar`, así que el cuerpo de la tool nunca corre:
+    devolver `medios[:3]` a pelo dejaba la suite entera en verde y volvían los 6 archivos.
+
+    Montar los dobles de la tool completa (BD + R2 + Meta + hilo) daba un test frágil que se
+    saltaba solo ante cualquier borde — o sea, uno que puede pasar sin probar nada, que es
+    exactamente lo que este banco existe para evitar. Se comprueba el CONTRATO en su lugar: que
+    los dos puntos donde la tool recorta la lista usen el parámetro y no una constante."""
+    import inspect
+
+    from app.agent import tools as tl
+
+    fuente = inspect.getsource(tl.enviar_fotos_producto)
+    assert "medios[:maximo]" in fuente, "la tool volvió a recortar con un número fijo"
+    assert "medios[:3]" not in fuente, "queda un [:3] a pelo: el tope no se respetaría"
+    # y el parámetro existe con el default de siempre
+    assert inspect.signature(tl.enviar_fotos_producto).parameters["maximo"].default == 3

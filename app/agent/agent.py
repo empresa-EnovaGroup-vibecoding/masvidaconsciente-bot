@@ -212,8 +212,14 @@ async def _asegurar_foto(
                 "RED DE LA FOTO: %s ya se le mostró a %s — no se repite", nombres, telefono
             )
             return
+        # 🔴 CUÁNTOS ARCHIVOS por producto. Con DOS productos se manda UNO de cada uno: la tool
+        # manda hasta 3 por defecto, y 2 × 3 = **6 archivos seguidos** — 5 salieron en la primera
+        # prueba real, y eso es el bombardeo que la regla quería evitar (y que arriesga la calidad
+        # del número con Meta). Con un solo producto se mantienen los 3 de siempre: ahí es
+        # enseñarlo desde varios ángulos, no spam.
+        por_producto = 1 if len(pendientes) > 1 else 3
         for nombre in pendientes:
-            args: dict = {"nombre": nombre}
+            args: dict = {"nombre": nombre, "maximo": por_producto}
             # Si el producto es COMPUESTO ("… de masa de yuca o de masa de plátano") y el cliente
             # dijo cuál versión quiere ("de platano"), la etiqueta va en la llamada: la herramienta
             # manda la foto que la dueña nombró así y JAMÁS la de la otra masa (hueco encontrado

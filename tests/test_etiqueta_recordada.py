@@ -245,7 +245,7 @@ async def test_la_red_manda_la_foto_de_la_masa_recordada(monkeypatch):
         monkeypatch, mensaje=MENSAJE_C, historial=HISTORIAL_REAL
     )
     assert llamadas == [
-        ("enviar_fotos_producto", {"nombre": COMPUESTO, "etiqueta": "platano"})
+        ("enviar_fotos_producto", {"nombre": COMPUESTO, "maximo": 3, "etiqueta": "platano"})
     ]
     assert consultas and consultas[0][2] == HISTORIAL_REAL, "el historial tiene que llegar"
 
@@ -256,7 +256,7 @@ async def test_la_red_no_consulta_la_memoria_si_el_turno_actual_ya_eligio(monkey
     llamadas, consultas = await _correr_red(
         monkeypatch, mensaje="mejor la de yuca", historial=HISTORIAL_REAL
     )
-    assert llamadas == [("enviar_fotos_producto", {"nombre": COMPUESTO, "etiqueta": "yuca"})]
+    assert llamadas == [("enviar_fotos_producto", {"nombre": COMPUESTO, "maximo": 3, "etiqueta": "yuca"})]
     assert consultas == [], "el turno actual manda: no hay nada que recordar"
 
 
@@ -265,7 +265,7 @@ async def test_la_red_sin_memoria_llama_como_siempre(monkeypatch):
     llamadas, _ = await _correr_red(
         monkeypatch, mensaje="dame 1 paquete", historial=[{"role": "user", "content": "hola"}]
     )
-    assert llamadas == [("enviar_fotos_producto", {"nombre": COMPUESTO})]
+    assert llamadas == [("enviar_fotos_producto", {"nombre": COMPUESTO, "maximo": 3})]
 
 
 # ══════════════════════════════════════════════════════════════════════════════════
@@ -414,7 +414,7 @@ async def test_por_la_puerta_real_el_turno_C_manda_solo_la_de_platano(monkeypatc
     salida, llamadas = await _correr_turno(
         monkeypatch, mensaje=MENSAJE_C, historial=HISTORIAL_REAL
     )
-    assert ("enviar_fotos_producto", {"nombre": COMPUESTO, "etiqueta": "platano"}) in llamadas
+    assert ("enviar_fotos_producto", {"nombre": COMPUESTO, "maximo": 3, "etiqueta": "platano"}) in llamadas
     assert salida == CIERRE, "la red suma una foto: el texto JAMÁS se toca"
 
 
@@ -426,4 +426,4 @@ async def test_por_la_puerta_real_tras_cambiar_de_producto_no_se_arrastra(monkey
         {"role": "assistant", "content": "Sí 💚"},
     ]
     _, llamadas = await _correr_turno(monkeypatch, mensaje="dame 1", historial=historial)
-    assert ("enviar_fotos_producto", {"nombre": COMPUESTO}) in llamadas
+    assert ("enviar_fotos_producto", {"nombre": COMPUESTO, "maximo": 3}) in llamadas

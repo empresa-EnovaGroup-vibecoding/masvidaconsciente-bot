@@ -164,6 +164,23 @@ dada por validada estaba en duda; lo que hubo fue trabajo de más buscando hueco
 checksum de agent.py y tools.py idéntico en local, BOT y WORKER
 ```
 
+### 🩹 AJUSTE INMEDIATO: eran DEMASIADAS fotos (lo cazó el tráfico real, a los minutos)
+
+Con el cambio recién puesto, una prueba REAL de Erwin (*"¿tienes tortas?"*) mandó **CINCO archivos
+seguidos**: la red permite 2 productos y `enviar_fotos_producto` manda **hasta 3 de cada uno** —
+2 × 3 = **6**. El tope se había puesto en PRODUCTOS, no en ARCHIVOS. Eso es el bombardeo que la regla
+quería evitar, y arriesga la calidad del número con Meta (hoy GREEN, regla dura de Tech Provider).
+
+→ `enviar_fotos_producto` acepta ahora `maximo` (3 por defecto, declarado también en su SCHEMA — si
+no, `_solo_lo_declarado` lo descartaría en silencio y volverían los 6). La red pide **1 archivo por
+producto cuando hay dos**, y mantiene los 3 cuando hay uno solo (ahí es enseñarlo desde varios
+ángulos, no spam). Verificado tras desplegar: **2 archivos en total, [1, 1]** — antes 5-6.
+
+**Reversión (4 piezas, 4 rojas).** R50 y R51 salieron verdes primero: nada ejercitaba la tool con el
+tope ni comprobaba que el schema lo declarase. Un intento de test con dobles completos se descartó
+porque **se saltaba solo ante cualquier borde** —un test que puede pasar sin probar nada, justo lo
+que este banco existe para evitar— y se cambió por uno de CONTRATO sobre el código de la tool.
+
 ⚠️ **Lo que NO arregla el código:** **8 de los 31 productos disponibles no tienen NI UNA foto**
 (CHOCOLATE, Harina de Almendra, Harina de Merey, Premezclas, Untable de Chocolate, barra proteica de
 chocolate, barra de chocolate con frutos secos, untable de mantequilla de merey con maca). En esos,

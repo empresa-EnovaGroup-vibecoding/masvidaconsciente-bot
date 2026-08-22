@@ -290,6 +290,14 @@ TOOL_SCHEMAS = [
                             "tamaño, no lo pongas."
                         ),
                     },
+                    "maximo": {
+                        "type": "integer",
+                        "description": (
+                            "OPCIONAL, casi nunca hace falta: cuántos archivos mandar (3 por "
+                            "defecto). Úsalo solo si vas a enseñar DOS productos en el mismo "
+                            "turno; ahí manda 1 de cada uno para no bombardear."
+                        ),
+                    },
                     "etiqueta": {
                         "type": "string",
                         "description": (
@@ -3081,8 +3089,17 @@ async def enviar_catalogo(session, telefono):
     return {"ok": True, "nota": "catalogo PDF enviado al cliente; confirmaselo con calidez"}
 
 
-async def enviar_fotos_producto(session, telefono, nombre, variante_id=None, etiqueta=None):
+async def enviar_fotos_producto(
+    session, telefono, nombre, variante_id=None, etiqueta=None, maximo=3
+):
     """Envía al cliente las fotos/videos de UN producto por WhatsApp (cuando las pide).
+
+    `maximo` = cuántos archivos mandar (3 por defecto, como siempre). 🔴 Existe desde el
+    2026-08-21: la RED DE LA FOTO pasó a mandar hasta DOS productos en un turno, y con 3 archivos
+    cada uno el cliente recibía **hasta 6 seguidos** — 5 en la primera prueba real. Eso es
+    exactamente el bombardeo que se quería evitar, y arriesga la calidad del número con Meta (regla
+    dura de Tech Provider). Con varios productos la red pide **1 de cada uno**; con uno solo sigue
+    mandando hasta 3, que ahí sí es enseñar el producto desde varios ángulos.
 
     Con `variante_id` manda PRIMERO las de ESE tamaño (si piden la kombucha de 700ml, la de
     700ml — antes mandaba siempre la de 350ml porque eran dos productos y el buscador devolvía
@@ -3166,7 +3183,7 @@ async def enviar_fotos_producto(session, telefono, nombre, variante_id=None, eti
     # Aquí se SIMULA el envío: cuenta las fotos como enviadas (sin llamar a Meta) y las guarda en
     # el hilo para que la dueña las VEA en el simulador. La cuenta de verdad es a números reales.
     if (telefono or "").startswith("__"):
-        for m in medios[:3]:
+        for m in medios[:maximo]:
             url = r2.url_publica(m.clave)
             if url:
                 # La etiqueta también AQUÍ: el simulador es el ÚNICO sitio desde donde la dueña
@@ -3227,7 +3244,7 @@ async def enviar_fotos_producto(session, telefono, nombre, variante_id=None, eti
             "enviar_fotos_producto: %s tiene %d archivos, se envían los 3 primeros (tope anti-spam)",
             prod.nombre, len(medios),
         )
-    for m in medios[:3]:
+    for m in medios[:maximo]:
         url = r2.url_publica(m.clave)
         if not url:
             sin_url += 1
