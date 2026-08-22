@@ -24,6 +24,135 @@
 
 ---
 
+## 2026-08-22 (5) — 📋 LA PLANTILLA DE NEGOCIO DE MAIRED, APLICADA AL BOT
+
+**Lo que pidió Erwin:** *"hay que dejar el sistema tal como pide en el documento, más que todo el
+bot"*, sobre la plantilla que llenó Maired (`~/Downloads/plantilla-info-negocio
+masvidaconciente.docx`, del Módulo 4 de un curso de agentes). Y antes de eso, la auditoría forense
+del chat de prueba del sábado, que él trajo con las quejas de Maired.
+
+### 0 · 🔴 LO QUE **NO** SE HIZO: el `project.md` que pide el último paso
+
+La plantilla termina con *"que Claude cree el archivo project.md"*. **No se creó, a propósito.** Ese
+paso asume un bot que se construye DESDE CERO; másvida ya tiene 546 tests, 35 migraciones y un
+cerebro de tres capas. Un `project.md` sería una **cuarta copia de la verdad que el bot no lee** —
+la enfermedad D3 que costó la fuga de la Kombucha. El contenido se ruteó a las capas que sí se
+ejecutan: `_REGLAS`, la personalidad de la BD, el panel y el ROADMAP.
+
+### 1 · 🕵️ LA AUDITORÍA DEL CHAT DEL SÁBADO (la conversación entera está en la BD)
+
+Se leyó la conversación real (`mensajes` 5562–5603) en vez de la paráfrasis. Cada queja tiene causa:
+
+| Lo que vio Maired | Lo que era |
+|---|---|
+| *"dice que ya pasaron las 6 y son las 12:44"* | 🔴 **Se lo inventó.** Tenía la hora correcta inyectada. Fabricó la excusa para sostener su error del turno anterior |
+| *"ofrece el domingo, que está cerrado"* | 🔴 Mismo origen. El sistema **sí lo frenó** al registrar (1:33 pm: *"los domingos no entregamos"*) — la "contradicción" del chat es el invento chocando con la verdad del código |
+| *"repite lo mismo tres veces"* | 🔴 **Cuatro**, medidas. La última pegada a los datos del Pago Móvil |
+| *"está sacando las cuentas mal"* | 🟢 **La cuenta era exacta**: 13.259,19 Bs = $17 × 779,9522 (BCV del día). Lo que estaba mal era la REGLA, no la aritmética — ver §2 |
+| *"manda toda la info al enviar las fotos"* | 🔴 Cierto: el pie de foto llevaba 140 caracteres de `descripcion`, o sea la lista de ingredientes entera |
+| *"saluda antes de las imágenes"* | 🟢 **Ya no pasa.** En los logs: texto → texto → foto → foto |
+
+🔴 **Y un hallazgo que nadie había reportado:** *"Enova, acabo de revisar y ese pago no me aparece
+en la cuenta"* (fila 5601). **El bot no tiene banco.** Ver §4.
+
+### 2 · 💵 EL DINERO: efectivo = 20% a los productos **y delivery gratis**
+
+La plantilla lo pide en sus **tres** apartados de pago. Invierte la regla anterior, que estaba
+defendida en el código con este motivo: *"si el 20% tocara el flete, la dueña lo pagaría de su
+bolsillo en cada venta"*. **Lo paga a propósito** — es la palanca para cobrar en efectivo. Cuesta
+**$3 en la zona centro y $5 en la oeste**, y queda escrito con su número en el código y en un test.
+
+Y el descuento deja de ser *"en divisas"* para ser **solo efectivo físico**: el documento nunca se
+lo da a Zelle ni a Binance, que sí cobran comisión. Los dos siguen **activos** como método, a precio
+completo.
+
+⚠️ **La cuenta estaba DUPLICADA** en `generar_datos_pago` (lo que se cobra) y en
+`registrar_comprobante` (contra qué se compara la captura), sincronizadas solo por un comentario
+que lo pedía. Ahora las dos llaman a **`monto_en_efectivo`**: si se separan, el comprobante no calza
+y cada venta en efectivo sale marcada como *"no cuadra"*.
+
+🔴 **Y AL CAMBIAR LA FÓRMULA, LOS 515 TESTS SIGUIERON VERDES.** Nadie la fijaba. El único que la
+afirmaba es `probar_delivery.py`, que **necesita Postgres y no corre en el CI** — la puerta que
+valida ANTES de desplegar. O sea: se podía invertir la cuenta del dinero, empujar, y que la puerta
+no dijera nada. `tests/test_pago_en_efectivo.py` lo cierra (14 casos).
+
+### 3 · 🗣️ LA VOZ Y LA CONDUCTA
+
+En `_REGLAS`: **saludo recíproco** (*"y tú, como estas?"* — lo pidió Maired con esa frase) ·
+**no forzar una pregunta al final de cada mensaje** · **no repetir la ficha** · **alergias por
+ficha, jamás por promesa general** · el precio no se justifica por la salud · datos de entrega
+progresivos.
+
+En la **personalidad de la BD** (ensayo con ROLLBACK, respaldo en
+`/root/personalidad_backup_20260822_antes_plantilla.txt`): *asistente* → **asesora** (el documento
+prohíbe la palabra "asistente") · el cariño **ya no se devuelve** · el 20% pasa a nombrarse
+**efectivo**, alineado con el código.
+
+🔴 **La contradicción del documento que NO se resolvió sola:** su punto 6 dice que la voz es
+**Alejandra** y su punto 7 dice que si preguntan responda que es **Whuilianny**. Las 5
+conversaciones de ejemplo dicen Alejandra, y el propio documento marca esa línea como *"debe
+validarse con Erwin"*. Se mantiene **Alejandra** (regla dura de Meta: un bot que jura ser humano
+arriesga la cuenta de todos los clientes) y se aplica del punto 7 lo que sí es literal: no decir
+"asistente". **Reversible en una línea si Maired decide lo contrario.**
+
+### 4 · 🔴 "ACABO DE REVISAR Y ESE PAGO NO ME APARECE EN LA CUENTA" — dos huecos
+
+El fondo era legítimo (la visión leyó la captura y el beneficiario no era el de la dueña), pero la
+frase es mentira: el bot **no tiene acceso a ninguna cuenta**. Salió por dos huecos a la vez:
+
+1. **La red no la vio.** `_PROHIBIDO_SIEMPRE` exigía "banco/cuenta" PEGADO al verbo, y aquí había
+   media frase en medio. El patrón nuevo mira el **TIEMPO VERBAL**, que es lo que de verdad separa
+   la mentira de la verdad: *"ya revisé"* miente, *"lo estoy revisando"* es la respuesta correcta —
+   y esa **no se toca**, o el bot quedaría mudo justo cuando alguien acaba de pagar.
+2. **La instrucción del sistema se lo ORDENABA:** decía literal *"dile que ese pago no te aparece a
+   tu cuenta"*. Ahora habla de la **captura**. Ese es el arreglo de fondo: *una red que hace falta
+   en el camino normal es una instrucción mal escrita.*
+
+### 5 · Verificación
+
+- **546 tests** (515 al empezar; +14 del efectivo, +17 de la frase del banco) · `ruff` limpio.
+- **Validado por reversión, dos veces:** la fórmula del dinero ⇒ **7 rojos**; red + instrucción de
+  la frase del banco ⇒ **7 rojos**.
+- Personalidad: **ensayo con ROLLBACK** antes del COMMIT, 6 verificadores en `t`.
+- Prompt: **28.962** caracteres.
+
+#### 🔴 Tres fallos del instrumento, cazados escribiendo los tests (y van…)
+
+1. **Un test tautológico.** `test_lo_que_le_cuesta_a_la_duena` comparaba `(X+envio) − X == envio`:
+   cierto pase lo que pase. **Se delató al revertir — fue el único que no se puso rojo.** (L42)
+2. **El test encontró la frase prohibida en su propio comentario**, el que documenta el bug.
+3. **Y no encontró la buena** porque el literal está PARTIDO entre dos líneas del fuente.
+   → Buscar texto en el código fuente es frágil por los dos lados: filtra comentarios y normaliza
+   espacios, o el instrumento miente en las dos direcciones.
+
+Y uno más, de diseño: la primera versión de la regla del precio usaba la palabra *"antiinflamatorio"*
+y puso rojo a `test_antiinflamatoria_sigue_apareciendo_UNA_vez_y_condicionada`. **El banco tenía
+razón** (PRM-17: no es campo de ninguna ficha, así que ninguna red la caza y cada mención empuja al
+modelo a afirmarla). Reformulada sin usarla. → **L36 otra vez, y funcionó: el banco defendió su
+decisión de diseño antes de que yo la rompiera.**
+
+### 🔴 Lo que la plantilla pide y NO se hizo todavía
+
+- **La herramienta de "próxima fecha disponible"** — es el arreglo de fondo del domingo inventado.
+  Hoy el bot calcula la fecha de cabeza; debe pedírsela al código, como ya hace con el precio.
+- **La pausa hasta «Pago aprobado»** (pasos 8-9): hoy el bot registra el comprobante y **sigue** la
+  venta. El documento pide que **espere** el clic de la dueña. Es un cambio de diseño de fondo, no
+  un ajuste — y tiene un costo real: si ella tarda dos horas, el cliente pasa dos horas mudo
+  después de haber pagado.
+- **Resumen final antes del despacho** (paso 11) y **tips de conservación al cerrar**.
+- **Features grandes, al ROADMAP:** pago dividido **30/70** con su medición · **delivery
+  extraordinario** con autorización temporal que expira sola · **mapa de zonas por sector** ·
+  aviso de día flojo.
+
+### 🔴 Lo que es de Maired (datos, no código)
+
+`dias_anticipacion` **0 en los 32** (la raíz del domingo inventado) · la zona cercana: el documento
+dice **$2**, el sistema cobra **$3** · **hogaza, rústicos, hamburguesas y opciones veganas** están
+en el documento y **no existen** en el catálogo · sabores en 5 de 37 variantes · 9 productos sin
+foto · 0 feriados · y la pregunta que sigue abierta: **¿la masa madre lleva almendra?**
+
+---
+
 ## 2026-08-22 (4) — 🚀 DESPLEGADO LO DE LA MADRUGADA + EL PUSH VUELVE A DESPLEGAR SOLO
 
 **Lo que pidió Erwin:** subir los 5 commits atascados (pasó su token por chat, avisando que lo

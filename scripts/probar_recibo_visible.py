@@ -18,9 +18,12 @@ RECIBO = (
     "Retiro en La Mendera — sin costo\n"
     "Total: $12\nEntrega: lunes 20 de julio"
 )
+# El texto que de verdad arma `generar_datos_pago` hoy. Es un retiro ($12, sin envío), así que
+# no lleva la coletilla del delivery. Desde el 2026-08-22 dice EFECTIVO, no "Zelle, Binance o
+# efectivo": el 20% dejó de aplicar a Zelle y Binance (plantilla de negocio de Maired).
 COBRO = (
     "Por Pago Móvil o transferencia son 8.729,41 Bs (precio completo). "
-    "Si pagas en dólares —Zelle, Binance o efectivo— son $9.60, "
+    "Si pagas en efectivo en dólares son $9.60, "
     "con el 20% de descuento"
 )
 
