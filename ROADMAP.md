@@ -41,6 +41,38 @@ Las **FASES 0 a 3 ya están hechas y desplegadas**:
 - [ ] 8. Saldo de IA recargado + respaldo automático corriendo también en el taller (D4).
 - [ ] 9. **ENTREGA formal a la clienta:** recorrido del panel juntas y **cierre del acuerdo comercial**. Esta casilla convierte a masvida en el primer caso del portafolio de Enova.
 
+## 📋 LO QUE PIDE LA PLANTILLA DE NEGOCIO DE MAIRED (2026-08-22) — lo que falta construir
+
+> La plantilla que llenó Maired es la especificación de negocio más completa que ha tenido el
+> proyecto. **La mayor parte ya estaba construida o se aplicó el 22-ago** (ver `SESIONES.md`
+> 08-22 (5)): el descuento del efectivo con delivery gratis, la voz, las alergias por ficha, el
+> calendario consultable. Lo que sigue son las piezas GRANDES que pide y que no existen.
+>
+> 🔴 **No se creó el `project.md` que pide su último paso, a propósito.** Ese paso asume un bot
+> que se construye desde cero; másvida ya tiene su cerebro de tres capas. Un documento más sería
+> una cuarta copia de la verdad que el bot no lee — la enfermedad D3. El contenido se ruteó a las
+> capas que sí se ejecutan.
+
+| # | Qué pide | Tamaño | Nota |
+|---|---|---|---|
+| **N1** | 💵 **Pago dividido 30/70** — 30% para confirmar, 70% contra entrega, con la modalidad asignada POR SISTEMA (no la elige el cliente) y medición A/B contra el pago completo | **alto** | Toca el carril del dinero entero: `Pago`, el panel, la validación del comprobante y el estado del pedido. La plantilla lo llama "la prueba" y pide medir pago, abandono, venta completada y pedidos no recibidos. **Necesita migración.** |
+| **N2** | 🚚 **Delivery extraordinario** — la dueña lo activa en el panel con fecha, hora límite, zonas, productos y capacidad; **expira solo** y el bot NUNCA lo activa por su cuenta | medio-alto | Encaja limpio sobre el calendario que ya existe (`proxima_fecha_entrega` lo leería). La plantilla insiste dos veces en que una autorización de delivery **no** significa que cualquier producto pueda prepararse hoy: hay que verificar producto, capacidad, zona y hora. |
+| **N3** | 🗺️ **Mapa de zonas por sector** — hoy son 3 zonas planas; pide sectores reconocidos y **escalar a la dueña** la dirección que no calce | medio | ⚠️ Y hay un dato que resolver antes: la plantilla dice que la zona cercana cuesta **$2** y el sistema cobra **$3**. |
+| **N4** | 📊 **Aviso de día flojo** — que el sistema detecte ventas bajas y le SUGIERA a la dueña activar una extensión | bajo-medio | La propia plantilla lo pone en "una fase posterior" y exige **aprobación de ella** antes de ofrecérselo a nadie. Depende de N2. |
+| **N5** | 🧾 **Resumen final antes del despacho** (su paso 11) + **tips de conservación** al cerrar | bajo | Lo más barato de la lista y se nota en cada venta. |
+| **N6** | ⏸️ **Que el bot ESPERE el clic de «Pago aprobado»** antes de coordinar la entrega (sus pasos 8-9) | medio | 🔴 **Es un cambio de diseño, no un ajuste**: hoy el bot registra el comprobante y **sigue** la venta (`CLAUDE.md` §3). Tiene un costo real — si la dueña tarda dos horas en aprobar, el cliente pasa dos horas mudo después de haber pagado. **Decisión de Maired antes de tocarlo.** |
+
+### 🔴 Y lo que la plantilla necesita de DATOS (es de Whuilianny, no de código)
+
+`dias_anticipacion` está en **0 en los 32 productos** — la maquinaria que lo usa ya existe entera
+y el bot lo respeta en el turno siguiente **sin desplegar nada**, porque el catálogo se relee en
+cada mensaje. Además: la zona cercana (**$2 o $3**), los productos que la plantilla ofrece y **no
+existen en el catálogo** (hogaza, rústicos, hamburguesas, opciones veganas), sabores en 5 de 37
+variantes, 9 productos sin foto, 0 feriados, y **si la masa madre lleva almendra** (es un
+alérgeno y sigue sin respuesta).
+
+---
+
 **NO entra en la v1** (ya decidido, no re-abrir): las plantillas proactivas de Meta · ordenar
 Conocimiento · el cliente #2 (ya hay candidato). *(El modo DOS agentes ya NO es "no entra": Erwin
 cerró sus 3 bloqueadores el 06-ago — ver abajo.)*

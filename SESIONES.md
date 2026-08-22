@@ -153,8 +153,12 @@ deploy, nunca antes.**
 
 ### 🔴 Lo que la plantilla pide y NO se hizo todavía
 
-- **La herramienta de "próxima fecha disponible"** — es el arreglo de fondo del domingo inventado.
-  Hoy el bot calcula la fecha de cabeza; debe pedírsela al código, como ya hace con el precio.
+- ✅ **HECHA en esta misma sesión: `proxima_fecha_entrega`.** El bot ya no calcula fechas de
+  cabeza — las consulta, igual que el precio. Va al NÚCLEO de tools blindadas (no se puede apagar
+  desde el panel) y trae 10 casos con el escenario exacto del sábado. Validada por reversión:
+  sacarla del núcleo, ignorar la hora de corte y dejar colar el domingo ⇒ **5 rojos**.
+  ⚠️ Con `dias_anticipacion` en 0 aporta solo los días de entrega y la hora de corte — que es
+  justo lo que falló. Cuando Whuilianny cargue el dato, la misma tool lo respeta sin desplegar.
 - **La pausa hasta «Pago aprobado»** (pasos 8-9): hoy el bot registra el comprobante y **sigue** la
   venta. El documento pide que **espere** el clic de la dueña. Es un cambio de diseño de fondo, no
   un ajuste — y tiene un costo real: si ella tarda dos horas, el cliente pasa dos horas mudo
