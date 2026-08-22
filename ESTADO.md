@@ -28,7 +28,7 @@ y salud, memoria que no se olvida a las 24h, y 8 migraciones nuevas (hasta la 03
 |---|---|---|
 | **Servidor** | netcup `152.53.89.118` | Hostinger `2.25.139.106` |
 | **Quién le escribe** | las clientas reales | número de la agencia: **+57 313 293 3806** |
-| **Bot: versión** | `7e80b8a` (14-jul) — **muy atrasada** | `4a482c5` (21-ago), desplegado por `docker cp` y con checksum verificado contra `master` |
+| **Bot: versión** | `7e80b8a` (14-jul) — **muy atrasada** | ✅ **`13a064f`** (22-ago), desplegado **por Coolify desde GitHub** (ya no por `docker cp`) y con checksum 5/5 contra `master` |
 | **Modelo IA activo** | (el de julio) | ✅ **`anthropic/claude-haiku-4.5`** (devuelto el 21-ago por decisión de Erwin; estuvo en `gpt-4o-mini` del 18 al 21-ago) |
 | **Modo del agente** | UN agente | los 3 bloqueadores del modo DOS ya están cerrados (06-ago) |
 | **Lista blanca** | ✅ activa | ✅ activa — 3 números (`NUMEROS_PERMITIDOS` + `numeros_permitidos_extra`) |
@@ -47,9 +47,12 @@ decisión deliberada hasta que esté listo para la entrega.
 Erwin cambió el despliegue el 2-ago (commit `f0429db` del panel): **ningún push despliega solo.
 El deploy es SIEMPRE a mano.** Antes un push a `master` reconstruía el taller; ya no.
 
-⚠️ **Coolify del taller quedó apuntando a `DESCONECTADO-2026-08-02`.** Antes de reconectarlo a
-`master`, confirmar con Erwin cómo quiere el despliegue ahora (manual del todo, o push→taller de
-nuevo). **Reconectar sin acordarlo puede reactivar builds que él no quiere.**
+✅ **COOLIFY RECONECTADO EL 2026-08-22** (lo pidió Erwin). Las 3 apps volvieron a `git_branch =
+'master'`, y **`is_auto_deploy_enabled` se puso en `false` en las tres** para NO revertir la
+decisión del 2-ago: el deploy sigue siendo SIEMPRE a mano. Si alguna vez se quiere push→taller
+otra vez, es un `UPDATE application_settings SET is_auto_deploy_enabled=true`.
+
+*(Estado anterior guardado en el VPS: `/root/COOLIFY_ANTES_2026-08-21.csv`.)*
 
 ⚠️ Coolify reconstruye desde GitHub: todo archivo editado a mano DENTRO del VPS se pierde en el
 siguiente despliegue. **Nada se edita en el servidor** (regla dura de CLAUDE.md §3).
@@ -84,6 +87,7 @@ git log origin/master -5         # últimos cambios en GitHub
 |---|---|---|---|
 | 2026-08-18 | `7e80b8a` (14-jul) | desconectado de GitHub | Descubierto: Coolify en rama `DESCONECTADO`, código de agosto solo en el servidor. |
 | 2026-08-21 | `7e80b8a` (14-jul) | código de agosto (en GitHub) | Rescatados 32+6 commits a `master`. Deploy ahora es manual. Falta reconectar y promover a producción. |
+| 2026-08-22 | `7e80b8a` (14-jul) | **`13a064f`** | 🟢 **Coolify RECONECTADO** (rama `master`, auto-deploy OFF) y primer despliegue por Coolify desde julio. Cola de media (el texto sale antes que la foto) + red del cierre. **27/27 bancos verdes** corridos uno por uno · 453 tests · `/salud` 8/8 · checksum 5/5 · **cero regresión de datos** (32/37/2/34/10/2/35 idéntico antes y después). |
 | 2026-08-21 (2) | `7e80b8a` (14-jul) | **`4a482c5`** | 9 bugs cerrados y desplegados ese día (memoria de 24h + su puerta de atrás, índice duplicado, 2 bancos del calendario, la banda ciega del 1%, args del LLM sin filtrar, saludo al volver, y 3 cegueras de las fotos). Modelo devuelto a **Haiku 4.5**. Nº de Maired añadido a la lista blanca. 421 tests · `/salud` 8/8. |
 
 ---
