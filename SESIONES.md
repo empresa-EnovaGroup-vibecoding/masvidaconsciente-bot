@@ -113,8 +113,50 @@ no comparado en cifrado (L24)— es `https://api-masvida.enovagroup.tech`. Despl
 y verificado que **la URL quedó horneada en el bundle** (`chunks/app/page-*.js`), que es la prueba
 de que no habrá "Failed to fetch": el HTTP 200 solo, no lo demuestra.
 
+### 4 · 🔴 UN FALSO ROJO DEL VIGILANTE (y el token con `Actions` ya validado)
+
+Erwin añadió `Actions` al PAT. Validado sin disparar nada con una sonda de rama inexistente:
+antes `403 Resource not accessible`, ahora **`422 No ref found`** — pasó la autorización y solo
+falló por la rama falsa. Lectura de Actions: `200`.
+
+Al validarlo de verdad —lanzando `deploy.yml` con `destino=taller`— **el paso de LOS BANCOS quedó
+ROJO con `exit 137`**, cinco segundos después de arrancar. No era ningún banco:
+
+| Qué se comprobó | Resultado |
+|---|---|
+| ¿Salió el WhatsApp a la dueña? | 🟢 **NO** — `0` filas en `mensajes` en 2 h. `correr_bancos.py` solo avisa **al final** si hay rojos, y fue matado a los 5 s |
+| ¿Fue falta de memoria? | 🟢 No — 6,3 GB libres |
+| ¿Qué contenedor atacó el log? | `qlfrx…154556451851` (creado **15:45:56**) |
+| ¿Cuál corre ahora? | `qlfrx…155113476182` (creado **15:51:13**) |
+
+**Coolify reemplazó el contenedor mientras los bancos corrían dentro, y `docker exec` murió con
+él.** La causa: el paso esperaba *un contenedor cuya imagen tuviera el SHA del commit*, y al
+**RE-desplegar el MISMO commit ya existe uno viejo con ese SHA**. Lo agarraba al instante en vez
+de esperar al nuevo. Por eso funcionó las 4 veces de hoy (commits nuevos) y falló al redesplegar.
+
+**Arreglado (`3276bf9`):** ya no se espera al SHA —que es ambiguo entre el viejo y el nuevo— sino
+a que **Coolify diga `status: finished`** vía `GET /api/v1/deployments/{uuid}`, que es un hecho y
+no una inferencia. Y si aun así el exec muere con 137, **se reintenta una vez** en vez de
+reportarlo como banco en rojo.
+
+**Validado reproduciendo el caso exacto:** un `workflow_dispatch` del **mismo commit**, que es lo
+que daba 137, ahora sale **verde en los tres pasos** (TALLER · esperar a Coolify · LOS BANCOS),
+con los dos de producción en `skipped`.
+
+→ **L49: un `exit 137` no es un test en rojo, es un proceso ASESINADO.** Antes de leerlo como
+fallo del código, pregúntate quién mató al contenedor. Y es L29 otra vez: un vigilante que da
+falsos rojos se acaba ignorando, y entonces deja de vigilar.
+
 ### 🔴 Lo que sigue faltando
 
+- 🔑 **El PAT ya puede lanzar el workflow de producción, pero `PROD_SSH_KEY` NUNCA se ha
+  ejercitado.** Los runs de julio (`7e80b8a`, `238a91c`) muestran el paso de PRODUCCIÓN en
+  `success`, así que `COOLIFY_NEW_TOKEN` existía y servía — pero en esos runs **no existían aún**
+  ni el paso de bancos ni el de los detectores de esquema (se añadieron el 2-ago, DAT-7). Si se
+  lanza producción y ese secreto falta, el código y **las 12 migraciones** entran igual y la
+  verificación falla después: producción desplegada y sin verificar, que es exactamente el
+  escenario que DAT-7 quería cerrar. **No se puede pre-comprobar** (leer los nombres de los
+  secretos necesita el permiso `Secrets`, que no está entre los 4).
 - **Producción (netcup) sigue en `7e80b8a` (14-jul).** No hay ninguna de sus tres llaves desde
   esta Mac, verificado en vivo: SSH da `Permission denied` (puerto abierto), su Coolify —que es
   **otra instancia**— da `401`, y el PAT no tiene `Actions: write` para lanzar el workflow (`403`).
