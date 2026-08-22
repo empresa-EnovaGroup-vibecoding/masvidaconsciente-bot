@@ -405,3 +405,24 @@ async def test_sin_info_producto_la_red_del_pitch_no_existe(monkeypatch):
     )
     assert correcciones == []
     assert salida == CONFIRMACION_PLANA
+
+
+def test_la_palabra_que_usa_el_cliente_REAL_para_pedir_consejo():
+    """🔴 CLI-034, primera línea de la conversación (anexo de las 42 conversaciones reales):
+
+        "queria saber si me puedes asesorar con una duda, quiero hacer Nuggets de corazón…"
+
+    "Asesorar" no estaba en la lista CERRADA de `_PIDE_ASESORIA`, que sí tenía "recomiendas",
+    "sugieres" y "aconsejas". El cliente que pide consejo con la palabra más natural de todas
+    no disparaba la red que existe justo para eso.
+
+    ⚠️ Solo las formas VERBALES: el bot se llama "Alejandra, la ASESORA" en la personalidad de
+    la BD, así que un "eres la asesora?" no puede disparar una red de venta.
+    """
+    from app.agent.agent import _pide_asesoria
+
+    assert _pide_asesoria("queria saber si me puedes asesorar con una duda") is True
+    assert _pide_asesoria("me asesoras con algo?") is True
+    assert _pide_asesoria("asesórame porfa") is True
+    assert _pide_asesoria("eres la asesora del negocio?") is False
+    assert _pide_asesoria("hola, hablo con la asesora?") is False

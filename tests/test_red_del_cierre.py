@@ -356,3 +356,78 @@ async def test_si_YA_registro_no_regana():
     ])
     assert "registrar_pedido" in tools
     assert avisos == [], "registró: no hay nada que regañar"
+
+
+# ══════════════════════════════════════════════════════════════════════════════════
+#  EL TERCER SITIO: el SCHEMA de la herramienta, que el modelo lee en CADA llamada
+# ══════════════════════════════════════════════════════════════════════════════════
+
+def test_el_schema_declara_opciones_OPCIONAL_y_no_solo_en_el_required():
+    """🔴 EL SITIO QUE SE QUEDÓ SIN ARREGLAR HASTA EL 2026-08-22.
+
+    La sesión del 08-21 encontró TRES sitios que empujan a pedir el sabor y ninguno que dijera
+    que se puede cerrar sin él. Arregló dos (`_REGLAS` y la personalidad de la BD). El tercero
+    —este— siguió intacto: decía *"Lo que el cliente eligió DENTRO del paquete y que la dueña
+    NECESITA PARA COCINAR"*, sin una palabra sobre que es opcional… mientras tres líneas más
+    abajo `required` lleva desde siempre solo `variante_id` y `cantidad`.
+
+    Un campo que el schema declara opcional y describe como imprescindible es una contradicción,
+    y el modelo la resolvía del lado malo: bloqueando la venta. Y a diferencia de `_REGLAS`, el
+    schema viaja en CADA llamada a la herramienta.
+    """
+    from app.agent.tools import TOOL_SCHEMAS
+
+    esquema = next(
+        t for t in TOOL_SCHEMAS if t["function"]["name"] == "registrar_pedido"
+    )["function"]["parameters"]
+    item = esquema["properties"]["items"]["items"]
+
+    # Lo que la herramienta EXIGE de verdad. Si algún día `opciones` entrara aquí, esta red y
+    # media docena de reglas del prompt pasarían a estar mintiendo.
+    assert item["required"] == ["variante_id", "cantidad"]
+
+    opciones = item["properties"]["opciones"]["description"]
+    assert opciones.startswith("OPCIONAL"), (
+        "el modelo lee la descripción antes que el `required`: si no dice OPCIONAL ahí, no lo es"
+    )
+    assert "DÉJALO VACÍO y registra igual" in opciones
+    assert "NUNCA dejes de registrar un pedido por esto" in opciones
+    assert "necesita para cocinar" not in opciones, (
+        "esa frase es la que trataba un campo opcional como un requisito"
+    )
+
+
+def test_pedir_el_dato_SIN_signo_de_pregunta_tambien_cuenta():
+    """🔴 EL HUECO QUE DESTAPÓ LA PROPIA WHUILIANNY (2026-08-22, leyendo el anexo de las 42
+    conversaciones). En CLI-051, tal cual:
+
+        [20:39] "Me vas a decir, por favor, qué sabores quieres… ahí salen los toppings."
+
+    Es una petición en toda regla y **no lleva signo de pregunta**. Mirando solo las preguntas,
+    un bot que escribiera así ("Necesito el sabor para seguir.", "Dime el relleno.") pedía el
+    dato turno tras turno y la red no contaba ni uno: el bucle seguía invisible.
+    """
+    assert _pide_opcion_del_paquete(
+        "Me vas a decir, por favor, qué sabores quieres. Ahí salen los toppings."
+    )
+    for peticion in (
+        "Necesito el sabor para poder seguir.",
+        "Dime el relleno y te la preparo.",
+        "Me confirmas el sabor.",
+        "Falta que me digas la hora de entrega.",
+    ):
+        assert _pide_opcion_del_paquete(peticion) is True, peticion
+
+
+def test_pero_DESCRIBIR_sigue_sin_contar_aunque_no_sea_pregunta():
+    """🔴 LA MITAD QUE PROTEGE. Si bastara con que la frase tenga la palabra "sabor", describir
+    los sabores contaría como pedirlos — y eso rompe el caso que esta red tiene PROHIBIDO tocar.
+    Hacen falta LAS DOS cosas: marca de petición Y el dato. Describir no pide nada."""
+    for describe in (
+        "Te recomiendo las Galletas New York, que vienen con varios sabores para elegir "
+        "(chocolate, limón pistacho, canela naranja, chocomerey).",
+        "Listo, te preparo la mezcla de sabores que pediste.",
+        "Ahí salen los toppings y los sabores de la semana.",
+        "Las New York pequeñas traen cuatro sabores.",
+    ):
+        assert _pide_opcion_del_paquete(describe) is False, describe

@@ -344,3 +344,132 @@ async def test_si_no_se_puede_leer_el_catalogo_la_venta_SIGUE(monkeypatch):
         "ok esa quiero, 1", HIST_SIN_TAMANO,
     )
     assert "registrar_pedido" in ejecutadas
+
+
+# ══════════════════════════════════════════════════════════════════════════════════
+#  7. `tamanos_hermanos` DE VERDAD (L21 — una función mockeada en todos los tests
+#     no tiene pruebas, y este repo ya pagó esa lección una vez)
+# ══════════════════════════════════════════════════════════════════════════════════
+
+class _Fila:
+    def __init__(self, **kw):
+        self.__dict__.update(kw)
+
+
+class _Resultado:
+    def __init__(self, filas):
+        self._filas = filas
+
+    def scalars(self):
+        return self
+
+    def all(self):
+        return self._filas
+
+
+class _Sesion:
+    """Sesión de mentira: `get()` resuelve por (modelo, id) y `execute()` devuelve las hermanas."""
+
+    def __init__(self, objetos, hermanas):
+        self._objetos, self._hermanas = objetos, hermanas
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def get(self, modelo, ident):
+        return self._objetos.get((modelo.__name__, ident))
+
+    async def execute(self, _stmt):
+        return _Resultado(self._hermanas)
+
+
+def _bd(monkeypatch, objetos, hermanas):
+    monkeypatch.setattr(
+        "app.agent.tools.get_session_factory", lambda: (lambda: _Sesion(objetos, hermanas))
+    )
+
+
+OBJETOS = {
+    ("ProductoVariante", 77): _Fila(id=77, producto_id=9, presentacion="1kg", disponible=True),
+    ("ProductoVariante", 91): _Fila(id=91, producto_id=3, presentacion="única", disponible=True),
+    ("Producto", 9): _Fila(id=9, nombre="Torta baja en carbohidratos"),
+    ("Producto", 3): _Fila(id=3, nombre="Kéfir"),
+}
+
+
+@pytest.mark.asyncio
+async def test_tamanos_hermanos_devuelve_los_hermanos_VENDIBLES(monkeypatch):
+    from app.agent.tools import tamanos_hermanos
+
+    _bd(monkeypatch, OBJETOS, ["500g", "1kg", "250g"])
+    info = await tamanos_hermanos(77)
+    assert info == {
+        "producto": "Torta baja en carbohidratos",
+        "elegido": "1kg",
+        "tamanos": ["500g", "1kg", "250g"],
+    }
+
+
+@pytest.mark.asyncio
+async def test_tamanos_hermanos_con_UN_solo_tamano_devuelve_None(monkeypatch):
+    """✅ NO HAY NADA QUE VIGILAR. 29 de los 32 productos del catálogo son así (08-22): si esta
+    guarda cayera, la red se metería en TODO el catálogo."""
+    from app.agent.tools import tamanos_hermanos
+
+    _bd(monkeypatch, OBJETOS, ["1kg"])
+    assert await tamanos_hermanos(77) is None
+
+
+@pytest.mark.asyncio
+async def test_la_presentacion_UNICA_no_cuenta_como_un_tamano(monkeypatch):
+    """'única' es el relleno que pone el modelo de datos cuando el producto no tiene tamaños
+    (`ProductoVariante.presentacion` lo trae por defecto). Contarla haría que un producto sin
+    tamaños pareciera tener dos."""
+    from app.agent.tools import tamanos_hermanos
+
+    _bd(monkeypatch, OBJETOS, ["única", ""])
+    assert await tamanos_hermanos(91) is None
+
+
+@pytest.mark.asyncio
+async def test_un_id_que_no_existe_no_es_asunto_de_esta_red(monkeypatch):
+    """Ese caso ya lo rechaza `registrar_pedido` con su lista cerrada; duplicar el rechazo aquí
+    daría dos mensajes distintos para el mismo error."""
+    from app.agent.tools import tamanos_hermanos
+
+    _bd(monkeypatch, OBJETOS, ["500g", "1kg"])
+    assert await tamanos_hermanos(12345) is None
+    assert await tamanos_hermanos(None) is None
+    assert await tamanos_hermanos("no-es-un-numero") is None
+
+
+@pytest.mark.asyncio
+async def test_si_la_BD_revienta_devuelve_None_y_NO_propaga(monkeypatch):
+    """🔴 FAIL-OPEN, medido desde la función y no desde su docstring: una red del cobro que se
+    cae no puede tumbar una venta."""
+    from app.agent.tools import tamanos_hermanos
+
+    def _explota():
+        raise RuntimeError("Postgres se cayó")
+
+    monkeypatch.setattr("app.agent.tools.get_session_factory", _explota)
+    assert await tamanos_hermanos(77) is None
+
+
+@pytest.mark.asyncio
+async def test_la_guarda_deja_pasar_TODAS_las_demas_herramientas():
+    """`_ejecutar_con_guardas` es ahora la única puerta del bucle: si filtrara de más, apagaría
+    el catálogo, las fotos o el cobro sin que nadie lo notara."""
+    vistas = []
+
+    async def ejecutar(nombre, args, telefono, *a, **kw):
+        vistas.append(nombre)
+        return {"ok": True, "quien": nombre}
+
+    for tool in ("enviar_catalogo", "generar_datos_pago", "info_producto", "pedir_ayuda"):
+        r = await ag._ejecutar_con_guardas(ejecutar, tool, {}, "58412", "hola", [])
+        assert r == {"ok": True, "quien": tool}
+    assert vistas == ["enviar_catalogo", "generar_datos_pago", "info_producto", "pedir_ayuda"]

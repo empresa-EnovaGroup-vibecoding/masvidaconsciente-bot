@@ -956,6 +956,23 @@ _COMO_SE_LLAMA = (
 # Una PREGUNTA DE ELECCIÓN PELADA no nombra su objeto: el objeto es la LISTA que la precede.
 _ELECCION_PELADA = re.compile(r"^(y|entonces|bueno|ok)?\s*(de|por)?\s*cu[áa]l(es)?\b", re.I)
 
+# 🔴 PEDIR UN DATO NO SIEMPRE LLEVA SIGNO DE PREGUNTA — y esto lo destapó la propia Whuilianny.
+# En CLI-051, tal cual: *"Me vas a decir, por favor, qué sabores quieres… ahí salen los
+# toppings."* Es una petición en toda regla y NO es una pregunta. Mirando solo las preguntas, un
+# bot que escribiera igual ("Necesito el sabor para seguir.", "Dime el relleno.") pedía el dato
+# turno tras turno y la red no contaba ni uno.
+#
+# ⚠️ POR QUÉ NO BASTA CON "la frase tiene la palabra sabor": porque entonces DESCRIBIR los
+# sabores contaría como pedirlos, y eso rompe el caso que esta red tiene prohibido tocar (el
+# turno 1 del smoke: *"traen 6 unidades con varios sabores para elegir (chocolate…)"*). Hacen
+# falta LAS DOS cosas: una marca de PETICIÓN y el dato. Describir no pide nada.
+_PIDE_QUE_LE_DIGA = re.compile(
+    r"\b(me\s+vas\s+a\s+decir|d[íi]game|dime|me\s+dices|me\s+dir[íi]as"
+    r"|me\s+confirmas|conf[íi]rmame|me\s+indicas|ind[íi]came"
+    r"|necesito|me\s+falta|falta\s+que|espero\s+(que\s+me\s+digas|tu))\b",
+    re.I,
+)
+
 # 🔴 EL FRENO QUE HACE SEGURA LA REGLA DE ARRIBA. Un TAMAÑO **jamás** es un dato opcional: cambia
 # el precio (Kombucha 350ml $4 / 700ml $7 — la fuga de $3 que costó la cirugía del 2026-07-13).
 # Si la lista que precede a la pregunta son tamaños, esta red NO puede tocarla: su aviso dice
@@ -1026,7 +1043,8 @@ def _dato_opcional_pedido(texto: str) -> str | None:
         # `_aplanar` (workers/tasks.py) borra los "¿" en el ENVÍO, pero aquí el texto todavía
         # los puede traer: se aceptan las dos formas.
         es_pregunta = limpia.endswith("?") or limpia.startswith("¿")
-        if es_pregunta:
+        # PEDIR es preguntar o mandar a decir. Describir, no (ver `_PIDE_QUE_LE_DIGA`).
+        if es_pregunta or _PIDE_QUE_LE_DIGA.search(limpia):
             hallado = _DATO_OPCIONAL.search(limpia)
             if hallado:
                 trozo = hallado.group(0)
@@ -1034,12 +1052,14 @@ def _dato_opcional_pedido(texto: str) -> str | None:
                     (nombre for patron, nombre in _COMO_SE_LLAMA if patron.search(trozo)),
                     "ese dato",
                 )
-            if (
-                _ELECCION_PELADA.match(limpia.lstrip("¿"))
-                and _es_lista_pelada(anterior)
-                and not _TAMANO_EN_LISTA.search(anterior)
-            ):
-                return "eso mismo"
+        # La ELECCIÓN PELADA sí exige pregunta: sin "?" no hay nada que resolver contra la lista.
+        if (
+            es_pregunta
+            and _ELECCION_PELADA.match(limpia.lstrip("¿"))
+            and _es_lista_pelada(anterior)
+            and not _TAMANO_EN_LISTA.search(anterior)
+        ):
+            return "eso mismo"
         anterior = limpia
     return None
 
@@ -1606,7 +1626,11 @@ def _dictamina_salud_sin_ficha(mensaje_cliente: str, texto: str, consulto_ficha:
 _PIDE_ASESORIA = re.compile(
     # pedir consejo con todas sus letras: "qué me recomiendas", "recomiéndame", "sugiéreme",
     # "alguna recomendación", "qué me aconsejas"
+    # "me puedes asesorar con una duda" — la primera línea REAL de CLI-034. La palabra que el
+    # cliente usa más a menudo para pedir consejo no estaba en esta lista cerrada. Solo las
+    # formas VERBALES: "la asesora" (el nombre del bot en la BD) no puede disparar la red.
     r"\b(recomiend|recomend|sugier|suger|aconsej)"
+    r"|\basesor(ar|arme|ame|as)\b"
     # no saber qué elegir: "no sé qué llevar/pedir", "no sé cuál", "no sabría qué"
     r"|\bno\s+(se|sabria)\s+(que|cual|cuales)\b"
     # "algo <cualidad>": "algo dulce/dulcito", "algo salado", "algo rico", "algo ligero"…
