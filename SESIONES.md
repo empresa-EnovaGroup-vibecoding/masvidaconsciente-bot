@@ -24,6 +24,62 @@
 
 ---
 
+## 2026-08-22 (4) — 🚀 DESPLEGADO LO DE LA MADRUGADA + EL PUSH VUELVE A DESPLEGAR SOLO
+
+**Lo que pidió Erwin:** subir los 5 commits atascados (pasó su token por chat, avisando que lo
+revocaría en días), aplicarlos al VPS, validarlo, y **dejar el despliegue automático**.
+
+### 1 · Push y deploy de los 5 commits
+
+`6c5d14c..c0a2f71` por `./subir_a_enova.sh`. **La CI de `c0a2f71` salió VERDE** — que era la
+prueba de fondo del arreglo de `ruff` de este mismo lote: si hubiera seguido roto, esta CI habría
+vuelto a salir roja y los 515 tests no habrían corrido.
+
+Deploy por la API de Coolify (§3.6), **worker primero y bot después**. Verificación:
+
+| | |
+|---|---|
+| Checksum `master` vs los DOS contenedores | 🟢 **5/5** (`agent.py` · `tools.py` · `system_prompt.py` · `tasks.py` · `cola_media.py`) |
+| Bancos, **uno por uno** | 🟢 **27/27 verdes** |
+| `/salud` | 🟢 `ok`, `fallos: []` |
+| Datos, antes vs después del rebuild | 🟢 **idénticos**: 32 productos / 37 variantes / 2 pedidos / 34 media / 10 conocimiento / 2 clientes / 35 migraciones |
+
+🔴 **Un fallo del INSTRUMENTO, y van…** El primer `curl` a la API de Coolify dio **400 Bad Request
+de nginx**, que parecía un problema de permisos o de puerto. No lo era: al capturar el id del
+token con `psql -t -A ... RETURNING id`, psql imprime **también su etiqueta `INSERT 0 1`**, así
+que la variable llevaba un salto de línea dentro y la cabecera `Authorization` salía malformada.
+**Un 400 acusando al servidor cuando el que estaba mal era el cliente.** → L48.
+
+### 2 · El push vuelve a desplegar el taller (`0426f3b`)
+
+Se revierte la decisión del 2-ago ("ningún push despliega nada"), que Erwin tomó cuando desplegaba
+a mano por `docker cp` y un deploy automático le borraba el trabajo. **Ese motivo ya no existe:**
+nada se edita dentro del VPS y Coolify construye desde GitHub.
+
+**Se hizo por GitHub Actions y NO por el webhook de auto-deploy de Coolify**, y la razón es la
+lección L41: el webhook dispara al recibir el push **sin esperar a la CI**, así que desplegaría
+también con los tests en rojo. `desplegar` conserva su `needs: verificar`, de modo que con
+`ruff`/`compileall`/`pytest` rojos el `curl` a Coolify no llega a existir. `is_auto_deploy_enabled`
+se queda en **`false`** en las 3 apps a propósito: encenderlo dejaría dos despliegues compitiendo
+por el mismo push, uno de ellos sin puerta.
+
+🔒 **Producción sigue siendo SOLO a mano.** En un `push` el destino se **fuerza** a `taller` vía
+`env.DESTINO`; `produccion` solo puede salir de un `workflow_dispatch` que un humano eligió. Se
+migraron los 4 pasos a `env.DESTINO`: dejar uno en `inputs.destino` habría desplegado sin que los
+bancos lo verificaran, porque en un push ese input llega vacío.
+
+**Validado en vivo:** el push de `0426f3b` disparó el flujo solo (evento `push`).
+
+### 🔴 Lo que sigue faltando
+
+- **Producción sigue en `7e80b8a` (14-jul)** y sin acceso SSH. Es el pendiente grande.
+- **El arreglo de fondo del P0** (inyectar el ESTADO DEL PEDIDO EN CURSO cada turno) sigue
+  pendiente — pero ahora **sí se puede medir contra el bot real**, que era lo que lo bloqueaba.
+- **La llave SSH de la Mac sigue sin registrar** en GitHub: el próximo lote de commits volverá a
+  pedir un token a mano. Es el tercer token de tres sesiones.
+
+---
+
 ## 2026-08-22 (3) — 🗣️ LOS DOS DOCUMENTOS DE WHUILIANNY, LÍNEA POR LÍNEA, CONTRA EL CÓDIGO
 
 **Lo que se buscaba (lo pidió Erwin de madrugada):** leer los dos `.docx` completos, compararlos

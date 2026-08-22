@@ -22,13 +22,13 @@ y salud, memoria que no se olvida a las 24h, y 8 migraciones nuevas (hasta la 03
 
 ---
 
-## Última verificación: **2026-08-21**
+## Última verificación: **2026-08-22 (tarde)**
 
 | | 🏪 PRODUCCIÓN | 🧪 TALLER |
 |---|---|---|
 | **Servidor** | netcup `152.53.89.118` | Hostinger `2.25.139.106` |
 | **Quién le escribe** | las clientas reales | número de la agencia: **+57 313 293 3806** |
-| **Bot: versión** | `7e80b8a` (14-jul) — **muy atrasada** | ✅ **`13a064f`** (22-ago), desplegado **por Coolify desde GitHub** (ya no por `docker cp`) y con checksum 5/5 contra `master` |
+| **Bot: versión** | `7e80b8a` (14-jul) — **muy atrasada** | ✅ **`c0a2f71`** (22-ago), desplegado **por Coolify desde GitHub** y con checksum 5/5 contra `master` en bot Y worker |
 | **Modelo IA activo** | (el de julio) | ✅ **`anthropic/claude-haiku-4.5`** (devuelto el 21-ago por decisión de Erwin; estuvo en `gpt-4o-mini` del 18 al 21-ago) |
 | **Modo del agente** | UN agente | los 3 bloqueadores del modo DOS ya están cerrados (06-ago) |
 | **Lista blanca** | ✅ activa | ✅ activa — 3 números (`NUMEROS_PERMITIDOS` + `numeros_permitidos_extra`) |
@@ -40,12 +40,12 @@ y salud, memoria que no se olvida a las 24h, y 8 migraciones nuevas (hasta la 03
 en GitHub pero **aún no promovido a producción**. El bot NO atiende clientas reales todavía: es una
 decisión deliberada hasta que esté listo para la entrega.
 
-**🟡 Y el TALLER también va por detrás de `master` desde el 2026-08-22 (2):** el taller corre
-`13a064f`; encima hay **5 commits sin desplegar** (la CI arreglada · los dos huecos de la red del
-cierre · la RED DEL TAMAÑO ADIVINADO del carril del dinero · el tercer caso del espejeo y los dos
-huecos que destaparon las conversaciones reales). **Nada de eso está vivo todavía** — hace falta
-`./subir_a_enova.sh <TOKEN>` (el push necesita el token de Erwin) y después un deploy a mano
-(§ "cómo se despliega hoy" y `SESIONES.md` 2026-08-22).
+**🟢 RESUELTO EL 2026-08-22 (tarde): el taller ya está al día con `master`.** Los 5 commits que
+estaban atascados en local (la CI arreglada · los dos huecos de la red del cierre · la RED DEL
+TAMAÑO ADIVINADO del carril del dinero · el tercer caso del espejeo y los dos huecos que
+destaparon las conversaciones reales) **se subieron y se desplegaron**: el taller corre
+`c0a2f71`, con checksum 5/5, **27/27 bancos verdes**, `/salud` en `ok` y cero regresión de datos.
+Desde el commit siguiente (`0426f3b`) el despliegue del taller **es automático en cada push**.
 
 **🔴 Lo que se descubrió el 2026-08-22 (2) y conviene no olvidar:** la **CI llevaba 3 commits en
 ROJO** (`09f4253`, `13a064f`, `6c5d14c`) por 4 errores de `ruff`, y como `ruff` es el PRIMER paso
@@ -55,15 +55,24 @@ que valida antes de desplegar.**
 
 ---
 
-## ⚠️ CÓMO SE DESPLIEGA HOY (cambió — leer antes de tocar Coolify)
+## ⚠️ CÓMO SE DESPLIEGA HOY (cambió OTRA VEZ el 2026-08-22 — leer antes de tocar nada)
 
-Erwin cambió el despliegue el 2-ago (commit `f0429db` del panel): **ningún push despliega solo.
-El deploy es SIEMPRE a mano.** Antes un push a `master` reconstruía el taller; ya no.
+🟢 **UN PUSH A `master` DESPLIEGA EL TALLER SOLO, si la CI está VERDE.** Lo pidió Erwin el
+22-ago y **reemplaza su decisión del 2-ago** ("ningún push despliega nada"). Va por **GitHub
+Actions**, no por el webhook de Coolify: el job `desplegar` lleva `needs: verificar`, así que con
+`ruff`/`compileall`/`pytest` en rojo el `curl` a Coolify **no llega a existir** (lección L41).
+
+🔒 **PRODUCCIÓN SIGUE SIENDO SOLO A MANO.** En un `push` el destino se **fuerza** a `taller`
+(`env.DESTINO` en `deploy.yml`); `produccion` solo sale de un `workflow_dispatch` que un humano
+lanzó y eligió. Un push no puede tocar a las clientas reales ni por accidente.
+
+⚠️ **`is_auto_deploy_enabled` sigue en `false` en las 3 apps, y así se queda.** No es un olvido:
+el webhook de Coolify dispara al recibir el push **sin esperar a la CI**, así que encenderlo
+dejaría dos despliegues compitiendo por el mismo push y uno de ellos sin puerta. El automatismo
+vive en `deploy.yml`, no en Coolify.
 
 ✅ **COOLIFY RECONECTADO EL 2026-08-22** (lo pidió Erwin). Las 3 apps volvieron a `git_branch =
-'master'`, y **`is_auto_deploy_enabled` se puso en `false` en las tres** para NO revertir la
-decisión del 2-ago: el deploy sigue siendo SIEMPRE a mano. Si alguna vez se quiere push→taller
-otra vez, es un `UPDATE application_settings SET is_auto_deploy_enabled=true`.
+'master'`.
 
 *(Estado anterior guardado en el VPS: `/root/COOLIFY_ANTES_2026-08-21.csv`.)*
 
@@ -98,6 +107,7 @@ git log origin/master -5         # últimos cambios en GitHub
 
 | Fecha | Producción | Taller | Nota |
 |---|---|---|---|
+| 2026-08-22 (tarde) | `7e80b8a` (14-jul) | **`c0a2f71`** | 🟢 **Los 5 commits atascados: subidos y desplegados.** Push con el token de Erwin (`c0a2f71`, CI **verde**) → deploy por la API de Coolify (worker primero, bot después). **Checksum 5/5** en los DOS contenedores · **27/27 bancos verdes** corridos uno por uno · `/salud` `ok` con `fallos: []` · **cero regresión de datos** (32/37/2/34/10/2/35 idéntico antes y después). Y **el despliegue del taller pasó a ser AUTOMÁTICO en cada push** (`0426f3b`), con la CI como puerta y producción todavía solo a mano. |
 | 2026-08-18 | `7e80b8a` (14-jul) | desconectado de GitHub | Descubierto: Coolify en rama `DESCONECTADO`, código de agosto solo en el servidor. |
 | 2026-08-21 | `7e80b8a` (14-jul) | código de agosto (en GitHub) | Rescatados 32+6 commits a `master`. Deploy ahora es manual. Falta reconectar y promover a producción. |
 | 2026-08-22 (2 y 3) | `7e80b8a` (14-jul) | `13a064f` (**master va 5 commits por delante, SIN desplegar**) | 🔴 **La CI llevaba 3 commits en ROJO y los 453 tests no corrían** (4 errores de `ruff`; `pytest` quedaba *skipped*) — arreglado. Cerrados los 2 huecos de la red del cierre (la HORA + la lista y la pregunta en frases distintas), el 3er sitio que empujaba a pedir el sabor (el schema de `opciones`), **la RED DEL TAMAÑO ADIVINADO** (P0.5, carril del dinero), y —cruzando los dos documentos de Whuilianny con el código— el **tercer caso del espejeo (cliente MOLESTO)**, las peticiones **sin signo de pregunta** y `asesorar`. **515 tests** (eran 453) · **18 reversiones → 18 rojas** · cero cambios en la BD. |
