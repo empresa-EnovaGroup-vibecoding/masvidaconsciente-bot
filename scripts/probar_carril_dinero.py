@@ -549,8 +549,18 @@ async def main() -> None:
         await tasks._procesar_comprobante(
             TEL, "wamid.OTRA", "media_otra_cuenta", None, "Rosa", "image/jpeg"
         )
+        # 🔴 REESCRITO EL 2026-08-22. Este check buscaba la frase literal "NO te aparece hecho a
+        # TU cuenta" — que es exactamente la instrucción que hizo al bot decirle a una clienta
+        # "acabo de revisar y ese pago no me aparece en la cuenta". El bot NO tiene banco: esa
+        # frase era una mentira que el sistema le ordenaba. Ahora la instrucción habla de la
+        # CAPTURA, y este banco verifica la INTENCIÓN (neutral, sobre lo que de verdad se vio)
+        # en vez de un texto exacto — que es lo que debió comprobar desde el principio.
+        _sit = situaciones[-1] if situaciones else ""
         check("✅ un pago a OTRA cuenta sigue con su mensaje neutral (no acusa a nadie)",
-              bool(situaciones) and "NO te aparece hecho a TU cuenta" in situaciones[-1],
+              bool(situaciones)
+              and "CAPTURA" in _sit                    # habla de lo que la visión SÍ vio
+              and "no lo acuses" in _sit.lower()       # sigue siendo neutral
+              and "NUNCA de haber revisado" in _sit,   # y le prohíbe la mentira del banco
               str(situaciones[-1:]))
 
         print("\n8.b) 🔒 Y LA VISIÓN CAÍDA NO INUNDA A LA DUEÑA (un aviso por cliente / 15 min)")
