@@ -47,11 +47,16 @@ def test_el_delivery_no_se_suma():
 
 def test_lo_que_le_cuesta_a_la_duena_esta_medido():
     """El flete regalado sale de su bolsillo: $3 en el centro, $5 en el oeste. Que quede escrito
-    en un test y no solo en un comentario — es el número que Maired decidió asumir."""
+    en un test y no solo en un comentario — es el número que Maired decidió asumir.
+
+    ⚠️ La primera versión de este test comparaba `monto_en_efectivo(...) + envio` contra
+    `monto_en_efectivo(...)` y afirmaba que difieren en `envio`: una TAUTOLOGÍA, cierta pase lo
+    que pase. Se delató sola al revertir la fórmula — fue la única que **no** se puso roja. Ahora
+    compara contra la regla vieja escrita a mano, que es lo que de verdad hay que vigilar."""
     for envio in (ENVIO_CENTRO, ENVIO_OESTE):
         total = GALLETAS + envio
-        con_flete_cobrado = monto_en_efectivo(total, envio) + envio
-        assert con_flete_cobrado - monto_en_efectivo(total, envio) == envio
+        regla_vieja = ((total - envio) * Decimal("0.80")).quantize(Decimal("0.01")) + envio
+        assert regla_vieja - monto_en_efectivo(total, envio) == envio
 
 
 def test_sin_envio_es_solo_el_20_por_ciento():
