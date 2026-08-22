@@ -488,6 +488,165 @@ def _asegurar_saludo(texto: str, mensaje_usuario: str, nombre_cliente: str | Non
     return ". ".join(partes) + " 💚\n\n" + texto
 
 
+# ─── 🔁 RED DE LA FICHA REPETIDA: el mismo dato del producto, turno tras turno ────────
+#
+# 🔴 EL CASO MEDIDO (2026-08-22, prueba de Maired, después de poner la regla en el prompt):
+# *"duran 2 semanas y son aptas para diabéticos"* apareció **CUATRO veces** en una sola
+# conversación — en los turnos de las 22:50, 22:55, 22:56 y 23:04. Maired lo reportó dos veces:
+# *"Repite mucho… son las galletas mini Nueva York y duran dos semanas y son para diabéticos"*.
+#
+# La regla del prompt ("NO REPITAS lo que ya dijiste") se escribió esa misma tarde y **el modelo
+# la ignoró las cuatro veces**. Otra vez L40: *el prompt SUGIERE, el código IMPIDE*.
+#
+# Cómo funciona: se parte el mensaje en frases y se tira la que ya se dijo ANTES en esta
+# conversación, palabra por palabra. No reescribe nada ni resume: **solo borra el duplicado
+# literal**, que es lo único que se puede hacer sin riesgo de estropear el mensaje.
+#
+# ⚠️ Los tres frenos que evitan que esta red haga daño:
+#   · Solo frases LARGAS (>30 caracteres). "Claro que sí" o "Cuántos quieres?" se repiten con
+#     toda naturalidad en una conversación y no son ficha.
+#   · Solo si queda algo que decir: si al quitar el duplicado el mensaje se queda vacío, se
+#     devuelve el original. Callar al bot es peor que repetirse.
+#   · Nada que lleve DINERO se toca: un precio o un total repetido es CORRECTO y necesario, y
+#     esta red no puede meterse en el carril del dinero. ⚠️ El freno mira MONEDA ($, dólares,
+#     bolívares…), NO "cualquier dígito": la primera versión lo hacía así y no quitaba nada,
+#     porque la ficha del caso real dice *"duran **2** semanas"*. Se descubrió escribiendo el test.
+
+def _frases_dichas(historial: list[dict]) -> set[str]:
+    """Las frases que el bot YA dijo en esta conversación, normalizadas para comparar."""
+    dichas = set()
+    for h in historial or []:
+        if (h.get("role") or "") != "assistant":
+            continue
+        for fr in re.split(r"[.\n]+", h.get("content") or ""):
+            fr = " ".join(fr.split())
+            if len(fr) > 30:
+                dichas.add(_sin_acentos_min(fr))
+    return dichas
+
+
+def _sin_ficha_repetida(texto: str, historial: list[dict]) -> str:
+    """Quita del mensaje las frases que ya se dijeron antes. Fail-open ante cualquier duda."""
+    try:
+        dichas = _frases_dichas(historial)
+        if not dichas:
+            return texto
+        salida, quitadas = [], 0
+        for fr in re.split(r"(?<=[.\n])", texto):
+            limpia = " ".join(fr.split())
+            # Las que llevan DINERO no se tocan (el monto se repite a propósito). Ojo: es
+            # moneda, no "cualquier dígito" — si no, "duran 2 semanas" quedaría protegida y la
+            # red no serviría para el caso que la motivó.
+            _hay_dinero = re.search(r"[$€]|\bd[oó]lar|\bbs\b|bol[ií]var", limpia, re.I)
+            if (len(limpia) > 30 and not _hay_dinero
+                    and _sin_acentos_min(limpia.rstrip(".")) in dichas):
+                quitadas += 1
+                continue
+            salida.append(fr)
+        nuevo = "".join(salida).strip()
+        # Si al limpiar no queda nada que decir, vale más repetirse que enmudecer.
+        if not quitadas or len(nuevo) < 15:
+            return texto
+        logger.info("FICHA REPETIDA: %d frase(s) ya dichas quitadas del mensaje", quitadas)
+        return nuevo
+    except Exception:  # noqa: BLE001
+        logger.exception("_sin_ficha_repetida: se deja el texto original")
+        return texto
+
+
+# ─── 🗓️ RED DEL DÍA IMPOSIBLE: el bot NO puede nombrar un día en que no se entrega ────
+#
+# 🔴 POR QUÉ EXISTE, Y POR QUÉ NO BASTÓ LA HERRAMIENTA. El 2026-08-22 se construyó
+# `proxima_fecha_entrega` para que el modelo CONSULTARA el calendario en vez de calcularlo, y se
+# le puso en el prompt que era OBLIGATORIA antes de nombrar cualquier fecha. Se desplegó, y en la
+# siguiente prueba real el bot escribió:
+#
+#     🤖 "Te las dejo para mañana domingo, o prefieres el lunes?"        (sábado, 18:55)
+#
+# **Llamadas a la herramienta en esa conversación: CERO.** El modelo la vio en su lista, leyó que
+# era obligatoria, y calculó la fecha de cabeza igual.
+#
+# Es **L40 al pie de la letra**: *el prompt SUGIERE, el código IMPIDE*. La herramienta le da al
+# modelo la posibilidad de acertar; esta red le quita la de equivocarse.
+#
+# ⚠️ Lo que esta red NO hace: reescribir la fecha por su cuenta. Le devuelve el calendario REAL y
+# le pide que rehaga el mensaje — igual que la red del dinero. Poner una fecha nosotros sería
+# adivinar qué quiso decir, y eso es justo lo que estamos impidiendo.
+
+_DIAS_ES = {
+    "lunes": 0, "martes": 1, "miercoles": 2, "miércoles": 2, "jueves": 3,
+    "viernes": 4, "sabado": 5, "sábado": 5, "domingo": 6,
+}
+# "mañana"/"pasado mañana"/"hoy" son fechas RELATIVAS: se resuelven contra el día de Venezuela.
+_RELATIVOS = {"pasado manana": 2, "pasado mañana": 2, "manana": 1, "mañana": 1, "hoy": 0}
+
+
+def _dias_nombrados(texto: str) -> set[str]:
+    """Los días que el bot NOMBRA en su mensaje (nombre propio o relativo).
+
+    Solo mira palabras completas: 'domingo' sí, pero 'mañana' dentro de 'mañana temprano' también
+    cuenta —es una promesa de fecha igual— y en cambio NO se confunde con 'de la mañana', que es
+    una hora. Por eso 'mañana' precedido de 'la/las/de la' se descarta.
+    """
+    t = " " + _sin_acentos_min(texto) + " "
+    encontrados = set()
+    for d in ("lunes", "martes", "miercoles", "jueves", "viernes", "sabado", "domingo"):
+        if re.search(rf"\b{d}\b", t):
+            encontrados.add(d)
+    if re.search(r"\bpasado\s+manana\b", t):
+        encontrados.add("pasado manana")
+    # "mañana" como DÍA, no como parte del día ("9 de la mañana", "mañana temprano" sí es día)
+    elif re.search(r"(?<!de la )(?<!la )(?<!las )\bmanana\b", t):
+        encontrados.add("manana")
+    if re.search(r"\b(para|el dia de|es)\s+hoy\b", t) or re.search(r"\bhoy\b.*\b(te|se)\s+(la|lo|las|los)\b", t):
+        encontrados.add("hoy")
+    return encontrados
+
+
+def _sin_acentos_min(x: str) -> str:
+    import unicodedata
+    return "".join(
+        c for c in unicodedata.normalize("NFD", (x or "").lower())
+        if unicodedata.category(c) != "Mn"
+    )
+
+
+async def _dias_imposibles(texto: str, calendario: dict | None) -> list[str]:
+    """De los días que nombró el bot, cuáles NO se pueden. Devuelve [] si todo está bien.
+
+    `calendario` es lo que devuelve `proxima_fecha_entrega`. **FAIL-OPEN**: sin calendario (falló
+    la BD, o el turno no lo pidió) esta red no opina — frenar una venta por no poder comprobar
+    sería peor que el bug que arregla.
+    """
+    if not calendario or not calendario.get("ok"):
+        return []
+    try:
+        buenas = {f["cuando"] for f in calendario.get("proximas_fechas", [])}
+        buenas_dias = {_sin_acentos_min(c.split()[0]) for c in buenas}
+        hoy_sirve = bool(calendario.get("hoy_se_puede_entregar"))
+        hoy_nombre = _sin_acentos_min((calendario.get("hoy_es") or " ").split()[0])
+
+        malos = []
+        for d in _dias_nombrados(texto):
+            if d == "hoy":
+                if not hoy_sirve:
+                    malos.append("hoy")
+            elif d in ("manana", "pasado manana"):
+                # ¿qué día de la semana cae? Se deduce del nombre de hoy, sin tocar el reloj.
+                orden = ["lunes", "martes", "miercoles", "jueves", "viernes", "sabado", "domingo"]
+                if hoy_nombre in orden:
+                    salto = 2 if d == "pasado manana" else 1
+                    cae = orden[(orden.index(hoy_nombre) + salto) % 7]
+                    if cae not in buenas_dias:
+                        malos.append(f"{d} (cae {cae})")
+            elif d not in buenas_dias:
+                malos.append(d)
+        return malos
+    except Exception:  # noqa: BLE001 — una red del calendario JAMÁS tumba una venta
+        logger.exception("_dias_imposibles: fallo leyendo el calendario; se deja pasar")
+        return []
+
+
 # ─── RED DEL DINERO: el bot NO puede decir un monto que no salió del código ──────────
 #
 # En el ensayo del 2026-07-12 el bot le dijo a una clienta "Total: $35" cuando el pedido en la
@@ -1972,6 +2131,8 @@ async def responder(
     # lleva a la vez el monto y los datos bancarios, así que un solo resbalón del modelo apagaba
     # el cupo para el otro. Cada red tiene ahora el suyo; el tope de iteraciones sigue mandando.
     corregido_dinero = False
+    corregido_fecha = False
+    _calendario = None  # lo que devolvió `proxima_fecha_entrega` en este turno (si se llamó)
     corregido_datos = False
     corregido_prohibida = False
     pidio_ayuda = False  # ¿el bot llamó a pedir_ayuda en este turno?
@@ -2022,6 +2183,43 @@ async def responder(
                     "RECIBO OMITIDO por %s: el código insertó los resúmenes exactos", telefono
                 )
                 texto = texto_seguro
+
+            # 🗓️ RED DEL DÍA IMPOSIBLE — va ANTES de la del dinero porque prometer un día en que
+            # no se entrega es del mismo tamaño que inventar un monto: las dos son promesas que el
+            # negocio no puede cumplir, y el cliente se entera DESPUÉS.
+            #
+            # El calendario se consulta AQUÍ, en el código, y NO se espera a que el modelo llame a
+            # la herramienta: el 22-ago la llamó CERO veces teniendo la instrucción de que era
+            # obligatoria. La red no puede depender de la buena voluntad del modelo (L40/L63).
+            if _calendario is None:
+                try:
+                    _calendario = await ejecutar("proxima_fecha_entrega", {}, telefono)
+                except Exception:  # noqa: BLE001 — fail-open: sin calendario, esta red calla
+                    logger.exception("RED DEL DÍA: no se pudo leer el calendario; se deja pasar")
+                    _calendario = {}
+            imposibles = await _dias_imposibles(texto, _calendario)
+            if imposibles and not corregido_fecha:
+                corregido_fecha = True
+                _buenas = ", ".join(
+                    f["cuando"] for f in (_calendario or {}).get("proximas_fechas", [])[:3]
+                )
+                logger.error(
+                    "DÍA IMPOSIBLE prometido por el modelo a %s: %s — texto=%r",
+                    telefono, imposibles, texto[:160],
+                )
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        f"[SISTEMA] Nombraste {imposibles} y en ese/esos día(s) el negocio NO "
+                        f"entrega. Las ÚNICAS fechas que puedes ofrecer ahora mismo son: {_buenas}. "
+                        "Reescribe tu último mensaje con una de ESAS, copiada tal cual. "
+                        "🔴 Y NO le des a elegir el día como si fueran opciones: dile con "
+                        "naturalidad para cuándo se lo dejas ('te lo dejo para el lunes'), que es "
+                        "como lo hace Whuilianny. Si él pide otro día, entonces sí lo conversas. "
+                        "No le menciones al cliente este aviso."
+                    ),
+                })
+                continue
 
             # RED DEL DINERO: ningún monto puede salir de la cabeza del modelo. Y ahora, además,
             # ninguna moneda puede salir cambiada: un dólar no puede presentarse como bolívar.
@@ -2434,6 +2632,10 @@ async def responder(
                     ya_fallo=relevo_imposible,
                 )
                 relevo_imposible = relevo_imposible or not pidio_ayuda
+
+            # 🔁 RED DE LA FICHA REPETIDA — con el texto ya final: quita lo que el bot ya dijo
+            # antes en esta conversación (medido: la misma ficha CUATRO veces el 22-ago).
+            texto = _sin_ficha_repetida(texto, historial)
 
             pidio_catalogo = _pide_catalogo(pregunta_cliente)
             texto = await _asegurar_catalogo(

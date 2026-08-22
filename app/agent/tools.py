@@ -1730,7 +1730,14 @@ async def _validar_entrega(session, fecha: date, items_pedido) -> dict | None:
     elif fecha == hoy and await _paso_la_hora_de_corte(session):
         # HOY ya no se puede: pasó la hora de corte. El próximo día empieza mañana.
         corte = await _config_hora(session, "hora_corte", "18:00")
-        motivo = f"para HOY ya pasó la hora (solo se toman pedidos del mismo día hasta las {corte})"
+        # 🔴 "YA NO HAY ENTREGAS HOY", NUNCA "EL NEGOCIO CIERRA". Lo corrigió Maired el 22-ago:
+        # *"Ellos no cierran. Ya no se hacen entregas después de las 6 pm"*. El negocio es ONLINE
+        # y el bot sigue atendiendo y vendiendo a cualquier hora — lo que se acaba a las 6 son las
+        # ENTREGAS. Decir "cerramos" es echar al cliente de una tienda que sigue abierta.
+        motivo = (
+            f"hoy ya no salen entregas (van hasta las {corte}), pero seguimos tomando pedidos "
+            "para el próximo día disponible"
+        )
         desde = hoy + timedelta(days=1)
     elif _DIAS_SEMANA[fecha.weekday()] not in dias_ok:
         motivo = f"los {_DIAS_SEMANA[fecha.weekday()]} el negocio NO entrega"
