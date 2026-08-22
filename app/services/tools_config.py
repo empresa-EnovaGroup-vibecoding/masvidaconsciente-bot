@@ -104,6 +104,16 @@ TOOLS: dict[str, dict] = {
         "pierde": "—",
         "motivo_blindaje": "Sin esto, un pago reportado se pierde y nadie se entera.",
     },
+    "proxima_fecha_entrega": {
+        "etiqueta": "Saber para cuándo puede entregar",
+        "descripcion": "Consulta el calendario real (días cerrados, feriados y preparación) antes de prometer una fecha.",
+        "pierde": "—",
+        "motivo_blindaje": (
+            "Es el ancla del CALENDARIO, igual que el catálogo lo es de los precios. Apagarla no "
+            "le quita una capacidad al bot: le devuelve la de inventar fechas. El 2026-08-22 "
+            "ofreció 'mañana domingo' con el negocio cerrado y se inventó que ya eran las 6."
+        ),
+    },
     "pedir_ayuda": {
         "etiqueta": "Llamarte a ti",
         "descripcion": "Pausa el bot y te avisa por WhatsApp cuando no sabe algo.",
@@ -124,7 +134,7 @@ _REDES = frozenset({"pedir_ayuda", "enviar_catalogo"})
 # productos, en un sistema cuya regla nº1 es NO INVENTAR (y que ya tuvo un incidente por eso).
 # Apagarlas no le quitaría una capacidad al bot — le quitaría el ancla, y empezaría a inventar.
 # Si algún día se quieren abrir, es UNA línea… y hay que marcar sus 21 menciones del prompt.
-_NUCLEO = frozenset({"ver_catalogo", "info_producto"})
+_NUCLEO = frozenset({"ver_catalogo", "info_producto", "proxima_fecha_entrega"})
 
 BLINDADAS = _COBRO | _REDES | _NUCLEO
 DESACTIVABLES = frozenset(TOOLS) - BLINDADAS  # hoy: 5

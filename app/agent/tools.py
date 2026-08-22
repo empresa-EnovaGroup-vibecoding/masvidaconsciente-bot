@@ -191,6 +191,38 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "proxima_fecha_entrega",
+            # 🔴 ESTE TEXTO ES LO QUE EL MODELO LEE PARA DECIDIR LLAMARLA, así que nombra el caso
+            # exacto que falló: le ofreció a la clienta "mañana domingo" (cerrado) un sábado al
+            # mediodía, y después se inventó que ya habían pasado las 6 de la tarde.
+            "description": (
+                "🗓️ OBLIGATORIA antes de nombrar CUALQUIER día de entrega. Te dice qué día es hoy, "
+                "si hoy todavía se puede, y las próximas fechas REALES en que el negocio entrega "
+                "(ya con los días cerrados, los feriados y la anticipación de cada producto "
+                "descontados). Úsala apenas se hable de para cuándo lo quiere — antes de decir "
+                "'mañana', 'el lunes' o cualquier fecha. NUNCA cuentes los días tú: el negocio "
+                "no entrega todos los días y hay productos que necesitan preparación, así que "
+                "una fecha calculada de cabeza sale mal y el cliente se entera después."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "productos": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "Los productos que quiere, si ya se sabe (nombres exactos del "
+                            "catálogo). Afinan la fecha: el pedido va a la velocidad del más "
+                            "lento. Si todavía no eligió, no lo mandes."
+                        ),
+                    }
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "info_negocio",
             "description": "Da información del negocio: ubicación, método de pago y redes. Úsala para dudas de ubicación, cómo pagar, etc.",
             "parameters": {"type": "object", "properties": {}},
@@ -1715,6 +1747,71 @@ async def _validar_entrega(session, fecha: date, items_pedido) -> dict | None:
     return {
         "motivo": motivo,
         "primera_fecha_valida": await _primera_fecha_valida(session, desde, dias_ok, anticipacion),
+    }
+
+
+async def proxima_fecha_entrega(session, telefono, productos=None):
+    """🗓️ LA FECHA LA CALCULA EL CÓDIGO, NO EL MODELO — y esta tool existe por un caso medido.
+
+    El 2026-08-22, un sábado a las 12:44 del mediodía, el bot le ofreció a Maired entregar
+    **"mañana domingo"** (el negocio NO entrega domingos) y, al reclamárselo, se inventó la excusa
+    de que **"ya pasaron las 6 de la tarde"** — teniendo la hora correcta inyectada en su prompt.
+
+    La maquinaria para no equivocarse YA EXISTÍA entera (`_validar_entrega`), pero solo se dispara
+    **al REGISTRAR el pedido**. Mientras el bot CONVERSA sobre cuándo entregar —que es cuando el
+    cliente decide si compra— no había nada: el modelo sumaba días de cabeza. Por eso la
+    conversación se contradecía sola, con el invento chocando después contra la verdad del código.
+
+    Es exactamente la doctrina del dinero, aplicada al calendario: *las cifras se copian, no se
+    piensan*. Una fecha es una cifra. El modelo pregunta; el código responde.
+
+    `productos` es opcional y solo afina la anticipación (el pedido va a la velocidad de su
+    producto más lento). Sin él, responde el calendario del negocio, que ya sirve para el 90%
+    de los turnos.
+    """
+    hoy = hoy_venezuela()
+    dias_ok = await _dias_de_entrega(session)
+    items = [{"producto": n} for n in (productos or []) if n]
+    anticipacion = await _anticipacion_del_pedido(session, items) if items else 0
+    paso_corte = await _paso_la_hora_de_corte(session)
+    corte = await _config_hora(session, "hora_corte", "18:00")
+
+    # Desde cuándo se puede empezar a contar: si ya pasó la hora de corte, HOY está descartado.
+    desde = hoy + timedelta(days=1) if paso_corte else hoy
+    primera = await _primera_fecha_valida(session, desde, dias_ok, anticipacion)
+
+    feriados = dict((await session.execute(select(Feriado.fecha, Feriado.motivo))).all())
+    # Las siguientes fechas buenas, para que el bot pueda ofrecer alternativas sin calcular nada.
+    proximas, cursor = [], primera
+    for _ in range(45):
+        if len(proximas) >= 4:
+            break
+        if _DIAS_SEMANA[cursor.weekday()] in dias_ok and cursor not in feriados:
+            proximas.append({"fecha": cursor.isoformat(), "cuando": _fecha_larga(cursor)})
+        cursor += timedelta(days=1)
+
+    hoy_sirve = (
+        not paso_corte
+        and anticipacion == 0
+        and _DIAS_SEMANA[hoy.weekday()] in dias_ok
+        and hoy not in feriados
+    )
+    return {
+        "ok": True,
+        "hoy_es": _fecha_larga(hoy),
+        "hoy_se_puede_entregar": hoy_sirve,
+        "hora_de_corte": corte,
+        "ya_paso_la_hora_de_corte": paso_corte,
+        "dias_anticipacion_del_pedido": anticipacion,
+        "primera_fecha": {"fecha": primera.isoformat(), "cuando": _fecha_larga(primera)},
+        "proximas_fechas": proximas,
+        "dias_que_se_entrega": [d for d in _DIAS_BONITO if _sin_acentos(d) in dias_ok],
+        "nota": (
+            "Estas son LAS ÚNICAS fechas que puedes ofrecer. No sumes ni restes días por tu "
+            "cuenta, no supongas que mañana se entrega, y no inventes una hora: si el cliente "
+            "pide un día que no está en esta lista, dile con cariño cuál es el más cercano que "
+            "sí puedes y ofréceselo. La HORA exacta no la cierras tú: la coordina Whuilianny."
+        ),
     }
 
 
@@ -3517,6 +3614,7 @@ _DISPATCH = {
     "registrar_comprobante": registrar_comprobante,
     "enviar_catalogo": enviar_catalogo,
     "pedir_ayuda": pedir_ayuda,
+    "proxima_fecha_entrega": proxima_fecha_entrega,
 }
 
 
