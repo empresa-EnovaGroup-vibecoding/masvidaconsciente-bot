@@ -42,7 +42,14 @@ Deploy por la API de Coolify (§3.6), **worker primero y bot después**. Verific
 | Checksum `master` vs los DOS contenedores | 🟢 **5/5** (`agent.py` · `tools.py` · `system_prompt.py` · `tasks.py` · `cola_media.py`) |
 | Bancos, **uno por uno** | 🟢 **27/27 verdes** |
 | `/salud` | 🟢 `ok`, `fallos: []` |
-| Datos, antes vs después del rebuild | 🟢 **idénticos**: 32 productos / 37 variantes / 2 pedidos / 34 media / 10 conocimiento / 2 clientes / 35 migraciones |
+| Datos, antes vs después del rebuild | 🟢 **idénticos**: 32 productos / 37 variantes / 2 pedidos / 34 media / 10 conocimiento / 35 migraciones |
+
+⚠️ **Una precisión sobre la línea base, para no volver a asustarse:** `clientes` sí cambió, de 2 a
+3. No es una regresión — es **por diseño**: los bancos escriben en la base y crean el cliente de
+prueba `__simulador__` (que el endpoint de la lista ya excluye). Los otros dos "clientes" de la
+línea base también eran de prueba (`__simulador__smoke4`, `__simulador__smokeEmp`, del 08-08): en
+el taller hay **cero clientes reales**, como dice `ESTADO.md`. **`clientes` no sirve como métrica
+de línea base después de correr bancos; los demás contadores sí.**
 
 🔴 **Un fallo del INSTRUMENTO, y van…** El primer `curl` a la API de Coolify dio **400 Bad Request
 de nginx**, que parecía un problema de permisos o de puerto. No lo era: al capturar el id del
@@ -68,7 +75,16 @@ por el mismo push, uno de ellos sin puerta.
 migraron los 4 pasos a `env.DESTINO`: dejar uno en `inputs.destino` habría desplegado sin que los
 bancos lo verificaran, porque en un push ese input llega vacío.
 
-**Validado en vivo:** el push de `0426f3b` disparó el flujo solo (evento `push`).
+**Validado en vivo DOS veces, paso por paso** (no por el color del run):
+
+```
+0426f3b  push → verificar success → desplegar success
+         TALLER success · LOS BANCOS success · los 2 pasos de PRODUCCIÓN skipped ✅
+aef1042  push → success, y los contenedores quedaron corriendo aef1042
+```
+
+Los pasos de producción **`skipped`** son la prueba de que el candado funciona: el push no puede
+llegar a netcup ni por accidente.
 
 ### 🔴 Lo que sigue faltando
 

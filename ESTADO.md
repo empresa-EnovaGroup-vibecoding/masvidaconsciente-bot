@@ -28,7 +28,7 @@ y salud, memoria que no se olvida a las 24h, y 8 migraciones nuevas (hasta la 03
 |---|---|---|
 | **Servidor** | netcup `152.53.89.118` | Hostinger `2.25.139.106` |
 | **Quién le escribe** | las clientas reales | número de la agencia: **+57 313 293 3806** |
-| **Bot: versión** | `7e80b8a` (14-jul) — **muy atrasada** | ✅ **`c0a2f71`** (22-ago), desplegado **por Coolify desde GitHub** y con checksum 5/5 contra `master` en bot Y worker |
+| **Bot: versión** | `7e80b8a` (14-jul) — **muy atrasada** | ✅ **`aef1042`** (22-ago), al día con `master` y **desplegado solo por el push**; checksum 5/5 contra `master` en bot Y worker |
 | **Modelo IA activo** | (el de julio) | ✅ **`anthropic/claude-haiku-4.5`** (devuelto el 21-ago por decisión de Erwin; estuvo en `gpt-4o-mini` del 18 al 21-ago) |
 | **Modo del agente** | UN agente | los 3 bloqueadores del modo DOS ya están cerrados (06-ago) |
 | **Lista blanca** | ✅ activa | ✅ activa — 3 números (`NUMEROS_PERMITIDOS` + `numeros_permitidos_extra`) |
@@ -43,9 +43,9 @@ decisión deliberada hasta que esté listo para la entrega.
 **🟢 RESUELTO EL 2026-08-22 (tarde): el taller ya está al día con `master`.** Los 5 commits que
 estaban atascados en local (la CI arreglada · los dos huecos de la red del cierre · la RED DEL
 TAMAÑO ADIVINADO del carril del dinero · el tercer caso del espejeo y los dos huecos que
-destaparon las conversaciones reales) **se subieron y se desplegaron**: el taller corre
-`c0a2f71`, con checksum 5/5, **27/27 bancos verdes**, `/salud` en `ok` y cero regresión de datos.
-Desde el commit siguiente (`0426f3b`) el despliegue del taller **es automático en cada push**.
+destaparon las conversaciones reales) **se subieron y se desplegaron**: checksum 5/5, **27/27
+bancos verdes**, `/salud` en `ok` y cero regresión de datos reales. Y desde `0426f3b` el
+despliegue del taller **es automático en cada push** — el taller corre hoy **`aef1042`**.
 
 **🔴 Lo que se descubrió el 2026-08-22 (2) y conviene no olvidar:** la **CI llevaba 3 commits en
 ROJO** (`09f4253`, `13a064f`, `6c5d14c`) por 4 errores de `ruff`, y como `ruff` es el PRIMER paso
@@ -107,7 +107,7 @@ git log origin/master -5         # últimos cambios en GitHub
 
 | Fecha | Producción | Taller | Nota |
 |---|---|---|---|
-| 2026-08-22 (tarde) | `7e80b8a` (14-jul) | **`c0a2f71`** | 🟢 **Los 5 commits atascados: subidos y desplegados.** Push con el token de Erwin (`c0a2f71`, CI **verde**) → deploy por la API de Coolify (worker primero, bot después). **Checksum 5/5** en los DOS contenedores · **27/27 bancos verdes** corridos uno por uno · `/salud` `ok` con `fallos: []` · **cero regresión de datos** (32/37/2/34/10/2/35 idéntico antes y después). Y **el despliegue del taller pasó a ser AUTOMÁTICO en cada push** (`0426f3b`), con la CI como puerta y producción todavía solo a mano. |
+| 2026-08-22 (tarde) | `7e80b8a` (14-jul) | **`aef1042`** | 🟢 **Los 5 commits atascados: subidos y desplegados.** Push con el token de Erwin (`c0a2f71`, CI **verde**) → deploy por la API de Coolify (worker primero, bot después). **Checksum 5/5** en los DOS contenedores · **27/27 bancos verdes** corridos uno por uno · `/salud` `ok` con `fallos: []` · **cero regresión de datos reales** (32 productos / 37 variantes / 2 pedidos / 34 media / 10 conocimiento / 35 migraciones, idéntico antes y después). ⚠️ `clientes` pasó de 2 a 3, y **es por diseño**: los bancos crean el cliente de prueba `__simulador__` (excluido de la lista del panel) — no es una regresión, pero **por eso `clientes` no sirve como métrica de línea base después de correr bancos.** Y **el despliegue del taller pasó a ser AUTOMÁTICO en cada push** (`0426f3b`), con la CI como puerta y producción todavía solo a mano; validado dos veces seguidas (`0426f3b` y `aef1042`). |
 | 2026-08-18 | `7e80b8a` (14-jul) | desconectado de GitHub | Descubierto: Coolify en rama `DESCONECTADO`, código de agosto solo en el servidor. |
 | 2026-08-21 | `7e80b8a` (14-jul) | código de agosto (en GitHub) | Rescatados 32+6 commits a `master`. Deploy ahora es manual. Falta reconectar y promover a producción. |
 | 2026-08-22 (2 y 3) | `7e80b8a` (14-jul) | `13a064f` (**master va 5 commits por delante, SIN desplegar**) | 🔴 **La CI llevaba 3 commits en ROJO y los 453 tests no corrían** (4 errores de `ruff`; `pytest` quedaba *skipped*) — arreglado. Cerrados los 2 huecos de la red del cierre (la HORA + la lista y la pregunta en frases distintas), el 3er sitio que empujaba a pedir el sabor (el schema de `opciones`), **la RED DEL TAMAÑO ADIVINADO** (P0.5, carril del dinero), y —cruzando los dos documentos de Whuilianny con el código— el **tercer caso del espejeo (cliente MOLESTO)**, las peticiones **sin signo de pregunta** y `asesorar`. **515 tests** (eran 453) · **18 reversiones → 18 rojas** · cero cambios en la BD. |
