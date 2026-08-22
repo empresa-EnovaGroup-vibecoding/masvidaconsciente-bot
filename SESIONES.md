@@ -24,6 +24,106 @@
 
 ---
 
+## 2026-08-22 (3) — 🗣️ LOS DOS DOCUMENTOS DE WHUILIANNY, LÍNEA POR LÍNEA, CONTRA EL CÓDIGO
+
+**Lo que se buscaba (lo pidió Erwin de madrugada):** leer los dos `.docx` completos, compararlos
+con lo que de verdad corre, y **probar** que está alineado — con foco en lo que reportó Maired:
+*"Una persona real responde breve. Y saluda primero antes de enviar imágenes."*
+
+### 1 · La matriz: 15 conductas documentadas, 14 ya estaban
+
+Se leyeron los dos documentos enteros (61 notas de voz + 42 conversaciones) y se cruzaron con las
+TRES capas: `_REGLAS`, la **personalidad VIVA de la BD** (9.835 caracteres, leída del servidor
+antes de escribir nada — `CLAUDE.md` §8) y el código.
+
+| ✅ Ya estaba | Dónde |
+|---|---|
+| Reencuadre "comida para salud" · educar sin rebajar · jamás improvisar un descuento | `_REGLAS` |
+| Asumir la venta · upsell con válvula · honestidad · nada de plantillas | `_REGLAS` |
+| Espejeo cariñoso ↔ neutro · "LO VOY A PENSAR: no insistas" · bajo pedido | personalidad (BD) |
+| Precio/total/banco solo de la herramienta · datos de pago ETIQUETADOS y con su método | código |
+| **Brevedad** (con umbral: "si pasa de 3 líneas, sobra algo") | `_REGLAS` + BD |
+| **Saludo antes de la media** | cola de media + `_REGLAS` |
+
+**Lo de Maired ya estaba cerrado, y se comprobó revirtiéndolo:** al vaciar la cola ANTES del texto
+(o sea, el bug original) **3 tests se ponen rojos** con el fallo exacto que ella describió —
+`IMAGEN, IMAGEN, IMAGEN, TEXTO`. No es que esté "en verde": es que está fijado.
+
+### 2 · 🔴 Lo que FALTABA: el tercer caso del espejeo
+
+El documento pide tres situaciones, con nombre y apellido: cliente **cariñoso**, **neutro** y
+**molesto**. La BD cubre los dos primeros. El tercero no estaba en ninguna parte — y la regla de
+al lado dice *"ESPEJEA al cliente: adapta tu largo y tu ENERGÍA a los suyos"*, que leída con un
+cliente enojado delante es **espejearle el enojo**.
+
+Va a `_REGLAS` y **no** a la personalidad (la voz es de Whuilianny, §8). Y va **solo el caso que
+falta**: los otros dos NO se duplican. Eso es L37 aplicada — el problema del prompt ES la
+duplicación, y además cuánto cariño se devuelve es decisión de ella, no del código.
+
+### 3 · 🔴 Dos huecos que destaparon las frases REALES del anexo
+
+Se usaron los mensajes literales de las 42 conversaciones como banco de pruebas. Salieron dos:
+
+1. **Pedir un dato NO siempre lleva signo de pregunta.** CLI-051, de la propia Whuilianny:
+   *"Me vas a decir, por favor, qué sabores quieres… ahí salen los toppings."* La red del cierre
+   solo miraba PREGUNTAS: un bot que escribiera así ("Necesito el sabor para seguir.", "Dime el
+   relleno.") pedía el dato turno tras turno **sin que la red contara ni uno**.
+   ⚠️ Se exigen **las dos cosas** —marca de petición Y el dato—, porque con solo el dato,
+   *describir* los sabores contaría como pedirlos y se rompe el caso que la red tiene prohibido
+   tocar.
+2. **"ASESORAR" no estaba** en la lista cerrada de `_PIDE_ASESORIA` (que sí tenía recomiendas /
+   sugieres / aconsejas). Es la **primera línea de CLI-034**: *"quería saber si me puedes asesorar
+   con una duda"*. Solo se añadieron las formas VERBALES: el bot se llama *"Alejandra, la
+   ASESORA"* en la BD, así que un "¿eres la asesora?" no puede disparar una red de venta.
+
+### 4 · El banco nuevo: `tests/test_voz_whuilianny.py` (35 casos)
+
+El documento lo pide con estas palabras: *"PROBARLO, no confiar y ya… No adivinamos: comprobamos."*
+Y también dice dónde está el límite: *"el tono nunca va a estar garantizado al 100% como el
+dinero"*. Así que **este banco no mide "¿estuvo cálida?"** —ninguna máquina puede— sino lo que sí
+es determinista y lo que de verdad se rompe solo:
+
+- la **matriz de las 11 conductas**, una fila por cada una (si alguien borra una editando de al
+  lado, se pone rojo — que es exactamente lo que pasó dos veces el 08-22);
+- que **sobrevivan con las 5 herramientas apagables APAGADAS** (no pueden colgar de un `{{tool|…}}`);
+- **los frenos**: el reencuadre no cruza la raya médica · el upsell va UNA vez y con salida · la
+  brevedad tiene umbral · "antiinflamatoria" sigue UNA vez y condicionada;
+- el reparto **"la voz vende, el texto cobra"**: las reglas del DINERO son del Operador y **no**
+  llegan a la Voz;
+- y **lo que NO se duplica** de la BD.
+
+### Verificación
+
+- **515 tests** (453 al empezar la noche). Ficheros nuevos: `test_red_del_tamano.py` (18) y
+  `test_voz_whuilianny.py` (35), más casos en los de cierre y asesoría.
+- **18 reversiones → 18 rojas.** Y **cinco fallos del INSTRUMENTO** cazados por el camino (L35):
+  1. una reversión verde por **sobredeterminación** (el caso protegido lo salvaba OTRA red);
+  2. cuatro reversiones que dijeron *"no tests ran"* — **zsh no parte `$3` en palabras** y pytest
+     recibía los node-ids pegados. Un "no tests ran" NO es un verde;
+  3. un caso que pasaba **por el orden de una lista**, no por el código;
+  4. **el schema de `opciones` no lo probaba nadie** (la reversión salió verde) — ahora sí;
+  5. un `es_pregunta` que **no protegía nada** y encima dejaba un hueco (ver abajo).
+- `ruff` limpio · `compileall` OK · **`probar_prompt_coherente` corrido en local y en verde**
+  (es el banco que codifica las decisiones de diseño del prompt) · las 4 afirmaciones de prompt
+  de `probar_dos_agentes` comprobadas a mano (ese banco exige Postgres).
+- **Cero cambios en la BD.** Todo esto es código.
+- Tamaño del prompt: modo uno **26.670** car / 43 reglas · modo voz **13.122** / 25. La regla nueva
+  se recortó un 22% después de escribirla: el propio documento dice que el prompt sobra de largo.
+
+### 🔴 Lo que sigue faltando
+
+- **Nada de esto está medido contra el bot real:** vive en `agent.py`, `tools.py` y
+  `system_prompt.py`. Hace falta **push + deploy**, y el push necesita el token de Erwin
+  (`./subir_a_enova.sh <TOKEN>`). Los 4 commits están en `master` LOCAL.
+- **El arreglo de fondo del P0** (inyectar el ESTADO DEL PEDIDO EN CURSO cada turno) sigue
+  pendiente y sigue mereciendo su sesión: cambia el prompt de TODOS los turnos, así que no se
+  despliega sin medirlo contra el bot real.
+- **P4 sigue siendo de Whuilianny:** la personalidad de la BD dice *"# FOTOS — solo cuando el
+  cliente pida ver el producto"* y `_REGLAS` dice *"ÚSALA PROACTIVA"*. Hoy la contradicción está
+  resuelta **por escrito** (y hay un test que lo fija), pero el texto es suyo.
+
+---
+
 ## 2026-08-22 (2) — 🔴 LA CI LLEVABA 3 COMMITS EN ROJO Y LOS 453 TESTS NO CORRÍAN + el tamaño que el bot elegía solo
 
 **Lo que se buscaba:** arrancar los pendientes en orden (`prompt_proxima_sesion.md` §5) — el P0 (los

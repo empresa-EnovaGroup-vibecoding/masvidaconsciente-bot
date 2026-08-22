@@ -41,9 +41,11 @@ en GitHub pero **aún no promovido a producción**. El bot NO atiende clientas r
 decisión deliberada hasta que esté listo para la entrega.
 
 **🟡 Y el TALLER también va por detrás de `master` desde el 2026-08-22 (2):** el taller corre
-`13a064f`; encima hay 3 commits **sin desplegar** (la CI arreglada, los dos huecos de la red del
-cierre, y la RED DEL TAMAÑO ADIVINADO del carril del dinero). **Nada de eso está vivo todavía** —
-hace falta un deploy a mano (§ "cómo se despliega hoy" y `SESIONES.md` 2026-08-22).
+`13a064f`; encima hay **5 commits sin desplegar** (la CI arreglada · los dos huecos de la red del
+cierre · la RED DEL TAMAÑO ADIVINADO del carril del dinero · el tercer caso del espejeo y los dos
+huecos que destaparon las conversaciones reales). **Nada de eso está vivo todavía** — hace falta
+`./subir_a_enova.sh <TOKEN>` (el push necesita el token de Erwin) y después un deploy a mano
+(§ "cómo se despliega hoy" y `SESIONES.md` 2026-08-22).
 
 **🔴 Lo que se descubrió el 2026-08-22 (2) y conviene no olvidar:** la **CI llevaba 3 commits en
 ROJO** (`09f4253`, `13a064f`, `6c5d14c`) por 4 errores de `ruff`, y como `ruff` es el PRIMER paso
@@ -98,7 +100,7 @@ git log origin/master -5         # últimos cambios en GitHub
 |---|---|---|---|
 | 2026-08-18 | `7e80b8a` (14-jul) | desconectado de GitHub | Descubierto: Coolify en rama `DESCONECTADO`, código de agosto solo en el servidor. |
 | 2026-08-21 | `7e80b8a` (14-jul) | código de agosto (en GitHub) | Rescatados 32+6 commits a `master`. Deploy ahora es manual. Falta reconectar y promover a producción. |
-| 2026-08-22 (2) | `7e80b8a` (14-jul) | `13a064f` (**master va 3 commits por delante, sin desplegar**) | 🔴 **La CI llevaba 3 commits en ROJO y los 453 tests no corrían** (4 errores de `ruff`; `pytest` quedaba *skipped*) — arreglado. Cerrados los 2 huecos de la red del cierre (la HORA + la lista y la pregunta en frases distintas), el 3er sitio que empujaba a pedir el sabor (el schema de `opciones`) y **la RED DEL TAMAÑO ADIVINADO** (P0.5, carril del dinero). **470 tests** · 9 reversiones → 9 rojas · cero cambios en la BD. |
+| 2026-08-22 (2 y 3) | `7e80b8a` (14-jul) | `13a064f` (**master va 5 commits por delante, SIN desplegar**) | 🔴 **La CI llevaba 3 commits en ROJO y los 453 tests no corrían** (4 errores de `ruff`; `pytest` quedaba *skipped*) — arreglado. Cerrados los 2 huecos de la red del cierre (la HORA + la lista y la pregunta en frases distintas), el 3er sitio que empujaba a pedir el sabor (el schema de `opciones`), **la RED DEL TAMAÑO ADIVINADO** (P0.5, carril del dinero), y —cruzando los dos documentos de Whuilianny con el código— el **tercer caso del espejeo (cliente MOLESTO)**, las peticiones **sin signo de pregunta** y `asesorar`. **515 tests** (eran 453) · **18 reversiones → 18 rojas** · cero cambios en la BD. |
 | 2026-08-22 | `7e80b8a` (14-jul) | **`13a064f`** | 🟢 **Coolify RECONECTADO** (rama `master`, auto-deploy OFF) y primer despliegue por Coolify desde julio. Cola de media (el texto sale antes que la foto) + red del cierre. **27/27 bancos verdes** corridos uno por uno · 453 tests · `/salud` 8/8 · checksum 5/5 · **cero regresión de datos** (32/37/2/34/10/2/35 idéntico antes y después). |
 | 2026-08-21 (2) | `7e80b8a` (14-jul) | **`4a482c5`** | 9 bugs cerrados y desplegados ese día (memoria de 24h + su puerta de atrás, índice duplicado, 2 bancos del calendario, la banda ciega del 1%, args del LLM sin filtrar, saludo al volver, y 3 cegueras de las fotos). Modelo devuelto a **Haiku 4.5**. Nº de Maired añadido a la lista blanca. 421 tests · `/salud` 8/8. |
 
