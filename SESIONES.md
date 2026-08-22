@@ -131,6 +131,26 @@ razón** (PRM-17: no es campo de ninguna ficha, así que ninguna red la caza y c
 modelo a afirmarla). Reformulada sin usarla. → **L36 otra vez, y funcionó: el banco defendió su
 decisión de diseño antes de que yo la rompiera.**
 
+### 🔴 UN PASO EN FALSO PROPIO: la voz se cambió antes que el código
+
+Los cambios de personalidad se aplicaron a la BD **mientras el push seguía bloqueado por el 403**.
+Dos de los tres son inofensivos (asesora · no devolver el cariño: no dependen del código), pero el
+tercero **prometía "el delivery corre por nuestra cuenta" con la fórmula VIEJA todavía desplegada**
+— o sea, el bot habría dicho "delivery gratis" y copiado un monto que incluye el flete. Es
+exactamente el bug de julio que ya hizo reclamar a una clienta ("prometía un descuento en Pago
+Móvil que NO existe"), reintroducido por la puerta de atrás.
+
+**Detectado al verificar qué corre de verdad en el worker, y revertido en el momento**: el bloque
+del pago volvió a su texto viejo, los otros dos cambios se quedaron. El SQL para reaplicarlo está
+en el VPS —`/root/pago_tras_el_deploy.sql`— con la comprobación previa escrita dentro
+(`grep -c monto_en_efectivo` sobre el contenedor: debe dar > 0).
+
+→ **La lección: un cambio de DATOS (la BD) y su cambio de CÓDIGO son un solo cambio, y el orden
+importa.** La BD se aplica al instante; el código espera al deploy. Si la voz promete algo que la
+herramienta aún no calcula, la ventana entre uno y otro es una promesa incumplida — y con el
+despliegue bloqueado, esa ventana puede durar días. **Lo que toca el dinero se aplica DESPUÉS del
+deploy, nunca antes.**
+
 ### 🔴 Lo que la plantilla pide y NO se hizo todavía
 
 - **La herramienta de "próxima fecha disponible"** — es el arreglo de fondo del domingo inventado.
