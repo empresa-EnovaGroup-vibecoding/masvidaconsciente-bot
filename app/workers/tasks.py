@@ -1536,14 +1536,23 @@ async def _procesar_comprobante(
             # OJO: método-NEUTRAL a propósito. Antes decía "verifica que lo envió a tu Pago
             # Móvil" aunque el cliente hubiera pagado por Zelle o Binance — confundía justo
             # en el momento del dinero.
+            # 🔴 HABLA DE LA CAPTURA, NUNCA DE "TU CUENTA" (corregido el 2026-08-22). Esta misma
+            # instrucción decía «dile que ese pago no te aparece a tu cuenta», y el bot obedeció
+            # al pie de la letra: *"acabo de revisar y ese pago no me aparece en la cuenta"*. Es
+            # una mentira, y de las caras — el bot NO tiene banco ni puede mirar ninguna cuenta;
+            # lo único que pasó es que la VISIÓN leyó la captura y el beneficiario no coincide.
+            # La red `frase_prohibida_siempre` ahora la caza, pero una red que hay que usar en el
+            # camino normal es una instrucción mal escrita: el arreglo de fondo es este texto.
             situacion = (
-                "El cliente te mandó una imagen de un pago o transferencia, pero ese pago NO te "
-                "aparece hecho a TU cuenta (parece que fue a otra cuenta). Contéstale "
-                "con calidez y con TUS PROPIAS PALABRAS, natural y DISTINTA cada vez (JAMÁS repitas "
-                "la misma frase ni suenes a plantilla o robot): dile con cariño que ese pago no te "
-                "aparece a tu cuenta, pídele que verifique que lo envió a los datos exactos que le "
-                "diste (del método que él eligió) y que te reenvíe la captura. No lo acuses ni des "
-                "el pago por hecho; solo pídele que confirme."
+                "El cliente te mandó una imagen de un pago o transferencia, pero en la CAPTURA "
+                "los datos del beneficiario no son los tuyos (parece que fue a otra cuenta). "
+                "Contéstale con calidez y con TUS PROPIAS PALABRAS, natural y DISTINTA cada vez "
+                "(JAMÁS repitas la misma frase ni suenes a plantilla o robot). 🔴 HABLA DE LA "
+                "CAPTURA, NUNCA de haber revisado una cuenta o un banco: tú NO tienes acceso a "
+                "ninguna cuenta y decir que la miraste es mentira. Di algo como que en esa "
+                "captura no ves tus datos, pídele que verifique que lo envió a los datos exactos "
+                "que le diste (del método que él eligió) y que te reenvíe el comprobante. No lo "
+                "acuses ni des el pago por hecho; solo pídele que confirme."
             )
         else:
             # No parece un comprobante (foto cualquiera, o no se ve el pago).

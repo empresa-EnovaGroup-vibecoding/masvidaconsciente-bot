@@ -3403,10 +3403,16 @@ async def enviar_fotos_producto(
     enviadas = 0
     sin_url = 0
     diferidas = 0  # cuántas quedaron EN LA COLA para salir después del texto
-    # PIE DE FOTO (caption): el NOMBRE del producto + una línea de su descripción, SIN precio (el
-    # precio vive en el tamaño y lo dice el cobro, no la foto). La PRIMERA foto lo lleva completo;
-    # las demás, solo el nombre, para no repetir la ficha bajo cada imagen del mismo producto.
-    _desc = " ".join((prod.descripcion or "").split())
+    # PIE DE FOTO (caption): SOLO el nombre del producto (y su etiqueta, si la tiene). Sin precio
+    # —el precio vive en el tamaño y lo dice el cobro— y desde el 2026-08-22, TAMPOCO la ficha.
+    #
+    # 🔴 Lo pidió Maired mirando un turno real: «le manda toda la información de lo que tiene
+    # guardado en el catálogo. No debería… solamente decirle: "Estas son las galletas Nueva York"».
+    # Tenía toda la razón y era peor de lo que parece: el pie llevaba los primeros 140 caracteres
+    # de `descripcion`, y en las Galletas New York eso es la LISTA DE INGREDIENTES entera
+    # ("harina de almendra y coco, azúcar de coco o alulosa, vainilla natural, manteca de cerdo…").
+    # Una foto con la ficha pegada debajo no es una vendedora enseñando su producto: es un folleto.
+    # Si el cliente quiere saber de qué está hecho, pregunta — y para eso está `info_producto`.
     # Tope de 3 (antes 8): ocho archivos de golpe es una descarga de spam y le baja la calidad
     # al número. LOS VIDEOS CUENTAN dentro del tope.
     if len(medios) > 3:
@@ -3429,8 +3435,7 @@ async def enviar_fotos_producto(
         # distingue cuando son dos del mismo producto al mismo precio). No es texto del modelo:
         # lo escribe el código copiando lo que puso la dueña. Sigue SIN precio.
         _et = (m.etiqueta or "").strip()
-        _base = f"{prod.nombre} — {_et}" if _et else prod.nombre
-        cap = _base if enviadas else (f"{_base}\n{_desc[:140]}" if _desc else _base)
+        cap = f"{prod.nombre} — {_et}" if _et else prod.nombre
         envio = _envio_de_un_archivo(
             telefono=telefono, producto=prod.nombre, url=url, cap=cap,
             es_video=es_video, etiqueta=_et,

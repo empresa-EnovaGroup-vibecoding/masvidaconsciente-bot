@@ -1280,6 +1280,17 @@ _PROHIBIDO_SIEMPRE = [
     # Afirmar que miró el banco (el bot NO tiene banco: eso solo lo sabe la dueña, en el suyo).
     (re.compile(r"(revis|verifi|chequ|mir)\w*\s+(en\s+)?(mi|el|tu)\s+(banco|cuenta)", re.I),
      "dijo que revisó el banco"),
+    # 🔴 LA MISMA MENTIRA EN PRETÉRITO, y se escapó por ahí (medido el 2026-08-22, mensaje 5601
+    # del taller): **"Enova, acabo de revisar y ese pago no me aparece en la cuenta"**. El patrón
+    # de arriba no la vio porque exige que el "banco/cuenta" venga PEGADO al verbo, y aquí hay
+    # media frase en medio ("…revisar Y ESE PAGO no me aparece en la cuenta").
+    #
+    # Lo que separa la mentira de la verdad aquí es el TIEMPO VERBAL, no el sustantivo:
+    #   · "acabo de revisar" / "ya revisé"  → afirma haber MIRADO una cuenta que no tiene. MENTIRA.
+    #   · "lo estoy revisando" / "déjame revisarlo" → es exactamente lo que debe decir. VERDAD.
+    # Por eso el patrón pide el pretérito con su marca delante y NO toca el gerundio.
+    (re.compile(r"\b(acabo de|ya|reci[eé]n)\s+(lo\s+|la\s+|los\s+)?(revis|verifi|chequ|mir)\w*", re.I),
+     "afirmó que YA revisó (el bot no revisa nada: la dueña lo hace en su banco)"),
     (re.compile(r"(mi|el)\s+banco\s+(ya\s+)?(me\s+)?(confirm|avis|lleg)", re.I),
      "dijo que el banco confirmó"),
     # Jurar que es humana cuando le preguntan de frente.
