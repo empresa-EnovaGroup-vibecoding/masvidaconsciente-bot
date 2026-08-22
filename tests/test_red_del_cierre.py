@@ -121,6 +121,13 @@ def test_la_lista_y_la_pregunta_en_FRASES_DISTINTAS_si_cuentan():
     )
     assert _pide_opcion_del_paquete(texto) is True
 
+    # 🔴 Y SIN EL SIGNO DE PREGUNTA TAMBIÉN. La personalidad manda escribir suelto ("como una
+    # persona chateando"), y `_aplanar` ya le quita los "¿": exigir el "?" dejaba el mismo hueco
+    # que las peticiones sin signo. Una frase que empieza por "cuál" ya es una pregunta.
+    assert _pide_opcion_del_paquete(
+        "Tenemos: limón, zanahoria, naranja y piña.\nCuál te provoca."
+    ) is True
+
 
 def test_una_lista_de_TAMANOS_no_dispara_JAMAS():
     """🔴🔴 LA GUARDA MÁS PELIGROSA DE TODO EL ARCHIVO — es el carril del DINERO.

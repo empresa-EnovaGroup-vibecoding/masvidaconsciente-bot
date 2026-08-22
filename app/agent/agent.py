@@ -1052,10 +1052,12 @@ def _dato_opcional_pedido(texto: str) -> str | None:
                     (nombre for patron, nombre in _COMO_SE_LLAMA if patron.search(trozo)),
                     "ese dato",
                 )
-        # La ELECCIÓN PELADA sí exige pregunta: sin "?" no hay nada que resolver contra la lista.
+        # La ELECCIÓN PELADA ("cuál te provoca") toma su objeto de la lista anterior, y cuenta
+        # AUNQUE le falte el "?": una frase que empieza por "cuál" ya es una pregunta, y la
+        # personalidad manda escribir suelto ("escribe como una persona chateando"). Exigir el
+        # signo dejaba el mismo hueco que acaba de aparecer con las peticiones sin signo.
         if (
-            es_pregunta
-            and _ELECCION_PELADA.match(limpia.lstrip("¿"))
+            _ELECCION_PELADA.match(limpia.lstrip("¿"))
             and _es_lista_pelada(anterior)
             and not _TAMANO_EN_LISTA.search(anterior)
         ):
