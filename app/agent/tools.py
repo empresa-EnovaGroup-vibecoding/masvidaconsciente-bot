@@ -396,6 +396,25 @@ def schemas_para(activas) -> list[dict]:
 
 # ─── Implementaciones ────────────────────────────────────────────────
 
+def monto_en_efectivo(total, envio) -> Decimal:
+    """Lo que se cobra pagando en EFECTIVO en dólares: 20% de descuento sobre los PRODUCTOS y el
+    delivery por cuenta de la casa (plantilla de negocio de Maired, 2026-08-22).
+
+    🔴 UNA SOLA FUENTE, Y ESA ES LA RAZÓN DE QUE EXISTA. Esta cuenta vivía DUPLICADA en dos
+    sitios que tienen que dar EXACTAMENTE lo mismo: `generar_datos_pago` (lo que se le cobra al
+    cliente) y `registrar_comprobante` (el monto contra el que se compara su captura). Lo único
+    que las mantenía sincronizadas era un comentario pidiéndolo — y un comentario no es un
+    candado. Si se separan, el comprobante no calza y **cada venta en efectivo sale marcada como
+    "no cuadra"**, que es el carril del dinero fallando en silencio.
+
+    ⚠️ El delivery NO se suma. Hasta el 2026-08-22 sí se sumaba, con este motivo escrito: "si no,
+    la dueña paga el flete de su bolsillo". Lo paga a propósito — es la palanca para cobrar en
+    efectivo. Cuesta $3 en la zona centro y $5 en la oeste.
+    """
+    productos = Decimal(str(total)) - Decimal(str(envio or 0))
+    return (productos * Decimal("0.80")).quantize(Decimal("0.01"))
+
+
 def _fmt_usd(x) -> str:
     """Monto USD listo para mostrar: '$16' si es entero, '$16.50' si no.
     None -> 'a consultar'. El cobro NUNCA lo calcula el modelo: estos strings
@@ -2347,16 +2366,32 @@ async def generar_datos_pago(session, telefono, pedido_id=None):
 
     monto_usd = Decimal(str(pedido.total))
     monto_bs = (monto_usd * tasa).quantize(Decimal("0.01"))
-    # 20% de descuento por pagar en DIVISAS (Zelle, Binance o efectivo en dólares).
+    # 20% de descuento sobre los PRODUCTOS + DELIVERY GRATIS, por pagar en EFECTIVO en dólares.
     # En Bs (Pago Móvil/transferencia) NO aplica: va el precio completo.
     #
-    # 🔴 EL DESCUENTO NO TOCA EL FLETE (fuga encontrada al ATACAR el diseño, antes de construirlo):
-    # si se aplicara al total, ($20 + $3) × 0,80 = $18,40 ⇒ la dueña estaría **pagando el delivery
-    # de su bolsillo** en CADA venta cobrada en dólares ($0,60 en la zona de $3, $1 en la de $5).
-    # El descuento es sobre lo que ella produce, no sobre lo que le cuesta el motorizado.
+    # 🔴 CAMBIO DE REGLA DE NEGOCIO — plantilla de negocio de Maired, 2026-08-22. Lo que decía
+    # aquí hasta hoy, y por qué se invierte:
+    #
+    #   «EL DESCUENTO NO TOCA EL FLETE: si se aplicara al total, ($20+$3)×0,80 = $18,40 ⇒ la dueña
+    #    estaría pagando el delivery de su bolsillo en CADA venta cobrada en dólares.»
+    #
+    # El documento decide EXACTAMENTE eso, a propósito y repetido en sus TRES apartados de pago:
+    # «20 % de descuento sobre los productos y delivery gratis en cualquier zona atendida». O sea
+    # que sí, la casa asume el flete — pero como PALANCA para cobrar en efectivo (sin comisión,
+    # sin reverso, y el billete en mano al entregar), no por descuido. El costo queda escrito con
+    # su número para que nadie lo descubra por sorpresa: **$3 en la zona centro, $5 en la oeste.**
+    #
+    # 🔴 Y el descuento deja de ser "en divisas" para ser SOLO EFECTIVO FÍSICO. El documento dice
+    # "dólares físicos" en los tres sitios y NUNCA le da el 20% a Zelle ni a Binance, que sí
+    # cobran comisión. Los dos siguen ACTIVOS como método de pago (su cláusula de recorte era
+    # condicional —"mientras el flujo multimétodo no esté activo"— y hoy sí lo está), pero cobran
+    # el precio COMPLETO, igual que el Pago Móvil.
+    #
+    # ⚠️ El nombre `monto_usd_divisas` (y su columna `cotizado_usd_divisas`) se CONSERVA a
+    # propósito: renombrarlo obligaría a una migración y a tocar `_montos_cobrados`, que compara
+    # el comprobante contra esa cotización. Cambia lo que vale, no cómo se llama.
     envio = Decimal(str(pedido.costo_envio or 0))
-    productos = monto_usd - envio
-    monto_usd_divisas = (productos * Decimal("0.80")).quantize(Decimal("0.01")) + envio
+    monto_usd_divisas = monto_en_efectivo(monto_usd, envio)
 
     pedido.estado = "esperando_pago"
     await session.commit()
@@ -2430,10 +2465,17 @@ async def generar_datos_pago(session, telefono, pedido_id=None):
     # también a los bolívares. En el ensayo del 2026-07-12 le pasó a 7 de 12 clientes: el bot
     # prometía un descuento en Pago Móvil que NO existe (los Bs son el precio COMPLETO), y una
     # clienta lo reclamó. El descuento del 20% es SOLO en divisas. Ahora la frase lo separa.
+    #
+    # 🔴 Y DESDE EL 2026-08-22 dice EFECTIVO, no "dólares": el 20% dejó de aplicar a Zelle y a
+    # Binance (ver el bloque del cálculo, arriba). Nombrar mal el método aquí es prometerle un
+    # descuento a quien no lo tiene — el mismo error que ya se cometió con los bolívares.
+    # El "delivery por nuestra cuenta" solo se nombra si de verdad hay flete que perdonar: en un
+    # retiro no hay envío, y presumir de regalar algo que no existe suena a vendedor de feria.
+    _flete_gratis = " y el delivery corre por nuestra cuenta" if envio > 0 else ""
     resumen_cobro = (
         f"Por Pago Móvil o transferencia son {_fmt_bs(monto_bs)} Bs (precio completo). "
-        f"Si pagas en dólares —Zelle, Binance o efectivo— son {_fmt_usd(monto_usd_divisas)}, "
-        f"con el 20% de descuento"
+        f"Si pagas en efectivo en dólares son {_fmt_usd(monto_usd_divisas)}, "
+        f"con el 20% de descuento{_flete_gratis}"
     )
 
     return {
@@ -2879,14 +2921,11 @@ async def registrar_comprobante(
     if monto_leido is not None and monto_usd is not None:
         try:
             leido = Decimal(str(monto_leido))
-            # ⚠️ EL MISMO DESCUENTO QUE EN `generar_datos_pago`, Y POR EL MISMO MOTIVO: el 20% NO
-            # toca el flete. Si aquí se calculara sobre el total y allá sobre los productos, el
-            # comprobante del cliente NO CALZARÍA con lo cobrado y el pago quedaría marcado como
-            # "no cuadra" en cada venta con delivery pagada en dólares.
+            # ⚠️ LA MISMA FUNCIÓN que usa `generar_datos_pago` para cobrar — no una copia de su
+            # fórmula. Antes eran dos cuentas escritas a mano que se pedían por comentario no
+            # desincronizarse; ahora es imposible que difieran (ver `monto_en_efectivo`).
             _envio = Decimal(str(getattr(pedido, "costo_envio", 0) or 0))
-            en_divisas = (
-                ((monto_usd - _envio) * Decimal("0.80")).quantize(Decimal("0.01")) + _envio
-            )
+            en_divisas = monto_en_efectivo(monto_usd, _envio)
             # Tolerancia del 2% (redondeos). Se compara contra el monto en DÓLARES: si el
             # comprobante viene en Bs, el número es mil veces mayor y no calza con ninguno.
             def _calza(a: Decimal, b: Decimal) -> bool:

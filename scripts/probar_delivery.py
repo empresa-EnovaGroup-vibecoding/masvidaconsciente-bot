@@ -156,15 +156,25 @@ async def main() -> None:
         cerca.costo = Decimal("3")
         await s.commit()
 
-        print("\n4) 💵 EL 20% DE DIVISAS **NO** TOCA EL FLETE")
+        print("\n4) 💵 EFECTIVO EN DÓLARES: 20% A LOS PRODUCTOS **Y DELIVERY GRATIS**")
+        # 🔴 ESTE BANCO AFIRMABA LO CONTRARIO HASTA EL 2026-08-22, y con este motivo escrito:
+        # "si diera X, la dueña PAGA el flete". La plantilla de negocio de Maired decide que sí lo
+        # pague — es una palanca para cobrar en efectivo, y aparece en sus tres apartados de pago.
+        # Se deja anotado para que nadie "arregle" esto de vuelta creyendo que es un bug (L36).
         cobro = await generar_datos_pago(s, TEL, ped.id)
         check("el cobro se generó", cobro.get("ok") is True, str(cobro.get("nota"))[:90])
-        # productos × 0,80 + envío COMPLETO
-        div_ok = float((precio * Decimal("0.80")).quantize(Decimal("0.01")) + Decimal("3"))
-        div_mal = float(((precio + Decimal("3")) * Decimal("0.80")).quantize(Decimal("0.01")))
-        check(f"en divisas: producto×0,80 + envío = ${div_ok:g} (NO ${div_mal:g})",
+        # productos × 0,80, SIN sumar el envío: el flete lo asume la casa
+        div_ok = float((precio * Decimal("0.80")).quantize(Decimal("0.01")))
+        div_viejo = float((precio * Decimal("0.80")).quantize(Decimal("0.01")) + Decimal("3"))
+        check(f"en efectivo: producto×0,80 sin flete = ${div_ok:g} (ya NO ${div_viejo:g})",
               cobro.get("ok") and abs(cobro["monto_usd_divisas"] - div_ok) < 0.01,
-              f"dio {cobro.get('monto_usd_divisas')} — si diera {div_mal:g}, la dueña PAGA el flete")
+              f"dio {cobro.get('monto_usd_divisas')} — si diera {div_viejo:g}, el flete se está cobrando")
+        check("y el texto del cobro dice EFECTIVO, no 'dólares' a secas (Zelle/Binance pagan completo)",
+              "efectivo" in (cobro.get("resumen_cobro") or "").lower(),
+              str(cobro.get("resumen_cobro"))[:120])
+        check("y nombra que el delivery va por cuenta de la casa",
+              "cuenta" in (cobro.get("resumen_cobro") or "").lower(),
+              str(cobro.get("resumen_cobro"))[:120])
 
         print("\n5) 🔒 SIN ZONA NO SE COBRA")
         await _limpiar(s)
