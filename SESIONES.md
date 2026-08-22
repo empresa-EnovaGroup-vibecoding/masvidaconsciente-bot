@@ -147,8 +147,52 @@ con los dos de producción en `skipped`.
 fallo del código, pregúntate quién mató al contenedor. Y es L29 otra vez: un vigilante que da
 falsos rojos se acaba ignorando, y entonces deja de vigilar.
 
+### 5 · 🟢 SMOKE CONTRA EL BOT REAL, ANTES DE LAS PRUEBAS CON MAIRED
+
+Pedido de Erwin: que esto esté "al 100% para hacer las pruebas con Maired". Se midió el bot real
+del taller (7 turnos, `meta_client` cortado entero, espía por parámetro). Resultado:
+
+| | |
+|---|---|
+| Saluda por su nombre y con la hora de Venezuela | 🟢 |
+| Manda el catálogo (DOC) y las fotos | 🟢 |
+| **Mantiene el hilo** (sigue con las Galletas New York) | 🟢 |
+| **Cazó que "mañana" era DOMINGO** y que no se entrega ese día | 🟢 y no estaba en el guion |
+| Total **$14** — el correcto (es el bug histórico del $12/$14) | 🟢 sale de la herramienta |
+| **CERRÓ el pedido** | 🟢 verificado **en la BD**, no en el chat |
+
+El pedido en la base: `Galletas New York · variante_id 9 · 6 unidades · $14.00 · opciones: null`.
+**Ese `opciones: null` es la prueba de que el P0 ya no bloquea el cierre.**
+
+Y `registrar_pedido` se llamó **3 veces pero solo se creó 1 pedido**: la guarda del dinero
+rechazó las dos primeras por falta de zona y el modelo se corrigió en el mismo turno. Es el
+carril del dinero funcionando, no un bug.
+
+**Limpieza:** el pedido, la ficha y los 7 mensajes de prueba se borraron con **ensayo de ROLLBACK
+antes del COMMIT** (`CLAUDE.md` §4), para que Maired no vea una conversación fantasma de un
+número de la lista blanca en el panel. Datos de vuelta a la línea base exacta:
+32/37/**2**/34/10/35, `mensajes = 0`.
+
+#### 🔴 L50 · Un historial con las claves mal parece un bot con amnesia
+
+Las dos primeras corridas del smoke fueron catastróficas: el bot **re-saludaba**, **re-enviaba el
+catálogo** y preguntaba *"¿qué te gustaría pedir?"* después de que la clienta ya había elegido.
+Parecía un P0 nuevo y gordo.
+
+**Era el instrumento.** El smoke pasaba `{"rol": …, "contenido": …}` y el código real lee
+`h.get("role")` / `h.get("content")` (`tasks.py:1017` y `:1038`). O sea, el bot recibía el
+historial **VACÍO** — y con `[]` las redes que lo reciben por parámetro se apagan y
+`_es_inicio_conversacion` da True (**L20**, otra vez). Con las claves correctas, todo lo de la
+tabla de arriba salió bien.
+
+**→ Antes de reportar un fallo de MEMORIA del bot, comprueba la FORMA del historial que le pasas.
+Un rojo inesperado acusa al instrumento antes que al código, igual que un verde inesperado (L35).**
+
 ### 🔴 Lo que sigue faltando
 
+- 💸 **Saldo de OpenRouter: $3.08.** Medido en este smoke: **~$0.016 por turno**, o sea **~190
+  turnos** de margen. Alcanza para la sesión con Maired, pero no para muchas. Sin saldo el bot
+  **enmudece sin avisar**, y eso en una demo se ve como "el bot no funciona".
 - 🔑 **El PAT ya puede lanzar el workflow de producción, pero `PROD_SSH_KEY` NUNCA se ha
   ejercitado.** Los runs de julio (`7e80b8a`, `238a91c`) muestran el paso de PRODUCCIÓN en
   `success`, así que `COOLIFY_NEW_TOKEN` existía y servía — pero en esos runs **no existían aún**
