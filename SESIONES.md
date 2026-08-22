@@ -24,6 +24,129 @@
 
 ---
 
+## 2026-08-21 (5) — 🗣️ EL TEXTO SALE ANTES QUE LA FOTO + lo que enseñaron los audios de Whuilianny
+
+**Lo que trajo Erwin:** los dos documentos del análisis de las conversaciones reales
+(`MASVIDA - Anexo conversaciones reales` y `MASVIDA - Como cierra la venta Whuilianny (los
+audios)`) — 61 notas de voz y 42 conversaciones de una semana, transcritas — y una observación
+suya sobre un turno del bot:
+
+> *"Una persona real responde breve. Y saluda primero antes de enviar imágenes. Pero en este caso
+> saluda después de enviar varias imágenes."*
+
+### 🔴 1 · El orden estaba invertido, y era ESTRUCTURAL (no un despiste del modelo)
+
+**Reproducido antes de tocar nada.** El orden en que le llegaban los mensajes a la clienta:
+
+```
+1. IMAGEN · 2. IMAGEN · 3. IMAGEN · 4. TEXTO ("Hola, Ana, buenas tardes 💚") · 5. TEXTO
+```
+
+La causa, leyendo el código y no de memoria: `enviar_fotos_producto` hace `await enviar_imagen()`
+**síncrono dentro de la tool** (`tools.py`), o sea que la foto sale mientras el modelo todavía
+piensa — y también cuando la dispara la RED DE LA FOTO al final de `responder()`
+(`agent.py:2024`). El texto, en cambio, lo manda `tasks.py` **después** de que `responder()`
+devuelve. Así que **en TODOS los turnos con foto la media iba delante del texto**, y con ella
+delante del saludo, que vive dentro del texto.
+
+**Los documentos confirman que Whuilianny hace exactamente lo contrario, sin una sola excepción en
+la muestra: ANUNCIA y DESPUÉS MUESTRA.**
+
+```
+[00:54] "Hola carlos buenas noches bendiciones."
+[00:54] "Por aquí te dejo nuestro catálogo. Por aquí a la orden."
+[00:54] (documento)
+```
+
+**El arreglo:** `app/services/cola_media.py` — un `ContextVar` con los envíos pendientes del
+turno. Mientras está abierta, las tools de media **encolan** en vez de llamar a Meta;
+`tasks.py::_pensar_y_enviar` (nuevo, y por donde pasan **los 3 carriles** que responden al
+cliente) manda el texto y recién entonces la vacía. Sin cola abierta `encolar()` devuelve False y
+quien llama envía como siempre — así los carriles que NO mandan texto detrás (worker de visión,
+avisos a la dueña) no cambian ni por error.
+
+Medido después: el saludo pasó de la **posición 4 a la 1**, y las tres fotos salen juntas al
+final en vez de colarse entre los globos.
+
+**🎁 Y un bug que se arregló de regalo:** si la dueña tomaba el chat mientras el bot pensaba,
+`_enviar_en_partes` no mandaba el texto… pero **las fotos ya habían salido**. El cliente recibía
+3 imágenes huérfanas, sin una línea, justo cuando una persona acababa de entrar a atenderlo. Ahora
+se descartan con el texto.
+
+### 2 · Lo que los audios añadieron al prompt (`_REGLAS`, no la BD)
+
+El hallazgo central del documento: **la voz vende y el texto cobra**. Whuilianny reparte el
+trabajo y no lo mezcla — hablando hace el porqué, el descuento, su gusto y el antojo; escribiendo
+da el precio, el total y el banco, secos. El bot solo escribe, así que su texto tiene que hacer
+las dos cosas — **pero los números siguen saliendo de la herramienta**, que es como ya estaba.
+
+Cuatro conductas que NO estaban en ningún sitio, ahora en `_REGLAS`:
+
+| Conducta | De dónde sale |
+|---|---|
+| **Si dudan, EDUCA, no rebajes** | Su jugada maestra: un cliente dudó de que fuera sano y ella le explicó el negocio 3 minutos sin tocar el precio |
+| **El reencuadre**: no es comida de dieta, es **comida para salud** | *"Yo no hago alimentos para dietas. Yo hago alimentos para salud"* — su posicionamiento |
+| **El extra se AVISA, no se empuja** | Su textura propia: *"no sé si quieres aprovechar…"*, *"si te provocan…"*, *"si no, bueno"* |
+| **La honestidad vende más que la perfección** | Le contó a una clienta que una tanda le salió mal — y le compró igual |
+
+⚠️ **El reencuadre lleva su freno pegado**, porque roza la regla médica: se puede decir para quién
+cocina el negocio y qué ES la comida; **jamás** prometer un efecto en el cuerpo de quien escribe.
+
+Y en el cobro (`generar_datos_pago`): **nombrar el método y etiquetar cada dato**. Whuilianny los
+manda secos (*"Datos. [cédula] [teléfono] Banesco"*) porque al otro lado hay alguien que ya sabe
+qué es cada número; el bot le escribe a gente que **no** lo sabe.
+
+### 3 · Dos contradicciones del prompt, cerradas
+
+El documento diagnostica por qué el bot "no obedece": **~16.400 palabras y 42 reglas, algunas que
+se contradicen** — cuando todo es importante, nada lo es. Dos que se pudieron cerrar sin tocar la
+voz de la dueña:
+
+- **DOS reglas se declaraban "la MÁS importante"** (ANTIINVENCIÓN y BREVEDAD) y competían por la
+  atención del mismo modelo. BREVEDAD deja de reclamar primacía y gana en cambio una regla
+  CONCRETA: *si tu respuesta pasa de 3 líneas, sobra algo* (la queja nº1 de Erwin).
+- **DOS reglas médicas duplicadas** (`NADA DE CONSEJO MÉDICO` y `SIN PROMESAS MÉDICAS`) → una
+  sola, conservando el matiz que solo tenía la segunda y añadiendo dónde está la raya.
+
+🔴 **Y una contradicción que NO se puede cerrar desde el código:** la personalidad de la BD dice
+*"# FOTOS Solo cuando el cliente pida ver el producto. No mandes fotos que nadie pidió"* y
+`_REGLAS` dice *"ÚSALA PROACTIVA"*. Gana `_REGLAS` (es la capa blindada, y es la decisión medida
+del 08-21), y ahora lo dice **explícito** para que el modelo no quede partido. **Pero el texto de
+la BD es de Whuilianny: hay que pedirle que lo alinee.**
+
+### Lo que el documento pedía y YA ESTABA (no se tocó nada)
+
+La recomendación estrella del documento —*el bot no inicia el cariño confianzudo pero sí lo
+devuelve*— **ya está en la personalidad de la BD**, palabra por palabra: *"El cariño NO lo inicias
+tú… Si el cliente te habla con cariño ('mi amor', 'reina'), devuélveselo con naturalidad"*. Igual
+que *"LO VOY A PENSAR: no insistas"*, que el documento daba por no visto en los datos. Se leyó la
+BD antes de escribir (CLAUDE.md §8) precisamente para no duplicarlo.
+
+### Verificación
+
+- **441 tests** (eran 425). Ficha nueva: `tests/test_orden_texto_antes_de_media.py`, **14 casos**,
+  la mitad de ellos casos que NO deben disparar (cola cerrada, cola vacía, un envío que falla,
+  abrir dos veces, relevo).
+- **12 reversiones → 12 rojas**, con `__pycache__` borrado y releyendo el fichero de disco antes de
+  cada corrida (L23).
+- 🔴 **Una reversión salió VERDE a la primera y destapó un hueco real** (van tres sesiones
+  seguidas, ver L21/L22): la trampa de la **closure con late binding** — construir el envío dentro
+  del `for` haría salir las 3 fotos con la url y el caption de la ÚLTIMA. Los tests del carril usan
+  un `responder` de mentira, así que nunca tocaban el factory de `tools.py`. Se sacó
+  `_envio_de_un_archivo` a nivel de módulo **para poder alcanzarlo** y se le escribieron 2 tests.
+  *Probar la pieza que puede romperse exige poder alcanzarla.*
+- Prompt renderizado en los 3 modos sin basura (`!v`/`!a`/`{{}}` sin resolver) y con las tools
+  apagadas. Modo `uno`: 44 reglas / 24,5k. Modo `voz`: **24 reglas / 12,2k** — que es justo la
+  dirección que pide el documento.
+
+**Hallazgo preexistente, NO tocado** (chip de tarea abierto): 3 reglas ordenan usar
+`info_producto` sin la marca `@info_producto`, así que con la herramienta apagada le llega al
+modelo una orden imposible — el patrón que el propio `system_prompt.py:103-108` documenta como
+causa de que el bot afirme lo que no hizo. Verificado que son las mismas 3 que ya estaban en
+`97c086a`.
+
+---
+
 ## 2026-08-20 — 🔍 AUDITORÍA DE ARRANQUE: 3 cambios de DATOS que nadie registró (cero código tocado)
 
 **Contexto:** nueva sesión, se corrió el §0 de `prompt_proxima_sesion.md` completo antes de tocar

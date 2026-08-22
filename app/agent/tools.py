@@ -36,6 +36,7 @@ from app.models import (
 )
 from app.services.db import get_session_factory
 from app.services.dueno import CLAVE_COPIA, telefono_de_la_duena
+from app.services import cola_media
 from app.services.meta_client import enviar_imagen, enviar_texto, enviar_video
 from app.services.redis_client import get_cache, set_cache
 from app.services.tasa import obtener_tasa_bcv
@@ -2392,8 +2393,17 @@ async def generar_datos_pago(session, telefono, pedido_id=None):
             "presenta el cobro copiando EXACTO `resumen_cobro` (NO recalcules). Los datos "
             "de las cuentas están en `metodos_de_pago`: dale al cliente SOLO los del método "
             "que ÉL elija, copiados TAL CUAL (si aún no eligió, pregúntale cómo prefiere "
-            "pagar nombrándole los métodos, sin soltar todos los datos). Pide la captura "
-            "del comprobante."
+            "pagar nombrándole los métodos, sin soltar todos los datos). "
+            # 🔴 NOMBRA EL MÉTODO Y ETIQUETA CADA DATO (del análisis de las conversaciones
+            # reales de Whuilianny, 2026-08-21). Ella los manda "secos" —"Datos. [cédula]
+            # [teléfono] Banesco"— porque al otro lado hay una persona que ya sabe qué es cada
+            # número. El bot le escribe a gente que NO lo sabe: tres números sin etiqueta y sin
+            # decir que eso es un Pago Móvil es la forma más fácil de que el cliente pague mal
+            # (o no pague). El dato sigue saliendo TAL CUAL de la herramienta: esto es solo
+            # ponerle su nombre delante.
+            "Al entregarlos, DI QUÉ MÉTODO ES por su nombre (el campo `metodo`: 'Pago Móvil', "
+            "'Zelle'…) y pon cada dato con su etiqueta en su propia línea (cédula, teléfono, "
+            "banco…), no tres números pegados. Pide la captura del comprobante."
         ),
     }
 
@@ -3069,8 +3079,34 @@ async def enviar_catalogo(session, telefono):
     # basta el flag en BD, y Meta descarga el PDF de la URL pública del bot.
     from app.services.meta_client import enviar_documento
 
-    try:
+    async def _mandar_pdf() -> None:
         resp = await enviar_documento(telefono, link, "Catalogo.pdf")
+        # El catálogo que el cliente recibió ahora SÍ aparece en el chat interno de la dueña.
+        await _guardar_media_saliente(
+            telefono=telefono,
+            tipo="document",
+            contenido="(catálogo en PDF)",
+            url=link,
+            respuesta=resp,
+        )
+
+    # 🔴 EL TEXTO SALE PRIMERO, y este es EL caso canónico de los documentos de Whuilianny:
+    #     [00:54] "Hola carlos buenas noches bendiciones."
+    #     [00:54] "Por aquí te dejo nuestro catálogo. Por aquí a la orden."
+    #     [00:54] (documento)
+    # Ella ANUNCIA y DESPUÉS MUESTRA. Con la cola abierta el PDF sale solo, detrás del texto.
+    # Ver `services/cola_media.py`.
+    if cola_media.encolar("catálogo en PDF", _mandar_pdf):
+        return {
+            "ok": True,
+            "nota": (
+                "el catálogo SALE SOLO justo DESPUÉS de tu mensaje (lo manda el código; NO "
+                "vuelvas a llamar a la herramienta). Anúnciaselo en tu texto con TUS palabras, "
+                "como quien se lo está dejando ahí, y sigue la conversación"
+            ),
+        }
+    try:
+        await _mandar_pdf()
     except Exception:  # noqa: BLE001
         # El PDF EXISTE (el flag de BD lo dice) y Meta lo rechazó: el cliente NO lo recibió, y
         # hasta hoy eso no dejaba rastro en ningún sitio — ni aquí, ni en la red de arriba.
@@ -3078,15 +3114,49 @@ async def enviar_catalogo(session, telefono):
             "enviar_catalogo: Meta rechazó el PDF de %s; el cliente NO lo recibió", telefono
         )
         return {"ok": False, "nota": "no se pudo enviar el catalogo PDF; usa ver_catalogo (texto)"}
-    # El catálogo que el cliente recibió ahora SÍ aparece en el chat interno de la dueña.
-    await _guardar_media_saliente(
-        telefono=telefono,
-        tipo="document",
-        contenido="(catálogo en PDF)",
-        url=link,
-        respuesta=resp,
-    )
     return {"ok": True, "nota": "catalogo PDF enviado al cliente; confirmaselo con calidez"}
+
+
+def _envio_de_un_archivo(
+    *, telefono: str, producto: str, url: str, cap: str, es_video: bool, etiqueta: str
+):
+    """Empaqueta UN archivo ya resuelto (el envío a Meta + su burbuja en el panel) para que la
+    cola lo suelte DESPUÉS del texto. Devuelve una corutina sin argumentos.
+
+    🔴 VIVE FUERA DEL BUCLE A PROPÓSITO, y esto no es estilo: un `async def` escrito DENTRO del
+    `for` de `enviar_fotos_producto` captura la VARIABLE del bucle, no su valor. Como la cola se
+    vacía cuando el `for` ya terminó, las tres fotos saldrían con **la url y el caption de la
+    última** — tres veces la misma imagen, y con el pie de foto equivocado. Los parámetros por
+    nombre fuerzan la captura por valor.
+
+    (Está a nivel de módulo también para poder PROBARLO: la primera versión era una closure
+    interna, la reversión de la trampa salió VERDE y ese hueco de tests fue el que la sacó
+    aquí. Probar la pieza que puede romperse exige poder alcanzarla.)
+    """
+    async def _hacerlo() -> None:
+        resp = (
+            await enviar_video(telefono, url, cap) if es_video
+            else await enviar_imagen(telefono, url, cap)
+        )
+        logger.info(
+            "enviar_fotos_producto: enviado %s de %s (url=%s)",
+            "video" if es_video else "image", producto, url,
+        )
+        # 🔴 LA FILA QUE FALTABA. El cliente recibía la foto y la dueña, en su chat interno, no
+        # veía NADA: el bot parecía no haberla mandado nunca. Ahora la burbuja existe.
+        await _guardar_media_saliente(
+            telefono=telefono,
+            tipo="video" if es_video else "image",
+            contenido=(
+                f"({'video' if es_video else 'foto'} de {producto}"
+                + (f" — {etiqueta}" if etiqueta else "")
+                + ")"
+            ),
+            url=url,
+            respuesta=resp,
+        )
+
+    return _hacerlo
 
 
 async def enviar_fotos_producto(
@@ -3233,6 +3303,7 @@ async def enviar_fotos_producto(
 
     enviadas = 0
     sin_url = 0
+    diferidas = 0  # cuántas quedaron EN LA COLA para salir después del texto
     # PIE DE FOTO (caption): el NOMBRE del producto + una línea de su descripción, SIN precio (el
     # precio vive en el tamaño y lo dice el cobro, no la foto). La PRIMERA foto lo lleva completo;
     # las demás, solo el nombre, para no repetir la ficha bajo cada imagen del mismo producto.
@@ -3244,6 +3315,7 @@ async def enviar_fotos_producto(
             "enviar_fotos_producto: %s tiene %d archivos, se envían los 3 primeros (tope anti-spam)",
             prod.nombre, len(medios),
         )
+
     for m in medios[:maximo]:
         url = r2.url_publica(m.clave)
         if not url:
@@ -3260,28 +3332,24 @@ async def enviar_fotos_producto(
         _et = (m.etiqueta or "").strip()
         _base = f"{prod.nombre} — {_et}" if _et else prod.nombre
         cap = _base if enviadas else (f"{_base}\n{_desc[:140]}" if _desc else _base)
-        try:
-            resp = (
-                await enviar_video(telefono, url, cap) if es_video else await enviar_imagen(telefono, url, cap)
-            )
+        envio = _envio_de_un_archivo(
+            telefono=telefono, producto=prod.nombre, url=url, cap=cap,
+            es_video=es_video, etiqueta=_et,
+        )
+        # 🔴 EL TEXTO SALE PRIMERO. Si `tasks.py` abrió la cola de este turno, la foto NO se manda
+        # aquí: se encola y sale justo DESPUÉS del texto del bot — que es como lo hace Whuilianny
+        # ("por aquí te dejo nuestro catálogo" y ENTONCES el archivo). Ver `services/cola_media.py`.
+        # Sin cola abierta (worker de visión, avisos) se envía en el momento, como siempre.
+        if cola_media.encolar(f"{prod.nombre}" + (f" ({_et})" if _et else ""), envio):
             enviadas += 1
-            logger.info("enviar_fotos_producto: enviado %s de %s (url=%s)", m.tipo, prod.nombre, url)
+            diferidas += 1
+            continue
+        try:
+            await envio()
+            enviadas += 1
         except Exception as e:  # noqa: BLE001 — si una falla, intentamos las demás
             logger.warning("No se pudo enviar media %s de %s: %s", m.id, prod.nombre, e)
             continue
-        # 🔴 LA FILA QUE FALTABA. El cliente recibía la foto y la dueña, en su chat interno, no
-        # veía NADA: el bot parecía no haberla mandado nunca. Ahora la burbuja existe.
-        await _guardar_media_saliente(
-            telefono=telefono,
-            tipo="video" if es_video else "image",
-            contenido=(
-                f"({'video' if es_video else 'foto'} de {prod.nombre}"
-                + (f" — {_et}" if _et else "")
-                + ")"
-            ),
-            url=url,
-            respuesta=resp,
-        )
     if sin_url and enviadas == 0:
         # R2 sin configurar en el worker: hasta hoy se saltaba en SILENCIO y el bot decía que el
         # producto "no tiene fotos" — mentira: las tiene, pero no se pudieron construir las URLs.
@@ -3302,10 +3370,26 @@ async def enviar_fotos_producto(
         "etiqueta_enviada": et_enviada,
         "etiquetas_disponibles": ets_disp,
         "nota": (
-            f"YA le enviaste {enviadas} archivo(s) de '{prod.nombre}'"
-            + (f" — la(s) de {et_enviada}" if et_enviada else "")
-            + ". Coméntale cálido que ahí los tiene y sigue la venta. NO digas que vas a "
-            "enviarlos: ya están enviados"
+            # 🔴 DOS VERDADES DISTINTAS, y decir la que no es hace mentir al bot.
+            # Con la cola abierta (el turno normal) los archivos AÚN NO han salido: salen solos
+            # justo después de tu texto. Entonces el bot los ANUNCIA — que es justo lo que hace
+            # Whuilianny ("por aquí te dejo nuestro catálogo" y ENTONCES el archivo). Si dijera
+            # "ahí los tienes" estaría afirmando algo que todavía no pasó.
+            (
+                f"Las {enviadas} foto(s)/video(s) de '{prod.nombre}'"
+                + (f" — la(s) de {et_enviada}" if et_enviada else "")
+                + " SALEN SOLAS justo DESPUÉS de tu mensaje (las manda el código; tú no tienes "
+                "que hacer nada más ni volver a llamar a la herramienta). Así que anúncialas en "
+                "tu texto como quien se las está dejando ahí, con TUS palabras y distinto cada "
+                "vez, y sigue la venta"
+                if diferidas
+                else (
+                    f"YA le enviaste {enviadas} archivo(s) de '{prod.nombre}'"
+                    + (f" — la(s) de {et_enviada}" if et_enviada else "")
+                    + ". Coméntale cálido que ahí los tiene y sigue la venta. NO digas que vas a "
+                    "enviarlos: ya están enviados"
+                )
+            )
             + (
                 ""
                 if (et_enviada or not _pedido)

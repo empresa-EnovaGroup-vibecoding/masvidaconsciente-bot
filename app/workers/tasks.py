@@ -14,6 +14,7 @@ from app.agent.agent import (
     transcribir_audio,
 )
 from app.config import get_settings
+from app.services import cola_media
 from app.services import redis_client as rc
 from app.services.db import get_session_factory
 from app.services.memoria import historial_con_respaldo
@@ -363,6 +364,44 @@ def _lo_que_llego(partes: list[dict], respuesta: str) -> str:
     if all(p.get("estado") == "enviado" for p in partes):
         return respuesta
     return "\n\n".join(p["texto"] for p in partes if p.get("estado") == "enviado")
+
+
+async def _pensar_y_enviar(
+    telefono: str, entrada: str, historial: list, nombre: str | None, **kw
+) -> tuple[list[dict], str]:
+    """Piensa la respuesta, manda el TEXTO y recién entonces suelta la MEDIA.
+
+    🔴 EL ORDEN ES EL PUNTO DE ESTA FUNCIÓN (lo reportó Erwin el 2026-08-21: *"saluda primero
+    antes de enviar imágenes… pero saluda después de enviar varias imágenes"*).
+
+    Antes, las fotos las mandaba `enviar_fotos_producto` DENTRO de `responder()` —o la RED DE LA
+    FOTO al final de él— y el texto salía después, aquí. Resultado medido: **3 imágenes y el
+    "Hola, Ana, buenas noches" en la posición 4**, en todos los turnos con foto. Ahora la media
+    se ENCOLA (`services/cola_media.py`) y sale detrás del texto, como hace Whuilianny:
+    anuncia y después muestra.
+
+    Los tres carriles que responden al cliente pasan por aquí, así que el orden no depende de
+    que nadie se acuerde de repetirlo.
+
+    Devuelve `(partes, respuesta)`: `partes` para el panel y la memoria, `respuesta` porque
+    `_lo_que_llego` la necesita para el camino feliz.
+    """
+    cola_media.abrir()
+    try:
+        respuesta = await responder(telefono, entrada, historial, nombre, **kw)
+        respuesta = _proteger_afirmacion_de_pago(respuesta)
+        partes = await _enviar_en_partes(telefono, respuesta)
+        if _algo_llego(partes):
+            await cola_media.vaciar()
+        else:
+            # 🔴 NI UN GLOBO LLEGÓ: la dueña tomó el chat mientras el bot pensaba, o Meta rechazó
+            # el primero. La media se TIRA. Antes ya había salido, así que el cliente recibía
+            # 3 fotos huérfanas —sin una línea de texto— encima del chat que una persona acababa
+            # de tomar. Este `else` es un bug que se arregló de regalo al poner la cola.
+            cola_media.descartar("no llegó ningún globo de texto (relevo, o Meta lo rechazó)")
+        return partes, respuesta
+    finally:
+        cola_media.cerrar()
 
 
 async def _guardar_media_en_hilo(
@@ -749,10 +788,7 @@ async def _procesar(telefono: str, nombre: str | None) -> str:
         # el turno aparte, y si además ya estuviera en la lista el modelo lo leería DOS VECES.
         await rc.guardar_historial(telefono, "user", texto)
 
-        respuesta = await responder(telefono, texto, historial, nombre)
-        respuesta = _proteger_afirmacion_de_pago(respuesta)
-
-        partes = await _enviar_en_partes(telefono, respuesta)
+        partes, respuesta = await _pensar_y_enviar(telefono, texto, historial, nombre)
         if not partes:
             # La dueña tomó el chat mientras el bot pensaba: su respuesta se DESCARTA
             # (no se envía ni se recuerda). Lo que sí se guarda es lo que dijo el cliente,
@@ -1002,12 +1038,9 @@ async def _retomar(telefono: str, nombre: str | None, pausado_por: str | None = 
             (h.get("content") for h in reversed(historial) if h.get("role") == "user"), ""
         )
         instruccion = _INSTRUCCION_RETOMAR_ESCALADO if venia_de_escalada else _INSTRUCCION_RETOMAR
-        respuesta = await responder(
+        partes, respuesta = await _pensar_y_enviar(
             telefono, instruccion, historial, nombre, pregunta_cliente=ultima_del_cliente
         )
-        respuesta = _proteger_afirmacion_de_pago(respuesta)
-
-        partes = await _enviar_en_partes(telefono, respuesta)
         if not partes:
             # La dueña volvió a tomar el chat mientras el bot pensaba (~20s): su respuesta se
             # DESCARTA (ni se envía ni se recuerda). Lo que dijo el cliente ya está guardado.
@@ -1786,9 +1819,7 @@ async def _responder_y_enviar(telefono: str, texto: str, nombre: str | None) -> 
         # Aquí es todavía más grave: lo que se pierde es una transcripción que NO está en ningún
         # buffer ni en ningún webhook. Si `responder()` revienta, esto es lo único que queda.
         await rc.guardar_historial(telefono, "user", texto)
-        respuesta = await responder(telefono, texto, historial, nombre)
-        respuesta = _proteger_afirmacion_de_pago(respuesta)
-        partes = await _enviar_en_partes(telefono, respuesta)
+        partes, respuesta = await _pensar_y_enviar(telefono, texto, historial, nombre)
         if not partes:
             # La dueña tomó el chat mientras el bot pensaba: su respuesta se DESCARTA
             # (no se envía ni se recuerda). Lo que sí se guarda es lo que dijo el cliente,
