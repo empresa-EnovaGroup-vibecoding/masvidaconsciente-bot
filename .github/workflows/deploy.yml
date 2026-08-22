@@ -1,32 +1,40 @@
-name: Bot — verificar en cada push · desplegar SOLO a mano
+name: Bot — verificar y desplegar al TALLER en cada push · producción SOLO a mano
 
-# 🔴 NINGÚN PUSH DESPLIEGA NADA. Decisión del 2026-08-02.
+# 🟢 UN PUSH A `master` DESPLIEGA EL TALLER SOLO — pero únicamente si la CI está VERDE.
+# Decisión de Erwin del 2026-08-22, que reemplaza la del 2026-08-02 ("ningún push despliega").
 #
-# ANTES (hasta el 2026-08-02): un push a master disparaba el despliegue del taller solo. Eso
-# tenía dos costos que se pagaron de verdad:
-#   1. **Se perdía la certeza de qué corre.** El 23-jul un despliegue automático recreó los
-#      contenedores del taller; los nombres cambiaron y nadie supo, hasta la auditoría del
-#      2026-08-02, qué versión estaba viva ni si el trabajo desplegado a mano había sobrevivido.
-#   2. **Publicar y desplegar eran el mismo acto.** No se podía guardar el trabajo en GitHub
-#      (respaldo, trazabilidad, revisión) sin tocar de inmediato un sistema con clientes.
+# POR QUÉ SE PUDO REVERTIR: la decisión del 2-ago nació de dos costos reales, y los dos están
+# hoy cubiertos por el propio flujo:
+#   1. **"Se perdía la certeza de qué corre."** El 23-jul un despliegue recreó los contenedores
+#      del taller, los nombres cambiaron y nadie supo qué versión estaba viva. Ya no puede
+#      pasar: el paso de los bancos ESPERA al contenedor que corre exactamente `$GITHUB_SHA` y
+#      **falla si nunca aparece** — el nombre miente, el SHA no.
+#   2. **"Publicar y desplegar eran el mismo acto."** Eso era un problema cuando el trabajo se
+#      desplegaba a mano por `docker cp` y un deploy automático lo borraba. Desde el 22-ago
+#      nada se edita dentro del VPS (`CLAUDE.md` §3) y Coolify construye desde GitHub: publicar
+#      y desplegar el TALLER pasa a ser deseable, no peligroso.
 #
-# AHORA:
-#   • `git push`  ->  SOLO VERIFICA (ruff · compileall · pytest). No llama a Coolify. Es gratis,
-#     no toca ni la BD, ni Redis, ni OpenRouter, ni WhatsApp — y te dice si rompiste algo.
-#   • Desplegar   ->  SIEMPRE a mano: pestaña "Actions" -> "Run workflow" -> elegir destino
-#     (o `gh workflow run deploy.yml -f destino=taller`).
-#   • Y desde el 2026-08-02, LOS DOS DESTINOS SE COMPRUEBAN DESPUÉS DE DESPLEGAR: el taller
-#     con los 18 bancos, y producción con los dos detectores de esquema (solo lectura). Antes
-#     producción era un `curl` a ciegas — ver el comentario del último paso (DAT-7).
+# LO QUE SIGUE BLINDADO (no se toca):
+#   • 🔒 **La CI es la puerta.** `desplegar` lleva `needs: verificar`: si `ruff`, `compileall` o
+#     `pytest` salen rojos, el `curl` a Coolify NO llega a existir. Esto es la lección L41 (en
+#     agosto la CI estuvo 3 commits en rojo y los tests no corrieron ni una vez): un push que
+#     rompa algo NO llega al taller.
+#   • 🔒 **PRODUCCIÓN SIGUE SIENDO SOLO A MANO.** En un `push` el destino se FUERZA a `taller`;
+#     `produccion` solo existe por `workflow_dispatch`. Un push no puede tocar a las clientas
+#     reales ni por accidente.
+#   • Los dos destinos se comprueban DESPUÉS de desplegar: el taller con los bancos, y
+#     producción con los dos detectores de esquema (solo lectura) — ver el último paso (DAT-7).
 #
-# El flujo recomendado sigue siendo el que dio certeza del 100%: probar por `docker cp` en el
-# taller, correr los bancos, y solo entonces publicar. Ver `SESIONES.md` 2026-08-02.
+# ⚠️ Por qué por GitHub Actions y NO por el webhook de auto-deploy de Coolify: el webhook
+# dispara al recibir el push, **sin esperar a la CI**, así que desplegaría también con los tests
+# en rojo. `is_auto_deploy_enabled` se queda en `false` en las 3 apps a propósito: si se
+# encendiera, habría DOS despliegues compitiendo por el mismo push y uno de ellos sin puerta.
 #
 # Los tokens viven en los "Secrets" del repositorio (Settings -> Secrets and variables -> Actions).
 
 on:
   push:
-    branches: [master]      # ← solo dispara el job `verificar`; NUNCA `desplegar`
+    branches: [master]      # ← dispara `verificar` y, si sale verde, `desplegar` al TALLER
   workflow_dispatch:
     inputs:
       destino:
@@ -77,13 +85,15 @@ jobs:
 
   desplegar:
     needs: verificar   # 🔒 sin la puerta en verde, no se despliega nada
-    # 🔴 EL CANDADO: este job SOLO corre si un humano lanzó el flujo a mano. En un `push` la
-    # condición es falsa y el job se salta entero — el `curl` a Coolify no llega a existir.
-    if: ${{ github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
+    env:
+      # 🔒 EL CANDADO DE PRODUCCIÓN. En un `push` el destino se fuerza a `taller`: `produccion`
+      # solo puede salir de un `workflow_dispatch` que un humano lanzó a mano y eligió. Todos
+      # los pasos de abajo miran `env.DESTINO`, nunca `inputs.destino` (que en un push va vacío).
+      DESTINO: ${{ github.event_name == 'push' && 'taller' || inputs.destino }}
     steps:
       - name: TALLER (bot + worker, Hostinger viejo, tu número de pruebas)
-        if: ${{ inputs.destino == 'taller' }}
+        if: ${{ env.DESTINO == 'taller' }}
         run: |
           curl -fsS --connect-timeout 20 --max-time 120 --retry 3 --retry-all-errors --retry-delay 5 \
             -H "Authorization: Bearer ${{ secrets.COOLIFY_OLD_TOKEN }}" \
@@ -95,7 +105,7 @@ jobs:
       # (scripts/correr_bancos.py). La regla "si sale rojo, no se despliega a producción" ya
       # no depende de que un humano se acuerde de correrlos por SSH.
       - name: LOS BANCOS (el taller se prueba SOLO — si algo se rompió, esto queda ROJO)
-        if: ${{ inputs.destino == 'taller' }}
+        if: ${{ env.DESTINO == 'taller' }}
         run: |
           mkdir -p ~/.ssh
           printf '%s\n' "${{ secrets.TALLER_SSH_KEY }}" > ~/.ssh/id_ed25519
@@ -121,7 +131,7 @@ jobs:
           SCRIPT
 
       - name: PRODUCCIÓN (bot + worker, netcup, CLIENTES REALES)
-        if: ${{ inputs.destino == 'produccion' }}
+        if: ${{ env.DESTINO == 'produccion' }}
         run: |
           curl -fsS --connect-timeout 20 --max-time 120 --retry 3 --retry-all-errors --retry-delay 5 \
             -H "Authorization: Bearer ${{ secrets.COOLIFY_NEW_TOKEN }}" \
@@ -148,7 +158,7 @@ jobs:
       # 🔑 Necesita el secreto `PROD_SSH_KEY` (llave privada con acceso root a netcup), el
       # gemelo del `TALLER_SSH_KEY` que ya usa el paso de los bancos.
       - name: PRODUCCIÓN — los dos detectores de esquema, DENTRO del contenedor nuevo
-        if: ${{ inputs.destino == 'produccion' }}
+        if: ${{ env.DESTINO == 'produccion' }}
         run: |
           mkdir -p ~/.ssh
           printf '%s\n' "${{ secrets.PROD_SSH_KEY }}" > ~/.ssh/id_ed25519
