@@ -173,6 +173,32 @@ antes del COMMIT** (`CLAUDE.md` §4), para que Maired no vea una conversación f
 número de la lista blanca en el panel. Datos de vuelta a la línea base exacta:
 32/37/**2**/34/10/35, `mensajes = 0`.
 
+#### 🔴🔴 L51 · Cortar `meta_client` con `setattr` NO corta nada: se escaparon 2 WhatsApps REALES
+
+El smoke de la torta **mandó dos mensajes de verdad**. Comprobado en los logs del worker:
+`POST https://graph.facebook.com/v21.0/…/messages` → **HTTP 200, x2, a las 16:12:22** — las dos
+fotos de la Torta Keto, al número `584247490499` que se usó como cliente de prueba.
+
+**Por qué se escapó:** el smoke hacía `setattr(mc, "enviar_imagen", falso)` sobre el MÓDULO, pero
+`tools.py` hace `from app.services.meta_client import enviar_imagen`, así que tiene **su propia
+referencia resuelta al importar** y el parche del módulo no la alcanza. **Es L27 otra vez, por la
+otra puerta:** allí el problema era el espía de tools (que se arregló pasándolo por parámetro);
+aquí es el embudo de salida, que NO tiene parámetro por donde inyectarlo.
+
+🟢 **Lo que sí funcionó, y por suerte:** los dos avisos que `pedir_ayuda` intentó mandarle a la
+DUEÑA (`573005690062`) fallaron con **`131047 Re-engagement message`** — la ventana de 24 h de
+Meta estaba cerrada. O sea que a Maired **no le llegó nada**; la protegió Meta, no el instrumento.
+
+**→ Para medir el bot real sin que se escape un envío, parchear el módulo NO basta. Hay que cortar
+donde de verdad sale:** `httpx` (que es por donde pasan TODOS los envíos), o el atributo en el
+namespace de CADA módulo que lo importó (`tools`, `agent`, `dueno`, `tasks`). Y después
+**comprobarlo en los logs** (`grep "graph.facebook.*messages"`), porque el smoke dirá que todo
+fue bien igual.
+
+⚠️ Y una consecuencia operativa: **el número de prueba estaba en la lista blanca**. Un smoke
+contra un número real de la lista blanca es un smoke que puede escribirle a una persona. Para
+medir, usar un número que NO exista en `NUMEROS_PERMITIDOS` ni en `numeros_permitidos_extra`.
+
 #### 🔴 L50 · Un historial con las claves mal parece un bot con amnesia
 
 Las dos primeras corridas del smoke fueron catastróficas: el bot **re-saludaba**, **re-enviaba el
