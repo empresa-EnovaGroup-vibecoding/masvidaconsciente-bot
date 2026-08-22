@@ -34,9 +34,9 @@ from app.models import (
     hoy_venezuela,
     now_utc,
 )
+from app.services import cola_media
 from app.services.db import get_session_factory
 from app.services.dueno import CLAVE_COPIA, telefono_de_la_duena
-from app.services import cola_media
 from app.services.meta_client import enviar_imagen, enviar_texto, enviar_video
 from app.services.redis_client import get_cache, set_cache
 from app.services.tasa import obtener_tasa_bcv
@@ -126,10 +126,22 @@ TOOL_SCHEMAS = [
                                 "opciones": {
                                     "type": "string",
                                     "description": (
-                                        "Lo que el cliente eligió DENTRO del paquete y que la dueña "
-                                        "necesita para cocinar: relleno, masa, sabor o mezcla "
-                                        "(ej. '4 de pollo y 4 de carne mechada', 'masa de plátano'). "
-                                        "NO cambia el precio."
+                                        # 🔴 EL TERCER SITIO QUE EMPUJABA A PEDIR EL SABOR (08-22).
+                                        # `_REGLAS` y la personalidad se arreglaron el 08-21; ESTE
+                                        # NO, y el modelo lee el schema en CADA llamada. Decía
+                                        # "que la dueña necesita para cocinar" y no mencionaba en
+                                        # ninguna parte que se puede registrar sin él — mientras
+                                        # `required` (abajo) lleva desde siempre solo `variante_id`
+                                        # y `cantidad`. Un campo que el schema declara opcional y
+                                        # describe como imprescindible es una contradicción que el
+                                        # modelo resuelve del lado malo: bloqueando la venta.
+                                        "OPCIONAL. Lo que el cliente eligió DENTRO del paquete: "
+                                        "relleno, masa, sabor o mezcla (ej. '4 de pollo y 4 de "
+                                        "carne mechada', 'masa de plátano'). NO cambia el precio. "
+                                        "Si el cliente ya lo dijo, pásalo con SUS palabras; si no "
+                                        "lo dijo, DÉJALO VACÍO y registra igual — la dueña lo "
+                                        "coordina después (el negocio trabaja bajo pedido). "
+                                        "NUNCA dejes de registrar un pedido por esto."
                                     ),
                                 },
                             },
@@ -1328,6 +1340,54 @@ async def etiqueta_recordada(
             "etiqueta_recordada: no se pudo leer el catálogo; van las fotos generales"
         )
         return None
+
+
+async def tamanos_hermanos(variante_id) -> dict | None:
+    """(SOLO LECTURA) El tamaño que el modelo eligió y los HERMANOS que competían con él.
+
+    La usa la RED DEL TAMAÑO ADIVINADO (`agent.py`). Devuelve None —o sea, "aquí no hay nada que
+    vigilar"— en cuanto el producto tiene UN solo tamaño vendible: si no hay elección, no se
+    puede adivinar. Hoy, en esta base, solo tres productos entran (Tortas keto, Kombucha y Torta
+    baja en carbohidratos), y son justo los que más dinero mueven por equivocarse: la Kombucha es
+    la fuga de $3 de la cirugía del 2026-07-13, y las tortas van de 250g a 1kg.
+
+    Ante CUALQUIER fallo devuelve None y la venta sigue como hasta hoy: una red que se cae no
+    puede tumbar un pedido. (Mismo criterio que `etiqueta_recordada` y `producto_enfocado`.)
+    """
+    try:
+        vid = int(variante_id)
+    except (TypeError, ValueError):
+        return None
+    try:
+        factory = get_session_factory()
+        async with factory() as session:
+            elegida = await session.get(ProductoVariante, vid)
+            if elegida is None:
+                return None   # id inexistente: eso ya lo rechaza `registrar_pedido`
+            prod = await session.get(Producto, elegida.producto_id)
+            if prod is None:
+                return None
+            hermanas = (
+                await session.execute(
+                    select(ProductoVariante.presentacion)
+                    .where(
+                        ProductoVariante.producto_id == elegida.producto_id,
+                        ProductoVariante.disponible.is_(True),
+                    )
+                    .order_by(ProductoVariante.id)
+                )
+            ).scalars().all()
+    except Exception:  # noqa: BLE001 — una red que falla NO puede tumbar una venta
+        logger.exception("tamanos_hermanos: no se pudo leer el catálogo; la venta sigue")
+        return None
+    vendibles = [str(h) for h in hermanas if str(h or "").strip() not in ("", "única")]
+    if len(vendibles) < 2:
+        return None
+    return {
+        "producto": prod.nombre,
+        "elegido": str(elegida.presentacion or ""),
+        "tamanos": vendibles,
+    }
 
 
 async def productos_enfocados(texto: str, maximo: int = 2) -> list[str]:

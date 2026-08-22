@@ -47,8 +47,8 @@ Si la dueña toma el chat mientras el bot piensa, `_enviar_en_partes` no manda n
 justo cuando una persona acababa de entrar a atenderlo. Ahora se descartan con el texto.
 """
 import logging
+from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
-from typing import Awaitable, Callable
 
 logger = logging.getLogger(__name__)
 

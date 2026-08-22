@@ -29,6 +29,7 @@ from app.agent.tools import (
     media_ya_mostrada,
     productos_enfocados,
     schemas_para,
+    tamanos_hermanos,
 )
 from app.config import get_settings
 
@@ -922,23 +923,102 @@ def _afirma_pedido_registrado(texto: str) -> bool:
 #
 # El teléfono está aquí por algo medido el 08-21: el bot le pidió *"me confirmas tu número de
 # teléfono"* **a alguien que le está escribiendo por WhatsApp**.
+# 🔴 LA HORA ENTRÓ EL 2026-08-22, y es el TERCER requisito inventado que se mide (sabor →
+# nombre completo → hora). Y aquí no hay ni que discutirlo: la personalidad de la BD dice
+# literalmente *"La hora exacta no la cierres tú: la coordina Whuilianny"*, y el propio schema
+# de `registrar_pedido` lo repite en el campo `entrega` ("La hora NO se cierra aquí: la coordina
+# la dueña después"). O sea que el bot se traba pidiendo un dato que sus DOS fuentes de verdad
+# le prohíben pedir. Ojo con la forma: `qué hora` y `hora exacta/de entrega`, NUNCA `horario`
+# (el horario del negocio SÍ se informa, y es lo correcto).
 _DATO_OPCIONAL = re.compile(
     r"\b(sabor(es)?|relleno(s)?|topping(s)?|mezcla|combinaci[óo]n"
     r"|nombre\s+completo|apellido|correo|email|c[óo]rreo"
-    r"|n[úu]mero\s+de\s+tel[ée]fono|tel[ée]fono\s+de\s+contacto)\b",
+    r"|n[úu]mero\s+de\s+tel[ée]fono|tel[ée]fono\s+de\s+contacto"
+    r"|qu[ée]\s+hora|hora\s+(exacta|aproximada)|hora\s+de\s+(la\s+)?(entrega|retiro))\b",
+    re.I,
+)
+
+# Cómo se LLAMA cada dato cuando hay que nombrárselo al modelo. El aviso decía siempre "EL SABOR
+# (o el relleno)" — y con la hora dentro eso pasaba a ser MENTIRA en el aviso que precisamente
+# le pide al modelo que deje de inventar. Se nombra el dato REAL que acaba de pedir.
+_COMO_SE_LLAMA = (
+    (re.compile(r"sabor", re.I), "el sabor"),
+    (re.compile(r"relleno", re.I), "el relleno"),
+    (re.compile(r"topping", re.I), "el topping"),
+    (re.compile(r"mezcla|combinaci[óo]n", re.I), "la mezcla"),
+    (re.compile(r"nombre\s+completo", re.I), "el nombre completo"),
+    (re.compile(r"apellido", re.I), "el apellido"),
+    (re.compile(r"correo|email|c[óo]rreo", re.I), "el correo"),
+    (re.compile(r"tel[ée]fono", re.I), "el número de teléfono"),
+    (re.compile(r"hora", re.I), "la hora exacta"),
+)
+
+# Una PREGUNTA DE ELECCIÓN PELADA no nombra su objeto: el objeto es la LISTA que la precede.
+_ELECCION_PELADA = re.compile(r"^(y|entonces|bueno|ok)?\s*(de|por)?\s*cu[áa]l(es)?\b", re.I)
+
+# 🔴 EL FRENO QUE HACE SEGURA LA REGLA DE ARRIBA. Un TAMAÑO **jamás** es un dato opcional: cambia
+# el precio (Kombucha 350ml $4 / 700ml $7 — la fuga de $3 que costó la cirugía del 2026-07-13).
+# Si la lista que precede a la pregunta son tamaños, esta red NO puede tocarla: su aviso dice
+# "registra con lo que tienes", y aplicado a un tamaño eso es ordenarle al bot que ADIVINE el
+# precio. Para ese caso está la RED DEL TAMAÑO ADIVINADO, que hace exactamente lo contrario.
+_TAMANO_EN_LISTA = re.compile(
+    r"\b\d+\s*(g|gr|grs|gramos|kg|kilos?|ml|lt|l|litros?|cc|onzas?|oz|unidades?)\b"
+    r"|\b(kilo|kilos|medio\s+kilo|peque[ñn][oa]s?|median[oa]s?|grandes?|chic[oa]s?)\b",
     re.I,
 )
 
 
-def _pide_opcion_del_paquete(texto: str) -> bool:
-    """True si el bot PREGUNTA por un dato OPCIONAL (sabor, relleno, nombre completo, correo…).
+def _es_lista_pelada(frase: str) -> bool:
+    """True si la frase es SOLO una enumeración ('Tenemos: limón, naranja, piña y cambur').
+
+    Es lo que separa los dos casos medidos, que a simple vista son el mismo:
+
+      🔴 SÍ es lista pelada (el bot REAL, 08-22): "Tenemos: limón, zanahoria, naranja, piña,
+         vainilla, marmoleada, manzana canela y cambur." + "Cuál te provoca?"
+      ✅ NO lo es (turno 1 del smoke, el que NO debe disparar): "Te recomiendo las Galletas New
+         York, que traen 6 unidades con varios sabores para elegir (chocolate, limón pistacho,
+         canela naranja, chocomerey)." + "De cuál te llevo?"
+
+    La diferencia no es la palabra "sabores" —está en las dos— sino la FORMA: en la primera el
+    mensaje ENTERO es la lista; en la segunda la lista es un paréntesis colgado de una frase que
+    RECOMIENDA un producto. Por eso se exige que, quitada una cabecera corta ('Tenemos:'), lo que
+    quede sean ≥3 trozos y NINGUNO tenga pinta de cláusula (>3 palabras).
+    """
+    cuerpo = (frase or "").strip().strip("¿").rstrip(".!?").strip()
+    if ":" in cuerpo:
+        cabeza, _, resto = cuerpo.partition(":")
+        if len(cabeza.split()) > 4:
+            return False   # la "cabecera" es una frase entera: no es una lista pelada
+        cuerpo = resto
+    cuerpo = re.sub(r"\s+\b[yo]\b\s+", ", ", cuerpo, flags=re.I)  # "manzana canela y cambur"
+    trozos = [t.strip() for t in cuerpo.split(",") if t.strip()]
+    if len(trozos) < 3:
+        return False
+    return all(len(t.split()) <= 3 for t in trozos)
+
+
+def _dato_opcional_pedido(texto: str) -> str | None:
+    """El dato OPCIONAL por el que el bot está preguntando AHORA, o None.
 
     Se mira FRASE POR FRASE y solo cuentan las PREGUNTAS, y eso no es un detalle: en el turno 1
     del smoke el bot escribió *"…traen 6 unidades con varios sabores para elegir (chocolate,
     limón pistacho…). De cuál te llevo?"*. Ahí la palabra "sabores" está en una frase que
     DESCRIBE, y la pregunta ("de cuál te llevo?") es sobre el PRODUCTO, no sobre el sabor —
     contar ese turno haría disparar la red cuando el bot está haciendo justo lo que debe.
+
+    🔴 EL HUECO QUE ESTO CIERRA (medido el 2026-08-22 contra el bot real, y el más natural de
+    todos): la lista y la pregunta van en frases DISTINTAS, así que ninguna de las dos cumplía
+    las dos condiciones a la vez —
+
+        "Tenemos: limón, zanahoria, naranja, piña, vainilla, marmoleada, manzana canela y cambur."
+        "Cuál te provoca?"
+
+    la primera tiene los sabores pero no es pregunta; la segunda es pregunta pero no tiene
+    ninguna palabra de la lista. La red no veía NADA y el bucle seguía. Se resuelve resolviendo
+    el objeto de la pregunta pelada: es la lista de la frase anterior (`_es_lista_pelada`), y
+    **nunca** si esa lista son TAMAÑOS (`_TAMANO_EN_LISTA`).
     """
+    anterior = ""
     for frase in re.split(r"(?<=[.!?\n])\s+", texto or ""):
         limpia = frase.strip()
         if not limpia:
@@ -946,9 +1026,27 @@ def _pide_opcion_del_paquete(texto: str) -> bool:
         # `_aplanar` (workers/tasks.py) borra los "¿" en el ENVÍO, pero aquí el texto todavía
         # los puede traer: se aceptan las dos formas.
         es_pregunta = limpia.endswith("?") or limpia.startswith("¿")
-        if es_pregunta and _DATO_OPCIONAL.search(limpia):
-            return True
-    return False
+        if es_pregunta:
+            hallado = _DATO_OPCIONAL.search(limpia)
+            if hallado:
+                trozo = hallado.group(0)
+                return next(
+                    (nombre for patron, nombre in _COMO_SE_LLAMA if patron.search(trozo)),
+                    "ese dato",
+                )
+            if (
+                _ELECCION_PELADA.match(limpia.lstrip("¿"))
+                and _es_lista_pelada(anterior)
+                and not _TAMANO_EN_LISTA.search(anterior)
+            ):
+                return "eso mismo"
+        anterior = limpia
+    return None
+
+
+def _pide_opcion_del_paquete(texto: str) -> bool:
+    """True si el bot PREGUNTA por un dato OPCIONAL (sabor, relleno, nombre completo, hora…)."""
+    return _dato_opcional_pedido(texto) is not None
 
 
 def _ya_pidio_opcion_antes(historial: list | None) -> bool:
@@ -967,6 +1065,165 @@ def _ya_pidio_opcion_antes(historial: list | None) -> bool:
         if _pide_opcion_del_paquete(h.get("content") or ""):
             return True
     return False
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════
+#  RED DEL TAMAÑO ADIVINADO: el bot elige el tamaño (y el precio) que el cliente no pidió
+# ══════════════════════════════════════════════════════════════════════════════════════
+#
+# 🔴 EL CASO MEDIDO (2026-08-22, contra el bot real). A un *"ok esa quiero, 1"* el bot contestó
+# *"te preparo la Torta baja en carbohidratos **de 1kg**"*. La clienta NUNCA dijo el tamaño: dijo
+# "1", que ahí es la CANTIDAD. El bot eligió por ella — **y eligió el más caro de los tres**
+# (250g / 500g / 1kg, tres precios distintos).
+#
+# No hubo cobro incorrecto solo porque no llegó a registrar (eso es el P0, la red del cierre). En
+# cuanto el cierre funcione, ese camino queda abierto de par en par.
+#
+# 🔴 Y ES EXACTAMENTE LA FUGA DE LA KOMBUCHA, otra vez: dos "Kombucha" (350ml $4 / 700ml $7), el
+# buscador devolvía siempre la primera y **siempre cobraba $4**. Aquello costó una cirugía entera
+# (migraciones 022/022b, el "código de barras"). Aquello lo arreglaba el CÓDIGO eligiendo bien;
+# esto es el MODELO eligiendo por su cuenta, y hace falta código igual.
+#
+# ⚠️ SE LE PROHÍBE DOS VECES EN EL PROMPT Y LO HIZO IGUAL: el catálogo ("TIENE VARIOS TAMAÑOS…
+# PREGÚNTALE cuál quiere ANTES de registrar, y NUNCA lo adivines") y el schema del `variante_id`
+# ("cada tamaño tiene SU precio"). *El prompt SUGIERE, el código IMPIDE.*
+#
+# QUÉ CUENTA COMO QUE EL CLIENTE ELIGIÓ:
+#   1. Lo dijo ÉL, en cualquier mensaje suyo de la conversación ("la de 1kg", "500", "un kilo").
+#   2. O el bot le propuso UN tamaño concreto —uno solo— en su último mensaje, y el cliente
+#      siguió la conversación con eso delante ("te la dejo de 1kg?" → "sí"). Un tamaño que el bot
+#      se propone a SÍ MISMO dentro del turno NO cuenta: no puede autorizarse solo.
+_UNIDADES = (
+    (("g", "gr", "grs", "gramo", "gramos"), ("g", "gr", "grs", "gramos")),
+    (("kg", "k", "kilo", "kilos"), ("kg", "k", "kilo", "kilos")),
+    (("ml", "mililitro", "mililitros", "cc"), ("ml", "mililitros", "cc")),
+    (("l", "lt", "litro", "litros"), ("l", "lt", "litro", "litros")),
+)
+_NUM_UNIDAD = re.compile(r"(\d+(?:[.,]\d+)?)\s*([a-zA-Z]+)")
+
+
+def _formas_del_tamano(presentacion: str) -> list[str]:
+    """Todas las maneras REALES de nombrar un tamaño ('1kg' → '1 kg', 'un kilo', 'kilo'…).
+
+    La clienta no escribe como el catálogo. Si esta función se queda corta, la red bloquea una
+    venta buena; si se pasa, deja colar un tamaño adivinado. Se prefiere pasarse (dejar pasar):
+    una red del dinero que frena de más se convierte en la red que alguien apaga.
+    """
+    plano = _sin_acentos(presentacion).strip()
+    if not plano:
+        return []
+    m = _NUM_UNIDAD.search(plano)
+    if not m:
+        return [re.escape(plano)]          # 'familiar', 'personal'… tal cual
+    numero, unidad = m.group(1), m.group(2).lower()
+    alias = next((a for nombres, a in _UNIDADES if unidad in nombres), (unidad,))
+    formas = [rf"{re.escape(numero)}\s*{a}\b" for a in alias]
+    # El número PELADO solo si es distintivo. '1' NO lo es: en "ok esa quiero, 1" el 1 es la
+    # CANTIDAD — que es justo el caso que abrió esta red.
+    try:
+        if float(numero.replace(",", ".")) >= 100:
+            formas.append(rf"\b{re.escape(numero)}\b")
+    except ValueError:
+        pass
+    if unidad in ("kg", "k", "kilo", "kilos") and numero in ("1", "1.0", "1,0"):
+        formas += [r"\bun\s+kilo\b", r"\bkilo\b", r"\bkilito\b"]
+    if unidad in ("g", "gr", "grs", "gramo", "gramos") and numero == "500":
+        formas.append(r"\bmedio\s+kilo\b")
+    return formas
+
+
+def _menciona_tamano(texto: str, presentacion: str) -> bool:
+    """¿Ese texto nombra ESE tamaño, con las palabras que usa una persona normal?"""
+    plano = _sin_acentos(texto)
+    return any(re.search(f, plano) for f in _formas_del_tamano(presentacion))
+
+
+def _tamano_propuesto_por_el_bot(texto: str, tamanos: list[str]) -> str | None:
+    """El único tamaño que el bot nombró en ese mensaje, o None si nombró varios (o ninguno).
+
+    Si nombró VARIOS está ofreciendo, no proponiendo: la elección sigue siendo del cliente y un
+    "sí" no dice cuál. Solo cuando nombró UNO el cliente pudo haber estado diciéndole que sí.
+    """
+    nombrados = [t for t in tamanos if _menciona_tamano(texto, t)]
+    return nombrados[0] if len(nombrados) == 1 else None
+
+
+async def _tamano_sin_elegir(
+    args: dict, mensaje_usuario: str, historial: list | None
+) -> dict | None:
+    """El rechazo que hay que devolverle al modelo, o None si el pedido puede pasar."""
+    items = args.get("items")
+    if not isinstance(items, list) or not items:
+        return None
+    dicho_por_el_cliente = "\n".join(
+        [str(mensaje_usuario or "")]
+        + [
+            str(h.get("content") or "")
+            for h in (historial or [])
+            if isinstance(h, dict) and h.get("role") == "user"
+        ]
+    )
+    ultimo_del_bot = next(
+        (
+            str(h.get("content") or "")
+            for h in reversed(historial or [])
+            if isinstance(h, dict) and h.get("role") == "assistant"
+        ),
+        "",
+    )
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        info = await tamanos_hermanos(it.get("variante_id"))
+        if not info:
+            continue                       # un solo tamaño vendible: no hay nada que adivinar
+        elegido = info["elegido"]
+        if _menciona_tamano(dicho_por_el_cliente, elegido):
+            continue                       # lo dijo el cliente
+        if _tamano_propuesto_por_el_bot(ultimo_del_bot, info["tamanos"]) == elegido:
+            continue                       # el bot propuso ESE y el cliente siguió con él delante
+        return {
+            "ok": False,
+            "nota": (
+                f"NO se registró nada. '{info['producto']}' se vende en varios tamaños "
+                f"({', '.join(info['tamanos'])}) y el cliente NUNCA dijo cuál quiere: el "
+                f"'{elegido}' lo elegiste tú. Cada tamaño tiene SU precio, así que adivinarlo es "
+                "cobrarle mal. PREGÚNTALE cuál quiere —nómbrale los tamaños, sin inventar ni un "
+                "precio— y registra el pedido COMPLETO recién cuando te lo diga. Si te dijo una "
+                "cantidad ('1', '2'), eso es CUÁNTOS quiere, no el tamaño."
+            ),
+            "tamanos": info["tamanos"],
+        }
+    return None
+
+
+async def _ejecutar_con_guardas(
+    ejecutar, nombre_tool: str, args: dict, telefono: str,
+    mensaje_usuario: str, historial: list | None,
+):
+    """`ejecutar` con las guardas del DINERO delante. Es la ÚNICA puerta por la que el bucle
+    ejecuta una herramienta.
+
+    Va aquí y no dentro de `ejecutar_tool` por lo mismo que el guardia de las tools apagadas: a
+    `ejecutar_tool` también entran las REDES por su cuenta y el worker de VISIÓN, y un candado
+    allí les arrancaría el brazo. Aquí se filtra solo lo que pide el MODELO.
+
+    Si una guarda frena, devuelve el rechazo con la MISMA forma que los rechazos propios de la
+    herramienta (`{"ok": False, "nota": …}`) — que es lo que hace que el resto del bucle siga
+    funcionando sin tocar una línea: `registro_ok` exige `ok` True y se queda en False, la lista
+    blanca del dinero no autoriza nada (el rechazo no lleva ni una cifra con marca de dinero), y
+    el `role: tool` de siempre le lleva la corrección al modelo dentro del mismo turno.
+    """
+    if nombre_tool == "registrar_pedido":
+        rechazo = await _tamano_sin_elegir(args, mensaje_usuario, historial)
+        if rechazo is not None:
+            logger.error(
+                "TAMAÑO ADIVINADO para %s: el modelo eligió un tamaño que el cliente nunca "
+                "pidió, y cada tamaño tiene SU precio — args=%r",
+                telefono, str(args)[:200],
+            )
+            return rechazo
+    return await ejecutar(nombre_tool, args, telefono)
 
 
 # ─── RED DE LA HONESTIDAD: hay cosas que el bot NO puede decir JAMÁS ──────────────────
@@ -1939,39 +2196,40 @@ async def responder(
             #
             # No escala ni mata el texto: el mensaje no es una MENTIRA, solo es un callejón sin
             # salida. Se le quita el falso bloqueo una vez y se le devuelve la decisión.
+            dato_opcional = _dato_opcional_pedido(texto)
             if (
                 not registro_ok
-                and _pide_opcion_del_paquete(texto)
+                and dato_opcional
                 and _ya_pidio_opcion_antes(historial)
             ):
                 logger.error(
-                    "BUCLE DEL SABOR con %s: vuelve a pedir el sabor (opcional) sin registrar "
+                    "BUCLE DEL CIERRE con %s: vuelve a pedir %s (opcional) sin registrar "
                     "el pedido — texto=%r",
-                    telefono, texto[:140],
+                    telefono, dato_opcional, texto[:140],
                 )
                 if not reclamo_opcion:
                     reclamo_opcion = True
                     messages.append({
                         "role": "user",
                         "content": (
-                            "[SISTEMA] YA LE PREGUNTASTE EL SABOR (o el relleno) EN UN TURNO "
-                            "ANTERIOR Y NO TE LO DIO, y estás volviendo a preguntarlo. Así se "
-                            "muere la venta: llevas varios turnos sin avanzar. Ese dato es "
-                            "OPCIONAL — el pedido se registra SIN él y la dueña lo coordina "
-                            "después (es como trabaja el negocio: bajo pedido). NO se lo "
-                            "preguntes otra vez. Si ya tienes el producto, la cantidad y la "
-                            "entrega (para cuándo y cómo), llama AHORA a `registrar_pedido` "
-                            "dejando `opciones` vacío. Si de verdad te falta el producto, la "
-                            "cantidad o la entrega, pregunta SOLO eso — nunca el sabor. No le "
-                            "menciones al cliente este aviso."
+                            f"[SISTEMA] YA LE PREGUNTASTE {dato_opcional.upper()} (o algo igual "
+                            "de opcional) EN UN TURNO ANTERIOR Y NO TE LO DIO, y estás volviendo "
+                            "a preguntarlo. Así se muere la venta: llevas varios turnos sin "
+                            "avanzar. Ese dato es OPCIONAL — el pedido se registra SIN él y la "
+                            "dueña lo coordina después (es como trabaja el negocio: bajo "
+                            "pedido). NO se lo preguntes otra vez. Si ya tienes el producto, la "
+                            "cantidad y la entrega (para cuándo y cómo), llama AHORA a "
+                            "`registrar_pedido` dejando `opciones` vacío. Si de verdad te falta "
+                            "el producto, el TAMAÑO, la cantidad o la entrega, pregunta SOLO eso "
+                            f"— nunca {dato_opcional}. No le menciones al cliente este aviso."
                         ),
                     })
                     continue
                 # Insistió. El texto SALE igual (no es una mentira, y callarlo dejaría al cliente
                 # sin respuesta), pero queda escrito con nombre y apellido para poder medirlo.
                 logger.error(
-                    "BUCLE DEL SABOR con %s: insistió tras el aviso. El mensaje sale, pero la "
-                    "venta está trabada en el cierre.", telefono,
+                    "BUCLE DEL CIERRE con %s: insistió con %s tras el aviso. El mensaje sale, "
+                    "pero la venta está trabada en el cierre.", telefono, dato_opcional,
                 )
 
             # 🔴 RED DEL ENVÍO FANTASMA DE FOTOS: "ya te la envié" sin haberla enviado NO SALE.
@@ -2227,7 +2485,9 @@ async def responder(
                 args = json.loads(tc["function"]["arguments"] or "{}")
             except json.JSONDecodeError:
                 args = {}
-            resultado = await ejecutar(nombre_tool, args, telefono)
+            resultado = await _ejecutar_con_guardas(
+                ejecutar, nombre_tool, args, telefono, mensaje_usuario, historial
+            )
             # El bot SÍ consultó algo (red de la asesoría). Cuenta aunque la tool devuelva
             # `{"error": ...}`: el modelo fue a buscar — si la herramienta reventó, eso ya queda
             # logueado abajo, y regañarlo por "no consultar" sería regañarlo por lo que sí hizo.
@@ -2460,7 +2720,9 @@ async def _responder_dos_agentes(
                 args = json.loads(tc["function"]["arguments"] or "{}")
             except json.JSONDecodeError:
                 args = {}
-            resultado = await ejecutar(nombre_tool, args, telefono)
+            resultado = await _ejecutar_con_guardas(
+                ejecutar, nombre_tool, args, telefono, mensaje_usuario, historial
+            )
             if isinstance(resultado, dict) and resultado.get("error"):
                 # Doble descarte hasta hoy: aquí no se logueaba, y `_renderizar` (hoja.py) hace
                 # `if r.get("error"): return ""`. La Voz recibía una hoja que decía "NO
@@ -2530,7 +2792,9 @@ async def _responder_dos_agentes(
                 args = json.loads(tc["function"]["arguments"] or "{}")
             except json.JSONDecodeError:
                 args = {}
-            r_tool = await ejecutar(n, args, telefono)
+            r_tool = await _ejecutar_con_guardas(
+                ejecutar, n, args, telefono, mensaje_usuario, historial
+            )
             if isinstance(r_tool, dict) and r_tool.get("error"):
                 # El re-prompt del dinero es el ÚLTIMO cartucho del Operador: si la tool que
                 # tenía que darle el monto bueno revienta AQUÍ, el encargo se queda igual de

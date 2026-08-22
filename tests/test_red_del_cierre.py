@@ -38,7 +38,6 @@ import pytest
 from app.agent import agent as ag
 from app.agent.agent import _pide_opcion_del_paquete, _ya_pidio_opcion_antes
 
-
 # ══════════════════════════════════════════════════════════════════════════════════
 #  LA PIEZA: ¿está preguntando por un dato opcional?
 # ══════════════════════════════════════════════════════════════════════════════════
@@ -72,6 +71,78 @@ def test_describir_los_sabores_NO_es_pedirlos():
         "De cuál te llevo?"
     )
     assert _pide_opcion_del_paquete(texto) is False
+
+    # 🔴 EL MISMO CASO, SIN "6 unidades" — y esta línea NO es redundante: la puso una reversión
+    # que salió VERDE cuando no debía (L35). El texto de arriba está protegido DOS veces: por la
+    # forma (no es una lista pelada) y de rebote porque "6 unidades" es un TAMAÑO. Con las dos
+    # redes encima, romper la primera no se notaba y el test no probaba lo que decía probar.
+    # Sin el tamaño, lo ÚNICO que sostiene este caso es `_es_lista_pelada`.
+    sin_tamano = (
+        "Te recomiendo las Galletas New York, que vienen con varios sabores para elegir "
+        "(chocolate, limón pistacho, canela naranja, chocomerey).\n"
+        "De cuál te llevo?"
+    )
+    assert _pide_opcion_del_paquete(sin_tamano) is False
+
+
+def test_la_hora_exacta_cuenta():
+    """🔴 EL TERCER REQUISITO INVENTADO, medido el 08-22 con el código ya desplegado.
+
+    Y es el más absurdo de los tres, porque el bot tiene DOS fuentes que se lo prohíben: la
+    personalidad de la BD (*"La hora exacta no la cierres tú: la coordina Whuilianny"*) y el
+    schema del campo `entrega` (*"La hora NO se cierra aquí"*).
+    """
+    assert _pide_opcion_del_paquete("A qué hora te la llevo?")
+    assert _pide_opcion_del_paquete("¿Me confirmas la hora exacta de la entrega?")
+
+
+def test_el_HORARIO_del_negocio_no_es_la_hora_del_pedido():
+    """NO DISPARA. Informar el horario es lo correcto y no tiene nada que ver con trabarse
+    pidiendo la hora de UNA entrega. Si esta guarda cae, el bot deja de poder hablar de su
+    propio horario sin que una red le regañe."""
+    assert _pide_opcion_del_paquete("Cuál es nuestro horario de atención?") is False
+    assert _pide_opcion_del_paquete("Te sirve el horario de la tarde?") is False
+
+
+def test_la_lista_y_la_pregunta_en_FRASES_DISTINTAS_si_cuentan():
+    """🔴 EL HUECO MEDIDO EL 08-22 CONTRA EL BOT REAL — y el patrón más natural de todos.
+
+        "Tenemos: limón, zanahoria, naranja, piña, vainilla, marmoleada, manzana canela y cambur."
+        "Cuál te provoca?"
+
+    La primera frase tiene los sabores pero NO es pregunta; la segunda es pregunta pero NO tiene
+    ninguna palabra de la lista. Mirando frase por frase, ninguna cumplía las dos condiciones y
+    la red no veía absolutamente nada. El objeto de una pregunta pelada es la lista que la
+    precede.
+    """
+    texto = (
+        "Tenemos: limón, zanahoria, naranja, piña, vainilla, marmoleada, manzana canela "
+        "y cambur.\nCuál te provoca?"
+    )
+    assert _pide_opcion_del_paquete(texto) is True
+
+
+def test_una_lista_de_TAMANOS_no_dispara_JAMAS():
+    """🔴🔴 LA GUARDA MÁS PELIGROSA DE TODO EL ARCHIVO — es el carril del DINERO.
+
+    El aviso de esta red dice *"registra con lo que tienes"*. Aplicado a un TAMAÑO eso es
+    ordenarle al bot que adivine el precio: Kombucha 350ml $4 vs 700ml $7 — la fuga de $3 que
+    costó la cirugía del 2026-07-13. Un tamaño NO es un dato opcional y esta red no puede
+    tocarlo NUNCA. (Para ese caso está la red del tamaño adivinado, que hace lo contrario.)
+    """
+    for lista in (
+        "Tenemos: 250g, 500g y 1kg.\nCuál prefieres?",
+        "La tenemos en 350ml, 700ml y litro.\nCuál te llevo?",
+        "Hay pequeña, mediana y grande.\nCuál quieres?",
+    ):
+        assert _pide_opcion_del_paquete(lista) is False, lista
+
+
+def test_la_pregunta_pelada_SIN_lista_delante_no_dispara():
+    """NO DISPARA: sin lista que la preceda, '¿cuál prefieres?' no tiene objeto conocido —
+    y suponerle uno es exactamente lo que esta red no debe hacer."""
+    assert _pide_opcion_del_paquete("Cuál prefieres?") is False
+    assert _pide_opcion_del_paquete("Perfecto, te la dejo lista.\nCuál te llevo?") is False
 
 
 def test_preguntar_producto_cantidad_o_fecha_NO_dispara():
