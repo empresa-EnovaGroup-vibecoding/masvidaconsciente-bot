@@ -28,7 +28,8 @@ y salud, memoria que no se olvida a las 24h, y 8 migraciones nuevas (hasta la 03
 |---|---|---|
 | **Servidor** | netcup `152.53.89.118` | Hostinger `2.25.139.106` |
 | **Quién le escribe** | las clientas reales | número de la agencia: **+57 313 293 3806** |
-| **Bot: versión** | `7e80b8a` (14-jul) — **muy atrasada** | ✅ **`aef1042`** (22-ago), al día con `master` y **desplegado solo por el push**; checksum 5/5 contra `master` en bot Y worker |
+| **Bot: versión** | `7e80b8a` (14-jul) — **muy atrasada** | ✅ **`14f0079`** (22-ago), al día con `master` y **desplegado solo por el push**; checksum 5/5 contra `master` en bot Y worker |
+| **Panel: versión** | (sin tocar desde julio) | ✅ **`b9a97c8`** (22-ago) — al día con `master`. **Estaba 6 commits atrasado** (corría `d34ccd9`, de 13 días) y nadie lo había notado porque este archivo no listaba el panel |
 | **Modelo IA activo** | (el de julio) | ✅ **`anthropic/claude-haiku-4.5`** (devuelto el 21-ago por decisión de Erwin; estuvo en `gpt-4o-mini` del 18 al 21-ago) |
 | **Modo del agente** | UN agente | los 3 bloqueadores del modo DOS ya están cerrados (06-ago) |
 | **Lista blanca** | ✅ activa | ✅ activa — 3 números (`NUMEROS_PERMITIDOS` + `numeros_permitidos_extra`) |

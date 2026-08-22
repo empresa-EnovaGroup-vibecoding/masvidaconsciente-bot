@@ -86,9 +86,41 @@ aef1042  push → success, y los contenedores quedaron corriendo aef1042
 Los pasos de producción **`skipped`** son la prueba de que el candado funciona: el push no puede
 llegar a netcup ni por accidente.
 
+### 3 · 🔴 EL PANEL LLEVABA 6 COMMITS SIN DESPLEGAR (y nadie lo había mirado)
+
+Mirando el Hostinger entero —no solo bot y worker— el panel corría **`d34ccd9`, de 13 días**,
+mientras `master` del dashboard estaba en `b9a97c8`. **Seis commits sin desplegar**, y uno de
+ellos es del dinero:
+
+```
+b9a97c8  fix(simulador): pintar la media que el bot envía
+a164b3f  feat(conversaciones): marcar un chat como contacto privado
+d8ecf1d  feat(conocimiento): interruptor para retirar sin borrar
+669bfe8  feat(catalogo): etiqueta debajo de cada foto
+4c610ce  fix(panel): el dinero que la dueña ve y toca (bloque 1.5 de la auditoría)   ← 💵
+f0429db  ci: ningún push despliega — el deploy pasa a ser SIEMPRE a mano
+```
+
+**Por qué se escapó:** `ESTADO.md` no tenía fila para el panel, así que "el taller está al día"
+se venía comprobando solo contra bot y worker. Y la nota del 22-ago decía *"el dashboard NO se
+redesplegó: no tiene commits nuevos (`b9a97c8`)"* — cierto de `master`, **falso de lo desplegado**.
+Confundir "no hay commits nuevos" con "no hay nada sin desplegar" es lo que lo tapó 13 días.
+**Ya hay fila para el panel en `ESTADO.md`.**
+
+Antes de reconstruirlo se comprobó lo que costó una sesión entera en su día:
+`NEXT_PUBLIC_API_URL` está marcada **`is_buildtime = t`** y su valor —descifrado con `artisan`,
+no comparado en cifrado (L24)— es `https://api-masvida.enovagroup.tech`. Desplegado a `b9a97c8`,
+y verificado que **la URL quedó horneada en el bundle** (`chunks/app/page-*.js`), que es la prueba
+de que no habrá "Failed to fetch": el HTTP 200 solo, no lo demuestra.
+
 ### 🔴 Lo que sigue faltando
 
-- **Producción sigue en `7e80b8a` (14-jul)** y sin acceso SSH. Es el pendiente grande.
+- **Producción (netcup) sigue en `7e80b8a` (14-jul).** No hay ninguna de sus tres llaves desde
+  esta Mac, verificado en vivo: SSH da `Permission denied` (puerto abierto), su Coolify —que es
+  **otra instancia**— da `401`, y el PAT no tiene `Actions: write` para lanzar el workflow (`403`).
+  Y no tiene dominio público: `api-masvida.enovagroup.tech` resuelve al **taller**. Además está
+  **12 migraciones por detrás** (023→034), que caerían de golpe sobre la base de las clientas, y
+  el camino de producción del workflow **no corre los bancos** a propósito (escriben en la base).
 - **El arreglo de fondo del P0** (inyectar el ESTADO DEL PEDIDO EN CURSO cada turno) sigue
   pendiente — pero ahora **sí se puede medir contra el bot real**, que era lo que lo bloqueaba.
 - **La llave SSH de la Mac sigue sin registrar** en GitHub: el próximo lote de commits volverá a
