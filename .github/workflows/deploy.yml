@@ -93,14 +93,49 @@ jobs:
       DESTINO: ${{ github.event_name == 'push' && 'taller' || inputs.destino }}
     steps:
       - name: TALLER (bot + worker, Hostinger viejo, tu número de pruebas)
+        id: taller
         if: ${{ env.DESTINO == 'taller' }}
         run: |
-          curl -fsS --connect-timeout 20 --max-time 120 --retry 3 --retry-all-errors --retry-delay 5 \
+          RESP=$(curl -fsS --connect-timeout 20 --max-time 120 --retry 3 --retry-all-errors --retry-delay 5 \
             -H "Authorization: Bearer ${{ secrets.COOLIFY_OLD_TOKEN }}" \
-            "http://2.25.139.106:8000/api/v1/deploy?uuid=qlfrx5yviileijm6lmovy67i,erzq5ycbrs323vwkcbam54a9"
+            "http://2.25.139.106:8000/api/v1/deploy?uuid=qlfrx5yviileijm6lmovy67i,erzq5ycbrs323vwkcbam54a9")
+          echo "$RESP"
+          # Los uuid de ESTOS despliegues, para poder esperarlos en el paso siguiente.
+          echo "uuids=$(printf '%s' "$RESP" | python3 -c \
+            'import sys,json; print(" ".join(d["deployment_uuid"] for d in json.load(sys.stdin)["deployments"]))')" >> "$GITHUB_OUTPUT"
+
+      # 🔴 ESTE PASO EXISTE POR UN FALSO ROJO REAL (2026-08-22). Sin él, "LOS BANCOS" buscaba un
+      # contenedor cuya imagen tuviera el SHA del commit — y al RE-desplegar el MISMO commit ya
+      # hay uno viejo con ese SHA. Lo agarraba, empezaba los bancos dentro, y Coolify lo
+      # reemplazaba a los segundos: `docker exec` moría con el contenedor (**exit 137**) y el
+      # flujo quedaba ROJO sin que nada del código estuviera mal.
+      #
+      # Por eso no se espera al SHA (que es ambiguo entre el viejo y el nuevo) sino a que
+      # COOLIFY DIGA QUE TERMINÓ, que es un hecho y no una inferencia. Un vigilante que da
+      # falsos rojos se acaba ignorando (L29), y entonces deja de vigilar.
+      - name: Esperar a que Coolify TERMINE (si no, los bancos corren en un contenedor que muere)
+        if: ${{ env.DESTINO == 'taller' }}
+        run: |
+          for du in ${{ steps.taller.outputs.uuids }}; do
+            echo "── esperando el despliegue $du"
+            for i in $(seq 1 90); do
+              S=$(curl -fsS --connect-timeout 20 --max-time 30 \
+                    -H "Authorization: Bearer ${{ secrets.COOLIFY_OLD_TOKEN }}" \
+                    "http://2.25.139.106:8000/api/v1/deployments/$du" \
+                  | python3 -c 'import sys,json; print(json.load(sys.stdin).get("status","?"))') || S="?"
+              case "$S" in
+                finished) echo "   ✅ finished"; break ;;
+                failed|cancelled) echo "   🔴 el despliegue quedó en '$S'"; exit 1 ;;
+                *) sleep 10 ;;
+              esac
+            done
+            if [ "$S" != "finished" ]; then
+              echo "🔴 el despliegue $du no terminó en 15 min (quedó en '$S')"; exit 1
+            fi
+          done
 
       # 🛡️ EL VIGILANTE (deuda D2, cerrada 2026-07-14): después de CADA despliegue del taller,
-      # los 10 bancos de prueba corren SOLOS dentro del contenedor nuevo. Si alguno sale ROJO:
+      # los bancos corren SOLOS dentro del contenedor nuevo. Si alguno sale ROJO:
       # (1) este flujo queda ROJO aquí en GitHub, y (2) a la dueña le llega un WhatsApp
       # (scripts/correr_bancos.py). La regla "si sale rojo, no se despliega a producción" ya
       # no depende de que un humano se acuerde de correrlos por SSH.
@@ -114,20 +149,30 @@ jobs:
             'bash -s' -- "$GITHUB_SHA" <<'SCRIPT'
           set -e
           SHA="$1"
-          echo "Esperando a que el contenedor NUEVO (commit $SHA) esté corriendo…"
-          BOT=""
-          for i in $(seq 1 60); do
-            BOT=$(docker ps --format '{{.Names}} {{.Image}}' | grep '^qlfrx' | grep "$SHA" | head -1 | cut -d' ' -f1 || true)
-            WORKER=$(docker ps --format '{{.Names}} {{.Image}}' | grep '^erzq' | grep "$SHA" | head -1 | cut -d' ' -f1 || true)
-            if [ -n "$BOT" ] && [ -n "$WORKER" ]; then break; fi
-            sleep 15
-          done
+          # Coolify ya dijo "finished" en el paso anterior, así que estos contenedores son los
+          # definitivos. Se sigue comprobando el SHA: si no calza, el build subió otra cosa.
+          BOT=$(docker ps --format '{{.Names}} {{.Image}}' | grep '^qlfrx' | grep "$SHA" | head -1 | cut -d' ' -f1 || true)
+          WORKER=$(docker ps --format '{{.Names}} {{.Image}}' | grep '^erzq' | grep "$SHA" | head -1 | cut -d' ' -f1 || true)
           if [ -z "$BOT" ] || [ -z "$WORKER" ]; then
-            echo "🔴 El contenedor con el commit $SHA nunca arrancó (¿falló el build en Coolify?)"
+            echo "🔴 Coolify terminó pero no hay contenedores con el commit $SHA:"
+            docker ps --format '{{.Names}} {{.Image}}'
             exit 1
           fi
-          echo "Contenedores nuevos: bot=$BOT worker=$WORKER — corriendo los bancos…"
+          echo "Contenedores: bot=$BOT worker=$WORKER — corriendo los bancos…"
+          # Si el exec muere con 137 (contenedor reemplazado bajo los pies), NO es un banco en
+          # rojo: se reintenta una vez contra el contenedor que esté vivo en ese momento.
+          set +e
           docker exec -w /app -e PYTHONPATH=/app "$BOT" python scripts/correr_bancos.py
+          RC=$?
+          set -e
+          if [ "$RC" -eq 137 ]; then
+            echo "⚠️ el contenedor murió durante los bancos (137). Reintento una vez…"
+            sleep 20
+            BOT=$(docker ps --format '{{.Names}} {{.Image}}' | grep '^qlfrx' | grep "$SHA" | head -1 | cut -d' ' -f1)
+            docker exec -w /app -e PYTHONPATH=/app "$BOT" python scripts/correr_bancos.py
+          else
+            exit $RC
+          fi
           SCRIPT
 
       - name: PRODUCCIÓN (bot + worker, netcup, CLIENTES REALES)
