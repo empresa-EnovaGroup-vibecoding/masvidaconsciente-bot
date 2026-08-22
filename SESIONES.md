@@ -24,6 +24,221 @@
 
 ---
 
+## 2026-08-22 (2) — 🔴 LA CI LLEVABA 3 COMMITS EN ROJO Y LOS 453 TESTS NO CORRÍAN + el tamaño que el bot elegía solo
+
+**Lo que se buscaba:** arrancar los pendientes en orden (`prompt_proxima_sesion.md` §5) — el P0 (los
+dos huecos de la red del cierre) y el P0.5 (el carril del dinero). Antes de tocar el P0 apareció
+algo que no estaba en ninguna lista y que las anulaba a las dos.
+
+### 1 · 🔴🔴 EL HALLAZGO: la puerta que valida CADA push llevaba tres commits abierta
+
+`ruff check .` en local dio **4 errores** sobre `master` limpio. Y `ruff` es el PRIMER paso del job
+`verificar` del CI, el que corre ANTES de desplegar. Comprobado contra la API de GitHub Actions,
+no de memoria:
+
+| commit | CI | qué pasó |
+|---|---|---|
+| `97c086a` | 🟢 success | el último verde |
+| `09f4253` | 🔴 failure | paso 5 `ruff` **falla** |
+| `13a064f` | 🔴 failure | ídem |
+| `6c5d14c` | 🔴 failure | ídem |
+
+Y el detalle que lo vuelve grave, leyendo los pasos del job:
+
+```
+5  ruff — el linter .................. failure
+6  compileall ....................... skipped
+7  pytest — LAS REDES DE SEGURIDAD ... skipped
+   desplegar ........................ skipped
+```
+
+**Los 453 tests NO SE EJECUTARON NI UNA VEZ en esos tres commits.** `prompt_proxima_sesion.md` §2
+decía "Tests 🟢 453 — corren en CI en cada push": los tests existen y pasan, pero el CI se caía
+antes de llegar a ellos. Se creía tener una red que llevaba tres commits descolgada.
+
+Los 4 errores eran de los commits de la sesión anterior (3 × `I001` de orden de imports + 1 ×
+`UP035` de `typing.Awaitable`), los cuatro auto-arreglables y de **cero cambio de comportamiento**.
+Arreglados ⇒ `ruff` limpio, `compileall` OK, **453/453** verdes otra vez.
+
+> **Es D2 otra vez, disfrazada.** D2 se cerró en julio para que "nadie hiciera push, rompiera algo y
+> no se enterara". Aquí nadie rompió el cobro: se rompió **el vigilante**, y el vigilante no se
+> vigila a sí mismo. La lección va abajo (L41).
+
+### 2 · 🛒 EL P0 — los dos huecos de detección, cerrados
+
+**Hueco A: la HORA.** Tercer requisito inventado que se mide (sabor → nombre completo → hora), y
+el más absurdo, porque el bot tiene **dos** fuentes que se lo prohíben: la personalidad de la BD
+(*"La hora exacta no la cierres tú: la coordina Whuilianny"*) y el schema del campo `entrega`
+(*"La hora NO se cierra aquí"*). Añadida a `_DATO_OPCIONAL` con la forma justa — `qué hora`,
+`hora exacta/aproximada/de la entrega/de retiro` y **nunca `horario`**, que el negocio SÍ informa.
+
+**Hueco B: la lista y la pregunta en frases distintas.** El patrón más natural, y el que usó el
+bot real:
+
+```
+🤖 "Tenemos: limón, zanahoria, naranja, piña, vainilla, marmoleada, manzana canela y cambur."
+🤖 "Cuál te provoca?"
+```
+
+La primera frase tiene los sabores pero no es pregunta; la segunda es pregunta pero no tiene
+ninguna palabra de la lista. Mirando frase por frase **ninguna de las dos cumplía las dos
+condiciones** y la red no veía nada. Se resuelve resolviendo el OBJETO de la pregunta pelada: es
+la lista que la precede (`_es_lista_pelada`).
+
+🔴 **Y lleva un freno pegado que es más importante que la regla: `_TAMANO_EN_LISTA`.** Si la lista
+que precede a la pregunta son TAMAÑOS ("250g, 500g y 1kg. ¿cuál prefieres?"), esta red **no puede
+tocarla jamás** — su aviso dice *"registra con lo que tienes"*, y aplicado a un tamaño eso es
+ordenarle al bot que adivine el precio. Sin ese freno, arreglar el P0 habría abierto el P0.5.
+
+**Y el aviso ahora nombra el dato de verdad.** Decía siempre *"YA LE PREGUNTASTE EL SABOR (o el
+relleno)"*; con la hora dentro, eso era una mentira en el mensaje que precisamente le pide al
+modelo que deje de inventar.
+
+### 3 · 🔴 EL TERCER SITIO QUE EMPUJABA A PEDIR EL SABOR — nadie lo había tocado
+
+La sesión anterior identificó tres sitios que empujan a pedir el sabor y ninguno que dijera que se
+puede cerrar sin él. Se arreglaron **dos** (`_REGLAS` y la personalidad). El tercero —**el schema
+de la tool, que el modelo lee en CADA llamada**— seguía intacto:
+
+> `opciones`: *"Lo que el cliente eligió DENTRO del paquete y **que la dueña necesita para
+> cocinar**…"* — sin una palabra sobre que es opcional.
+
+Mientras tanto, tres líneas más abajo, `"required": ["variante_id", "cantidad"]`. **Un campo que el
+schema declara opcional y describe como imprescindible es una contradicción, y el modelo la
+resolvía del lado malo: bloqueando la venta.** Reescrito: empieza por `OPCIONAL`, y dice qué hacer
+si el cliente no lo da (dejarlo vacío y registrar igual).
+
+### 4 · 💵 P0.5 — LA RED DEL TAMAÑO ADIVINADO (el carril del dinero)
+
+El caso medido: a un *"ok esa quiero, 1"* el bot contestó *"te preparo la Torta baja en
+carbohidratos **de 1kg**"*. La clienta nunca dijo el tamaño — dijo "1", que ahí es la CANTIDAD. Y
+el 1kg **es el más caro de los tres**.
+
+**Es la fuga de la Kombucha otra vez, por la otra puerta.** Aquella (350ml $4 / 700ml $7, siempre
+cobraba $4) era el CÓDIGO eligiendo mal y costó una cirugía entera (022/022b, el "código de
+barras"). Esta es el MODELO eligiendo por su cuenta, y el código de barras **no la tapa**: el
+`variante_id` es válido, solo que no es el que el cliente pidió.
+
+Se le prohíbe en el prompt DOS veces (el catálogo y el schema del `variante_id`) y lo hizo igual.
+
+**Qué se construyó.** `tamanos_hermanos()` (solo lectura, en `tools.py`) + `_tamano_sin_elegir()`
+(en `agent.py`), detrás de `_ejecutar_con_guardas()` — **una sola puerta**, por la que pasan los
+**tres** sitios que ejecutan tools (modo uno, el Operador del modo dos, y el re-prompt del dinero).
+Cuenta como elegido si:
+
+1. lo dijo **el cliente**, en cualquier mensaje suyo ("la de 1kg", "500", "un kilo", "medio kilo"); o
+2. el bot propuso **UN** tamaño concreto en su último mensaje y el cliente siguió con eso delante.
+   Ofrecer los tres **no** cuenta: un "sí" no dice cuál. Y un tamaño que el bot se propone a sí
+   mismo dentro del turno tampoco: no puede autorizarse solo.
+
+Si no, **la herramienta NO se ejecuta** y el modelo recibe un rechazo con la misma forma que los
+suyos (`{"ok": false, "nota": …}` + la lista de tamaños), que ya sabe corregir en el mismo turno.
+
+⚠️ **Dos decisiones que hacen que esta red no pierda ventas.** El número pelado solo cuenta si es
+distintivo (≥100: 250, 500, 350, 700) — porque el "1" de *"ok esa quiero, 1"* es la cantidad, que
+es justo el bug. Y **fail-open**: cualquier fallo leyendo el catálogo deja pasar la venta. Una red
+del cobro que frena de más es una red que alguien acaba apagando.
+
+*Alcance real: hoy solo 3 de 32 productos tienen más de un tamaño vendible (Tortas keto, Kombucha
+y Torta baja en carbohidratos) — verificado en la BD del taller. Los otros 29 esta red ni los roza.*
+
+### 5 · ✅ Un pendiente que se cierra SIN escribir código
+
+`prompt_proxima_sesion.md` §5 P5 tenía abierto: *"3 reglas ordenan usar `info_producto` sin la marca
+`@info_producto`: con la herramienta apagada le llega al modelo una orden imposible"*. **Ese fallo
+no puede ocurrir:** `info_producto` (y `ver_catalogo`) están en `_NUCLEO` ⊂ `BLINDADAS`, con **tres**
+candados independientes — `_parsear` las re-inyecta al LEER, `serializar` al ESCRIBIR, y
+`router.py:1239` rechaza la llamada de la API que las omita. **No se pueden apagar ni editando el
+CSV a mano en Postgres.** Marcar esas 3 reglas sería código muerto; el propio `tools_config.py:126`
+ya deja escrito que las marcas hacen falta *si algún día* se saca del núcleo.
+
+### Verificación
+
+- **470 tests** (eran 453). Fichero nuevo `tests/test_red_del_tamano.py` (**12 casos**, 7 de ellos
+  de los que NO deben disparar) + 5 casos nuevos en `test_red_del_cierre.py`.
+- **9 reversiones → 9 rojas.** Y **dos fallos del INSTRUMENTO** cazados por el camino (L35 otra vez):
+  1. La reversión de `_es_lista_pelada` salió VERDE: el caso que protege estaba **sobredeterminado**
+     — *"traen 6 unidades…"* contiene un TAMAÑO, así que el freno del tamaño lo salvaba igual y el
+     test no probaba lo que decía. Se le añadió la misma frase **sin** "6 unidades".
+  2. Cuatro reversiones dijeron *"no tests ran"* y eso NO es un verde: **zsh no parte `$3` en
+     palabras** (a diferencia de bash), así que pytest recibía los dos node-ids pegados como uno y
+     no seleccionaba nada. Con `${=3}`, las cuatro en rojo.
+  3. Y una tercera, menor: un caso del tamaño pasaba **por el orden de la lista**, no por el código
+     (la reversión devolvía el primer tamaño, que no era el elegido). Se cambió al tamaño que va
+     primero en la lista para que el caso quede realmente fijado.
+- `ruff` limpio · `compileall` OK · **CI verde otra vez** (era lo primero).
+- **Cero cambios en la BD** y cero migraciones nuevas: todo esto es código.
+
+### 🔴 Lo que FALTA (no se hizo, y no es un olvido)
+
+- **El arreglo de fondo del P0 sigue pendiente y merece su sesión:** inyectar cada turno el
+  **ESTADO DEL PEDIDO EN CURSO** (qué producto se identificó, qué cantidad, qué falta), como ya se
+  hace con `ESTADO DEL CLIENTE`. Las redes de arriba tapan los casos medidos; eso mata la clase.
+- **Nada de esto está medido contra el bot real todavía:** vive en `agent.py` y `tools.py`, así que
+  hace falta push + deploy (`CLAUDE.md` §3 prohíbe `docker cp`). Está validado de forma
+  determinista con modelos guionados y reversiones.
+
+---
+
+## 2026-08-22 — 🔌 COOLIFY RECONECTADO Y LAS DOS REGRESIONES QUE CAZARON LOS BANCOS
+
+> **Entrada de registro que FALTABA.** Los commits `13a064f` y `6c5d14c` no tocaron `SESIONES.md`,
+> así que estos dos bloques vivían solo en `ESTADO.md` (a medias) y en `prompt_proxima_sesion.md`,
+> **que no está versionado en ninguna parte**. `CLAUDE.md` §0.3 pide registrar cada cambio aquí; la
+> receta del despliegue manual (abajo) es operación crítica y estaba en un solo fichero, en una sola
+> Mac. Se registra el 2026-08-22 (2), releyendo los commits.
+
+### 1 · Los bancos cazaron DOS REGRESIONES del prompt (commit `13a064f`)
+
+Al desplegar y correr los 27 bancos **uno por uno**: 24 verdes, **3 rojos**, y los tres eran de la
+propia sesión.
+
+1. **`probar_prompt_coherente`** — al fusionar las dos reglas médicas duplicadas se cayó el *"si la
+   personalidad lo indica"*. **No era adorno:** *"antiinflamatorio"* no es campo de ninguna ficha,
+   así que ninguna red lo caza, y sin la condición la contradicción con ANTIINVENCIÓN se resuelve
+   siempre a favor de **AFIRMAR**. Restaurado.
+2. **`probar_dos_agentes` + `probar_herramientas`** — se le quitó a BREVEDAD su *"(lo más importante
+   de tu voz)"* creyendo que competía con ANTIINVENCIÓN. **Error de lectura:** el reparto entre
+   agentes YA resuelve esa competencia (ANTIINVENCIÓN al Operador, BREVEDAD a la Voz, **una** primacía
+   por prompt) y los bancos lo tenían codificado con su porqué. En modo `uno` van las dos, y ese es
+   el coste conocido de ese modo, no un bug. Restaurado verbatim.
+
+→ **Los bancos codifican decisiones de diseño. Antes de "arreglar" una contradicción del prompt,
+`grep` en `scripts/probar_*.py`.**
+
+### 2 · Coolify reconectado (commit `6c5d14c`)
+
+- Las 3 apps volvieron a **`git_branch = 'master'`** (estaban en `DESCONECTADO-2026-08-02`, una rama
+  que no existe).
+- 🔴 **`is_auto_deploy_enabled` estaba en `true` en las tres.** Poner solo la rama habría reactivado
+  push→deploy y **revertido en silencio** la decisión de Erwin del 2-ago de que el deploy es siempre
+  a mano. Se puso en **`false`**. Para volver atrás:
+  `UPDATE application_settings SET is_auto_deploy_enabled=true`.
+- Estado anterior guardado en el VPS: **`/root/COOLIFY_ANTES_2026-08-21.csv`**.
+- El **dashboard NO se redesplegó**: no tiene commits nuevos (`b9a97c8`) y reconstruirlo arriesga el
+  `NEXT_PUBLIC_API_URL` de build-time por nada.
+- Antes del rebuild se hizo una **auditoría de regresión de 7 comprobaciones** (md5 de 9 ficheros del
+  contenedor contra git · volúmenes nombrados de Postgres y Redis · `002_seed_catalogo` ya marcada
+  como aplicada · 35 migraciones = 35 ficheros · env vars de Coolify descifradas y comparadas ·
+  `NIXPACKS_NODE_VERSION` inerte porque las 3 apps son `dockerfile` · Dockerfiles presentes en
+  `master`). Todo en verde, y **cero regresión de datos** después (32/37/2/34/10/2).
+
+#### 🔧 CÓMO SE DISPARA UN DEPLOY DE COOLIFY A MANO (no es obvio, y no estaba escrito aquí)
+
+**No hay comando de artisan.** `php artisan tinker` + `createToken()` **falla** por `team_id` nulo.
+La vía que funciona:
+
+1. `INSERT INTO personal_access_tokens (name, token, abilities, tokenable_id, tokenable_type, team_id, …)`
+   con **`tokenable_id=1, team_id=2`**, y el campo `token` = **sha256 del plaintext**.
+2. Cabecera **`Authorization: Bearer {id}|{plaintext}`**.
+3. `GET http://localhost:8000/api/v1/deploy?uuid=<uuid>` (desde DENTRO del VPS).
+4. Esperar en `application_deployment_queues.status` → `finished`.
+5. **Borrar el token al terminar.**
+
+**Orden: WORKER primero, BOT después** — si algo sale mal, el bot sigue atendiendo.
+
+---
+
 ## 2026-08-21 (6) — 🛒 EL P0: el bot NO CIERRA. Reproducido, diagnosticado, y la "decisión pendiente" ya estaba contestada en los audios
 
 **Lo que se buscaba:** cerrar el único P0 de `prompt_proxima_sesion.md` — *"asesora bien pero NO
