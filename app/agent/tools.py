@@ -2581,6 +2581,22 @@ async def generar_datos_pago(session, telefono, pedido_id=None):
         f"Si pagas en efectivo en dólares son {_fmt_usd(monto_usd_divisas)}, "
         f"con el 20% de descuento{_flete_gratis}"
     )
+    # 🧾 EL DESGLOSE DEL EFECTIVO, línea por línea. Lo pide el documento con esas palabras:
+    # «El sistema debe mostrar subtotal, descuento, delivery en USD 0 y total final».
+    #
+    # 🔴 Y RESUELVE UNA CONFUSIÓN REAL, no es adorno. Maired reportó dos veces que el bot
+    # "saca mal la cuenta" porque veía $17 arriba y $11.20 abajo, sin el paso intermedio: la
+    # resta no se veía por ningún lado. Con el desglose delante, el 20% se sigue con el dedo.
+    # Cuando el dinero sorprende, el problema no suele ser la cifra: es que no se ve de dónde sale.
+    _productos = monto_usd - envio
+    _descuento = (_productos * Decimal("0.20")).quantize(Decimal("0.01"))
+    desglose_efectivo = [
+        f"Productos: {_fmt_usd(_productos)}",
+        f"Descuento 20%: -{_fmt_usd(_descuento)}",
+    ]
+    if envio > 0:
+        desglose_efectivo.append(f"Delivery: $0 (normalmente {_fmt_usd(envio)}, va por nuestra cuenta)")
+    desglose_efectivo.append(f"Total en efectivo: {_fmt_usd(monto_usd_divisas)}")
 
     return {
         "ok": True,
@@ -2590,6 +2606,9 @@ async def generar_datos_pago(session, telefono, pedido_id=None):
         "tasa_bcv": float(tasa),
         "monto_bs": float(monto_bs),
         "resumen_cobro": resumen_cobro,
+        # El desglose va aparte del resumen: el modelo lo copia TAL CUAL cuando el cliente
+        # pregunta por la cuenta o elige pagar en efectivo. Nunca lo recalcula.
+        "desglose_efectivo": desglose_efectivo,
         "banco": (pm.banco if pm else None) or config.get("pago_movil_banco"),
         "cedula": (pm.cedula if pm else None) or config.get("pago_movil_cedula"),
         "telefono_pago": (pm.telefono if pm else None) or config.get("pago_movil_telefono"),

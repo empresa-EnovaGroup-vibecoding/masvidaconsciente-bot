@@ -132,3 +132,45 @@ def test_cobrar_y_comprobar_usan_la_misma_funcion():
             f"{funcion.__name__} volvió a escribir el 0,80 a mano en vez de usar "
             "`monto_en_efectivo`"
         )
+
+
+# ══════════════════════════════════════════════════════════════════════════════════
+#  EL DESGLOSE — "subtotal, descuento, delivery en USD 0 y total final"
+# ══════════════════════════════════════════════════════════════════════════════════
+#
+# Lo pide el documento con esas palabras. Y no es adorno: Maired reportó DOS VECES que el bot
+# "saca mal la cuenta" porque veía $17 arriba y $11.20 abajo **sin el paso intermedio**. La resta
+# no se veía por ningún lado. Cuando el dinero sorprende, lo que falta casi nunca es la cifra —
+# es ver de dónde sale.
+
+def test_el_desglose_muestra_las_cuatro_lineas():
+    """Con envío: productos, descuento, delivery en 0 y total. Cuatro líneas, como pide el doc."""
+    import inspect
+
+    from app.agent import tools
+
+    fuente = inspect.getsource(tools.generar_datos_pago)
+    assert "desglose_efectivo" in fuente
+    for linea in ("Productos:", "Descuento 20%:", "Delivery: $0", "Total en efectivo:"):
+        assert linea in fuente, f"falta la línea del desglose: {linea!r}"
+
+
+def test_el_desglose_sale_en_el_resultado_de_la_tool():
+    """Si no viaja en el return, el modelo no puede copiarlo."""
+    import inspect
+
+    from app.agent import tools
+
+    fuente = inspect.getsource(tools.generar_datos_pago)
+    assert '"desglose_efectivo": desglose_efectivo' in fuente
+
+
+def test_el_descuento_del_desglose_cuadra_con_lo_que_se_cobra():
+    """🔴 Lo que este test impide: que el desglose y el total se desincronicen. Un desglose que
+    no suma el total es peor que no tenerlo — le da al cliente motivos para desconfiar."""
+    productos, envio = Decimal("14"), Decimal("3")
+    descuento = (productos * Decimal("0.20")).quantize(Decimal("0.01"))
+    total = monto_en_efectivo(productos + envio, envio)
+    assert productos - descuento == total, (
+        f"el desglose no cuadra: {productos} - {descuento} != {total}"
+    )
