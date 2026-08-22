@@ -151,6 +151,68 @@ herramienta aún no calcula, la ventana entre uno y otro es una promesa incumpli
 despliegue bloqueado, esa ventana puede durar días. **Lo que toca el dinero se aplica DESPUÉS del
 deploy, nunca antes.**
 
+### 6 · 🔴 LA SEGUNDA PRUEBA DE MAIRED: la herramienta sola NO bastó
+
+Con el calendario **ya desplegado**, Maired probó a las 18:55 y el bot escribió:
+
+```
+🤖 "Te las dejo para mañana domingo, o prefieres el lunes?"
+```
+
+🔴 **Y las llamadas a `proxima_fecha_entrega` en esa conversación fueron CERO.** El modelo la tenía
+activa en su lista, leyó en su descripción que era **OBLIGATORIA** antes de nombrar cualquier
+fecha, y calculó el día de cabeza igual.
+
+**Es L40 al pie de la letra** —*el prompt SUGIERE, el código IMPIDE*— y es la lección que este
+proyecto ya había aprendido tres veces (el sabor, el nombre completo, la hora). La herramienta le
+daba al modelo la **posibilidad de acertar**; faltaba quitarle la **de equivocarse**. Dos redes:
+
+- **RED DEL DÍA IMPOSIBLE.** El calendario se consulta **desde el código en cada turno**, sin
+  esperar a que el modelo se acuerde. Si el texto nombra un día en que no se entrega —por su
+  nombre o como "mañana"— se le devuelve el calendario real y reescribe. Fail-open.
+- **RED DE LA FICHA REPETIDA.** *"duran 2 semanas y son aptas para diabéticos"* salió **CUATRO
+  veces**, con la regla del prompt ya puesta. Se quita la frase ya dicha, literal. Tres frenos:
+  solo frases largas, solo si queda algo que decir, y **nunca una que lleve dinero**.
+
+Y dos correcciones de lo que DICE, las dos de Maired:
+- **"el negocio cierra a las 6" → NO cierra.** *"Ellos no cierran. Ya no se hacen entregas después
+  de las 6 pm"*. Es online y sigue vendiendo; lo que termina son las ENTREGAS. Decirle "cerramos"
+  es echar a un cliente de una tienda abierta.
+- **La fecha se AFIRMA, no se pone a votación.** *"no se deja al cliente la opción de decidir el
+  día"* · *"debe decir para el día lunes que se le entregará"*.
+
+### 7 · 📊 LOS DATOS, TOMADOS DEL DOCUMENTO (no de mi criterio)
+
+- **Zona centro $3 → $2.** Documento §9: *"USD 2 en la zona cercana a La Mendera"*.
+- **`dias_anticipacion`, que estaba en 0 en los 32** — o sea, el bot creía que TODO salía hoy.
+  Documento §12: *"normalmente uno o dos días"*. Quedan **16 en 0** (congelados y envasados: el
+  propio panel dice que salen el mismo día), **12 en 1** y **4 en 2** (las que se hornean).
+
+### 8 · 🔴 EL DESCUENTO: EL DOCUMENTO Y MAIRED NO DICEN LO MISMO — sin resolver
+
+Maired reportó *"sigue sacando mal la cuenta: si son $17 y aplica un descuento del −20% da
+**$13.60**, no $11.20"*. **El bot NO calculó mal.** Su documento lo define tres veces:
+
+> *"con dólares físicos se aplica **20 % de descuento a los productos** y **delivery gratis** en
+> cualquier zona atendida"* · *"El sistema debe mostrar subtotal, descuento, **delivery en USD 0**
+> y total final"*
+
+$14 × 0,80 = **$11.20**, envío en cero. Lo que ella calcula ($17 × 0,80) es 20% **sobre el total
+con el envío dentro**, que el documento no dice en ninguna parte.
+
+**Lo que probablemente pasó:** al escribir *"20% Y delivery gratis"* no se calculó el efecto de
+las dos cosas juntas.
+
+| | cobra | − flete | le queda | descuento real |
+|---|---|---|---|---|
+| **documento** | $11.20 | $3 | **$8.20** | **41%** |
+| lo que pide Maired | $13.60 | $3 | $10.60 | 24% |
+| la regla anterior | $14.20 | $3 | $11.20 | 20% |
+
+🔴 **Queda como está (el documento manda, lo confirmó Erwin), pero es una bomba de tiempo: Maired
+va a volver a reportarlo como bug en la próxima prueba.** Hay que enseñarle la cita de su propio
+documento y que decida. Son dos líneas de cambio y ya tienen tests.
+
 ### 🔴 Lo que la plantilla pide y NO se hizo todavía
 
 - ✅ **HECHA en esta misma sesión: `proxima_fecha_entrega`.** El bot ya no calcula fechas de
