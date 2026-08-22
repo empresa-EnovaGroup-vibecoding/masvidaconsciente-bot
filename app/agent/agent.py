@@ -618,13 +618,24 @@ async def _dias_imposibles(texto: str, calendario: dict | None) -> list[str]:
     la BD, o el turno no lo pidió) esta red no opina — frenar una venta por no poder comprobar
     sería peor que el bug que arregla.
     """
-    if not calendario or not calendario.get("ok"):
+    # 🔴 `ejecutar` puede devolver CUALQUIER COSA: en los bancos está mockeado, y en producción
+    # una tool puede devolver un error. Si no es un dict con `ok`, esta red no opina.
+    if not isinstance(calendario, dict) or not calendario.get("ok"):
         return []
     try:
-        buenas = {f["cuando"] for f in calendario.get("proximas_fechas", [])}
-        buenas_dias = {_sin_acentos_min(c.split()[0]) for c in buenas}
+        buenas = {f.get("cuando", "") for f in (calendario.get("proximas_fechas") or [])
+                  if isinstance(f, dict)}
+        # ⚠️ `"".split()` devuelve [] (NO [""]), así que indexar [0] a ciegas revienta. Pasó:
+        # `probar_herramientas` cazó un IndexError aquí en cuanto se corrió contra el entorno
+        # local, porque su ejecutor mockeado devuelve un calendario sin `hoy_es`. El `try` lo
+        # tapaba —fail-open— pero eso significa que la red **se apagaba en silencio**, que es
+        # justo lo que no puede hacer una red de seguridad.
+        buenas_dias = {_sin_acentos_min(c.split()[0]) for c in buenas if c and c.split()}
         hoy_sirve = bool(calendario.get("hoy_se_puede_entregar"))
-        hoy_nombre = _sin_acentos_min((calendario.get("hoy_es") or " ").split()[0])
+        _hoy_es = (calendario.get("hoy_es") or "").split()
+        if not _hoy_es or not buenas_dias:
+            return []  # sin saber qué día es hoy no se puede resolver "mañana": no se opina
+        hoy_nombre = _sin_acentos_min(_hoy_es[0])
 
         malos = []
         for d in _dias_nombrados(texto):
@@ -2191,13 +2202,20 @@ async def responder(
             # El calendario se consulta AQUÍ, en el código, y NO se espera a que el modelo llame a
             # la herramienta: el 22-ago la llamó CERO veces teniendo la instrucción de que era
             # obligatoria. La red no puede depender de la buena voluntad del modelo (L40/L63).
-            if _calendario is None:
-                try:
-                    _calendario = await ejecutar("proxima_fecha_entrega", {}, telefono)
-                except Exception:  # noqa: BLE001 — fail-open: sin calendario, esta red calla
-                    logger.exception("RED DEL DÍA: no se pudo leer el calendario; se deja pasar")
-                    _calendario = {}
-            imposibles = await _dias_imposibles(texto, _calendario)
+            # ⚠️ EL CALENDARIO SOLO SE CONSULTA SI EL BOT NOMBRÓ UN DÍA. `_dias_nombrados` es
+            # puro texto y no toca la BD, así que filtrar aquí sale gratis. La primera versión
+            # lo pedía en TODOS los turnos: una consulta de más por mensaje, y un traceback en
+            # cada banco que tiene lista cerrada de herramientas (lo destapó `probar_recibo_visible`
+            # al correrlo contra Postgres local). Si nadie habla de fechas, no hay nada que validar.
+            imposibles = []
+            if _dias_nombrados(texto):
+                if _calendario is None:
+                    try:
+                        _calendario = await ejecutar("proxima_fecha_entrega", {}, telefono)
+                    except Exception:  # noqa: BLE001 — fail-open: sin calendario, la red calla
+                        logger.warning("RED DEL DÍA: sin calendario en este turno; se deja pasar")
+                        _calendario = {}
+                imposibles = await _dias_imposibles(texto, _calendario)
             if imposibles and not corregido_fecha:
                 corregido_fecha = True
                 _buenas = ", ".join(

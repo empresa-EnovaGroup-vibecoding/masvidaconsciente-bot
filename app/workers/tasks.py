@@ -1661,14 +1661,38 @@ async def _procesar_comprobante(
     if message_id:
         await rc.marcar_comprobante(message_id)
 
-    # Cierre del CLOSER: si se registró el pago, SIGUE la venta (agradece, coordina,
-    # ofrece más). No avisa a la dueña (su banco ya le avisa) ni afirma verificación.
+    # 🔴 EL BOT ESPERA A QUE LA DUEÑA APRUEBE — cambiado el 2026-08-22 a petición de Maired:
+    # *"lo de que ella confirma el pago y luego él sigue el proceso tampoco estaba"*. Es el
+    # flujo de los pasos 8 y 9 de su plantilla: recibir → "en revisión" + avisarle a ella →
+    # ella pulsa «Pago aprobado» en el panel → ESE evento reactiva al bot, que recién ahí
+    # confirma y coordina la entrega (lo hace `confirmar_pago` en `router.py`, que ya manda
+    # `notificar_cliente_pago` con `contexto_entrega`).
+    #
+    # ⚠️ ANTES ERA AL REVÉS y estaba escrito como decisión en `CLAUDE.md` §3: el bot registraba
+    # y SEGUÍA la venta de una. Se cambia porque la dueña quiere el control del dinero, y el
+    # costo de esperar está asumido: el cliente pasa un rato sin coordinación después de pagar.
+    #
+    # 🔴 PAUSAR Y AVISAR VAN JUNTOS, SIEMPRE. Si el bot se detiene y a ella no le llega nada,
+    # el cliente queda colgado indefinidamente después de haber pagado — que es peor que el
+    # comportamiento que estamos cambiando. Por eso el aviso NO es opcional aquí.
     if resultado.get("ok") and monto_cuadra:
         situacion = (
             "el cliente acaba de mandar el comprobante de su pago y ya lo registraste. "
-            "Agradécele con calidez, dile que recibiste su pago y que coordinas la "
-            "entrega/envío, y déjale la puerta abierta por si quiere algo más. "
-            "NO digas que verificaste el pago en el banco ni que está 'confirmado'."
+            "Agradécele con calidez y dile que YA LO RECIBISTE y que lo estás revisando, que "
+            "le confirmas enseguida. 🔴 NO coordines todavía la entrega ni le pidas la "
+            "dirección: eso viene después, cuando el pago quede aprobado. Y NO digas que "
+            "verificaste el pago en el banco ni que está 'confirmado'."
+        )
+        # El aviso a ella es lo que cierra el círculo: sin esto, esperar sería abandonar.
+        await _avisar_a_la_duena(
+            telefono,
+            motivo="pago_por_aprobar",
+            detalle=(
+                f"{nombre or telefono} mandó su comprobante y el monto CUADRA con lo cobrado. "
+                "El bot ya le dijo que lo está revisando y NO va a coordinar la entrega hasta "
+                "que tú apruebes. Míralo en el panel y pulsa «Pago aprobado»: ese clic reactiva "
+                "al bot para que cierre la entrega con él."
+            ),
         )
     elif resultado.get("ok"):
         # Registrado, pero el monto NO cuadra con lo cobrado: no afirmar que está completo.

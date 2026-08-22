@@ -94,6 +94,29 @@ async def test_no_dispara_en_mensajes_normales(texto):
 
 
 @pytest.mark.asyncio
+async def test_un_calendario_MALFORMADO_no_revienta_ni_se_apaga_a_ciegas():
+    """🔴 EL BUG QUE CAZÓ EL ENTORNO LOCAL. `_dias_imposibles` hacía
+    `(calendario.get("hoy_es") or " ").split()[0]` — y `" ".split()` devuelve **[]**, no [" "],
+    así que indexar [0] lanzaba IndexError.
+
+    El `try/except` lo tapaba (fail-open), pero eso significa que **la red se apagaba en
+    silencio** justo cuando más falta hacía. Salió a la luz al correr `probar_herramientas`
+    contra Postgres local: su ejecutor mockeado devuelve un calendario sin `hoy_es`, algo que en
+    el VPS no pasaba. Un banco que solo corre después de desplegar no puede cazar esto."""
+    for roto in (
+        {"ok": True},                                             # sin nada
+        {"ok": True, "hoy_es": "", "proximas_fechas": []},        # cadenas vacías
+        {"ok": True, "hoy_es": "   ", "proximas_fechas": [{}]},   # solo espacios
+        {"ok": True, "hoy_es": "lunes 24", "proximas_fechas": None},
+        "no soy un dict",                                          # lo que sea que devuelva la tool
+        ["tampoco"],
+    ):
+        assert await _dias_imposibles("Te lo dejo para mañana domingo", roto) == [], (
+            f"reventó o inventó un fallo con {roto!r}"
+        )
+
+
+@pytest.mark.asyncio
 async def test_fail_open_sin_calendario():
     """🔴 Si no hay calendario (falló la BD), la red CALLA. Frenar una venta por no poder
     comprobar sería peor que el bug que arregla."""
