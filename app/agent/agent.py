@@ -883,6 +883,92 @@ def _afirma_pedido_registrado(texto: str) -> bool:
     return False
 
 
+# ══════════════════════════════════════════════════════════════════════════════════════
+#  RED DEL CIERRE: el bot se traba pidiendo un SABOR que es opcional
+# ══════════════════════════════════════════════════════════════════════════════════════
+#
+# 🔴 EL CASO MEDIDO (2026-08-21, smoke de 5 turnos contra el bot real, reproducido dos veces):
+# la clienta llega con producto, cantidad, fecha y forma de entrega… y quedan **0 PEDIDOS EN LA
+# BASE**. El bot pidió el sabor en los CINCO turnos y en el último no llamó a NINGUNA herramienta:
+# bucle puro. La venta se pierde en silencio — nadie se entera, ni la dueña.
+#
+# LA CAUSA no es que invente el sabor: los sabores son REALES, viven en `productos.descripcion`
+# ("chocolate, limón pistacho, canela naranja, chocomerey"). La causa es que trata un campo
+# **OPCIONAL** como si fuera bloqueante. Tres sitios empujan a pedirlo y NINGUNO dice que se puede
+# cerrar sin él: `_REGLAS` ("pásalo SIEMPRE en `opciones`"), la personalidad de la BD ("pregunta
+# lo que falte: tamaño, sabor, cuántos") y el schema de la tool ("la dueña lo necesita para
+# cocinar"). Y sin embargo el propio schema lo declara opcional (`required` = variante_id +
+# cantidad) y el pedido 1078 de esta misma base es exactamente ese producto con `opciones: null`.
+#
+# 🟢 Y LOS DOCUMENTOS DE WHUILIANNY ZANJAN LA DUDA que quedó abierta en `prompt_proxima_sesion.md`
+# ("¿se puede registrar sin el sabor, o es obligatorio?"). Ella ACEPTA PRIMERO y pide el sabor
+# DESPUÉS, en el mismo minuto (CLI-051):
+#
+#   [20:39] "Recuerda que yo trabajo bajo pedido. Para mañana sí te lo puedo tener."   ← acepta
+#   [20:39] "Me vas a decir, por favor, qué sabores quieres… ahí salen los toppings."  ← y luego
+#
+# **Nunca bloquea el pedido por el sabor.** No hacía falta decisión de nadie: estaba en los audios.
+#
+# ⚠️ LO QUE ESTA RED **NO** HACE: registrar el pedido por su cuenta. Forzar el registro antes de
+# que el cliente confirme sería peor que el bug (lo advierte el comentario de `_AFIRMA_PEDIDO`, y
+# por eso `_afirma_pedido_registrado` deja pasar a propósito las preguntas y los condicionales).
+# Lo que hace es QUITAR EL FALSO BLOQUEO: le dice que el sabor es opcional y que no lo repregunte.
+# Quien decide si ya tiene bastante para registrar sigue siendo el modelo.
+# 🔴 Y NO ES SOLO EL SABOR: es una CLASE de fallo. Al quitar el bloqueo del sabor y volver a
+# medir, el bot cerró la venta en una corrida (pedido 1156 en la base) y en la otra se trabó
+# igual… **pidiendo el "nombre completo"**. Mismo patrón, otro dato: se inventa un requisito que
+# `registrar_pedido` no pide (su `required` son SOLO `variante_id` y `cantidad`) y bloquea el
+# cierre con él. Por eso la lista cubre la clase, no un caso.
+#
+# El teléfono está aquí por algo medido el 08-21: el bot le pidió *"me confirmas tu número de
+# teléfono"* **a alguien que le está escribiendo por WhatsApp**.
+_DATO_OPCIONAL = re.compile(
+    r"\b(sabor(es)?|relleno(s)?|topping(s)?|mezcla|combinaci[óo]n"
+    r"|nombre\s+completo|apellido|correo|email|c[óo]rreo"
+    r"|n[úu]mero\s+de\s+tel[ée]fono|tel[ée]fono\s+de\s+contacto)\b",
+    re.I,
+)
+
+
+def _pide_opcion_del_paquete(texto: str) -> bool:
+    """True si el bot PREGUNTA por un dato OPCIONAL (sabor, relleno, nombre completo, correo…).
+
+    Se mira FRASE POR FRASE y solo cuentan las PREGUNTAS, y eso no es un detalle: en el turno 1
+    del smoke el bot escribió *"…traen 6 unidades con varios sabores para elegir (chocolate,
+    limón pistacho…). De cuál te llevo?"*. Ahí la palabra "sabores" está en una frase que
+    DESCRIBE, y la pregunta ("de cuál te llevo?") es sobre el PRODUCTO, no sobre el sabor —
+    contar ese turno haría disparar la red cuando el bot está haciendo justo lo que debe.
+    """
+    for frase in re.split(r"(?<=[.!?\n])\s+", texto or ""):
+        limpia = frase.strip()
+        if not limpia:
+            continue
+        # `_aplanar` (workers/tasks.py) borra los "¿" en el ENVÍO, pero aquí el texto todavía
+        # los puede traer: se aceptan las dos formas.
+        es_pregunta = limpia.endswith("?") or limpia.startswith("¿")
+        if es_pregunta and _DATO_OPCIONAL.search(limpia):
+            return True
+    return False
+
+
+def _ya_pidio_opcion_antes(historial: list | None) -> bool:
+    """True si el bot YA preguntó por el sabor/relleno en un turno ANTERIOR.
+
+    Es la señal del BUCLE: preguntarlo una vez es correcto (Whuilianny lo pregunta). Volver a
+    preguntarlo cuando el cliente no lo contestó es donde se muere la venta.
+
+    ⚠️ Un historial VACÍO devuelve False, y eso está bien: sin turnos anteriores no hay bucle que
+    romper. (Es la trampa de L20 —un historial vacío APAGA las redes que lo reciben por
+    parámetro—; aquí el fail-safe cae del lado bueno: la red no dispara en el primer contacto.)
+    """
+    for h in reversed(historial or []):
+        if h.get("role") != "assistant":
+            continue
+        if _pide_opcion_del_paquete(h.get("content") or ""):
+            return True
+    return False
+
+
 # ─── RED DE LA HONESTIDAD: hay cosas que el bot NO puede decir JAMÁS ──────────────────
 #
 # Bajo presión (un cliente molesto), el bot dijo "acabo de revisar todo en mi banco" — TRES
@@ -1604,6 +1690,7 @@ async def responder(
     fotos_ok = False  # ¿enviar_fotos_producto ENVIÓ algo de verdad en este turno?
     fotos_intentadas = False  # ¿se LLAMÓ a enviar_fotos_producto este turno? (aunque no enviara)
     reclamo_fotos = False  # ya se le llamó la atención por afirmar un envío de fotos falso
+    reclamo_opcion = False  # ya se le llamó la atención por trabarse pidiendo el sabor
     # 🔴 EL GUARD DEL COMPROBANTE, TRAÍDO AL MODO QUE CORRE HOY (auditoría 2026-08-02, PRM-3).
     # La regla 79 del prompt ORDENA: "al registrar el comprobante… dile que RECIBISTE su pago".
     # El bot obedecía, y `_PROHIBIDO_EN_CHARLA` ("afirmó que el pago ya llegó") lo frenaba con un
@@ -1842,6 +1929,50 @@ async def responder(
                     ya_fallo=relevo_imposible,
                 )
                 return RESPUESTA_SEGURA
+
+            # 🔴 RED DEL CIERRE: se traba pidiendo el SABOR, que es OPCIONAL (ver el bloque de
+            # `_pide_opcion_del_paquete`). Medido: 5/5 turnos pidiéndolo y 0 pedidos en la base.
+            #
+            # Dispara solo si se juntan las TRES: pregunta el sabor AHORA, ya lo había preguntado
+            # ANTES (o sea, el cliente no lo contestó y está insistiendo) y NO hay pedido
+            # registrado en este turno. Preguntarlo UNA vez es correcto y no se toca.
+            #
+            # No escala ni mata el texto: el mensaje no es una MENTIRA, solo es un callejón sin
+            # salida. Se le quita el falso bloqueo una vez y se le devuelve la decisión.
+            if (
+                not registro_ok
+                and _pide_opcion_del_paquete(texto)
+                and _ya_pidio_opcion_antes(historial)
+            ):
+                logger.error(
+                    "BUCLE DEL SABOR con %s: vuelve a pedir el sabor (opcional) sin registrar "
+                    "el pedido — texto=%r",
+                    telefono, texto[:140],
+                )
+                if not reclamo_opcion:
+                    reclamo_opcion = True
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "[SISTEMA] YA LE PREGUNTASTE EL SABOR (o el relleno) EN UN TURNO "
+                            "ANTERIOR Y NO TE LO DIO, y estás volviendo a preguntarlo. Así se "
+                            "muere la venta: llevas varios turnos sin avanzar. Ese dato es "
+                            "OPCIONAL — el pedido se registra SIN él y la dueña lo coordina "
+                            "después (es como trabaja el negocio: bajo pedido). NO se lo "
+                            "preguntes otra vez. Si ya tienes el producto, la cantidad y la "
+                            "entrega (para cuándo y cómo), llama AHORA a `registrar_pedido` "
+                            "dejando `opciones` vacío. Si de verdad te falta el producto, la "
+                            "cantidad o la entrega, pregunta SOLO eso — nunca el sabor. No le "
+                            "menciones al cliente este aviso."
+                        ),
+                    })
+                    continue
+                # Insistió. El texto SALE igual (no es una mentira, y callarlo dejaría al cliente
+                # sin respuesta), pero queda escrito con nombre y apellido para poder medirlo.
+                logger.error(
+                    "BUCLE DEL SABOR con %s: insistió tras el aviso. El mensaje sale, pero la "
+                    "venta está trabada en el cierre.", telefono,
+                )
 
             # 🔴 RED DEL ENVÍO FANTASMA DE FOTOS: "ya te la envié" sin haberla enviado NO SALE.
             # Caso real (2026-07-14, confirmado en el log): a "mándame la foto de la torta keto"

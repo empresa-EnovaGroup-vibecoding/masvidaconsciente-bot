@@ -24,6 +24,118 @@
 
 ---
 
+## 2026-08-21 (6) — 🛒 EL P0: el bot NO CIERRA. Reproducido, diagnosticado, y la "decisión pendiente" ya estaba contestada en los audios
+
+**Lo que se buscaba:** cerrar el único P0 de `prompt_proxima_sesion.md` — *"asesora bien pero NO
+COBRA"*. Estaba marcado como **bloqueado por una decisión de Maired/Whuilianny**: *"¿se puede
+registrar el pedido sin el sabor y coordinarlo después, o el sabor es obligatorio?"*.
+
+### 1 · Reproducido antes de tocar nada — y el primer guion NO lo reprodujo
+
+Primer intento, nombrando el producto (*"las mini new york, 1 paquete"*): **cerró la venta**,
+pedido 1155 en la base. Casi se da el P0 por resuelto. Pero el P0 se midió con el guion del 08-08
+—**una clienta que NO sabe qué quiere**— y ahí está la diferencia: el turno de la RECOMENDACIÓN.
+Con el guion original, reproducido exacto:
+
+```
+turnos pidiendo un sabor .... [1, 2, 3, 4, 5]
+llamó a registrar_pedido .... NO
+🔴 PEDIDOS EN LA BD ......... 0
+```
+
+En el turno 5 no llamó a NINGUNA herramienta: bucle puro. **Un guion distinto no es la misma
+medición** — y por poco se reporta "arreglado" sobre un caso que nunca se probó.
+
+### 2 · La causa NO es que invente el sabor
+
+Se rastreó en la BD del taller: los sabores son **REALES** y viven en `productos.descripcion`
+("chocolate, limón pistacho, canela naranja, chocomerey"). Lo que está vacío es
+`producto_variantes.sabores` (**solo 5 de 37** variantes lo tienen). Así que el bot ofrece bien…
+y luego trata como **bloqueante** un campo que su propia herramienta declara OPCIONAL:
+
+| Evidencia de que es opcional | |
+|---|---|
+| `registrar_pedido` schema | `"required": ["variante_id", "cantidad"]` — `opciones` NO está |
+| Pedido **1078** de esta base | ese mismo producto con `"opciones": null`, $14, cobrado |
+
+**Tres sitios empujan a pedirlo y ninguno dice que se puede cerrar sin él:** `_REGLAS` (*"pásalo
+SIEMPRE en `opciones`"*), la personalidad de la BD (*"pregunta lo que falte: tamaño, sabor,
+cuántos"*) y el schema de la tool (*"la dueña lo necesita para cocinar"*).
+
+### 3 · 🟢 La decisión que estaba "pendiente" ya la contestaron los audios
+
+No hacía falta preguntarle a nadie: **está en la conversación CLI-051**, en el mismo minuto.
+
+```
+[20:39] "Recuerda que yo trabajo bajo pedido. Para mañana sí te lo puedo tener."   ← ACEPTA
+[20:39] "Me vas a decir, por favor, qué sabores quieres… ahí salen los toppings."  ← y LUEGO pide
+```
+
+**Whuilianny acepta el pedido primero y pide el sabor después. Nunca lo bloquea.** La casilla de
+"decisión de producto" se cierra con dato, no con opinión.
+
+### 4 · 🔴 Y NO ES EL SABOR: ES UNA CLASE DE FALLO
+
+Se arregló el prompt (el sabor es opcional y nunca bloquea) y se volvió a medir **con las reglas
+nuevas inyectadas en memoria** — sin tocar un fichero del contenedor, que `CLAUDE.md` §3 prohíbe.
+Cuatro corridas:
+
+| | resultado |
+|---|---|
+| Corrida A | ✅ **cerró** — pedido 1156, `opciones: null` |
+| Corrida B | 🔴 0 pedidos — se trabó pidiendo el **"nombre completo"** |
+| Corridas C y D | 🔴 0 pedidos — volvió a trabarse con el sabor |
+
+**1 de 4.** El bucle del sabor sí bajó (de 5/5 turnos a 1/5 en la mejor corrida), pero el bot
+**encuentra otro requisito que inventarse**. La conclusión está medida, no supuesta: **el prompt
+solo es una moneda al aire.** *El prompt SUGIERE, el código IMPIDE.*
+
+### 5 · La RED DEL CIERRE (`agent.py`)
+
+Dispara cuando se juntan las TRES: pregunta por un dato opcional AHORA, **ya lo había preguntado
+antes** (o sea, está insistiendo), y **no hay pedido registrado** en este turno. Le inyecta un
+aviso: *ese dato es opcional, no lo repreguntes, registra con lo que tienes.*
+
+⚠️ **Lo que la red NO hace: registrar por su cuenta.** Forzar el registro antes de que el cliente
+confirme sería peor que el bug — lo advierte el propio comentario de `_AFIRMA_PEDIDO`. La red
+**quita el falso bloqueo**; quién decide si ya hay bastante sigue siendo el modelo. Y si insiste, el
+texto **SALE igual**: no es una mentira (a diferencia del pedido fantasma), es un callejón sin
+salida, y callarlo dejaría al cliente sin respuesta.
+
+La lista cubre la **clase**, no el caso: sabor · relleno · topping · mezcla · nombre completo ·
+apellido · correo · **número de teléfono** (medido el 08-21: se lo pidió a alguien que le escribe
+por WhatsApp).
+
+### Verificación
+
+- **453 tests** (eran 441). Ficha nueva `tests/test_red_del_cierre.py`, **12 casos**, la mitad de
+  ellos casos que NO deben disparar — la guarda más importante: **preguntar el sabor UNA vez no se
+  toca**, porque eso es lo correcto y es lo que hace Whuilianny.
+- **18 reversiones → 18 rojas** (12 de la cola de media + 6 de esta red), con `__pycache__` borrado
+  y releyendo de disco antes de cada corrida (L23).
+- 🔴 **Dos reversiones salieron VERDES y las dos eran fallos DEL INSTRUMENTO, no huecos de tests:**
+  1. El espía deduplicaba los avisos por contenido — y el regaño es siempre el MISMO TEXTO, así
+     que un regaño repetido en bucle contaba como uno solo.
+  2. La segunda respuesta del guion (*"En serio, dime el sabor primero"*) **no era una pregunta**,
+     así que la red ni se evaluaba por segunda vez y la bandera nunca se ejercitaba.
+  → **El guion y el espía son parte del instrumento.** Antes de reportar un hueco de tests, hay que
+  comprobar que la reversión de verdad rompe algo.
+- BD del taller limpia al terminar: 0 pedidos de prueba, 0 clientes de prueba, `pedidos` vuelve a
+  2 (los 1078/1079 originales). Los scripts del smoke borrados del contenedor.
+
+### 🔴 Lo que FALTA para cerrar el P0 de verdad
+
+**La red NO se ha medido contra el bot real**, porque vive en `agent.py` y `CLAUDE.md` §3 prohíbe
+`docker cp` de código: hace falta **push + deploy**. Lo medido contra el bot real es el bug (5/5
+pidiendo sabor, 0 pedidos) y que el prompt solo no basta (1 de 4). La red está validada de forma
+determinista con un modelo guionado que se traba igual que el real.
+
+Y el arreglo de fondo, que merece su sesión: **inyectar cada turno el ESTADO DEL PEDIDO EN CURSO**
+(qué producto se identificó, qué cantidad, qué falta) como ya se hace con `ESTADO DEL CLIENTE`. Eso
+mata la clase entera en vez de listar los datos que el bot se inventa.
+
+---
+
 ## 2026-08-21 (5) — 🗣️ EL TEXTO SALE ANTES QUE LA FOTO + lo que enseñaron los audios de Whuilianny
 
 **Lo que trajo Erwin:** los dos documentos del análisis de las conversaciones reales
