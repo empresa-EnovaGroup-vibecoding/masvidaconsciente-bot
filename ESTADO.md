@@ -22,18 +22,51 @@ y salud, memoria que no se olvida a las 24h, y 8 migraciones nuevas (hasta la 03
 
 ---
 
-## Última verificación: **2026-08-22 (tarde)**
+## Última verificación: **2026-08-22 (noche)**
 
 | | 🏪 PRODUCCIÓN | 🧪 TALLER |
 |---|---|---|
 | **Servidor** | netcup `152.53.89.118` | Hostinger `2.25.139.106` |
 | **Quién le escribe** | las clientas reales | número de la agencia: **+57 313 293 3806** |
-| **Bot: versión** | `7e80b8a` (14-jul) — **muy atrasada** | ✅ **`14f0079`** (22-ago), al día con `master` y **desplegado solo por el push**; checksum 5/5 contra `master` en bot Y worker |
+| **Bot: versión** | `7e80b8a` (14-jul) — **muy atrasada** | ✅ **`15fb81f`** (22-ago noche), al día con `master`, desplegado solo por el push; checksum **6/6** contra `master` en bot Y worker |
 | **Panel: versión** | (sin tocar desde julio) | ✅ **`b9a97c8`** (22-ago) — al día con `master`. **Estaba 6 commits atrasado** (corría `d34ccd9`, de 13 días) y nadie lo había notado porque este archivo no listaba el panel |
 | **Modelo IA activo** | (el de julio) | ✅ **`anthropic/claude-haiku-4.5`** (devuelto el 21-ago por decisión de Erwin; estuvo en `gpt-4o-mini` del 18 al 21-ago) |
 | **Modo del agente** | UN agente | los 3 bloqueadores del modo DOS ya están cerrados (06-ago) |
 | **Lista blanca** | ✅ activa | ✅ activa — 3 números (`NUMEROS_PERMITIDOS` + `numeros_permitidos_extra`) |
 | **Bot en el mercado** | ❌ NO — apagado para clientas reales hasta la entrega | pruebas |
+
+### 🟢 2026-08-22 (noche) — la plantilla de negocio de Maired, aplicada y viva
+
+Los **9 commits** de la plantilla están desplegados y verificados: `a524822..15fb81f`.
+
+| | |
+|---|---|
+| CI (`ruff` · `compileall` · `pytest`) | 🟢 **566 tests** verdes |
+| Deploy del taller | 🟢 automático por el push · **producción `skipped`** (el candado funciona) |
+| **LOS BANCOS** | 🟢 **27/27**, corridos por el vigilante tras el deploy |
+| Checksum `master` vs los DOS contenedores | 🟢 **6/6 bit a bit** |
+| `/salud` | 🟢 `ok`, `fallos: []` |
+| Datos | 🟢 32 productos / 37 variantes / 34 media / 10 conocimiento / 35 migraciones — **sin cambios** |
+
+**Qué cambió para la clienta:** el 20% + **delivery gratis** pagando en efectivo (y ya NO a Zelle
+ni Binance) · el bot **consulta el calendario** en vez de inventarse las fechas · ya no dice que
+revisó una cuenta que no tiene · saluda devolviendo la pregunta · no repite la ficha · las
+alergias salen de la ficha del producto, nunca de una promesa general · el pie de foto ya no
+lleva la lista de ingredientes. En la BD: **asesora** (no "asistente") y ya no devuelve el
+"mi amor".
+
+🔴 **Y DOS COSAS QUE SE DESCUBRIERON DESPLEGANDO, y conviene no olvidar:**
+
+1. **El deploy de `a524822` (sesión de la tarde) había FALLADO en silencio.** El runner no pudo
+   alcanzar el puerto 8000 de Coolify (`curl: (28) Timeout`, tres reintentos) porque Coolify
+   estaba reiniciándose por el deploy anterior. **La CI salió verde, el paso TALLER en rojo, y
+   nadie lo miró**: el taller se quedó con el código viejo mientras todo el mundo creía que
+   estaba al día. Es el panel de los 13 días otra vez — *un automatismo que falla en silencio es
+   peor que no tenerlo*. **Mirar el paso `desplegar`, no solo la CI.**
+2. **Los bancos hacen su trabajo.** Salieron 2 rojos en el primer deploy, los dos míos: el conteo
+   de tools (12 → 13) y —el bueno— `probar_carril_dinero`, que **fijaba la frase de la mentira**
+   ("NO te aparece hecho a TU cuenta"). El banco defendía el bug. Reescrito para comprobar la
+   intención, no el texto.
 
 ### 🔴 Lo que importa
 
