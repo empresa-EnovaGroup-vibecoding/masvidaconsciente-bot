@@ -512,34 +512,55 @@ def _asegurar_saludo(texto: str, mensaje_usuario: str, nombre_cliente: str | Non
 #     bolívares…), NO "cualquier dígito": la primera versión lo hacía así y no quitaba nada,
 #     porque la ficha del caso real dice *"duran **2** semanas"*. Se descubrió escribiendo el test.
 
-def _frases_dichas(historial: list[dict]) -> set[str]:
-    """Las frases que el bot YA dijo en esta conversación, normalizadas para comparar."""
-    dichas = set()
-    for h in historial or []:
-        if (h.get("role") or "") != "assistant":
-            continue
-        for fr in re.split(r"[.\n]+", h.get("content") or ""):
-            fr = " ".join(fr.split())
-            if len(fr) > 30:
-                dichas.add(_sin_acentos_min(fr))
-    return dichas
+def _texto_ya_dicho(historial: list[dict]) -> str:
+    """Todo lo que el bot ya dijo en esta conversación, en un solo texto normalizado."""
+    partes = [
+        h.get("content") or ""
+        for h in (historial or [])
+        if isinstance(h, dict) and (h.get("role") or "") == "assistant"
+    ]
+    return _sin_acentos_min(" ".join(" ".join(" ".join(partes).split()).split()))
+
+
+# Lo que NUNCA se toca: el carril del dinero y los hechos del pedido. Un total, un precio o una
+# fecha de entrega SE REPITEN A PROPÓSITO —el cliente los necesita delante— y borrarlos deja un
+# recibo mutilado, que es peor que repetirse.
+_NO_SE_TOCA = re.compile(
+    r"[$€]|\bd[oó]lar|\bbs\b|bol[ií]var|\btotal\b|\bentrega\b|\benv[ií]o\b|=|"
+    r"\b(lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo)\b",
+    re.I,
+)
 
 
 def _sin_ficha_repetida(texto: str, historial: list[dict]) -> str:
-    """Quita del mensaje las frases que ya se dijeron antes. Fail-open ante cualquier duda."""
+    """Quita del mensaje lo que el bot YA dijo antes en esta conversación.
+
+    ⚠️ COMPARA POR CONTENIDO, NO POR FRASE EXACTA — y esa es toda la diferencia. La primera
+    versión (desplegada el 22-ago con el mensaje "ahora en CÓDIGO") comparaba frases completas y
+    **no quitaba nada en el caso real que la motivó**, porque la misma ficha venía con distinto
+    prefijo cada vez:
+
+        antes:  "Listo, 1 paquete de Mini New York, son versión mini de las galletas New York,
+                 duran 2 semanas y son aptas para diabéticos."
+        ahora:  "Perfecto, te las dejo para el lunes. Son versión mini de las galletas New York,
+                 duran 2 semanas y son aptas para diabéticos."
+
+    Como frases completas no coinciden nunca. Como subcadena, sí. Lo cazó una auditoría que probó
+    la red con los textos LITERALES de la base de datos en vez de con un ejemplo inventado — es
+    L45 otra vez: *antes de inventarte casos de prueba, usa los que ya pasaron*.
+    """
     try:
-        dichas = _frases_dichas(historial)
-        if not dichas:
+        ya = _texto_ya_dicho(historial)
+        if not ya:
             return texto
         salida, quitadas = [], 0
         for fr in re.split(r"(?<=[.\n])", texto):
             limpia = " ".join(fr.split())
-            # Las que llevan DINERO no se tocan (el monto se repite a propósito). Ojo: es
-            # moneda, no "cualquier dígito" — si no, "duran 2 semanas" quedaría protegida y la
-            # red no serviría para el caso que la motivó.
-            _hay_dinero = re.search(r"[$€]|\bd[oó]lar|\bbs\b|bol[ií]var", limpia, re.I)
-            if (len(limpia) > 30 and not _hay_dinero
-                    and _sin_acentos_min(limpia.rstrip(".")) in dichas):
+            if (
+                len(limpia) > 30
+                and not _NO_SE_TOCA.search(limpia)
+                and _sin_acentos_min(limpia.rstrip(".")) in ya
+            ):
                 quitadas += 1
                 continue
             salida.append(fr)
@@ -598,7 +619,23 @@ def _dias_nombrados(texto: str) -> set[str]:
     # "mañana" como DÍA, no como parte del día ("9 de la mañana", "mañana temprano" sí es día)
     elif re.search(r"(?<!de la )(?<!la )(?<!las )\bmanana\b", t):
         encontrados.add("manana")
-    if re.search(r"\b(para|el dia de|es)\s+hoy\b", t) or re.search(r"\bhoy\b.*\b(te|se)\s+(la|lo|las|los)\b", t):
+    # 🔴 "HOY" SE DETECTA SIEMPRE Y SE EXCLUYE POR NEGACIÓN — no al revés.
+    #
+    # La primera versión buscaba PATRONES DE PROMESA (`para hoy`, `hoy te lo…`) y se le escapaban
+    # 4 de cada 5 formas reales de prometer el mismo día: *"Te lo puedo entregar hoy"*, *"Te lo
+    # mando hoy"*, *"Te lo tengo hoy mismo"*, *"Te lo dejo hoy"*. Enumerar las formas de decir algo
+    # en español es una lista que nunca se termina.
+    #
+    # Y al revés frenaba la frase CORRECTA que el propio documento pone en su Conversación 5:
+    # *"Para hoy ya cerraron las entregas"* — obligando al bot a reescribir un mensaje que estaba
+    # bien. Una red que corrige lo correcto se acaba desactivando.
+    #
+    # Invertido: si el mensaje dice "hoy", es candidato; y solo se descarta si ahí mismo se está
+    # NEGANDO la entrega de hoy. Las negaciones sí son una lista corta y estable.
+    if re.search(r"\bhoy\b", t) and not re.search(
+        r"(ya\s+no|no\s+(sal|hay|se\s+puede|alcanz|llega|entrega)|ya\s+(cerr|pas)|"
+        r"cerrar?on|fuera\s+de\s+hora)\w*", t
+    ):
         encontrados.add("hoy")
     return encontrados
 
@@ -1444,6 +1481,31 @@ _PROHIBIDO_EN_CHARLA = [
      "afirmó que el pago ya llegó"),
     (re.compile(r"no\s+(me\s+)?(ha\s+)?(lleg\w+|aparec\w+)\s+(tu|el|ning[úu]n)\s+pago", re.I),
      "afirmó que el pago NO llegó"),
+    # 🔴 APROBADO / VERIFICADO / CONFIRMADO — el hueco que dejó esta lista y que una auditoría
+    # exhaustiva midió el 2026-08-22 contra el bot vivo:
+    #
+    #     "Perfecto, el pago fue aprobado"          → PASABA
+    #     "Tu pago quedó verificado, gracias"       → PASABA
+    #     "Listo, acabamos de verificar tu pago"    → PASABA  ← frase textual de la plantilla
+    #     "Tu pago quedó confirmado"                → PASABA
+    #
+    # Solo se cazaba la forma en primera persona ("ya verifiqué tu pago"). El PARTICIPIO —que es
+    # como lo diría cualquiera— entraba entero.
+    #
+    # ⚠️ Van en EN_CHARLA y no en SIEMPRE **a propósito**: después del clic de la dueña en «Pago
+    # aprobado» estas frases son VERDAD, y son justo lo que `notificar_cliente_pago` le manda
+    # decir. Meterlas en SIEMPRE mataría el mensaje correcto — que es el error que esta misma
+    # separación de listas existe para evitar.
+    #
+    # Y desde hoy pesan más: el bot ESPERA ese clic antes de coordinar, así que en la charla
+    # normal ya no hay ningún momento en que pueda saber que un pago quedó bueno.
+    (re.compile(r"(pago|transferencia)\b[^.]{0,30}\b(fue|qued[óo]|est[áa]|ya)\s+"
+                r"(aprobad|verificad|confirmad|validad)\w*", re.I),
+     "afirmó que el pago quedó aprobado/verificado (solo la dueña puede saberlo)"),
+    (re.compile(r"\b(acabamos|acabo|acaba)\s+de\s+(verificar|aprobar|confirmar|validar)\b", re.I),
+     "afirmó que acaban de verificar el pago"),
+    (re.compile(r"\b(aprobad|verificad|confirmad|validad)\w*\s+(tu|el|su)\s+pago\b", re.I),
+     "afirmó que el pago quedó aprobado/verificado"),
 ]
 
 _PROHIBIDO_SIEMPRE = [

@@ -746,6 +746,39 @@ def _cobertura(prod, palabras: list[str], extra: str = "") -> int:
     return sum(1 for w in palabras if any(t.startswith(w) for t in tokens))
 
 
+# 🔴 RESTRICCIONES ALIMENTARIAS QUE EL CATÁLOGO **NO** SABE RESPONDER.
+#
+# `apto_diabeticos` sí es un campo real (24 de 32 productos lo tienen), y por eso "algo para
+# diabéticos" se resuelve bien en el escalón 4. **Estas otras no existen en ninguna columna**, así
+# que la búsqueda las manda a los escalones difusos… y ahí pasa esto (medido el 2026-08-22):
+#
+#     ver_catalogo(busqueda='vegano')  →  ["Pan de Sándwich", "Wafles Dulces"]
+#       · Pan de Sándwich  lleva MANTECA DE COCHINO y huevo
+#       · Wafles Dulces    llevan HUEVOS e HÍGADO DESHIDRATADO
+#     ver_catalogo(busqueda='celiaco') →  los 31 productos, con la nota de un acierto normal
+#
+# El escalón difuso lleva escrito "en la asesoría encontrar de más es gratis". Es verdad para un
+# typo ('galetas' → Galletas). **Es falso para una restricción alimentaria**: ahí encontrar de más
+# es ofrecerle hígado a un vegano y pan con gluten a una celíaca. Y la Conversación 3 de la
+# plantilla de negocio es, justamente, una clienta vegana comprando para su hijo.
+_RESTRICCION_SIN_CAMPO = (
+    "vegano", "vegana", "veganos", "veganas", "vegetarian",
+    "celiac", "gluten", "trigo", "avena", "centeno", "cebada",
+    "lactosa", "lacteo", "leche", "queso",
+    "alergi", "alerg", "mani", "cacahuate", "almendra", "merey", "nuez", "nueces",
+    "frutos secos", "huevo", "soya", "maiz",
+)
+
+
+def _es_restriccion_alimentaria(busqueda: str) -> str | None:
+    """Devuelve la restricción detectada, o None. Solo mira lo que NO tiene campo en la BD."""
+    t = _sin_acentos((busqueda or "").lower())
+    for w in _RESTRICCION_SIN_CAMPO:
+        if w in t:
+            return w
+    return None
+
+
 async def ver_catalogo(session, telefono, categoria=None, busqueda=None):
     """El catálogo para ASESORAR. La lista vacía ya no existe.
 
@@ -812,6 +845,38 @@ async def ver_catalogo(session, telefono, categoria=None, busqueda=None):
                 )
                 if hallados:
                     como = "sinonimo"
+
+        # ── 🔴 FRENO DE SEGURIDAD ALIMENTARIA — va ANTES de los escalones que adivinan.
+        #    Si lo que pide es una restricción que el catálogo no sabe responder (vegano,
+        #    celíaco, alergias…), NO se le ofrece "lo más parecido": el parecido aquí es lo que
+        #    le pone manteca de cochino delante a un vegano. Se corta la búsqueda y se le dice
+        #    al modelo qué hacer — mirar la ficha producto por producto, y escalar si no consta.
+        # ⚠️ SOLO cuando la consulta es la restricción A SECAS. Si además nombra un producto o
+        #    una categoría ("pan sin gluten"), es una búsqueda normal y los escalones de abajo la
+        #    resuelven bien — frenarla dejaría al bot sin nada que ofrecer y cortaría la venta.
+        #    Lo cazó `probar_buscador`, que tenía justo ese caso escrito.
+        _restriccion = _es_restriccion_alimentaria(busqueda) if busqueda else None
+        if _restriccion and palabras:
+            _nombra_producto = any(
+                _con(lambda p, w=w: _coincide_texto(p, [w], _extra.get(p.id, "")))
+                or any(_calza_categoria(w, p.categoria) for p in todos)
+                for w in palabras
+            )
+            if _nombra_producto:
+                _restriccion = None
+        if not hallados and _restriccion:
+            return {
+                "productos": [],
+                "nota": (
+                    f"🔴 '{busqueda}' es una RESTRICCIÓN ALIMENTARIA y el catálogo NO tiene ese "
+                    "dato cargado, así que NO tengo con qué responderte. **NO le ofrezcas "
+                    "productos parecidos ni le digas que algo es apto**: aquí equivocarse le "
+                    "hace daño a una persona. Dile con calidez que se lo confirmas con "
+                    "seguridad antes de que compre, y llama a `pedir_ayuda` para que "
+                    "Whuilianny te diga cuáles sirven. Si quiere ver el catálogo entero "
+                    "mientras tanto, mándaselo — pero SIN afirmar que alguno cumple."
+                ),
+            }
 
         # ── ESCALÓN 4 · ATRIBUTO. "algo para diabéticos" no es una palabra del catálogo: es el
         #    campo `apto_diabeticos`, que tienen 24 de los 31 productos.
