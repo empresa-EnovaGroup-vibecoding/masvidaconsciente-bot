@@ -35,6 +35,30 @@ y salud, memoria que no se olvida a las 24h, y 8 migraciones nuevas (hasta la 03
 | **Lista blanca** | ✅ activa | ✅ activa — **4 números** (verificado 23-ago): 2 en `NUMEROS_PERMITIDOS` (env: `584264399792` Maired · `573005690062` `dueno_telefono`) + 2 en `numeros_permitidos_extra` (BD) |
 | **Bot en el mercado** | ❌ NO — apagado para clientas reales hasta la entrega | pruebas |
 
+### 🟢 2026-08-23 (2) — EL PROMPT, PULIDO (era el pendiente #1) — ⏸️ SIN DESPLEGAR
+
+La causa raíz del *"bot bruto"* atacada donde estaba: **`_REGLAS` 31.418 → 25.567 car (−19%)** y el
+**prompt completo 60.390 → 54.545** (~15.100 → ~13.600 tokens). Se cerraron **5 contradicciones**, y
+las dos peores no las había encontrado nadie:
+
+1. 🔴🔴 **`_REGLAS` ordenaba *"coordinas la entrega/envío"* al recibir el comprobante** — el día
+   DESPUÉS de que el código pasara a ESPERAR el clic de «Pago aprobado». Instrucción del turno y
+   regla permanente diciendo lo contrario, **un día desplegado con los 645 tests verdes**.
+2. 🔴 **8 ejemplos del prompt usaban los `¿` y `¡` que el propio prompt prohíbe.**
+3. *"Manda VARIOS mensajitos"* vs *"1 o 2 globitos"* de la personalidad → los **6 globos de un
+   turno** que contó Maired.
+4. Las dos primacías (con su desempate nuevo; las etiquetas se conservan por el modo dos).
+5. Cuatro reglas repitiendo lo mismo.
+
+Además: **orden de prioridad** (VERDAD > BREVEDAD > CIERRE) · **7 bloques por momento** · fuera lo
+que ya dice la personalidad · y el **paso 11 de la plantilla** (resumen final), que era N5.
+
+**654 tests · 24/24 bancos en local · 10 reversiones → 10 rojas.**
+⏸️ **Commits `439c212` y `09e8fb0` SIN SUBIR: el PAT dio 403** (credencial en caché = cuenta
+personal, `prompt_proxima_sesion.md` §0.b). En cuanto haya token, el push lo despliega solo.
+🔴 **Falta medirlo en vivo** (la misma conversación de Maired, antes y después): **no se hizo porque
+el saldo está en $1.70** y la medición son ~24 turnos de los ~106 que quedan. Recargar primero.
+
 ### 🔴 2026-08-23 — EL SALDO DE IA CRUZÓ EL UMBRAL: `/salud` está en `degradado`
 
 **`/salud` no dice `ok`. Dice `degradado`, con `fallos: ["saldo_ia"]`.** El saldo de OpenRouter está

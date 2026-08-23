@@ -24,6 +24,58 @@
 
 ---
 
+## 2026-08-23 (2) — 🧹 EL PROMPT PULIDO: un orden de prioridad en vez de 68 reglas que compiten
+
+**El encargo de Erwin:** *"revisa que todo se ajuste a lo del documento ya que eso me lo pasó
+Maired, y pule/optimiza el prompt"*. Era el pendiente #1 que él mismo dejó la sesión anterior.
+
+- 📏 **Antes de recortar, se midió.** El prompt son **60.390 car**: `_REGLAS` **31.418 (52%)**,
+  catálogo 16.318 (27%), personalidad 10.069 (17%). Y las 68 reglas se inventariaron una por una
+  con su tamaño y con **qué banco o test las fija** (45 anclas). *La arqueología —fechas, "lo pidió
+  Erwin"— son solo ~300 car: la masa NO estaba ahí, y medirlo evitó recortar por el lado
+  equivocado.*
+- 🔴🔴 **CINCO CONTRADICCIONES, y las dos peores no las había encontrado nadie:**
+  1. **`_REGLAS` ordenaba *"dile que RECIBISTE su pago y que coordinas la entrega/envío"*** — el día
+     DESPUÉS de que el código pasara a **ESPERAR el clic de «Pago aprobado»**. La instrucción del
+     turno pedía esperar; la regla permanente ordenaba seguir. **Un día entero desplegado así con
+     los 645 tests en verde**, porque el test de esa función mira el carril de `tasks.py`, no el
+     prompt.
+  2. **8 ejemplos del prompt usaban los signos `¿` y `¡` que el propio prompt PROHÍBE** tres reglas
+     más abajo — y la regla de al lado dice que esas frases entre comillas son el modelo de cómo
+     escribir. El prompt le enseñaba lo contrario de lo que le ordenaba.
+  3. *"Manda VARIOS mensajitos"* (código) contra *"usa 1 o 2 globitos"* (personalidad). **De ahí
+     salían los 6 globos seguidos que contó Maired en un solo turno.**
+  4. Las dos primacías (ANTIINVENCIÓN / BREVEDAD). ⚠️ **Las etiquetas SE CONSERVAN**: en modo DOS
+     cae una en cada prompt y no compiten — es el diseño que protege `probar_dos_agentes` (L36).
+     Lo que faltaba era el **desempate para el modo `uno`**, que es el que corre.
+  5. Cuatro reglas distintas decían "no inventes productos, usa la herramienta".
+- 🟢 **QUÉ SE HIZO:** un **ORDEN DE PRIORIDAD** arriba (VERDAD > BREVEDAD > CIERRE, *"gana la de
+  número más bajo"*) + quién manda entre capas (**la personalidad en el TONO, `_REGLAS` en los
+  HECHOS, el DINERO y las FECHAS**) · reagrupado en **7 bloques por momento de la conversación**,
+  no por orden de llegada de los bugs · **quitado lo que ya dice la personalidad** (espejeo, tip de
+  conservación, precio, plantillas, saludo por hora — y encima triplemente cubierto por sus redes)
+  · ejemplos reescritos en el estilo que el prompt exige · y **añadido el paso 11 de la plantilla**
+  (resumen final antes del despacho): era **N5**, atado a N6, y N6 se cerró el 22-ago.
+- 📉 **MEDIDO:** `_REGLAS` **31.418 → 25.567** (−19%) · prompt completo **60.390 → 54.545** (−10%,
+  ~15.100 → ~13.600 tokens) · la **Voz** 16.124 → 14.330.
+- 🔴 **Y los bancos volvieron a cazarme:** reformulé **2 de las 11 frases que `probar_herramientas`
+  exige LITERALES** ("Sin fecha de entrega acordada NO PUEDES COBRAR" y "registra el pedido
+  COMPLETO con registrar_pedido") y **los 645 tests siguieron verdes** — solo lo vio el banco, que
+  necesita Postgres y corre DESPUÉS de desplegar. **Es L57 otra vez.** Ahora dos tests nuevos leen
+  esa lista DEL banco y la vigilan desde el CI. → **L69.**
+- ✅ **Auditoría del documento de Maired:** lo que faltaba de conducta ya está; **la personalidad de
+  la BD cubría más de lo que parecía** (el "va?" mexicano, el máximo de UN emoji, la bendición sin
+  repetir, el vocabulario, pedir el nombre al agendar — todo estaba ahí). Sigue faltando **N1
+  (30/70)**, **N2 (delivery extraordinario)**, **N3 (mapa de zonas por sector)** y **N4**, y los **4
+  productos fantasma** (hogaza, rústicos, hamburguesas, opciones veganas) que el documento ofrece y
+  **no existen en el catálogo**. *(Churros: confirmado que NO está en el catálogo.)*
+
+**654 tests · 24/24 bancos en local · 10 reversiones → 10 rojas · `ruff` limpio.**
+🔴 **SIN SUBIR: el PAT dio 403** (la credencial en caché es la cuenta personal, §0.b). Commits
+locales `439c212` y `09e8fb0`.
+
+---
+
 ## 2026-08-23 — 🔬 AUDITORÍA EXHAUSTIVA, ENTORNO LOCAL Y LA CAUSA RAÍZ DEL "BOT BRUTO"
 
 **Detalle completo en `prompt_proxima_sesion.md` §3-E.** Resumen de lo que importa:
