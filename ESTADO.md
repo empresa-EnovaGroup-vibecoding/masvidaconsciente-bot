@@ -22,18 +22,58 @@ y salud, memoria que no se olvida a las 24h, y 8 migraciones nuevas (hasta la 03
 
 ---
 
-## Última verificación: **2026-08-22 (noche)**
+## Última verificación: **2026-08-23 (17:40)**
 
 | | 🏪 PRODUCCIÓN | 🧪 TALLER |
 |---|---|---|
 | **Servidor** | netcup `152.53.89.118` | Hostinger `2.25.139.106` |
 | **Quién le escribe** | las clientas reales | número de la agencia: **+57 313 293 3806** |
-| **Bot: versión** | `7e80b8a` (14-jul) — **muy atrasada** | ✅ **`15fb81f`** (22-ago noche), al día con `master`, desplegado solo por el push; checksum **6/6** contra `master` en bot Y worker |
-| **Panel: versión** | (sin tocar desde julio) | ✅ **`b9a97c8`** (22-ago) — al día con `master`. **Estaba 6 commits atrasado** (corría `d34ccd9`, de 13 días) y nadie lo había notado porque este archivo no listaba el panel |
+| **Bot: versión** | `7e80b8a` (14-jul) — **muy atrasada** | ✅ **`c5ba1c4`** (23-ago), al día con `master`, desplegado solo por el push. **SHA de la imagen verificado en bot Y worker** — no el color del run (L59) |
+| **Panel: versión** | (sin tocar desde julio) | ✅ **`b9a97c8`** — al día con `master` (sin commits nuevos desde el 22-ago). **Estaba 6 commits atrasado** (corría `d34ccd9`, de 13 días) y nadie lo había notado porque este archivo no listaba el panel |
 | **Modelo IA activo** | (el de julio) | ✅ **`anthropic/claude-haiku-4.5`** (devuelto el 21-ago por decisión de Erwin; estuvo en `gpt-4o-mini` del 18 al 21-ago) |
 | **Modo del agente** | UN agente | los 3 bloqueadores del modo DOS ya están cerrados (06-ago) |
-| **Lista blanca** | ✅ activa | ✅ activa — 3 números (`NUMEROS_PERMITIDOS` + `numeros_permitidos_extra`) |
+| **Lista blanca** | ✅ activa | ✅ activa — **4 números** (verificado 23-ago): 2 en `NUMEROS_PERMITIDOS` (env: `584264399792` Maired · `573005690062` `dueno_telefono`) + 2 en `numeros_permitidos_extra` (BD) |
 | **Bot en el mercado** | ❌ NO — apagado para clientas reales hasta la entrega | pruebas |
+
+### 🔴 2026-08-23 — EL SALDO DE IA CRUZÓ EL UMBRAL: `/salud` está en `degradado`
+
+**`/salud` no dice `ok`. Dice `degradado`, con `fallos: ["saldo_ia"]`.** El saldo de OpenRouter está
+en **$1.70** y el umbral de la sonda es $2.00. A ~$0.016 por turno son **~106 turnos**, y cuando se
+agote el bot **no da error: deja de responder**. Desde el chat es idéntico a "el bot está roto".
+**Solo Erwin puede recargarlo** (openrouter.ai → Credits). Es lo único que puede arruinar una demo.
+
+### 🟢 2026-08-23 — la auditoría exhaustiva, el entorno local y la causa raíz del "bot bruto"
+
+7 commits más desplegados: `3d88cd1..c5ba1c4`. Lo verificado en vivo el 23-ago a las 17:40:
+
+| | |
+|---|---|
+| Bot y worker | 🟢 **`c5ba1c4`** en el SHA de la imagen de los DOS contenedores |
+| CI · paso `desplegar` · LOS BANCOS | 🟢 verdes en los **2 últimos push** (y producción `skipped`) |
+| Tests | 🟢 **645** (eran 566) |
+| Bancos | 🟢 **27/27** en el VPS · **24/27 en LOCAL** con `./banco_local.sh`, antes de desplegar |
+| `/salud` | 🔴 **`degradado`** por el saldo · Postgres, Redis, Meta (**GREEN**), barredor, tasa y modelo en `ok` |
+| Datos | 🟢 32 productos / 37 variantes / 34 media / 10 conocimiento / 35 migraciones |
+| **`dias_anticipacion`** | 🟢 **CARGADO**: 16 en 0 · 12 en 1 · 4 en 2 *(estaba en 0 en los 32)* |
+| **Zona centro** | 🟢 **$2.00** *(cobraba $3; la plantilla pide $2)* · oeste $5 · retiro $0 |
+
+**Lo que cambió para la clienta:** a quien pide **"vegano"** ya no se le ofrece manteca de cochino
+ni hígado deshidratado (freno de seguridad alimentaria) · la red de la salud caza el celíaco en sus
+4 formas, no en 1 · el **recibo ya no sale duplicado** (lo insertaba el CÓDIGO, no el modelo:
+comparaba texto literal y el modelo parafraseaba) · el cobro trae **desglose de 4 líneas** · y el
+bot **ESPERA el clic de «Pago aprobado»** antes de coordinar la entrega, avisando a la dueña
+(pasos 8-9 de la plantilla — ya reflejado en `CLAUDE.md` §3).
+
+🔴 **EL TRABAJO #1 DE LA PRÓXIMA SESIÓN, y lo dejó pedido Erwin: PULIR EL PROMPT.** La causa de que
+el bot "repita y suene robótico" no es un bug: son **44 reglas escritas por acumulación, varias
+contradiciéndose**, sobre **Haiku 4.5** (el modelo más pequeño). Medido en vivo: **60.390 caracteres
+(~15.100 tokens)** — y sigue creciendo (eran 59.381 ayer). Método y los 5 frenos que hay que
+respetar: `prompt_proxima_sesion.md` §5 → P-PROMPT.
+
+🟡 **Y un detalle que conviene decidir antes de la próxima prueba con Maired:** su chat **ya no está
+en cero**. En la BD hay **58 mensajes, 4 pedidos y 6 clientes** (5 son `__simulador__`, 1 es ella)
+de las pruebas del 22/23-ago. Si quiere volver a probar como clienta nueva, hay que limpiarlo otra
+vez — con ensayo de ROLLBACK, y **acordándose de Redis** (`hist:`, `abuso:`, `cobro:`).
 
 ### 🟢 2026-08-22 (noche) — la plantilla de negocio de Maired, aplicada y viva
 
@@ -141,6 +181,7 @@ git log origin/master -5         # últimos cambios en GitHub
 
 | Fecha | Producción | Taller | Nota |
 |---|---|---|---|
+| 2026-08-23 | `7e80b8a` (14-jul) | **`c5ba1c4`** | 🟢 **7 commits más, desplegados solos por el push** (`3d88cd1..c5ba1c4`). **645 tests** (eran 566) · **27/27 bancos** en el VPS y **24/27 en LOCAL** con el nuevo `banco_local.sh` —los bancos por fin corren ANTES de desplegar, y en su primera corrida cazaron 2 bugs que el VPS no había visto. La auditoría exhaustiva sacó **200 requisitos** del documento de Maired (una revisión a mano previa había sacado 51), y **3 de los 4 fallos graves eran de arreglos de ESE MISMO DÍA**: código nuevo, con tests en verde, que no hacía lo que decía (L65). El más grave: a quien pedía **"vegano"** el bot le ofrecía **manteca de cochino e hígado deshidratado** (L63). **DATOS cargados:** `dias_anticipacion` (16/12/4, estaba en 0 en los 32) y zona centro **$3 → $2**. 🔴 **`/salud` en `degradado`: el saldo de OpenRouter cayó a $1.70** (umbral $2.00, ~106 turnos). 🔴 **Pendiente #1:** pulir el prompt — **60.390 car / 44 reglas contradictorias sobre Haiku 4.5** es la causa raíz del "bot bruto" (L68). |
 | 2026-08-22 (tarde) | `7e80b8a` (14-jul) | **`aef1042`** | 🟢 **Los 5 commits atascados: subidos y desplegados.** Push con el token de Erwin (`c0a2f71`, CI **verde**) → deploy por la API de Coolify (worker primero, bot después). **Checksum 5/5** en los DOS contenedores · **27/27 bancos verdes** corridos uno por uno · `/salud` `ok` con `fallos: []` · **cero regresión de datos reales** (32 productos / 37 variantes / 2 pedidos / 34 media / 10 conocimiento / 35 migraciones, idéntico antes y después). ⚠️ `clientes` pasó de 2 a 3, y **es por diseño**: los bancos crean el cliente de prueba `__simulador__` (excluido de la lista del panel) — no es una regresión, pero **por eso `clientes` no sirve como métrica de línea base después de correr bancos.** Y **el despliegue del taller pasó a ser AUTOMÁTICO en cada push** (`0426f3b`), con la CI como puerta y producción todavía solo a mano; validado dos veces seguidas (`0426f3b` y `aef1042`). |
 | 2026-08-18 | `7e80b8a` (14-jul) | desconectado de GitHub | Descubierto: Coolify en rama `DESCONECTADO`, código de agosto solo en el servidor. |
 | 2026-08-21 | `7e80b8a` (14-jul) | código de agosto (en GitHub) | Rescatados 32+6 commits a `master`. Deploy ahora es manual. Falta reconectar y promover a producción. |

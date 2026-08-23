@@ -57,19 +57,23 @@ Las **FASES 0 a 3 ya están hechas y desplegadas**:
 |---|---|---|---|
 | **N1** | 💵 **Pago dividido 30/70** — 30% para confirmar, 70% contra entrega, con la modalidad asignada POR SISTEMA (no la elige el cliente) y medición A/B contra el pago completo | **alto** | Toca el carril del dinero entero: `Pago`, el panel, la validación del comprobante y el estado del pedido. La plantilla lo llama "la prueba" y pide medir pago, abandono, venta completada y pedidos no recibidos. **Necesita migración.** |
 | **N2** | 🚚 **Delivery extraordinario** — la dueña lo activa en el panel con fecha, hora límite, zonas, productos y capacidad; **expira solo** y el bot NUNCA lo activa por su cuenta | medio-alto | Encaja limpio sobre el calendario que ya existe (`proxima_fecha_entrega` lo leería). La plantilla insiste dos veces en que una autorización de delivery **no** significa que cualquier producto pueda prepararse hoy: hay que verificar producto, capacidad, zona y hora. |
-| **N3** | 🗺️ **Mapa de zonas por sector** — hoy son 3 zonas planas; pide sectores reconocidos y **escalar a la dueña** la dirección que no calce | medio | ⚠️ Y hay un dato que resolver antes: la plantilla dice que la zona cercana cuesta **$2** y el sistema cobra **$3**. |
+| **N3** | 🗺️ **Mapa de zonas por sector** — hoy son 3 zonas planas; pide sectores reconocidos y **escalar a la dueña** la dirección que no calce | medio | ✅ El dato que había que resolver antes **ya está resuelto** (23-ago): la zona cercana pasó a **$2** en `zonas_entrega` (Barquisimeto centro $2.00 · oeste $5.00 · retiro $0), como pide la plantilla. |
 | **N4** | 📊 **Aviso de día flojo** — que el sistema detecte ventas bajas y le SUGIERA a la dueña activar una extensión | bajo-medio | La propia plantilla lo pone en "una fase posterior" y exige **aprobación de ella** antes de ofrecérselo a nadie. Depende de N2. |
 | **N5** | 🧾 **Resumen final antes del despacho** (su paso 11) | bajo | ⏸️ **Atado a N6.** Su paso 11 ocurre "después de «Pago aprobado»", así que dónde va exactamente depende de si el bot espera o no. Se hace junto con N6, no antes. *(La otra mitad de N5 —los tips de conservación al cerrar— ✅ **ya está hecha**: 24 de 32 fichas traen `duracion`, y la regla no deja inventar el tip si falta.)* |
 | **N6** | ⏸️ **Que el bot ESPERE el clic de «Pago aprobado»** antes de coordinar la entrega (sus pasos 8-9) | medio | 🔴 **Es un cambio de diseño, no un ajuste**: hoy el bot registra el comprobante y **sigue** la venta (`CLAUDE.md` §3). Tiene un costo real — si la dueña tarda dos horas en aprobar, el cliente pasa dos horas mudo después de haber pagado. **Decisión de Maired antes de tocarlo.** |
 
 ### 🔴 Y lo que la plantilla necesita de DATOS (es de Whuilianny, no de código)
 
-`dias_anticipacion` está en **0 en los 32 productos** — la maquinaria que lo usa ya existe entera
-y el bot lo respeta en el turno siguiente **sin desplegar nada**, porque el catálogo se relee en
-cada mensaje. Además: la zona cercana (**$2 o $3**), los productos que la plantilla ofrece y **no
-existen en el catálogo** (hogaza, rústicos, hamburguesas, opciones veganas), sabores en 5 de 37
-variantes, 9 productos sin foto, 0 feriados, y **si la masa madre lleva almendra** (es un
-alérgeno y sigue sin respuesta).
+✅ **`dias_anticipacion` YA ESTÁ CARGADO** (23-ago, tomado del documento): 16 productos en 0
+(congelados y envasados), 12 en 1 y 4 en 2 (los que se hornean). Verificado en la BD el 23-ago.
+El bot lo respeta **sin desplegar nada**, porque el catálogo se relee en cada mensaje.
+⚠️ **Los números salieron del documento, no de la boca de Whuilianny: conviene que ella los
+confirme.** ✅ Y la **zona cercana** quedó en **$2**.
+
+🔴 **Lo que sigue faltando de datos:** los productos que la plantilla ofrece y **no existen en el
+catálogo** (hogaza, rústicos, hamburguesas, opciones veganas), sabores en 5 de 37 variantes,
+9 productos sin foto, **0 feriados**, y **si la masa madre lleva almendra** (es un alérgeno y
+sigue sin respuesta).
 
 ---
 
