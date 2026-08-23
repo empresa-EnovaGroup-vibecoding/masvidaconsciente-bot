@@ -24,6 +24,28 @@
 
 ---
 
+## 2026-08-23 — 🔬 AUDITORÍA EXHAUSTIVA, ENTORNO LOCAL Y LA CAUSA RAÍZ DEL "BOT BRUTO"
+
+**Detalle completo en `prompt_proxima_sesion.md` §3-E.** Resumen de lo que importa:
+
+- 🐳 **`banco_local.sh`**: los bancos ya corren **ANTES** de desplegar (24/27 en local, en
+  segundos). En su primera corrida cazó 2 bugs que el VPS no había visto.
+- 🔬 **La auditoría sacó 200 requisitos** del documento (una revisión a mano previa había sacado
+  51). **Tres de los cuatro fallos graves eran de arreglos de ese mismo día**: código nuevo, con
+  tests en verde, que no hacía lo que decía.
+- 🚨 **A quien pedía "vegano" el bot le ofrecía manteca de cochino e hígado deshidratado.** Freno
+  nuevo de seguridad alimentaria. Y la red de la salud se saltaba 3 de cada 4 formas del celíaco.
+- 🧾 **El "repite y redunda" de Maired: la mitad era del CÓDIGO.** El recibo se insertaba dos veces
+  porque se comparaba texto literal y el modelo lo parafraseaba.
+- ⏸️ **El bot ya ESPERA el clic de «Pago aprobado»** y avisa a la dueña (pasos 8-9 de la plantilla).
+- 🔴🔴 **LA CAUSA RAÍZ del bot que repite: 44 reglas acumuladas y contradictorias sobre Haiku 4.5**
+  (59.381 caracteres de prompt). **Pulir el prompt queda PENDIENTE como trabajo #1** — método y
+  frenos en `prompt_proxima_sesion.md` §5 → P-PROMPT.
+
+**645 tests · 27/27 bancos en el VPS · commits `a5b6808`…`b563b21`, todos desplegados.**
+
+---
+
 ## 2026-08-22 (5) — 📋 LA PLANTILLA DE NEGOCIO DE MAIRED, APLICADA AL BOT
 
 **Lo que pidió Erwin:** *"hay que dejar el sistema tal como pide en el documento, más que todo el
