@@ -227,3 +227,58 @@ def test_ningun_banco_se_queda_huerfano():
         f"estos bancos existen pero el vigilante NO los corre: {huerfanos}. "
         "Un banco que nadie ejecuta no vigila nada."
     )
+
+
+# ══════════════════════════════════════════════════════════════════════════════════
+#  6 · EL RECIBO DUPLICADO — la causa del "repite y redunda" de Maired
+# ══════════════════════════════════════════════════════════════════════════════════
+#
+# CONTADO en la conversación real de anoche (58 mensajes en la BD):
+#     5 veces · la ficha ("duran 2 semanas y son aptas para diabéticos")
+#     4 veces · "1 paquete de Mini New York"
+#     2 veces · el recibo completo del pedido
+#     2 veces · el cobro en bolívares — LAS DOS EN EL MISMO TURNO
+#     6 globos seguidos en un solo turno
+#
+# El recibo y el cobro duplicados NO eran del modelo: eran del CÓDIGO.
+# `_asegurar_resumenes_exactos` comprobaba `resumen in visible` — comparación de cadena LITERAL.
+# El modelo había escrito el cobro con sus palabras ("Por Pago Móvil son…" en vez de "Por Pago
+# Móvil O TRANSFERENCIA son…"), con las cifras correctas; el código no lo reconoció, lo dio por
+# omitido y lo insertó otra vez.
+
+def test_el_cobro_parafraseado_NO_se_duplica():
+    """El caso literal de las 23:06:45."""
+    from app.agent.agent import _asegurar_resumenes_exactos
+
+    de_la_tool = ("Por Pago Móvil o transferencia son 13.259,19 Bs (precio completo). "
+                  "Si pagas en efectivo en dólares son $11.20, con el 20% de descuento")
+    del_modelo = ("Por Pago Móvil son 13.259,19 Bs (precio completo). Si prefieres pagar en "
+                  "efectivo en dólares son $11.20, con el 20% de descuento.")
+    salida = _asegurar_resumenes_exactos(del_modelo, [], None, de_la_tool)
+    assert salida == del_modelo, "insertó el cobro otra vez: el cliente lo ve DOS veces"
+    assert salida.count("13.259,19") == 1
+
+
+def test_pero_si_el_modelo_OMITE_el_cobro_se_inserta():
+    """La red sigue haciendo su trabajo: el cliente no puede quedarse sin las cifras."""
+    from app.agent.agent import _asegurar_resumenes_exactos
+
+    de_la_tool = "Por Pago Móvil son 13.259,19 Bs. En efectivo $11.20"
+    salida = _asegurar_resumenes_exactos("Listo, gracias!", [], None, de_la_tool)
+    assert "13.259,19" in salida and "11.20" in salida
+
+
+def test_y_si_el_modelo_CAMBIA_una_cifra_se_inserta_la_buena():
+    """🔴 Lo que esto impide: que aflojar la comparación deje pasar un monto inventado."""
+    from app.agent.agent import _asegurar_resumenes_exactos
+
+    de_la_tool = "Por Pago Móvil son 13.259,19 Bs. En efectivo $11.20"
+    salida = _asegurar_resumenes_exactos("son 99,99 Bs y $11.20", [], None, de_la_tool)
+    assert "13.259,19" in salida, "dejó pasar una cifra que el modelo se inventó"
+
+
+def test_un_resumen_sin_cifras_se_inserta_igual():
+    """Conservador a propósito: ante la duda, el cliente ve el recibo de más, no de menos."""
+    from app.agent.agent import _ya_dice_las_cifras
+
+    assert _ya_dice_las_cifras("sin numeros aqui", "cualquier cosa") is False

@@ -2076,6 +2076,32 @@ def _pregunta_repetida(texto: str, historial: list | None, veces: int = 2) -> bo
     return False
 
 
+def _ya_dice_las_cifras(resumen: str, visible: str) -> bool:
+    """¿El texto que el bot ya escribió contiene TODAS las cifras de este resumen?
+
+    🔴 POR QUÉ NO BASTA CON `resumen in visible`. Así estaba, y produjo el recibo duplicado que
+    Maired reportó como "repite y redunda". El caso real (mensaje de las 23:06:45):
+
+        la herramienta devolvió:  "Por Pago Móvil O TRANSFERENCIA son 13.259,19 Bs…"
+        el modelo escribió:       "Por Pago Móvil son 13.259,19 Bs…"
+
+    Dice exactamente lo mismo y con las cifras correctas, pero **no es la misma cadena**. El
+    código no lo reconocía, daba el resumen por omitido y lo insertaba delante: el cliente veía
+    el cobro DOS VECES en el mismo turno. Con el recibo del pedido pasaba igual.
+
+    Lo que de verdad hay que garantizar no es que el texto sea idéntico —el modelo redacta, para
+    eso está— sino que **ninguna cifra se pierda**. Si todas están, el trabajo ya está hecho.
+
+    Conservador a propósito: si el resumen no trae ninguna cifra reconocible, devuelve False y se
+    inserta como antes. Ante la duda, el cliente ve el recibo de más y no de menos.
+    """
+    cifras = re.findall(r"\d[\d.,]*", resumen or "")
+    if not cifras:
+        return False
+    v = visible or ""
+    return all(c in v for c in cifras)
+
+
 def _asegurar_resumenes_exactos(
     texto: str,
     historial: list | None,
@@ -2091,7 +2117,7 @@ def _asegurar_resumenes_exactos(
     faltantes: list[str] = []
     for resumen in (resumen_pedido, resumen_cobro):
         limpio = (resumen or "").strip()
-        if limpio and limpio not in visible and limpio not in faltantes:
+        if limpio and not _ya_dice_las_cifras(limpio, visible) and limpio not in faltantes:
             faltantes.append(limpio)
     return "\n\n".join([*faltantes, texto]) if faltantes else texto
 
