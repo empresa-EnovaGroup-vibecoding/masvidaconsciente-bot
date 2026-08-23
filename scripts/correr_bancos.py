@@ -101,6 +101,14 @@ BANCOS = [
     "probar_telemetria",
     "probar_fase2",
     "probar_panel_tamanos",
+    # EL TESTIGO DEL WEBHOOK: mira y anota (entregado / leído / FALLÓ), nunca estorba.
+    # 🔴 ESTE BANCO EXISTÍA Y NADIE LO CORRÍA. La lista de arriba se escribe a mano y se quedó
+    # fuera: pasaba en verde cuando alguien lo lanzaba suelto, pero el vigilante no lo miraba
+    # nunca. Si el testigo se rompe, el panel deja de mostrar si los mensajes llegan — y no hay
+    # ningún otro sitio donde eso se note. Es el patrón que ya mordió dos veces este mismo día
+    # (el panel 13 días atrás, el deploy que falló en silencio): algo que se da por vigilado y
+    # que no mira nadie.
+    "probar_testigo",
 ]
 
 

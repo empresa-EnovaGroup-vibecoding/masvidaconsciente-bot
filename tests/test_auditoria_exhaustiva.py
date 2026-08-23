@@ -155,3 +155,75 @@ def test_pero_tras_el_clic_de_la_dueña_SI_puede_confirmar():
         assert frase_prohibida_siempre(legitimo) is None, (
             f"se frenaría el mensaje legítimo tras la aprobación: {legitimo!r}"
         )
+
+
+# ══════════════════════════════════════════════════════════════════════════════════
+#  5 · LA RED DE LA SALUD NO CAZABA A LOS CELÍACOS
+# ══════════════════════════════════════════════════════════════════════════════════
+#
+# La red impide que el bot sentencie sobre el cuerpo de alguien sin abrir la ficha del producto.
+# Funcionaba para "apto para diabéticos" (que sí es un campo de la BD) y **se le escapaban tres
+# de cada cuatro formas reales** — justo las del celíaco, que es la mitad del público que declara
+# el documento en su primera línea.
+#
+# ⚠️ Y una de las que pasaba es objetivamente FALSA en este catálogo: *"todo es libre de gluten,
+# azúcar refinada y lácteos"* — hay Kéfir de Leche de cabra y Yogurt Kéfirado. Dicha a quien
+# pregunta por una alergia, es la respuesta más cara que puede dar el sistema.
+
+@pytest.mark.parametrize("respuesta", [
+    "Si, el pan de sandwich es libre de gluten, puedes comerlo tranquila",
+    "Claro, todas nuestras galletas son aptas para celiacos",   # el PLURAL no se cazaba
+    "Todo es libre de gluten, azucar refinada y lacteos",        # y además es falso
+    "Si eres celiaca puedes comer cualquiera de nuestros panes",
+    "El pan keto es apto para diabeticos, comelo tranquila",
+    "No lleva gluten, tranquila",
+])
+def test_no_puede_sentenciar_sobre_salud_sin_abrir_la_ficha(respuesta):
+    from app.agent.agent import _dictamina_salud_sin_ficha
+
+    assert _dictamina_salud_sin_ficha("soy celiaca, me sirve?", respuesta, False), (
+        f"se escapó una sentencia sobre el cuerpo de alguien: {respuesta!r}"
+    )
+
+
+@pytest.mark.parametrize("respuesta", [
+    "Eso te lo confirmo con seguridad antes de que compres",
+    "Dejame verificar la ficha y te digo",
+    "Eso lo tienes que ver con tu medico, yo no soy nutricionista",
+])
+def test_la_respuesta_HONESTA_no_se_frena(respuesta):
+    """La red prefiere quedarse corta antes que frenar a un bot que está diciendo la verdad."""
+    from app.agent.agent import _dictamina_salud_sin_ficha
+
+    assert not _dictamina_salud_sin_ficha("soy celiaca, me sirve?", respuesta, False)
+
+
+def test_con_la_ficha_consultada_la_red_no_se_mete():
+    """Si el bot SÍ abrió la ficha, puede responder: el dato es real y viene de la BD."""
+    from app.agent.agent import _dictamina_salud_sin_ficha
+
+    assert not _dictamina_salud_sin_ficha(
+        "soy celiaca, me sirve?", "Si, es libre de gluten", True
+    )
+
+
+def test_ningun_banco_se_queda_huerfano():
+    """🔴 `probar_testigo` EXISTÍA y el vigilante no lo corría: la lista se escribe a mano y se
+    quedó fuera. Pasaba en verde cuando alguien lo lanzaba suelto, pero nadie lo lanzaba.
+    Es el mismo patrón del panel que estuvo 13 días sin desplegar: algo que se da por vigilado
+    y que no mira nadie. Este test hace que el hueco no pueda repetirse en silencio."""
+    import ast
+    import pathlib
+
+    raiz = pathlib.Path(__file__).resolve().parent.parent
+    arbol = ast.parse((raiz / "scripts" / "correr_bancos.py").read_text())
+    lista = []
+    for n in ast.walk(arbol):
+        if isinstance(n, ast.Assign) and any(getattr(x, "id", "") == "BANCOS" for x in n.targets):
+            lista = [e.value for e in n.value.elts if isinstance(e, ast.Constant)]
+    en_disco = {f.stem for f in (raiz / "scripts").glob("probar_*.py")}
+    huerfanos = sorted(en_disco - set(lista))
+    assert not huerfanos, (
+        f"estos bancos existen pero el vigilante NO los corre: {huerfanos}. "
+        "Un banco que nadie ejecuta no vigila nada."
+    )

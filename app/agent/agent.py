@@ -1824,9 +1824,27 @@ _CONDICION = re.compile(
     r"az[úu]car\s+alta|mi\s+condici[óo]n|mi\s+enfermedad)",
     re.IGNORECASE,
 )
+# 🔴 AMPLIADO EL 2026-08-22. La versión anterior solo cazaba una de cada cuatro sentencias
+# reales. Medido con el par pregunta→respuesta que más se repite ("soy celíaca, ¿me sirve?"):
+#
+#     "el pan de sándwich es libre de gluten, puedes comerlo tranquila"  → PASABA
+#     "todas nuestras galletas son aptAS para celíacos"                  → PASABA (falta el plural)
+#     "todo es libre de gluten, azúcar refinada y lácteos"               → PASABA
+#     "el pan keto es apto para diabéticos"                              → sí frenaba
+#
+# Tres huecos: el PLURAL (`apta` sí, `aptas` no), la ventana de 40 caracteres (demasiado corta
+# para "Sí, el pan de sándwich es libre de gluten, puedes…") y, sobre todo, la forma que más se
+# usa de verdad: **"libre de X" / "no lleva X"**, que sentencia igual sin decir "apto".
+#
+# ⚠️ Y "todo es libre de gluten y lácteos" es FALSA en este catálogo: hay Kéfir de Leche de cabra
+# y Yogurt Kéfirado. Dicha a quien pregunta por una alergia, es la respuesta más cara del sistema.
 _DICTAMINA_APTO = re.compile(
-    r"\b(s[íi]|no)\b[^.?!]{0,40}\b(apt[oa]|puede|sirve|problema)\b"
-    r"|\bes\s+apt[oa]\b|\bno\s+es\s+apt[oa]\b|\bs[íi],?\s+(la|lo|el)\s+puede\b",
+    r"\b(s[íi]|no)\b[^.?!]{0,70}\b(apt[oa]s?|puede[sn]?|sirve|problema)\b"
+    r"|\b(es|son|est[áa]n?)\s+apt[oa]s?\b|\bno\s+(es|son)\s+apt[oa]s?\b"
+    r"|\bs[íi],?\s+(la|lo|el|las|los)\s+puede\b"
+    r"|\b(libre|libres|exent[oa]s?)\s+de\s+\w+"
+    r"|\bno\s+(lleva|contiene|tiene)\s+\w+"
+    r"|\bpuedes?\s+(comer|consumir|tomar)\w*",
     re.IGNORECASE,
 )
 
