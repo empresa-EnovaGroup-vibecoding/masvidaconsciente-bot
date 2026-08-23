@@ -22,20 +22,20 @@ y salud, memoria que no se olvida a las 24h, y 8 migraciones nuevas (hasta la 03
 
 ---
 
-## Última verificación: **2026-08-23 (17:40)**
+## Última verificación: **2026-08-23 (18:35)**
 
 | | 🏪 PRODUCCIÓN | 🧪 TALLER |
 |---|---|---|
 | **Servidor** | netcup `152.53.89.118` | Hostinger `2.25.139.106` |
 | **Quién le escribe** | las clientas reales | número de la agencia: **+57 313 293 3806** |
-| **Bot: versión** | `7e80b8a` (14-jul) — **muy atrasada** | ✅ **`c5ba1c4`** (23-ago), al día con `master`, desplegado solo por el push. **SHA de la imagen verificado en bot Y worker** — no el color del run (L59) |
+| **Bot: versión** | `7e80b8a` (14-jul) — **muy atrasada** | ✅ **`d9bce71`** (23-ago), al día con `master`, desplegado solo por el push. **SHA de la imagen verificado en bot Y worker** + **checksum 135/135 bit a bit** — no el color del run (L59) |
 | **Panel: versión** | (sin tocar desde julio) | ✅ **`b9a97c8`** — al día con `master` (sin commits nuevos desde el 22-ago). **Estaba 6 commits atrasado** (corría `d34ccd9`, de 13 días) y nadie lo había notado porque este archivo no listaba el panel |
 | **Modelo IA activo** | (el de julio) | ✅ **`anthropic/claude-haiku-4.5`** (devuelto el 21-ago por decisión de Erwin; estuvo en `gpt-4o-mini` del 18 al 21-ago) |
 | **Modo del agente** | UN agente | los 3 bloqueadores del modo DOS ya están cerrados (06-ago) |
 | **Lista blanca** | ✅ activa | ✅ activa — **4 números** (verificado 23-ago): 2 en `NUMEROS_PERMITIDOS` (env: `584264399792` Maired · `573005690062` `dueno_telefono`) + 2 en `numeros_permitidos_extra` (BD) |
 | **Bot en el mercado** | ❌ NO — apagado para clientas reales hasta la entrega | pruebas |
 
-### 🟢 2026-08-23 (2) — EL PROMPT, PULIDO (era el pendiente #1) — ⏸️ SIN DESPLEGAR
+### 🟢 2026-08-23 (2) — EL PROMPT, PULIDO Y DESPLEGADO (era el pendiente #1)
 
 La causa raíz del *"bot bruto"* atacada donde estaba: **`_REGLAS` 31.418 → 25.567 car (−19%)** y el
 **prompt completo 60.390 → 54.545** (~15.100 → ~13.600 tokens). Se cerraron **5 contradicciones**, y
@@ -54,8 +54,10 @@ Además: **orden de prioridad** (VERDAD > BREVEDAD > CIERRE) · **7 bloques por 
 que ya dice la personalidad · y el **paso 11 de la plantilla** (resumen final), que era N5.
 
 **654 tests · 24/24 bancos en local · 10 reversiones → 10 rojas.**
-⏸️ **Commits `439c212` y `09e8fb0` SIN SUBIR: el PAT dio 403** (credencial en caché = cuenta
-personal, `prompt_proxima_sesion.md` §0.b). En cuanto haya token, el push lo despliega solo.
+🟢 **DESPLEGADO** (`d9bce71`, con el PAT que pasó Erwin): CI ✅ · paso `desplegar` ✅ · **LOS BANCOS
+✅** · producción `skipped`. **Checksum 135/135 bit a bit** en bot Y worker, y el prompt VIVO medido
+dentro del worker: **54.545 car / ~13.636 tokens**, con las 4 invariantes del refactor comprobadas
+ahí mismo.
 🔴 **Falta medirlo en vivo** (la misma conversación de Maired, antes y después): **no se hizo porque
 el saldo está en $1.70** y la medición son ~24 turnos de los ~106 que quedan. Recargar primero.
 

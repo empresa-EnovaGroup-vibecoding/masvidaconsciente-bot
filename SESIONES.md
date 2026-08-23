@@ -71,8 +71,13 @@ Maired, y pule/optimiza el prompt"*. Era el pendiente #1 que él mismo dejó la 
   **no existen en el catálogo**. *(Churros: confirmado que NO está en el catálogo.)*
 
 **654 tests · 24/24 bancos en local · 10 reversiones → 10 rojas · `ruff` limpio.**
-🔴 **SIN SUBIR: el PAT dio 403** (la credencial en caché es la cuenta personal, §0.b). Commits
-locales `439c212` y `09e8fb0`.
+🟢 **SUBIDO Y DESPLEGADO** (`c5ba1c4..d9bce71`, con el PAT de Erwin): CI ✅ · `desplegar` ✅ · **LOS
+BANCOS ✅** · producción `skipped` · **checksum 135/135 bit a bit** en los DOS contenedores · prompt
+VIVO medido dentro del worker en **54.545 car / ~13.636 tokens**.
+🔴 **Y un fallo del instrumento, el de siempre:** el primer checksum dio **3 diferencias**.
+`subir_a_enova.sh` empuja a una **URL inline**, así que NO mueve el ref local `origin/master` — yo
+estaba comparando contra el commit anterior. Es exactamente la regla de §0.b (*"`git fetch` SIEMPRE
+antes de auditar"*) que me salté. Con el `fetch` hecho: 135/135. → **L72.**
 
 ---
 
