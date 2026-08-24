@@ -24,6 +24,51 @@
 
 ---
 
+## 2026-08-24 (2) — 🔬 LA PRUEBA EN VIVO DE MAIRED, MONITOREADA TURNO A TURNO: 3 bugs de código cazados y desplegados
+
+**Maired probó en vivo (00:35–00:52) con el bot sin redes de estilo, monitoreado en tiempo real
+desde la BD y los logs.** Su queja: *"tiene casi los mismos errores"*. El forense dice otra cosa:
+sus 4 quejas de estilo del sábado están resueltas (ficha 0×, cifras EXACTAS las 5 veces, 2-3
+globos, texto→foto) y **el pedido quedó PERFECTO en la BD** (#1918: $8+$2=$10, zona centro $2,
+martes 25 respetando la anticipación, cotizado 7.846,63 Bs / $6.40 exactos). Lo que ella vio
+—resumen 3×, cobro 2×, re-preguntar el método— es la ESTELA de los rescates del dinero:
+**Haiku INVENTÓ datos bancarios DOS VECES** (cédulas 04165892147 y 04165432127, teléfonos
+0414-7891234 y 0414-7894561 — todos fabricados, distintos entre sí) y `_dinero_inventado` lo
+frenó las dos veces ANTES de enviarse. Sin las redes del dinero que SE QUEDARON, una clienta
+habría pagado a una cuenta inexistente. **Ese es el argumento definitivo para subir de modelo.**
+
+**Y la segunda pasada forense cazó 3 bugs de CÓDIGO, los 3 arreglados con el caso literal en
+rojo primero, y desplegados (`e5ef54b` · `28facc1` · `5a2a07f`):**
+
+1. 🔴 **"Buenos días" a las 00:35** (`e5ef54b`): `_saludo_hora_texto` no tenía franja de
+   madrugada (`h < 12 → buenos días`). Ella dijo "buenas noches" y el bot la contradijo —
+   obedeciendo al código. Franja nueva: 00:00–05:59 = noche. Tests de las 4 franjas y 6 bordes.
+2. 🔴 **Aviso espurio a la dueña a las 00:39 AM** (`28facc1`): *"Déjame confirmar tu pedido:
+   … ¿Está bien así?"* es un RECAP al cliente y `_PROMESA_RE` lo cazó como promesa por la rama
+   `déjame…confirm` → WhatsApp real de "el bot te necesita" a la dueña de madrugada por un
+   mensaje perfecto (el 3er POST del turno, verificado en logs). Lookahead quirúrgico: excluye
+   `confirmar (el|tu) pedido` SALVO que la frase lleve "con la dueña/Whuilianny/ella".
+3. 🔴🔴 **El personaje roto** (`5a2a07f`): ella le escribió su lista de quejas AL BOT y el bot
+   contestó con un análisis interno numerado en 6 globos citando sus herramientas:
+   *"debo CONSULTAR `proxima_fecha_entrega`"*. `_SUENA_A_SISTEMA` existía para esta clase y no
+   cubría ni backticks, ni nombres_con_guion_bajo, ni el "debo consultar/usar". Extendida
+   (sigue SUAVE: pide reescribir una vez, jamás bloquea).
+
+**Dos aclaraciones para la reunión con Maired:** su punto *"dice que mañana es martes, no sabe
+en qué día está"* — **el bot tenía RAZÓN** (pasada la medianoche hoy ES lunes 24; la tool lo
+confirmó); la confusión la amplificó el "buenos días" ya corregido. Y su *"no debe preguntar
+para cuándo, debe tomar el tiempo de preparado"* es una **decisión de producto** (ofrecer la
+fecha en vez de preguntarla): va al prompt/personalidad cuando ella lo confirme.
+
+**Lo que sigue siendo del MODELO, con prueba:** la excusa falsa de las 18:00 (la tool le dijo
+`ya_paso_la_hora_de_corte: false` y el motivo real era la anticipación) · el "testamento" al
+primer "¿tienes kefir?" · los datos bancarios fabricados 2× · re-citar el resumen tras cada
+rescate (violando la regla 66 que tiene delante).
+
+**650 tests · 24/24 bancos local · 27/27 VPS tras cada deploy · saldo al cierre ~$0.94.**
+
+---
+
 ## 2026-08-24 — 🔪 FUERA LAS 3 REDES DE ESTILO: el LLM queda expuesto, a propósito
 
 **El encargo de Erwin:** *"elimina esas redes que fallaron y que sea el LLM quien decida, quien
