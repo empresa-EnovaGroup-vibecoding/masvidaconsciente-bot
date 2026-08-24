@@ -35,6 +35,15 @@ PROMESAS = [
     ("Te la confirmo enseguidita 💚", True),          # el diminutivo con el que habla esta voz
     ("Déjame que te la verifique y te digo", True),  # subjuntivo: la raíz cambia de c a qu
     # Lo que NO debe disparar la red (falsos positivos que romperían la venta):
+    # 🔴 EL CASO REAL DEL 24-ago (00:39, mensaje 6946): "Déjame confirmar tu pedido" es un
+    # RECAP al cliente —le está mostrando el pedido AHORA y preguntándole "¿está bien así?"—,
+    # no una promesa de averiguar nada. La red lo cazó como promesa y le mandó a la dueña un
+    # "el bot te necesita" a las 00:39 AM por un mensaje que era perfecto.
+    ("Déjame confirmar tu pedido: 1 kéfir de leche de cabra para mañana martes 25 de agosto, "
+     "delivery en Barquisimeto centro. Está bien así?", False),
+    ("Déjame confirmar el pedido: 2 paquetes de empanadas. Correcto?", False),
+    # …pero la MISMA frase con la dueña dentro SÍ es una promesa (el guard del guard):
+    ("Déjame confirmar tu pedido con la dueña y te aviso", True),
     ("Te la mando ahorita", False),                  # manda una foto: no promete averiguar nada
     ("Perfecto, te confirmo el pedido: 2 paquetes de empanadas. Total: $28", False),
     ("Listo, te lo tengo para el lunes 💚", False),

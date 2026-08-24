@@ -935,7 +935,16 @@ _PROMESA_RE = re.compile(
     # `verifiqu` no es un adorno: en subjuntivo la raíz cambia de c a qu ("déjame que lo
     # VERIFIQUE") y el stem `verific` no la ve. Los otros verbos no cambian (consulte, revise,
     # averigüe, pregunte). Lo cazó el banco, no la lectura — como siempre.
-    r"(verific|verifiqu|consult|revis|averigu|pregunt|confirm)"
+    #
+    # 🔴 "DÉJAME CONFIRMAR TU PEDIDO" NO ES UNA PROMESA (caso real, 24-ago 00:39, mensaje
+    # 6946): es un RECAP — le muestra el pedido AL CLIENTE ahora mismo y le pregunta "¿está
+    # bien así?". La red lo cazó como promesa y le mandó a la dueña un "el bot te necesita"
+    # a las 00:39 AM por un mensaje perfecto. El lookahead lo excluye SOLO cuando a
+    # `confirm…` le sigue "el/tu pedido/orden/compra" SIN "con la dueña/Whuilianny/ella"
+    # en la misma frase — "déjame confirmar tu pedido CON LA DUEÑA" sigue siendo promesa.
+    r"(verific|verifiqu|consult|revis|averigu|pregunt"
+    r"|confirm(?!\w*\s+(el|tu)\s+(pedido|orden|compra)\b"
+    r"(?![^.\n?]*\bcon\s+(la\s+due[ñn]a|whuilianny|ella)\b)))"
     r"|perm[ií]teme\s+(que\s+)?((te\s+)?(lo|la|los|las|le)\s+)?"
     r"(verific|verifiqu|consult|revis|averigu|pregunt)"
     r"|((te\s+)?(lo|la|los|las)|eso)\s+(verifico|consulto|averiguo|pregunto|confirmo)\b"
