@@ -673,12 +673,23 @@ async def _estado_cliente_texto(telefono: str) -> str:
     return "\n".join(lineas)
 
 
-def _saludo_hora_texto() -> str:
+def _saludo_hora_texto(ahora=None) -> str:
     """Le dice al bot la hora de Venezuela (UTC-4) para que salude acorde (buenos
-    días/tardes/noches). Sin esto, el modelo NO sabe qué hora es y puede equivocarse."""
-    ahora = datetime.now(UTC) - timedelta(hours=4)  # Venezuela = UTC-4
+    días/tardes/noches). Sin esto, el modelo NO sabe qué hora es y puede equivocarse.
+
+    🔴 LA MADRUGADA ES NOCHE (bug real, 24-ago 00:35): Maired escribió "Buenas noches" y el
+    bot contestó "buenos días" — porque la franja era `h < 12 → buenos días` y la madrugada
+    no existía. El modelo obedeció lo que se le inyectó: el bug era de AQUÍ, no suyo.
+    "Buenos días" empieza a las 06:00; de 00:00 a 05:59 se saluda "buenas noches".
+
+    `ahora` va por parámetro SOLO para los tests (tests/test_saludo_hora.py): sin él, la
+    hora real de Venezuela, como siempre."""
+    if ahora is None:
+        ahora = datetime.now(UTC) - timedelta(hours=4)  # Venezuela = UTC-4
     h = ahora.hour
-    if h < 12:
+    if h < 6:
+        franja = "buenas noches"  # la madrugada sigue siendo noche
+    elif h < 12:
         franja = "buenos días"
     elif h < 19:
         franja = "buenas tardes"
