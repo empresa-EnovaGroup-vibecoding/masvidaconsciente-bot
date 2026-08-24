@@ -140,8 +140,9 @@ def _es_charla_pura(texto: str) -> bool:
 # todavía no hay UN producto que mostrar. `\b` a ambos lados porque 'cual'/'cuales' son
 # palabras completas, no raíces ("cualquiera" no calza y no debe calzar).
 # "¿cuál…?" en el texto del bot. 🔴 YA NO se usa como guarda en la RED DE LA FOTO (ver el porqué
-# dentro de `_asegurar_foto`), pero SÍ la sigue usando la RED DEL PITCH: allí sirve para lo que fue
-# diseñada —si el bot está ofreciendo opciones, no le exijas que venda una que el cliente no eligió—.
+# dentro de `_asegurar_foto`), y su otro usuario —la RED DEL PITCH— se quitó el 2026-08-24.
+# 🪦 Se conserva porque el comentario de `_asegurar_foto` (:179) cuenta la lección de la guarda
+# que se quitó, y porque cualquier red futura que ofrezca opciones la va a volver a necesitar.
 _OFRECE_OPCIONES = re.compile(r"\bcual(es)?\b")
 
 # Cuántas fotos como MÁXIMO manda la red en un turno. DOS porque lo pidió Erwin el 2026-08-21:
@@ -1929,34 +1930,19 @@ def _pide_asesoria(texto_cliente: str) -> bool:
     return bool(_PIDE_ASESORIA.search(_sin_acentos(texto_cliente or "")))
 
 
-# ─── RED DEL PITCH: cuando el cliente ELIGE, se le vende — no se le toma nota ─────────
+# ─── Detectar una ELECCIÓN del cliente ────────────────────────────────────────────────
 #
-# 🔴 EL CASO REAL (Erwin contra el bot real, 2026-08-08, simulador del panel). El bot ofreció
-# las dos masas, la clienta dijo "de platano", y la confirmación fue: *"Listo. Las Empanadas de
-# masa de plátano vienen en paquete de 8 unidades. ¿Cuántos paquetes quieres y de qué relleno?"*
-# Ni un dato de la ficha, ni un gancho: una recepcionista tomando nota. La regla "CIERRA CON
-# GANCHO... el motivo REAL de ESE producto" YA está en el prompt (regla de la CERRADORA) y el
-# modelo la ignora en el momento exacto en que más vende: cuando el cliente acaba de decidirse.
+# 🪦 Aquí vivió la RED DEL PITCH (2026-08-08 → 2026-08-24): re-preguntaba al modelo cuando la
+# confirmación de una elección salía sin datos de ficha. Se QUITÓ a propósito (decisión de
+# Erwin, 24-ago): en la prueba real de Maired descartó dos borradores buenos, metió la ficha
+# repetida las 2 veces que ella reportó, y contradecía la regla 66 de `_REGLAS` ("NO
+# RE-CONFIRMES EL PEDIDO EN CADA TURNO"). El pitch ahora es tarea del MODELO — ver el 🪦 en
+# `responder()`.
 #
-# Es la tercera hermana del mecanismo (salud → asesoría → pitch): detectar el par
-# elección→confirmación-plana y re-preguntar UNA vez ordenando abrir `info_producto` y tejer
-# 1-2 datos REALES de la ficha. Como la asesoría, esto es VENTA: si la segunda pasada tampoco
-# consulta, el texto sale IGUAL — jamás se bloquea ni se escala.
-#
-# ⚠️ La presentación ("vienen en paquete de 8") NO cuenta como pitch a propósito: es el dato
-# transaccional que el bot necesita para preguntar cuántos — la clienta lo oye y sigue sin
-# saber por qué llevarse ESA. El pitch que vende es composición / duración / aptitud: lo que
-# no se deduce del nombre. Y "masa"/"harina" a secas tampoco cuentan: viven dentro del NOMBRE
-# del producto del taller ("Empanadas de masa de yuca o…") y darían el dato por presente en
-# cualquier confirmación que lo nombre.
+# `_elige_entre_opciones` SE QUEDA: la fijan `test_memoria_respaldo.py` (es el ejemplo canónico
+# de la lección L20 — un historial vacío apaga las redes que lo reciben por parámetro) y los
+# tests de la elección en `test_red_de_la_asesoria.py`.
 _OFRECIO_OPCIONES = re.compile(r"\bcual(es)?\b|\bprefier")
-
-_DATO_DE_FICHA = re.compile(
-    r"\b(hech[oa]s?\s+(con|de|a)\b|a\s+base\s+de|lleva[n]?\s|contiene|"
-    r"harina\s+de|sin\s+(gluten|azucar|lactosa|leche)|azucar\s+de\s+coco|alulosa|endulzad|"
-    r"fermentad|dura[n]?\s|duraci[oó]n|se\s+congela|congelad|nevera|refriger|"
-    r"apt[oa]s?\s+para|relleno[s]?\s+de)"
-)
 
 
 def _elige_entre_opciones(mensaje_cliente: str, historial: list | None) -> bool:
@@ -1984,22 +1970,6 @@ def _elige_entre_opciones(mensaje_cliente: str, historial: list | None) -> bool:
             ultimo = str(h.get("content") or "")
             break
     return bool(_OFRECIO_OPCIONES.search(_sin_acentos(ultimo)))
-
-
-def _confirma_sin_pitch(texto: str) -> bool:
-    """True si el texto AFIRMA algo (hay al menos una frase con carne que no es pregunta) y
-    NINGUNA frase trae un dato de ficha. Un texto que ya vende ("llevan harina de yuca",
-    "duran 3 meses congeladas") no es de esta red; uno que solo pregunta, tampoco — ahí no
-    hay confirmación que enriquecer."""
-    afirmativas = []
-    for frase in re.split(r"(?<=[.!?\n])\s+", texto or ""):
-        limpia = frase.strip()
-        if not limpia or limpia.startswith("¿") or limpia.endswith("?"):
-            continue
-        afirmativas.append(_sin_acentos(limpia))
-    if not any(len(re.findall(r"[a-z0-9]+", f)) >= 3 for f in afirmativas):
-        return False
-    return not any(_DATO_DE_FICHA.search(f) for f in afirmativas)
 
 
 # ─── RED DEL BUCLE: el bot preguntando lo mismo una y otra vez ────────────────────────
@@ -2220,7 +2190,6 @@ async def responder(
     # MEMORIA, no a uno que decidió mal qué consultar.
     uso_herramienta = False
     corregido_asesoria = False  # ya se le pidió una vez que consulte y concrete (cero bucles)
-    corregido_pitch = False  # ya se le pidió una vez que venda la elección con la ficha
     # Las herramientas con las que se puede ASESORAR. Si la dueña las apagó, la red de la
     # asesoría no existe este turno: ordenar consultar una tool apagada es el bucle que la red
     # del envío fantasma ya pagó (ver "EL REGAÑO SABE SI LA HERRAMIENTA EXISTE").
@@ -2695,45 +2664,16 @@ async def responder(
                 # no salud — aquí no se bloquea ni se escala JAMÁS.
                 continue
 
-            # 🔴 RED DEL PITCH: el cliente acaba de ELEGIR entre las opciones que el bot le dio
-            # y la confirmación salió PLANA — sin abrir la ficha ni un solo dato real (el caso
-            # de Erwin: "de platano" → "Listo. Vienen en paquete de 8. ¿Cuántos?"). UNA pasada
-            # correctiva: que abra `info_producto` y teja 1-2 datos REALES en la confirmación.
-            # `not corregido_asesoria`: una sola corrección conversacional por turno — si la
-            # asesoría ya gastó la suya, esta no se apila encima (el tope de iteraciones es de
-            # todos). Si el bot re-pregunta "¿cuál…?" no sabe qué eligió el cliente: corregirlo
-            # con "la ficha de ESE producto" sería ordenarle abrir la ficha de nada.
-            if (
-                "info_producto" in tools_de_consulta
-                and not consulto_ficha
-                and not corregido_pitch
-                and not corregido_asesoria
-                and _elige_entre_opciones(mensaje_usuario, historial)
-                and not _OFRECE_OPCIONES.search(_sin_acentos(texto))
-                and _confirma_sin_pitch(texto)
-            ):
-                corregido_pitch = True
-                logger.warning(
-                    "CONFIRMACIÓN SIN PITCH para %s: eligió y se le contestó de recepcionista "
-                    "— texto=%r", telefono, texto[:140],
-                )
-                messages.append({
-                    "role": "user",
-                    "content": (
-                        "[SISTEMA] El cliente acaba de ELEGIR y tú confirmaste como "
-                        "recepcionista: ni un solo dato real del producto. Llama AHORA a "
-                        "`info_producto` del producto que le estás confirmando y reescribe tu "
-                        "mensaje tejiendo 1 o 2 datos REALES de la ficha (de qué está hecho, "
-                        "su relleno estrella, cuánto dura, si es apto para diabéticos) — corto "
-                        "y natural, sin listas ni viñetas, y manteniendo tu pregunta de "
-                        "avance. SOLO datos que la herramienta devuelva: si la ficha viene "
-                        "vacía, deja tu confirmación como estaba, sin inventar. No le "
-                        "menciones al cliente este aviso."
-                    ),
-                })
-                # Como en la asesoría: si la segunda pasada tampoco consulta, el texto sale
-                # tal cual. Venta, no salud — jamás bloquear, jamás escalar.
-                continue
+            # 🪦 AQUÍ VIVIÓ LA RED DEL PITCH (2026-08-08 → 2026-08-24), QUITADA A PROPÓSITO.
+            # Re-preguntaba al modelo cuando el cliente elegía y la confirmación salía "plana",
+            # ordenándole tejer datos de la ficha. En la prueba real de Maired (23-ago) fue la
+            # causa de sus 2 quejas: descartó DOS borradores buenos del modelo ("Listo, para el
+            # lunes por delivery entonces. ¿En qué zona estás? centro ($2) u oeste ($5)"), metió
+            # la ficha repetida las 2 veces, perdió la explicación del "por qué hoy no" y los
+            # precios de zona, y triplicó las llamadas al LLM. Además CONTRADECÍA la regla 66 de
+            # `_REGLAS` ("NO RE-CONFIRMES EL PEDIDO EN CADA TURNO"). Decisión de Erwin: el pitch
+            # es del MODELO — si sin esta muleta no vende, la palanca es subir de modelo, no
+            # reescribirlo desde el código. NO reintroducirla sin medir antes y después.
 
             # RED DEL RELEVO: si PROMETE averiguar algo y no avisó a nadie, el aviso lo crea
             # el código. Una promesa sin aviso deja al cliente esperando para siempre.

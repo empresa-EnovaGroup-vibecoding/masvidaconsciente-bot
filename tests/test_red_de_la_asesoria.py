@@ -267,27 +267,21 @@ async def test_producto_concreto_no_dispara_por_la_puerta_real():
 
 
 # ══════════════════════════════════════════════════════════════════════════════════
-# LA RED DEL PITCH: cuando el cliente ELIGE, se le vende — no se le toma nota
+# LA ELECCIÓN — `_elige_entre_opciones` (fija además la lección L20: historial vacío)
 # ══════════════════════════════════════════════════════════════════════════════════
 #
-# El caso real de Erwin (simulador, 2026-08-08): el bot ofreció las dos masas, la clienta dijo
-# "de platano" y la confirmación fue "Listo. Las Empanadas de masa de plátano vienen en paquete
-# de 8 unidades. ¿Cuántos paquetes quieres y de qué relleno?" — ni un dato de la ficha, ni un
-# gancho. Confirma como recepcionista, no vende.
+# 🪦 Aquí vivieron los tests de la RED DEL PITCH, quitada el 2026-08-24 por decisión de Erwin:
+# en la prueba real de Maired (23-ago) esa red descartó dos borradores buenos del modelo, metió
+# la ficha repetida las 2 veces que ella reportó y contradecía la regla 66 de `_REGLAS`
+# ("NO RE-CONFIRMES EL PEDIDO EN CADA TURNO"). El pitch ahora es tarea del MODELO.
+# `_elige_entre_opciones` SE QUEDA (la usa también `test_memoria_respaldo.py` como ejemplo
+# canónico de L20), y estos tests la siguen fijando.
 
 OFERTA = (
     "Tengo Empanadas de masa de plátano y Empanadas de masa de yuca — ambas son saludables "
     "y sin gluten. ¿De cuál prefieres?"
 )
 HIST_ELECCION = [{"role": "assistant", "content": OFERTA}]
-CONFIRMACION_PLANA = (
-    "Listo. Las Empanadas de masa de plátano vienen en paquete de 8 unidades. "
-    "¿Cuántos paquetes quieres y de qué relleno?"
-)
-CONFIRMACION_CON_PITCH = (
-    "buena eleccion 💚 las de plátano llevan harina de yuca y duran hasta 3 meses congeladas. "
-    "cuantos paquetes te preparo?"
-)
 
 
 def test_elegir_es_contestar_corto_a_la_oferta_del_bot():
@@ -305,106 +299,6 @@ def test_elegir_es_contestar_corto_a_la_oferta_del_bot():
 ])
 def test_lo_que_no_es_una_eleccion(mensaje: str, historial: list):
     assert ag._elige_entre_opciones(mensaje, historial) is False
-
-
-def test_la_confirmacion_real_de_erwin_es_plana():
-    """La presentación ("paquete de 8") es transaccional, no pitch: la clienta sigue sin saber
-    por qué llevarse ESA. Y "masa de plátano" es el NOMBRE, no un dato."""
-    assert ag._confirma_sin_pitch(CONFIRMACION_PLANA) is True
-
-
-@pytest.mark.parametrize("texto", [
-    CONFIRMACION_CON_PITCH,                                        # ya vende: llevan/duran
-    "Son sin gluten y aptas para diabéticos. cuantos paquetes?",   # ya vende: ficha presente
-    "Tengo relleno de carne mechada, pollo o queso de cabra.",     # dato de relleno (turno 3)
-    "¿Cuántos paquetes quieres?",                                  # puro preguntar: nada que enriquecer
-])
-def test_lo_que_ya_vende_o_no_confirma_no_es_plano(texto: str):
-    assert ag._confirma_sin_pitch(texto) is False
-
-
-async def test_la_eleccion_plana_se_corrige_consulta_y_vende():
-    """EL CASO DE ERWIN completo: elección → confirmación plana → corrección [SISTEMA] →
-    info_producto → confirmación con 1-2 datos REALES. Eso es lo que sale."""
-    salida, llamadas, correcciones = await _correr(
-        cliente="de platano",
-        historial=HIST_ELECCION,
-        marca="ELEGIR",
-        respuestas=[
-            _msg(CONFIRMACION_PLANA),
-            _msg("", tools=[("info_producto", {"nombre": "Empanadas de masa de yuca o de masa de plátano"})]),
-            _msg(CONFIRMACION_CON_PITCH),
-        ],
-        resultados_tool={
-            "info_producto": {
-                "encontrado": True,
-                "nombre": "Empanadas de masa de yuca o de masa de plátano",
-                "descripcion": "masa de plátano macho o yuca, con harina de yuca",
-                "duracion": "3 meses congeladas",
-            },
-        },
-    )
-    assert salida == CONFIRMACION_CON_PITCH
-    assert any(n == "info_producto" for n, _ in llamadas), "nunca abrió la ficha"
-    assert len(correcciones) == 1
-
-
-async def test_si_insiste_la_confirmacion_sale_igual():
-    """Venta, no salud: si la segunda pasada tampoco consulta, el texto sale tal cual —
-    sin RESPUESTA_SEGURA, sin escalar, y con UNA sola corrección."""
-    segunda = "perfecto, las de plátano entonces 💚 me dices cuantos paquetes?"
-    salida, llamadas, correcciones = await _correr(
-        cliente="de platano",
-        historial=HIST_ELECCION,
-        marca="ELEGIR",
-        respuestas=[_msg(CONFIRMACION_PLANA), _msg(segunda)],
-    )
-    assert salida == segunda
-    assert salida != RESPUESTA_SEGURA
-    assert not any(n == "pedir_ayuda" for n, _ in llamadas), "escaló por el pitch: prohibido"
-    assert len(correcciones) == 1
-
-
-async def test_si_ya_vende_no_se_corrige():
-    """La confirmación ya trae datos de ficha: no hay nada que corregir."""
-    salida, _, correcciones = await _correr(
-        cliente="de platano",
-        historial=HIST_ELECCION,
-        marca="ELEGIR",
-        respuestas=[_msg(CONFIRMACION_CON_PITCH)],
-    )
-    assert correcciones == []
-    assert salida == CONFIRMACION_CON_PITCH
-
-
-async def test_el_dato_puntual_respondido_no_se_toca():
-    """"relleno de hay?" pide un dato y el bot lo dio: ese turno no es de esta red."""
-    texto = "Tengo relleno de carne mechada, pollo o queso de cabra."
-    salida, _, correcciones = await _correr(
-        cliente="relleno de hay?",
-        historial=[{"role": "assistant", "content": CONFIRMACION_PLANA}],
-        marca="ELEGIR",
-        respuestas=[_msg(texto)],
-    )
-    assert correcciones == []
-    assert salida == texto
-
-
-async def test_sin_info_producto_la_red_del_pitch_no_existe(monkeypatch):
-    """Ordenar abrir una ficha APAGADA es el bucle ya conocido: sin `info_producto`, nada."""
-
-    async def _sin_ficha():
-        return frozenset({"ver_catalogo", "enviar_catalogo", "pedir_ayuda"})
-
-    monkeypatch.setattr(ag, "leer_tools_activas", _sin_ficha)
-    salida, _, correcciones = await _correr(
-        cliente="de platano",
-        historial=HIST_ELECCION,
-        marca="ELEGIR",
-        respuestas=[_msg(CONFIRMACION_PLANA)],
-    )
-    assert correcciones == []
-    assert salida == CONFIRMACION_PLANA
 
 
 def test_la_palabra_que_usa_el_cliente_REAL_para_pedir_consejo():
