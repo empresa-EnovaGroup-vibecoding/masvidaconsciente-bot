@@ -131,3 +131,45 @@ def test_detecta_los_dias_por_su_nombre():
     assert "pasado manana" in _dias_nombrados("te lo tengo pasado mañana")
     # "de la mañana" es una hora, no un día
     assert "manana" not in _dias_nombrados("abrimos a las 8 de la mañana")
+
+
+# ══════════════════════════════════════════════════════════════════════════════════
+#  LA OTRA MITAD: el modelo no puede CONCEDER la excepción por su cuenta
+# ══════════════════════════════════════════════════════════════════════════════════
+#
+# 🔴 De la auditoría forense del 2026-08-23. `_dias_imposibles` caza el día imposible cuando el
+# bot ya lo NOMBRÓ — es la mitad mecánica. Pero el prompt no le decía en ninguna parte que la
+# excepción no es suya, y la plantilla de Maired insiste DOS veces:
+#
+#   · *"No ofrecer delivery después de las 6:00 p.m. por decisión propia ni inferir una excepción
+#      porque el día tuvo pocas ventas. Solo puede hacerlo cuando la dueña active una autorización
+#      concreta en el panel."*
+#   · *"Una autorización extraordinaria de delivery no significa que cualquier producto pueda
+#      prepararse hoy: también debe verificar producto habilitado, capacidad, zona y hora límite."*
+#
+# Sin la regla, el modelo lo intenta y la red tiene que frenarlo cada vez — y un bot al que su
+# propia red le tumba la frase se contradice DELANTE de la clienta. Es la patología que produjo el
+# domingo inventado: el invento vivía en la conversación y solo chocaba con la verdad al final.
+
+def test_el_prompt_prohibe_conceder_la_excepcion_por_cuenta_propia():
+    from app.agent.system_prompt import _REGLAS, _aplicar_marcas, _filtrar_por_agente
+    from app.services.tools_config import BLINDADAS, DESACTIVABLES
+
+    uno = _aplicar_marcas(_filtrar_por_agente(_REGLAS, "uno"), frozenset(BLINDADAS | DESACTIVABLES))
+    linea = next((ln for ln in uno.split("\n") if "LA EXCEPCIÓN NO LA DAS TÚ" in ln), "")
+    assert linea, "no existe la regla que le prohíbe conceder la excepción de entrega"
+    assert "el día esté flojo" in linea, (
+        "falta el caso que la plantilla nombra explícitamente (inferir la excepción por pocas ventas)"
+    )
+    assert "SOLO si la dueña la autorizó" in linea, "falta quién es el único que puede autorizarla"
+    assert "una autorización no vuelve posible cualquier cosa" in linea, (
+        "falta el segundo aviso de la plantilla: autorizar el delivery no habilita cualquier producto"
+    )
+    assert "pide ayuda" in linea, "sin salida por pedir_ayuda, la regla deja al bot en un callejón"
+
+
+def test_la_regla_de_la_excepcion_le_llega_a_quien_ESCRIBE():
+    """Es una regla de lo que el bot DICE, así que en modo dos le toca a la Voz."""
+    from app.agent.system_prompt import _REGLAS, _filtrar_por_agente
+
+    assert "LA EXCEPCIÓN NO LA DAS TÚ" in _filtrar_por_agente(_REGLAS, "voz")
