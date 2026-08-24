@@ -34,7 +34,7 @@ Las **FASES 0 a 3 ya están hechas y desplegadas**:
 - [x] 1. Código de agosto de Erwin unificado en GitHub (hecho 21-ago: 32 commits del bot + 6 del panel).
 - [x] 2. **Despliegue reconectado y AUTOMÁTICO (hecho 22-ago).** Coolify reconectado a `master` y construyendo desde GitHub; y un push a `master` **despliega el taller solo**, con la CI (`ruff`/`compileall`/`pytest`) como puerta: si sale rojo, no se despliega. Producción sigue SOLO a mano (en un push el destino se fuerza a `taller`). Cómo funciona hoy está en `ESTADO.md` § "cómo se despliega".
 - [ ] 3. Producción actualizada a la última versión — CON respaldo previo de BD + personalidad de netcup.
-- [ ] 4. Los **17 bancos en verde en producción** (no solo en el taller).
+- [ ] 4. Los **27 bancos en verde en producción** (no solo en el taller). *(Eran 17 cuando se escribió esta casilla; hoy son 27 — y 24 de ellos corren en LOCAL antes de desplegar con `./banco_local.sh`.)*
 - [ ] 5. Pruebas de humo con el número real: saludo · catálogo · fotos · pedido · datos de pago · comprobante · delivery — **verificado en la BD, no en el chat**.
 - [ ] 6. La lista blanca se quita (o se amplía por grupos) y **el bot atiende clientas reales**.
 - [ ] 7. La dueña atiende desde la bandeja del panel y el bot escala cuando no sabe.
