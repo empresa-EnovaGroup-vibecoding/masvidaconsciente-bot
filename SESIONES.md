@@ -69,11 +69,36 @@ contra cualquier modelo. **Si el bot ahora repite u omite cifras, esa es la MEDI
 la palanca es subir de modelo (panel, un clic — ⚠️ Sonnet rechaza `temperature` con 400) o el
 modo DOS, no volver a escribir redes de estilo.
 
-**Pendiente al cierre:** medir el guion EXACTO de Maired contra el bot sin muletas (línea base:
-ficha 2× · confirmación 3× · cobro mutilado · 3 llamadas/turno) — bloqueado por el saldo
-($1.31) y el push por el PAT/llave SSH.
+**🟢 DESPLEGADO Y MEDIDO (madrugada del 24-ago).** Erwin pasó un PAT nuevo, se subieron los 5
+commits (`fc66deb..ee9058b`), CI ✅ · `desplegar` ✅ · LOS BANCOS ✅ · producción `skipped`, y el
+SHA `ee9058b` verificado en la imagen de los DOS contenedores. Después se corrió **el guion
+EXACTO de Maired contra el bot desplegado** (`smoke_guion_maired.py`, corte en `httpx`, número
+fuera de la lista blanca, 0 envíos reales verificado en logs):
 
-**636 tests (eran 661: −25 de las redes quitadas) · 24/24 bancos en local · `ruff` limpio.**
+| Métrica | CON redes (23-ago) | SIN redes (24-ago) |
+|---|---|---|
+| Ficha repetida | **2×** | **0** |
+| Confirmación completa repetida | **3×** | **0** |
+| "retiro o delivery" preguntado | **3×** | **1** |
+| Máx. globos por turno | hasta 6 | **3** |
+| Llamadas LLM | hasta 3/turno | **9 en 8 turnos** (~1/turno) |
+| Cifras del cobro | MUTILADAS | ninguna decapitada |
+| Explica el "por qué no hoy" | a la 2ª insistencia | **a la PRIMERA** (y citó la anticipación real del Kéfir) |
+
+**El veredicto del experimento: las quejas de ESTILO de Maired eran de las redes, no del modelo.**
+Sin muletas, Haiku conversa breve, directo y sin repetirse.
+
+🔴 **Y la señal del MODELO que quedó a la vista (la clase P0, intacta):** la venta **NO cerró**.
+En el turno 7 pidió el **nombre** antes de registrar y en el 8 volvió a bloquearse con él
+(*"Primero necesito tu nombre para registrar el pedido"*) — `registrar_pedido`: **0 llamadas**,
+0 pedidos en la BD. Es la clase documentada (sabor → nombre → hora): el modelo eleva un dato a
+requisito bloqueante. La red del cierre (que SE QUEDÓ) no disparó — "¿cuál es tu nombre?" no
+calza sus formas. **Ese es el argumento medible para Maired:** el estilo ya está; lo que falta
+es el cierre, y eso se ataca con el arreglo de fondo (inyectar el ESTADO DEL PEDIDO) o con un
+modelo/modo superior — no con más redes de estilo.
+
+**636 tests (eran 661: −25 de las redes quitadas) · 24/24 bancos en local · 27/27 en el VPS
+tras el deploy · `ruff` limpio.**
 
 ---
 

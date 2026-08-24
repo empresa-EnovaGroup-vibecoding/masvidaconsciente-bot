@@ -22,18 +22,35 @@ y salud, memoria que no se olvida a las 24h, y 8 migraciones nuevas (hasta la 03
 
 ---
 
-## Última verificación: **2026-08-23 (18:35)**
+## Última verificación: **2026-08-24 (00:50, madrugada)**
 
 | | 🏪 PRODUCCIÓN | 🧪 TALLER |
 |---|---|---|
 | **Servidor** | netcup `152.53.89.118` | Hostinger `2.25.139.106` |
 | **Quién le escribe** | las clientas reales | número de la agencia: **+57 313 293 3806** |
-| **Bot: versión** | `7e80b8a` (14-jul) — **muy atrasada** | ✅ **`d9bce71`** (23-ago), al día con `master`, desplegado solo por el push. **SHA de la imagen verificado en bot Y worker** + **checksum 135/135 bit a bit** — no el color del run (L59) |
+| **Bot: versión** | `7e80b8a` (14-jul) — **muy atrasada** | ✅ **`ee9058b`** (24-ago), al día con `master`, desplegado solo por el push. **SHA de la imagen verificado en bot Y worker** — no el color del run (L59) |
 | **Panel: versión** | (sin tocar desde julio) | ✅ **`b9a97c8`** — al día con `master` (sin commits nuevos desde el 22-ago). **Estaba 6 commits atrasado** (corría `d34ccd9`, de 13 días) y nadie lo había notado porque este archivo no listaba el panel |
 | **Modelo IA activo** | (el de julio) | ✅ **`anthropic/claude-haiku-4.5`** (devuelto el 21-ago por decisión de Erwin; estuvo en `gpt-4o-mini` del 18 al 21-ago) |
 | **Modo del agente** | UN agente | los 3 bloqueadores del modo DOS ya están cerrados (06-ago) |
 | **Lista blanca** | ✅ activa | ✅ activa — **4 números** (verificado 23-ago): 2 en `NUMEROS_PERMITIDOS` (env: `584264399792` Maired · `573005690062` `dueno_telefono`) + 2 en `numeros_permitidos_extra` (BD) |
 | **Bot en el mercado** | ❌ NO — apagado para clientas reales hasta la entrega | pruebas |
+
+### 🔪 2026-08-24 — LAS 3 REDES DE ESTILO FUERA, Y EL EXPERIMENTO MEDIDO (`ee9058b`)
+
+**Decisión de Erwin:** quitar las redes que REESCRIBEN al modelo (pitch · ficha repetida ·
+inserción de resúmenes) y dejar que el LLM razone solo — las 3 quejas de Maired del 23-ago las
+causaban esas redes, no el modelo (la de la ficha llegó a MUTILAR el cobro: "7.799,52 Bs" salió
+como "799,52 Bs", entregado). Las redes del DINERO/VERDAD/SALUD/Meta se quedan TODAS.
+
+**Medido con el guion exacto de Maired, antes y después:** ficha repetida **2→0** · confirmación
+repetida **3→0** · "retiro o delivery" **3→1** · globos por turno **6→3** · llamadas LLM
+**~1/turno** (eran hasta 3) · cifras intactas · el "por qué no hoy" explicado **a la primera**.
+🔴 **Lo que quedó a la vista (la clase P0, y ahora sin ruido):** la venta NO cerró — el modelo
+bloqueó el registro pidiendo el **nombre** (0 pedidos en la BD). El estilo ya está; el cierre es
+del modelo. Palancas: inyectar el ESTADO DEL PEDIDO (arreglo de fondo) · modo DOS · subir modelo.
+
+**636 tests · 24/24 bancos local · 27/27 VPS · auditor: 104 requisitos, 90 CUMPLEN, 0 NO CUMPLE
+(las 2 conductas pasaron de "red" a "conducta del LLM": 13→11 redes).**
 
 ### 🔬 2026-08-23 (3) — LA PLANTILLA DE MAIRED, AUDITADA EN UN COMANDO (`3cb7d8f`)
 
