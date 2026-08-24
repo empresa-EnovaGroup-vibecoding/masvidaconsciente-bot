@@ -10,7 +10,7 @@ Es la lección del proyecto un nivel más arriba: *el código impide… si el c�
 
 import pytest
 
-from app.agent.agent import _dias_imposibles, _frase_prohibida, _sin_ficha_repetida
+from app.agent.agent import _dias_imposibles, _frase_prohibida
 from app.agent.tools import _es_restriccion_alimentaria
 
 CAL = {
@@ -64,36 +64,13 @@ def test_el_freno_NO_aplica_si_la_consulta_nombra_un_PRODUCTO():
 
 
 # ══════════════════════════════════════════════════════════════════════════════════
-#  2 · LA FICHA REPETIDA — el arreglo del día que no arreglaba su propio caso
+#  2 · 🪦 LA FICHA REPETIDA — red QUITADA el 2026-08-24 (decisión de Erwin)
 # ══════════════════════════════════════════════════════════════════════════════════
-
-FICHA = "Son versión mini de las galletas New York, duran 2 semanas y son aptas para diabéticos"
-
-
-def test_el_caso_LITERAL_de_la_base_de_datos():
-    """🔴 Este test es la razón del fichero. La primera versión de la red comparaba frases
-    COMPLETAS, y la misma ficha venía con distinto prefijo cada vez — así que no quitaba nada.
-    Se desplegó con el mensaje "ahora en CÓDIGO" y la queja de Maired habría seguido igual.
-    Estos son los textos exactos de los mensajes 5858 y 5864."""
-    historial = [{"role": "assistant", "content":
-                  "Listo, 1 paquete de Mini New York, son versión mini de las galletas New York, "
-                  "duran 2 semanas y son aptas para diabéticos."}]
-    nuevo = f"Perfecto, te las dejo para el lunes. {FICHA}."
-    salida = _sin_ficha_repetida(nuevo, historial)
-    assert "duran 2 semanas" not in salida, "la ficha se repitió por segunda vez"
-    assert "te las dejo para el lunes" in salida, "se llevó lo que sí era nuevo"
-
-
-def test_el_recibo_NO_se_mutila():
-    """🔴 El otro defecto del mismo arreglo: al recibo repetido le quitaba la línea
-    `Entrega: lunes 24 de agosto`. Un recibo con las cifras sueltas y sin la fecha es peor que
-    un recibo repetido."""
-    recibo = ("Mini New York x1 = $14\nEnvío a Barquisimeto centro = $3\n"
-              "Total: $17\nEntrega: lunes 24 de agosto")
-    salida = _sin_ficha_repetida(recibo + "\nMe confirmas?", [{"role": "assistant", "content": recibo}])
-    for imprescindible in ("Total:", "Entrega: lunes 24", "$14", "$3"):
-        assert imprescindible in salida, f"mutiló el recibo: falta {imprescindible!r}"
-
+#
+# Aquí vivían los tests de `_sin_ficha_repetida`. La red mutiló el cobro de Maired el 23-ago
+# (partía los números por el punto decimal: "7.799,52" → "799,52", "$6.40" → "$6", mensaje
+# 6784, entregado) y su comparación por subcadena no cazaba la paráfrasis. No repetirse es
+# ahora tarea del MODELO (regla 66 de _REGLAS + personalidad). Ver SESIONES.md 2026-08-24.
 
 # ══════════════════════════════════════════════════════════════════════════════════
 #  3 · LA RED DEL DÍA — 4 de 5 promesas de "hoy" se escapaban

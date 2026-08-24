@@ -489,98 +489,15 @@ def _asegurar_saludo(texto: str, mensaje_usuario: str, nombre_cliente: str | Non
     return ". ".join(partes) + " 💚\n\n" + texto
 
 
-# ─── 🔁 RED DE LA FICHA REPETIDA: el mismo dato del producto, turno tras turno ────────
-#
-# 🔴 EL CASO MEDIDO (2026-08-22, prueba de Maired, después de poner la regla en el prompt):
-# *"duran 2 semanas y son aptas para diabéticos"* apareció **CUATRO veces** en una sola
-# conversación — en los turnos de las 22:50, 22:55, 22:56 y 23:04. Maired lo reportó dos veces:
-# *"Repite mucho… son las galletas mini Nueva York y duran dos semanas y son para diabéticos"*.
-#
-# La regla del prompt ("NO REPITAS lo que ya dijiste") se escribió esa misma tarde y **el modelo
-# la ignoró las cuatro veces**. Otra vez L40: *el prompt SUGIERE, el código IMPIDE*.
-#
-# Cómo funciona: se parte el mensaje en frases y se tira la que ya se dijo ANTES en esta
-# conversación, palabra por palabra. No reescribe nada ni resume: **solo borra el duplicado
-# literal**, que es lo único que se puede hacer sin riesgo de estropear el mensaje.
-#
-# ⚠️ Los tres frenos que evitan que esta red haga daño:
-#   · Solo frases LARGAS (>30 caracteres). "Claro que sí" o "Cuántos quieres?" se repiten con
-#     toda naturalidad en una conversación y no son ficha.
-#   · Solo si queda algo que decir: si al quitar el duplicado el mensaje se queda vacío, se
-#     devuelve el original. Callar al bot es peor que repetirse.
-#   · Nada que lleve DINERO se toca: un precio o un total repetido es CORRECTO y necesario, y
-#     esta red no puede meterse en el carril del dinero. ⚠️ El freno mira MONEDA ($, dólares,
-#     bolívares…), NO "cualquier dígito": la primera versión lo hacía así y no quitaba nada,
-#     porque la ficha del caso real dice *"duran **2** semanas"*. Se descubrió escribiendo el test.
-
-def _texto_ya_dicho(historial: list[dict]) -> str:
-    """Todo lo que el bot ya dijo en esta conversación, en un solo texto normalizado."""
-    partes = [
-        h.get("content") or ""
-        for h in (historial or [])
-        if isinstance(h, dict) and (h.get("role") or "") == "assistant"
-    ]
-    return _sin_acentos_min(" ".join(" ".join(" ".join(partes).split()).split()))
-
-
-# Lo que NUNCA se toca: el carril del dinero y los hechos del pedido. Un total, un precio o una
-# fecha de entrega SE REPITEN A PROPÓSITO —el cliente los necesita delante— y borrarlos deja un
-# recibo mutilado, que es peor que repetirse.
-_NO_SE_TOCA = re.compile(
-    r"[$€]|\bd[oó]lar|\bbs\b|bol[ií]var|\btotal\b|\bentrega\b|\benv[ií]o\b|=|"
-    r"\b(lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo)\b",
-    re.I,
-)
-
-
-def _sin_ficha_repetida(texto: str, historial: list[dict]) -> str:
-    """Quita del mensaje lo que el bot YA dijo antes en esta conversación.
-
-    ⚠️ COMPARA POR CONTENIDO, NO POR FRASE EXACTA — y esa es toda la diferencia. La primera
-    versión (desplegada el 22-ago con el mensaje "ahora en CÓDIGO") comparaba frases completas y
-    **no quitaba nada en el caso real que la motivó**, porque la misma ficha venía con distinto
-    prefijo cada vez:
-
-        antes:  "Listo, 1 paquete de Mini New York, son versión mini de las galletas New York,
-                 duran 2 semanas y son aptas para diabéticos."
-        ahora:  "Perfecto, te las dejo para el lunes. Son versión mini de las galletas New York,
-                 duran 2 semanas y son aptas para diabéticos."
-
-    Como frases completas no coinciden nunca. Como subcadena, sí. Lo cazó una auditoría que probó
-    la red con los textos LITERALES de la base de datos en vez de con un ejemplo inventado — es
-    L45 otra vez: *antes de inventarte casos de prueba, usa los que ya pasaron*.
-    """
-    try:
-        ya = _texto_ya_dicho(historial)
-        if not ya:
-            return texto
-        salida, quitadas = [], 0
-        # 🔴 `(?!\d)`: NO partir cuando después del punto viene un dígito. Sin eso se parte
-        # DENTRO del número —"7.799,52" y "$6.40"— y el trozo amputado se queda al otro lado
-        # del `$`/`Bs` que lo protege, así que `_NO_SE_TOCA` no lo reconoce como dinero y se lo
-        # lleva. Pasó en vivo el 2026-08-24 (mensaje 6784): a Maired le llegó "799,52 Bs … son
-        # $6." en vez de "7.799,52 Bs … $6.40" — un precio DIEZ VECES MENOR, entregado.
-        # Los otros seis partidores de este fichero usan `(?<=[.!?\n])\s+` y por eso nunca
-        # rompieron un número: exigen espacio. Este era el único sin él, y el único del dinero.
-        for fr in re.split(r"(?<=[.\n])(?!\d)", texto):
-            limpia = " ".join(fr.split())
-            if (
-                len(limpia) > 30
-                and not _NO_SE_TOCA.search(limpia)
-                and _sin_acentos_min(limpia.rstrip(".")) in ya
-            ):
-                quitadas += 1
-                continue
-            salida.append(fr)
-        nuevo = "".join(salida).strip()
-        # Si al limpiar no queda nada que decir, vale más repetirse que enmudecer.
-        if not quitadas or len(nuevo) < 15:
-            return texto
-        logger.info("FICHA REPETIDA: %d frase(s) ya dichas quitadas del mensaje", quitadas)
-        return nuevo
-    except Exception:  # noqa: BLE001
-        logger.exception("_sin_ficha_repetida: se deja el texto original")
-        return texto
+# 🪦 AQUÍ VIVIÓ LA RED DE LA FICHA REPETIDA (2026-08-23 → 2026-08-24), QUITADA A PROPÓSITO.
+# Partía el texto final en frases y borraba las "ya dichas". El 23-ago (22:19 VET) MUTILÓ EL
+# COBRO de Maired: partía por CADA punto —el decimal incluido—, "7.799,52 Bs" salió como
+# "799,52 Bs" y "$6.40" como "$6" (mensaje 6784, ENVIADO Y ENTREGADO: un precio diez veces
+# menor, en el carril del dinero). Y su borrado por subcadena literal no cazaba la paráfrasis,
+# así que la ficha repetida que motivó la red pasaba igual. Decisión de Erwin (24-ago): no
+# repetirse es tarea del MODELO (la regla 66 de _REGLAS y la personalidad ya lo ordenan) — si
+# no obedece, la palanca es subir de modelo, no censurar el texto desde el código.
+# NO reintroducirla sin medir antes y después.
 
 
 # ─── 🗓️ RED DEL DÍA IMPOSIBLE: el bot NO puede nombrar un día en que no se entrega ────
@@ -2703,10 +2620,6 @@ async def responder(
                     ya_fallo=relevo_imposible,
                 )
                 relevo_imposible = relevo_imposible or not pidio_ayuda
-
-            # 🔁 RED DE LA FICHA REPETIDA — con el texto ya final: quita lo que el bot ya dijo
-            # antes en esta conversación (medido: la misma ficha CUATRO veces el 22-ago).
-            texto = _sin_ficha_repetida(texto, historial)
 
             pidio_catalogo = _pide_catalogo(pregunta_cliente)
             texto = await _asegurar_catalogo(
