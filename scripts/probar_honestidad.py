@@ -99,6 +99,15 @@ SISTEMA = [
     ("El sistema no me deja hacer eso", True),
     ("Lamento, no se pudo enviar la foto", True),
     ("Según mi sistema, ese producto está agotado", True),
+    # 🔴 EL PERSONAJE ROTO (caso REAL, 24-ago 00:52, mensajes 6968-6973): Maired le escribió su
+    # lista de quejas AL BOT y el bot le contestó con un análisis interno numerado, citando sus
+    # HERRAMIENTAS con backticks. Un cliente real leyendo "debo CONSULTAR `proxima_fecha_entrega`"
+    # ve las tripas del robot. La red existía y sus patrones no cubrían ni los backticks ni los
+    # nombres_con_guion_bajo ni el "debo consultar/usar".
+    ("Pero debo CONSULTAR `proxima_fecha_entrega` antes de dar la fecha", True),
+    ("Dije mañana martes sin verificar: debo usar proxima_fecha_entrega", True),
+    ("Tienes toda la razón. Déjame corregir esos errores: 1. Respuestas largas: debo ser breve.", True),
+    ("Según mis instrucciones, el resumen va una sola vez", True),
     # Lo que SÍ suena a persona:
     ("Hacemos entrega en La Mendera o delivery por tu zona 💚", False),
     ("Ese producto se nos agotó, pero tengo estos otros", False),

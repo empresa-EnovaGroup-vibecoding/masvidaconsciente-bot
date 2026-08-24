@@ -1533,7 +1533,16 @@ _SUENA_A_SISTEMA = re.compile(
     r"(lo que (yo )?tengo cargad|tengo cargad|no me trae|no me aparece en (el sistema|mi)"
     r"|mi (base de datos|sistema|catálogo cargado)|el sistema (no )?(me )?(deja|permite|trae)"
     r"|no se pudo enviar|no me deja|est[áa] cargad[oa] en el sistema"
-    r"|seg[úu]n (mi|el) (sistema|registro|base))",
+    r"|seg[úu]n (mi|el) (sistema|registro|base)"
+    # 🔴 EL PERSONAJE ROTO (caso real, 24-ago 00:52, mensajes 6968-6973): la clienta le escribió
+    # su lista de quejas y el bot le contestó con un análisis interno numerado citando sus
+    # herramientas: "debo CONSULTAR `proxima_fecha_entrega`". Un cliente leyendo eso ve las
+    # tripas del robot. Tres formas nuevas, todas imposibles en boca de una vendedora:
+    r"|`[^`\n]{2,60}`"                                     # backticks = código/nombre de tool
+    r"|(?<![\w@.])[a-záéíóúñ]+(?:_[a-záéíóúñ]+){1,4}\b(?!@)"  # nombre_con_guion_bajo (no email)
+    r"|debo (consultar|usar|llamar|verificar|ser breve)"
+    r"|d[ée]jame corregir (esos|los|mis) errores"
+    r"|(mis|las) instrucciones|mi prompt|mis reglas)",
     re.IGNORECASE,
 )
 
