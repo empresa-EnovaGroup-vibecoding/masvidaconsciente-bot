@@ -1707,15 +1707,6 @@ def _datos_sensibles_inventados(
     return malos
 
 
-def _texto_previo_del_agente(historial: list | None) -> str:
-    """Solo lo que el cliente ya vio; los mensajes internos no cuentan como recibo visible."""
-    return "\n".join(
-        str(item.get("content") or "")
-        for item in (historial or [])
-        if isinstance(item, dict) and item.get("role") == "assistant"
-    )
-
-
 # ─── RED DE LA SALUD: no se dictamina sobre el cuerpo de alguien sin mirar la ficha ────
 #
 # 🔴 EL CASO REAL (simulacro con el bot real, 2026-08-06). Una clienta preguntó "¿es apta para
@@ -1970,50 +1961,15 @@ def _pregunta_repetida(texto: str, historial: list | None, veces: int = 2) -> bo
     return False
 
 
-def _ya_dice_las_cifras(resumen: str, visible: str) -> bool:
-    """¿El texto que el bot ya escribió contiene TODAS las cifras de este resumen?
-
-    🔴 POR QUÉ NO BASTA CON `resumen in visible`. Así estaba, y produjo el recibo duplicado que
-    Maired reportó como "repite y redunda". El caso real (mensaje de las 23:06:45):
-
-        la herramienta devolvió:  "Por Pago Móvil O TRANSFERENCIA son 13.259,19 Bs…"
-        el modelo escribió:       "Por Pago Móvil son 13.259,19 Bs…"
-
-    Dice exactamente lo mismo y con las cifras correctas, pero **no es la misma cadena**. El
-    código no lo reconocía, daba el resumen por omitido y lo insertaba delante: el cliente veía
-    el cobro DOS VECES en el mismo turno. Con el recibo del pedido pasaba igual.
-
-    Lo que de verdad hay que garantizar no es que el texto sea idéntico —el modelo redacta, para
-    eso está— sino que **ninguna cifra se pierda**. Si todas están, el trabajo ya está hecho.
-
-    Conservador a propósito: si el resumen no trae ninguna cifra reconocible, devuelve False y se
-    inserta como antes. Ante la duda, el cliente ve el recibo de más y no de menos.
-    """
-    cifras = re.findall(r"\d[\d.,]*", resumen or "")
-    if not cifras:
-        return False
-    v = visible or ""
-    return all(c in v for c in cifras)
-
-
-def _asegurar_resumenes_exactos(
-    texto: str,
-    historial: list | None,
-    resumen_pedido: str | None,
-    resumen_cobro: str | None,
-) -> str:
-    """Pone delante los recibos que el modelo omitió o reescribió.
-
-    El dinero ya viene calculado por herramientas. Aquí no se redacta ni se recalcula:
-    se copia literalmente para que el cliente pueda revisar pedido, entrega y cobro.
-    """
-    visible = f"{_texto_previo_del_agente(historial)}\n{texto}"
-    faltantes: list[str] = []
-    for resumen in (resumen_pedido, resumen_cobro):
-        limpio = (resumen or "").strip()
-        if limpio and not _ya_dice_las_cifras(limpio, visible) and limpio not in faltantes:
-            faltantes.append(limpio)
-    return "\n\n".join([*faltantes, texto]) if faltantes else texto
+# 🪦 AQUÍ VIVIERON `_ya_dice_las_cifras` Y `_asegurar_resumenes_exactos` (QUITADAS 24-ago).
+# Insertaban delante del mensaje el recibo/cobro EXACTOS de las herramientas cuando el modelo
+# los omitía o parafraseaba. Se quitaron por decisión de Erwin: presentar el recibo es tarea
+# del MODELO (las reglas 107-108 de _REGLAS ya le ordenan copiar `resumen`/`resumen_cobro` tal
+# cual). Además alimentaban el conflicto entre redes (L28 medido el 23-ago): el texto insertado
+# quedaba en el historial y la red de la ficha repetida lo recortaba al turno siguiente,
+# mutilando el cobro de Maired. El dinero FALSO lo sigue frenando `_dinero_inventado` (esa es
+# otra red y se queda entera); lo que ya no garantiza nadie es que el modelo INCLUYA las cifras
+# — a propósito: es la señal que mide si el modelo alcanza. NO reintroducir sin medir.
 
 
 async def responder(
@@ -2170,8 +2126,6 @@ async def responder(
     # ¿El cliente escribió "foto"/"video"/"imagen", o solo "muéstrame"? De eso depende a qué
     # apunta un "ya te lo envié" pelado — ver `_afirma_envio_fotos` (PRM-1).
     pidio_media = _pide_media_explicita(pregunta_cliente)
-    resumen_pedido: str | None = None
-    resumen_cobro: str | None = None
 
     for _ in range(settings.max_iteraciones_agente):
         data = await _llamar_con_fallback(messages, llm, modelo, tools_llm)
@@ -2181,18 +2135,6 @@ async def responder(
         tool_calls = msg.get("tool_calls")
         if not tool_calls:
             texto = (msg.get("content") or "").strip() or RESPUESTA_SEGURA
-
-            texto_seguro = _asegurar_resumenes_exactos(
-                texto,
-                historial,
-                resumen_pedido,
-                resumen_cobro,
-            )
-            if texto_seguro != texto:
-                logger.warning(
-                    "RECIBO OMITIDO por %s: el código insertó los resúmenes exactos", telefono
-                )
-                texto = texto_seguro
 
             # 🗓️ RED DEL DÍA IMPOSIBLE — va ANTES de la del dinero porque prometer un día en que
             # no se entrega es del mismo tamaño que inventar un monto: las dos son promesas que el
@@ -2769,17 +2711,6 @@ async def responder(
                 # El pedido existe DE VERDAD en la base. Sin esto, el bot podía decir
                 # "listo, te agendo" sin haber registrado nada (caso real del 2026-07-12).
                 registro_ok = True
-                resumen = str(resultado.get("resumen") or "").strip()
-                if resumen:
-                    resumen_pedido = resumen
-            if (
-                nombre_tool == "generar_datos_pago"
-                and isinstance(resultado, dict)
-                and resultado.get("ok")
-            ):
-                resumen = str(resultado.get("resumen_cobro") or "").strip()
-                if resumen:
-                    resumen_cobro = resumen
             if (
                 nombre_tool == "registrar_comprobante"
                 and isinstance(resultado, dict)
