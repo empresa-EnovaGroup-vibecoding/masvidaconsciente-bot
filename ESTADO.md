@@ -22,18 +22,46 @@ y salud, memoria que no se olvida a las 24h, y 8 migraciones nuevas (hasta la 03
 
 ---
 
-## Última verificación: **2026-08-24 (00:50, madrugada)**
+## Última verificación: **2026-08-24 (01:15, madrugada)**
 
 | | 🏪 PRODUCCIÓN | 🧪 TALLER |
 |---|---|---|
 | **Servidor** | netcup `152.53.89.118` | Hostinger `2.25.139.106` |
 | **Quién le escribe** | las clientas reales | número de la agencia: **+57 313 293 3806** |
-| **Bot: versión** | `7e80b8a` (14-jul) — **muy atrasada** | ✅ **`ee9058b`** (24-ago), al día con `master`, desplegado solo por el push. **SHA de la imagen verificado en bot Y worker** — no el color del run (L59) |
+| **Bot: versión** | `7e80b8a` (14-jul) — **muy atrasada** | ✅ **`8fdb099`** (24-ago), al día con `master`, desplegado solo por el push. **SHA de la imagen verificado en bot Y worker** — no el color del run (L59) |
 | **Panel: versión** | (sin tocar desde julio) | ✅ **`b9a97c8`** — al día con `master` (sin commits nuevos desde el 22-ago). **Estaba 6 commits atrasado** (corría `d34ccd9`, de 13 días) y nadie lo había notado porque este archivo no listaba el panel |
 | **Modelo IA activo** | (el de julio) | ✅ **`anthropic/claude-haiku-4.5`** (devuelto el 21-ago por decisión de Erwin; estuvo en `gpt-4o-mini` del 18 al 21-ago) |
 | **Modo del agente** | UN agente | los 3 bloqueadores del modo DOS ya están cerrados (06-ago) |
 | **Lista blanca** | ✅ activa | ✅ activa — **4 números** (verificado 23-ago): 2 en `NUMEROS_PERMITIDOS` (env: `584264399792` Maired · `573005690062` `dueno_telefono`) + 2 en `numeros_permitidos_extra` (BD) |
 | **Bot en el mercado** | ❌ NO — apagado para clientas reales hasta la entrega | pruebas |
+
+### 🔬 2026-08-24 (2) — LA PRUEBA EN VIVO DE MAIRED: 3 bugs de código y EL TECHO DEL MODELO
+
+Maired probó en vivo (00:35–00:52) con el bot sin redes de estilo, **monitoreado turno a turno**.
+Su veredicto: *"tiene casi los mismos errores"*. Contado contra la BD: **1 era del código · 1 es
+decisión suya · 4 son del modelo.** Las quejas de estilo del sábado SÍ se resolvieron (ficha
+**2→0** · globos **6→3** · cifras **exactas las 5 veces**) y **la venta CERRÓ**: pedido **#1918**
+($8+$2=$10 · zona centro $2 · martes 25 · 7.846,63 Bs con tasa BCV 784,6633 · $6,40 efectivo).
+
+🔴🔴 **Lo que ella NO vio: el modelo inventó DATOS BANCARIOS dos veces** (cédulas 04165892147 y
+04165432127, ambas falsas y distintas). **Los dos guardias del dinero los frenaron las dos veces** —
+sin ellos, una clienta habría pagado a una cuenta inexistente. Y **las repeticiones que ella
+reportó son la ESTELA de esos rescates**: al rehacer el turno, el modelo re-cita todo.
+
+🟢 **3 BUGS DE CÓDIGO, arreglados con su caso literal en rojo primero y desplegados:**
+`e5ef54b` la **madrugada no existía** en el saludo (le decía "son las 00:35 (buenos días)") ·
+`28facc1` un **aviso falso a Whuilianny a las 00:39 AM** por un mensaje perfecto ·
+`5a2a07f` el **personaje roto** (le citó `proxima_fecha_entrega` a la clienta).
+
+🔴🔴 **EL VEREDICTO, y cierra el diagnóstico:** se verificaron **las 10 conductas falladas contra el
+prompt VIVO** (55.174 car dentro del worker) — **las 10 están escritas**, varias en MAYÚSCULAS
+(*"BREVEDAD ante todo"*, *"LAS FECHAS SE CONSULTAN"*, *"NO REPREGUNTES LO QUE YA SABES"*, *"LOS
+DATOS DE PAGO… jamás de memoria"*). **No es "nadie se lo ordenó": se le ordenó lo contrario y lo
+hizo igual.** `_REGLAS` **NO se tocó a propósito.** ➡️ **El trabajo #1 ya no es código ni prompt:
+es SUBIR DE MODELO o encender el modo DOS**, midiendo con `smoke_guion_maired.py`.
+
+**650 tests · 24/24 bancos local · 27/27 VPS · auditor 104/0 NO CUMPLE · saldo ~$0,93.**
+📄 Informe para ella: `MAS VIDA/INFORME_MAIRED_2026-08-24.html` (los 30 globos anotados uno por uno).
 
 ### 🔪 2026-08-24 — LAS 3 REDES DE ESTILO FUERA, Y EL EXPERIMENTO MEDIDO (`ee9058b`)
 
