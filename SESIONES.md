@@ -24,6 +24,63 @@
 
 ---
 
+## 2026-08-23 (3) — 🔬 AUDITORÍA FORENSE DE LA PLANTILLA: 106 requisitos, ejecutados
+
+**El encargo de Erwin:** *"vuelve a hacer un análisis forense y auditado de que todo esté tal como
+pidió Maired, y que el bot tenga la estructura adecuada para aquello; que el único detalle sea el
+modelo LLM, nada más"*.
+
+- 🧪 **Se escribió un AUDITOR, no un informe.** `scripts/auditar_plantilla.py` corre DENTRO del
+  worker desplegado y no lee ficheros ni cita de memoria: **ensambla el prompt real, ejecuta las
+  tools reales, consulta la BD real y comprueba las redes de código**. 106 requisitos con su
+  veredicto medido. *"¿Está como lo pidió Maired?" ya se contesta en un comando* — antes cada
+  revisión a mano daba un número distinto (51, luego 200).
+- 📊 **Resultado: 92 CUMPLEN · 0 NO CUMPLE · 1 parcial · 5 son piezas sin construir · 6 son datos
+  de Whuilianny · 2 no aplican.**
+- 🔴🔴 **EL HALLAZGO. La plantilla ofrece hogaza, rústicos y opciones veganas — que NO están en el
+  catálogo. Y el bot los contestaba con un producto cualquiera, en tono de certeza:**
+
+  ```
+  "tienes hogaza?"    →  Arepas Andinas
+  "tienes rusticos?"  →  Yogurt Kéfirado
+  ```
+
+  Similitud con el NOMBRE **0.000** en los dos. El calce venía de la **descripción** (0.429 y
+  0.444): ruido de trigramas contra listas largas de ingredientes (`hogaza`↔`harina`,
+  `rusticos`↔`probióticos`). **Y lo grave no es encontrar de más: es que UN calce espurio SECUESTRA
+  el camino que ya funcionaba** — con cero calces la nota dice *"calzan varios, nómbrale los tipos y
+  pregúntale"* (lo correcto, y lo que ya hacía con `pizza`), y con uno pasa a *"Calza UN solo
+  producto: preséntalo"*. Arreglado dándole a la descripción **su propio piso (0.6)**: los typos van
+  por NOMBRE y no se tocan (`kombuncha` calza 0.583), y los calces legítimos están muy por encima
+  del ruido (`bebidas`→Kéfir 0.750, `limon`→tortas 1.000). **De regalo:** `limon` devolvía **15**
+  productos —Caldo de Huesos incluido— y ahora devuelve los 5 que sí lo mencionan. → **L73.**
+- 🔴 **El segundo hueco: la plantilla insiste DOS veces en que el bot no puede conceder una entrega
+  fuera de horario por su cuenta** (*"ni inferir una excepción porque el día tuvo pocas ventas"*) y
+  **el prompt no lo decía en ninguna parte**. `_dias_imposibles` cazaba el día ya nombrado —la mitad
+  mecánica—, pero un bot al que su propia red le tumba la frase **se contradice delante de la
+  clienta**: es la patología del domingo inventado. Regla escrita, con sus dos avisos y su salida
+  por `pedir_ayuda`.
+- 🟢 **Lo que la auditoría CONFIRMÓ midiendo** (no leyendo): el calendario probado **en domingo** —
+  `hoy_se_puede_entregar: false`, primera fecha **lunes 24**, que es literalmente lo que pide el
+  documento · el efectivo $14+$3 → **$11.20** · el freno vegano devolviendo **0 productos** con su
+  nota de seguridad · las **13 tools** y **8 blindadas** · las **13 redes** de código · churros
+  **ausente** del catálogo · zona centro **$2** y oeste **$5**.
+- 🔴 **Y 4 de los 6 "fallos" de la primera corrida eran del AUDITOR, no del bot**: firmas de tools
+  sin la sesión, un `in` ingenuo sobre una frase que decía lo contrario de lo que asumí, y un
+  chequeo del domingo que se disparaba porque la tool reportaba bien `hoy_es: domingo`. Queda
+  escrito en su cabecera. → **L35 otra vez.**
+
+**659 tests · 24/24 bancos en local · 27/27 en el VPS · 2 reversiones → 2 rojas · desplegado
+`3cb7d8f`.**
+
+🔴 **LO QUE NO ES EL MODELO Y SIGUE ABIERTO** (respuesta directa al encargo): **no es cierto que solo
+falte el modelo.** Faltan tres piezas que el propio documento aplaza —**N1** pago 30/70, **N2**
+delivery extraordinario, **N4** aviso de día flojo— y faltan **datos de Whuilianny**: los 4 productos
+que el documento anuncia y no existen (hogaza, rústicos, hamburguesas, opciones veganas), 0 feriados,
+9 productos sin foto y sabores en 5 de 37 variantes. **De la ESTRUCTURA no falla nada.**
+
+---
+
 ## 2026-08-23 (2) — 🧹 EL PROMPT PULIDO: un orden de prioridad en vez de 68 reglas que compiten
 
 **El encargo de Erwin:** *"revisa que todo se ajuste a lo del documento ya que eso me lo pasó

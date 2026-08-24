@@ -35,6 +35,23 @@ y salud, memoria que no se olvida a las 24h, y 8 migraciones nuevas (hasta la 03
 | **Lista blanca** | ✅ activa | ✅ activa — **4 números** (verificado 23-ago): 2 en `NUMEROS_PERMITIDOS` (env: `584264399792` Maired · `573005690062` `dueno_telefono`) + 2 en `numeros_permitidos_extra` (BD) |
 | **Bot en el mercado** | ❌ NO — apagado para clientas reales hasta la entrega | pruebas |
 
+### 🔬 2026-08-23 (3) — LA PLANTILLA DE MAIRED, AUDITADA EN UN COMANDO (`3cb7d8f`)
+
+`scripts/auditar_plantilla.py` — **106 requisitos ejecutados contra el sistema vivo**, no leídos:
+**92 CUMPLEN · 0 NO CUMPLE · 1 parcial · 5 piezas sin construir · 6 datos de Whuilianny · 2 N/A.**
+
+🔴 **Dos huecos que cerró, y el primero era de venta:** la plantilla ofrece *hogaza*, *rústicos* y
+*opciones veganas* que NO están en el catálogo, y el bot los contestaba con **Arepas Andinas** y
+**Yogurt Kéfirado**, en tono de certeza (calce espurio por la descripción, 0.43). Arreglado con un
+piso propio para la descripción; los typos siguen intactos. Y la plantilla insiste dos veces en que
+el bot **no puede conceder una entrega fuera de horario por su cuenta** — no estaba escrito en
+ninguna parte del prompt. Ya está.
+
+🔴 **«¿Solo falta el modelo?» NO.** De la estructura no falla nada, pero quedan **N1** (pago 30/70),
+**N2** (delivery extraordinario) y **N4** (día flojo) —las tres aplazadas por el propio documento— y
+los **datos de Whuilianny**: 4 productos anunciados que no existen, 0 feriados, 9 sin foto, sabores
+5/37.
+
 ### 🟢 2026-08-23 (2) — EL PROMPT, PULIDO Y DESPLEGADO (era el pendiente #1)
 
 La causa raíz del *"bot bruto"* atacada donde estaba: **`_REGLAS` 31.418 → 25.567 car (−19%)** y el
