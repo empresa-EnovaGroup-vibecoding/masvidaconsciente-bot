@@ -66,6 +66,14 @@ CONSULTAS = [
     # Las que ya funcionaban (no se pueden romper):
     ("pan", "Pan"),
     ("panes", "Pan"),
+    # 🔴 LOS QUE LA PLANTILLA DE MAIRED OFRECE Y EL CATÁLOGO **NO TIENE** (medido 2026-08-23).
+    #    No van aquí para que "encuentren algo": van para que encuentren MUCHOS. Un producto
+    #    inexistente tiene que caer en el camino de `pizza`/`sushi` —"eso no lo tengo, mira lo
+    #    que sí hay"— y NO en el de UN calce, que le ordena al modelo presentarlo con certeza.
+    #    Antes del arreglo: 'hogaza' → Arepas Andinas (1) y 'rusticos' → Yogurt Kéfirado (1),
+    #    los dos por ruido de trigramas contra descripciones largas de ingredientes.
+    ("hogaza", None),
+    ("rusticos", None),
     ("harinas", "Harina"),
     ("empanadas", "Empanada"),
     ("galletas", "Galleta"),
@@ -146,7 +154,8 @@ async def main() -> None:
             check(f"'{q}' NUNCA trae una empanada", not malos, str(malos))
 
         print("\n2) LA NOTA NUNCA ORDENA NEGAR EL CATÁLOGO")
-        for consulta in ("bebidas", "postres", "pan sin gluten", "pizza", "sushi"):
+        for consulta in ("bebidas", "postres", "pan sin gluten", "pizza", "sushi",
+                         "hogaza", "rusticos"):
             r = await ver_catalogo(session, TEL, busqueda=consulta)
             nota = (r.get("nota") or "").lower()
             # "pizza"/"sushi" NO existen: el bot SÍ debe poder decir que eso no lo tiene —
@@ -157,6 +166,14 @@ async def main() -> None:
                 bool(prods),
                 "productos=[] ⇒ el bot corta la venta",
             )
+            # 🔴 Un producto que NO existe no puede salir con UN solo calce: esa nota le dice
+            #    al modelo "preséntalo", y presenta un producto que no tiene nada que ver.
+            if consulta in ("pizza", "sushi", "hogaza", "rusticos"):
+                check(
+                    f"'{consulta}' (no existe): ofrece ALTERNATIVAS, no un falso calce único",
+                    len(prods) > 1,
+                    f"devolvió {len(prods)}: {[p['nombre'] for p in prods][:3]}",
+                )
             if consulta in ("bebidas", "postres", "pan sin gluten"):
                 check(
                     f"'{consulta}': la nota NO le ordena decir 'no tengo'",

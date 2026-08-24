@@ -568,7 +568,8 @@ def _elegir_medios(todos, variante_id, etiqueta):
 
 
 async def _buscar_productos_difuso(
-    session, consulta, *, limite=12, umbral=0.3, solo_disponibles=True, con_descripcion=False
+    session, consulta, *, limite=12, umbral=0.3, solo_disponibles=True, con_descripcion=False,
+    umbral_descripcion=0.6,
 ):
     """Búsqueda TOLERANTE a errores de tipeo y acentos (pg_trgm + unaccent).
     Encuentra 'galletas' aunque escriban 'galetas', y 'limón' aunque pongan 'limon'.
@@ -588,6 +589,36 @@ async def _buscar_productos_difuso(
 
     Por eso el DEFAULT es False (el comportamiento de siempre, el del cobro) y solo la asesoría
     la enciende.
+
+    🔴 Y POR ESO LA DESCRIPCIÓN LLEVA SU PROPIO UMBRAL, MÁS ALTO (`umbral_descripcion=0.6`).
+    Medido el 2026-08-23 contra la base real, buscando lo que la plantilla de Maired ofrece y el
+    catálogo NO tiene:
+
+        'hogaza'   → similitud con el NOMBRE 0.000 · con la DESCRIPCIÓN 0.429 → Arepas Andinas
+        'rusticos' → similitud con el NOMBRE 0.000 · con la DESCRIPCIÓN 0.444 → Yogurt Kéfirado
+
+    O sea: cero parecido con el nombre de nada, y aun así un calce contra una descripción LARGA de
+    ingredientes ('hogaza'↔'harina', 'rusticos'↔'probióticos'). Una descripción larga infla
+    `word_similarity` porque hay muchas palabras contra las que calzar.
+
+    🔴 EL DAÑO NO ES "ENCONTRAR DE MÁS": ES QUE UN CALCE ESPURIO ES PEOR QUE NINGUNO. Con CERO
+    calces, la búsqueda cae al escalón bueno y la nota dice *"calzan varios: nómbrale los TIPOS y
+    pregúntale de cuál quiere"* — que es exactamente la respuesta correcta a "tienes hogaza?" ("eso
+    no, mira lo que sí hay"). Con UN calce espurio, la nota pasa a *"Calza UN solo producto:
+    preséntalo"* y el bot contesta "tienes hogaza?" con **Arepas Andinas**, en tono de certeza.
+    Es el camino de `pizza`/`sushi` —que funciona bien— secuestrado por un falso positivo.
+
+    Los calces LEGÍTIMOS por descripción están muy por encima del ruido, así que el corte no
+    pierde ninguno (medido):
+
+        'bebidas' → Kéfir  0.750   (su descripción dice "Bebida láctea fermentada")
+        'limon'   → tortas 1.000   (el sabor está escrito en la descripción)
+        ── ruido ──────────────────
+        'rusticos' 0.444 · 'hogaza' 0.429 · 'limon'→Caldo de Huesos 0.333
+
+    De paso arregla otra cosa que nadie había mirado: 'limon' devolvía **15** productos, entre
+    ellos Caldo de Huesos y Pan de Hamburguesa (ruido de 0.333). Ahora devuelve los 5 que de
+    verdad lo mencionan.
     """
     q = (consulta or "").strip()
     if len(q) < 2:
@@ -598,13 +629,17 @@ async def _buscar_productos_difuso(
     sim = (
         "GREATEST("
         "  word_similarity(unaccent(lower(:q)), unaccent(lower(nombre))) + 0.2,"
-        "  word_similarity(unaccent(lower(:q)), unaccent(lower(COALESCE(descripcion, ''))))"
+        "  CASE WHEN word_similarity(unaccent(lower(:q)),"
+        "            unaccent(lower(COALESCE(descripcion, '')))) >= :umbral_desc"
+        "       THEN word_similarity(unaccent(lower(:q)),"
+        "            unaccent(lower(COALESCE(descripcion, '')))) ELSE 0 END"
         ")"
         if con_descripcion
         else "word_similarity(unaccent(lower(:q)), unaccent(lower(nombre)))"
     )
     extra_where = (
-        " OR word_similarity(unaccent(lower(:q)), unaccent(lower(COALESCE(descripcion, '')))) >= :umbral"
+        " OR word_similarity(unaccent(lower(:q)), unaccent(lower(COALESCE(descripcion, ''))))"
+        " >= :umbral_desc"
         if con_descripcion
         else ""
     )
@@ -621,7 +656,12 @@ async def _buscar_productos_difuso(
         """
     )
     try:
-        rows = (await session.execute(sql, {"q": q, "umbral": umbral, "lim": limite})).all()
+        rows = (
+            await session.execute(
+                sql,
+                {"q": q, "umbral": umbral, "lim": limite, "umbral_desc": umbral_descripcion},
+            )
+        ).all()
     except Exception as e:  # noqa: BLE001 — sin pg_trgm: el llamador usa la búsqueda exacta
         # 🔴 ANTES ESTO ERA UN `return []` MUDO. Si a un cliente nuevo le faltaba `pg_trgm`
         # (CREATE EXTENSION normalmente exige superusuario), la difusa fallaba en CADA
