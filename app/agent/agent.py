@@ -554,7 +554,14 @@ def _sin_ficha_repetida(texto: str, historial: list[dict]) -> str:
         if not ya:
             return texto
         salida, quitadas = [], 0
-        for fr in re.split(r"(?<=[.\n])", texto):
+        # 🔴 `(?!\d)`: NO partir cuando después del punto viene un dígito. Sin eso se parte
+        # DENTRO del número —"7.799,52" y "$6.40"— y el trozo amputado se queda al otro lado
+        # del `$`/`Bs` que lo protege, así que `_NO_SE_TOCA` no lo reconoce como dinero y se lo
+        # lleva. Pasó en vivo el 2026-08-24 (mensaje 6784): a Maired le llegó "799,52 Bs … son
+        # $6." en vez de "7.799,52 Bs … $6.40" — un precio DIEZ VECES MENOR, entregado.
+        # Los otros seis partidores de este fichero usan `(?<=[.!?\n])\s+` y por eso nunca
+        # rompieron un número: exigen espacio. Este era el único sin él, y el único del dinero.
+        for fr in re.split(r"(?<=[.\n])(?!\d)", texto):
             limpia = " ".join(fr.split())
             if (
                 len(limpia) > 30

@@ -72,3 +72,50 @@ def test_fail_open_ante_cualquier_fallo():
     """Un historial con la forma rara no puede tumbar la respuesta."""
     texto = "Te lo dejo para el lunes."
     assert _sin_ficha_repetida(texto, [{"rol": "malo"}, None]) == texto
+
+
+# ══════════════════════════════════════════════════════════════════════════════════
+#  🔴🔴 EL CUARTO FRENO — descubierto EN VIVO el 2026-08-24 en el chat de Maired
+# ══════════════════════════════════════════════════════════════════════════════════
+#
+# Mensaje 6784 de la BD del taller, ENVIADO Y ENTREGADO a Maired a las 02:19:55:
+#
+#     🤖 "799,52 Bs (precio completo). Si pagas en efectivo en dólares son $6."
+#
+# Tenía que decir **7.799,52 Bs** y **$6.40**. Le mostró un precio DIEZ VECES MENOR.
+#
+# La causa: esta red partía con `re.split(r"(?<=[.\n])")` — **después de CADA punto, incluido el
+# decimal**. "7.799,52" y "$6.40" se cortaban por la mitad, y los trozos amputados
+# ("...son 7." y "40, con el 20%...") se quedaban SIN el `$` ni el `Bs` que los protege, así que
+# `_NO_SE_TOCA` no los reconocía como dinero y se los llevaba por ya-dichos. El marcador se queda
+# a un lado del corte y la mitad del número al otro.
+#
+# Es el defecto que el comentario de `_NO_SE_TOCA` ya advertía en palabras ("borrarlos deja un
+# recibo mutilado, que es peor que repetirse") y que ningún test cazaba, porque **los seis casos
+# escritos usaban números enteros** ($14, $3, "14 dolares"): ninguno tenía punto decimal ni
+# separador de miles. L65 otra vez — el test de un arreglo se escribe con el texto LITERAL.
+#
+# Los otros SEIS partidores de `agent.py` usan `(?<=[.!?\n])\s+`, que exige espacio y por eso
+# nunca rompieron un número. Este era el único sin `\s+` — y el único que toca el dinero.
+
+_COBRO_REAL = (
+    "Por Pago Móvil o transferencia son 7.799,52 Bs (precio completo). "
+    "Si pagas en efectivo en dólares son $6.40, con el 20% de descuento y el delivery "
+    "corre por nuestra cuenta."
+)
+
+
+def test_NUNCA_parte_un_numero_con_decimales():
+    """🔴 El caso REAL: el bot repite el cobro y la red le amputa las cifras."""
+    salida = _sin_ficha_repetida(_COBRO_REAL, [{"role": "assistant", "content": _COBRO_REAL}])
+    assert "7.799,52" in salida, f"mutiló los bolívares: {salida!r}"
+    assert "$6.40" in salida, f"mutiló los dólares: {salida!r}"
+    assert not salida.startswith("799,52"), "envió el precio DIEZ VECES MENOR"
+
+
+def test_el_separador_de_miles_no_se_pierde_aunque_la_frase_sea_nueva():
+    """La misma cifra dentro de un mensaje que sí trae algo nuevo detrás."""
+    salida = _sin_ficha_repetida(
+        _COBRO_REAL + " Me confirmas?", [{"role": "assistant", "content": _COBRO_REAL}]
+    )
+    assert "7.799,52" in salida and "$6.40" in salida, f"mutiló el cobro: {salida!r}"
