@@ -24,6 +24,59 @@
 
 ---
 
+## 2026-08-24 — 🔪 FUERA LAS 3 REDES DE ESTILO: el LLM queda expuesto, a propósito
+
+**El encargo de Erwin:** *"elimina esas redes que fallaron y que sea el LLM quien decida, quien
+razone — porque si el LLM no es capaz, ahí es donde sabremos qué LLM falla y debemos usar un
+modelo más avanzado, y eso deberé decirle a Maired"*.
+
+**El hallazgo forense que lo motivó (prueba de Maired, 23-ago 22:09–22:19, filas 6762–6785):**
+las 3 quejas grandes de ella las causaron REDES corrigiendo al modelo, no el modelo:
+
+- 🔴🔴 **El cobro mutilado** (*"da un precio y luego otro"*): `_sin_ficha_repetida` partía el
+  texto por CADA punto —el decimal incluido— y "7.799,52 Bs" salió como **"799,52 Bs"** y
+  "$6.40" como **"$6"** (mensaje 6784, ENVIADO Y ENTREGADO). Los trozos amputados quedaban al
+  otro lado del `$`/`Bs` que los protegía. Reproducido **bit a bit**. La aritmética y la tasa
+  BCV estaban EXACTAS: lo roto era el procesado del texto.
+- 🔴🔴 **Las 2 fichas repetidas las ORDENÓ la RED DEL PITCH.** Los logs conservan los borradores
+  que descartó — eran justo lo que Maired pide: *"Listo, para el lunes por delivery entonces.
+  ¿En qué zona estás? Tenemos entrega en centro ($2) u oeste ($5)."* → reescrito CON la ficha
+  (2ª vez) y SIN los precios. Y en el turno anterior la reescritura perdió la explicación del
+  "por qué hoy no" — por eso ella tuvo que insistir. Encima **contradecía la regla 66 de
+  `_REGLAS`** ("NO RE-CONFIRMES EL PEDIDO EN CADA TURNO") y **triplicaba las llamadas al LLM**.
+- 🔴 **Las redes se PELEAN (L28, medida en producción):** `_asegurar_resumenes_exactos` insertó
+  el cobro exacto (log 02:18:45) → quedó en el historial → la red de la ficha lo recortó al
+  turno siguiente, cuando el modelo lo repetía legítimamente. Una red garantizaba el texto y la
+  otra lo borraba.
+
+**Qué se quitó (un commit por red, revertibles por separado):** la RED DEL PITCH
+(`_confirma_sin_pitch`, `_DATO_DE_FICHA`, el re-prompt, 10 tests) · la RED DE LA FICHA REPETIDA
+(`_sin_ficha_repetida`, `_texto_ya_dicho`, `_NO_SE_TOCA`, `test_ficha_repetida.py` entero) · la
+INSERCIÓN DE RESÚMENES (`_asegurar_resumenes_exactos`, `_ya_dice_las_cifras`,
+`_texto_previo_del_agente`, las capturas). Con **lápidas 🪦 en cada sitio** y la frontera escrita
+en `CLAUDE.md` §8. El auditor pasa de 13 a **11 redes** con el porqué anotado.
+
+**Qué NO se tocó:** TODAS las redes del dinero, la verdad, la salud y Meta (`_dinero_inventado`,
+`_datos_sensibles_inventados`, `_afirma_pedido_registrado`, tamaño adivinado, día imposible,
+frase del banco, salud alimentaria, bucle, relevo, promesa, saludo/foto/catálogo, cola de media,
+`_aplanar`, lista blanca). `_elige_entre_opciones` se queda (la fijan los tests de la memoria,
+L20). El prompt NO se tocó: las reglas 66 y 107-108 ya ordenan la conducta.
+
+**El criterio, para la próxima vez:** las redes de ESTILO eran muletas del modelo y se
+acumularon como el prompt — cada una arreglando SU incidente, ninguna leída contra las demás
+(la enfermedad de las 68 reglas, en código). Las del DINERO son garantías del negocio y valen
+contra cualquier modelo. **Si el bot ahora repite u omite cifras, esa es la MEDIDA del modelo:**
+la palanca es subir de modelo (panel, un clic — ⚠️ Sonnet rechaza `temperature` con 400) o el
+modo DOS, no volver a escribir redes de estilo.
+
+**Pendiente al cierre:** medir el guion EXACTO de Maired contra el bot sin muletas (línea base:
+ficha 2× · confirmación 3× · cobro mutilado · 3 llamadas/turno) — bloqueado por el saldo
+($1.31) y el push por el PAT/llave SSH.
+
+**636 tests (eran 661: −25 de las redes quitadas) · 24/24 bancos en local · `ruff` limpio.**
+
+---
+
 ## 2026-08-23 (3) — 🔬 AUDITORÍA FORENSE DE LA PLANTILLA: 106 requisitos, ejecutados
 
 **El encargo de Erwin:** *"vuelve a hacer un análisis forense y auditado de que todo esté tal como

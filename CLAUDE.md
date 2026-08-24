@@ -95,6 +95,19 @@ KISS · YAGNI · DRY · una responsabilidad por pieza · nombres claros · archi
 > *(Queda pendiente el blindaje definitivo: que `registrar_pedido` reciba un `producto_id` de una lista
 > CERRADA —"código de barras"— en vez de un nombre en texto libre.)*
 
+> ## 🪦 LA FRONTERA DEL 2026-08-24: las redes de ESTILO se QUITARON — no reintroducirlas
+> **Decisión de Erwin (24-ago):** se eliminaron las 3 redes que REESCRIBÍAN o CENSURABAN el texto
+> del modelo — la **RED DEL PITCH** (fabricó las 2 fichas repetidas que reportó Maired y descartó
+> borradores buenos), la **RED DE LA FICHA REPETIDA** (mutiló el cobro: "7.799,52 Bs" salió como
+> "799,52 Bs", entregado) y la **INSERCIÓN DE RESÚMENES** (plantaba el texto que la otra recortaba
+> — L28). No repetirse, hacer el pitch y presentar el recibo son ahora **conducta del LLM** (las
+> reglas 66 y 107-108 de `_REGLAS` ya lo ordenan). **El motivo es de diagnóstico:** si sin muletas
+> el modelo repite u omite cifras, la señal es limpia — el techo es el MODELO, y la palanca es
+> subir de modelo o el modo DOS, no más redes de estilo. Las redes del DINERO, la VERDAD, la SALUD
+> y Meta se quedan TODAS (`_dinero_inventado`, `_datos_sensibles_inventados`, tamaño, día
+> imposible, frase del banco, etc.): esas protegen contra cualquier modelo. **Antes de reintroducir
+> una red de estilo: medir antes y después, y leer las lápidas 🪦 en `agent.py`.**
+
 **Ya vive en el código (no ponerlo en el prompt):**
 - **Formato al escribir:** corto, varios mensajitos, sin viñetas ni negritas, espejear al cliente. → `_REGLAS` (BREVEDAD, "Planos sin formato", ESPEJEA).
 - **Saludo:** saludar según la hora de Venezuela y responder "muy bien, gracias a Dios" al "¿cómo estás?". → `_REGLAS` + `_saludo_hora_texto` (inyecta la hora) + red `_asegurar_saludo` (agent.py, lo garantiza aunque el modelo falle).

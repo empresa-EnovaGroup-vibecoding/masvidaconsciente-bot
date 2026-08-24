@@ -25,6 +25,10 @@ Veredictos, y la diferencia importa:
                mensaje.
   N/A        · el requisito no aplica (su condición no se da)
 
+🪦 **24-ago:** las redes de la ficha repetida y del recibo exacto se QUITARON (decisión de
+Erwin): esas dos conductas pasan a ser del LLM y este auditor ya no las cuenta como redes.
+Si el modelo repite o omite cifras, eso es el TERMÓMETRO del modelo, no una red que falta.
+
 ⚠️ **Y una advertencia que costó cuatro falsos rojos escribiendo esto:** de los 6 fallos que dio la
 primera corrida, **4 eran del auditor, no del bot** — firmas de tools sin la sesión, un `in`
 demasiado ingenuo sobre una frase que decía lo contrario de lo que asumí, y un chequeo del domingo
@@ -262,8 +266,11 @@ async def main():
         ("red.dinero", "_dinero_inventado", "no deja pasar una cifra que no dio una herramienta"),
         ("red.datos", "_datos_sensibles_inventados", "no deja pasar datos de pago inventados"),
         ("red.pedido", "_afirma_pedido_registrado", "no deja decir «te lo anoté» sin pedido"),
-        ("red.ficha", "_sin_ficha_repetida", "no repite la ficha del producto"),
-        ("red.recibo", "_asegurar_resumenes_exactos", "el recibo sale una vez y con las cifras buenas"),
+        # 🪦 24-ago: `red.ficha` (_sin_ficha_repetida) y `red.recibo` (_asegurar_resumenes_exactos)
+        # SALIERON de esta lista — las redes se QUITARON por decisión de Erwin: no repetir la
+        # ficha y presentar el recibo exacto pasan a ser CONDUCTA DEL LLM (reglas 66 y 107-108
+        # de _REGLAS), para medir el techo del modelo. No es un NO CUMPLE: es un cambio de capa.
+        # La primera mutiló el cobro de Maired (23-ago) y la segunda alimentaba el conflicto L28.
         ("red.tamano", "_tamano_sin_elegir", "no adivina el tamaño (carril del dinero)"),
         ("red.cierre", "_dato_opcional_pedido", "no bloquea el cierre por un dato opcional"),
         ("red.saludo", "_asegurar_saludo", "garantiza el saludo aunque el modelo falle"),
