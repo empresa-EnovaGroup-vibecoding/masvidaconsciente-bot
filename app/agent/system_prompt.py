@@ -12,6 +12,7 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 
+from app.agent.tools import _fmt_bs
 from app.config import get_settings
 from app.models import (
     Cliente,
@@ -651,6 +652,25 @@ async def _estado_cliente_texto(telefono: str) -> str:
         lineas.append(
             f"- Pedido #{esperando.id} ESPERANDO PAGO: a ese se le pega el próximo comprobante."
         )
+        # 🔴 LA CIFRA EN BOLÍVARES VA DELANTE (prueba en vivo de Maired, 24-ago). Con el cobro ya
+        # presentado, la clienta preguntó "cuánto sería en bolívares?" y el modelo —que ya no ve
+        # el resumen de generar_datos_pago, porque los resultados de las herramientas no viven en
+        # el historial— no volvió a llamarla: contestó "dame un momentito y te confirmo", la
+        # promesa vacía que _REGLAS prohíbe. El monto exacto YA estaba guardado en el pedido
+        # (cotizado_bs, migración 027 — el MISMO contra el que se valida el comprobante):
+        # ponérselo delante hace que copiarlo sea más fácil que prometer.
+        # ⚠️ SOLO los bolívares, a propósito: un monto en USD inyectado aquí (sin herramienta en
+        # el turno) chocaría con la red del TOTAL de _dinero_inventado ("el TOTAL solo lo pone
+        # una HERRAMIENTA"), que vigila únicamente dólares. Para el efectivo en USD o los datos
+        # de una cuenta, la orden sigue siendo llamar a generar_datos_pago.
+        if esperando.cotizado_bs is not None:
+            lineas.append(
+                f"- Ese pedido YA ESTÁ COTIZADO: por Pago Móvil o transferencia son "
+                f"{_fmt_bs(esperando.cotizado_bs)} Bs (precio completo). Si pregunta cuánto es "
+                f"en bolívares, respóndele DE UNA con esa cifra COPIADA TAL CUAL — no la "
+                f"recalcules ni prometas 'confirmarla'. Para el monto en efectivo o los datos "
+                f"de una cuenta, llama a generar_datos_pago con pedido_id={esperando.id}."
+            )
         lineas.append(
             f"- Si pide los datos o elige cómo pagar, NO registres el pedido otra vez: "
             f"llama directamente a generar_datos_pago con pedido_id={esperando.id}."
