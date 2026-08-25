@@ -24,6 +24,49 @@
 
 ---
 
+## 2026-08-24 (3) — 🌿 PRIMERA RAMA + PR (flujo nuevo) · la cifra en Bs viaja en ESTADO DEL CLIENTE · caja Personalidad limpia · DeepSeek V4 Pro
+
+**Sesión conducida por Maired, aprendiendo el flujo profesional: RAMAS + PULL REQUEST** (sugerencia
+de su amigo Jorge, adoptada). Desde hoy los cambios nacen en una rama y entran a `master` por PR:
+nada llega al taller hasta que ella fusiona. Ramas: `arreglo-bolivares-estado-cliente` (este PR) ·
+`identidad-alejandra` (aparcada: el cambio Whuilianny→Alejandra del 24-ago, falta su test) ·
+próxima: `descuento-zelle-binance`.
+
+**El arreglo de este PR (`fix(estado)`):** en la prueba en vivo, con el cobro YA presentado, la
+clienta preguntó *"Cuanto seria en bolívares?"* y el bot: *"Dame un momentito y te confirmo 😊"* —
+la promesa vacía que `_REGLAS` prohíbe. El monto exacto YA estaba guardado (`cotizado_bs`, migración
+027); el modelo no volvió a llamar a `generar_datos_pago`, y los resultados de las herramientas no
+viven en el historial. Ahora el bloque ESTADO DEL CLIENTE enseña la cifra formateada, lista para
+COPIAR. **Solo bolívares, a propósito:** un USD inyectado sin herramienta chocaría con la red del
+TOTAL de `_dinero_inventado` (vigila únicamente dólares). 3 tests nuevos
+(`tests/test_estado_cliente_cotizado.py`).
+
+**Fuera del repo, en la BD del taller (lo hizo Maired desde el panel):**
+- **La caja "Personalidad" quedó limpia:** fuera el `# EL FLUJO DE LA VENTA` (8 pasos que duplicaban
+  `_REGLAS` §3–§6 — dos voces peleando) y fuera `# FOTOS` (contradecía la regla proactiva del código,
+  que además la manda). Se rescató en `# PAGOS` la lista de métodos (dato del negocio que NO vivía en
+  el código: `info_negocio` solo decía "Pago Móvil"). 10.259 → ~7.500 caracteres. La regla enseñada:
+  **dato del negocio → caja; flujo/conducta → código; lo duplicado → fuera.**
+- **Modelo cambiado por Maired a `deepseek/deepseek-v4-pro-0813`** (probó GPT-5.6 Luna → malo;
+  DeepSeek le gustó: clavó identidad y el descuento, brevedad decente). Sigue en modo UN agente.
+
+**🔴 DECISIÓN DE NEGOCIO NUEVA (Maired, 24-ago — revierte parcialmente la del 22-ago): el 20% +
+delivery gratis aplica a TODO pago en DÓLARES (efectivo, Zelle y Binance); bolívares (Pago
+Móvil/transferencia) = precio completo.** El cambio ya está mapeado completo (rastreo de 6 agentes):
+~6 textos que dicen "solo efectivo" + 2-3 tests acoplados que fijan las frases viejas
+(`test_pago_en_efectivo.py:154`, `probar_delivery.py:172-174`, `auditar_plantilla.py` P6). **El
+validador del comprobante NO se toca:** valida por MONTO, no por método — ya acepta el descontado
+por cualquier vía (verificado en `tools.py:3146-3169` y `tasks.py:1300-1320`); atarlo al método
+sería el único modo de romperlo. La caja PAGOS de la BD ya dice la regla nueva; el código la alcanza
+en la rama `descuento-zelle-binance`. ⚠️ Hasta fusionar esa rama, el bot narra "solo efectivo" al
+cobrar (ventana conocida y aceptada por Maired; taller, lista blanca).
+
+**Entorno local de Maired (Windows, Python 3.14):** pytest + pytest-asyncio + python-multipart
+instalados sueltos (los pines de `requirements-dev.txt` no compilan ahí: asyncpg/pydantic-core sin
+rueda para 3.14). 3 tests de la suite fallan SOLO en esta máquina (lectura cp1252 sin
+`encoding="utf-8"` en 2 tests + multipart) — **idéntico con y sin el cambio, verificado con stash**;
+en la CI (Linux) van verdes.
+
 ## 2026-08-24 (2) — 🔬 LA PRUEBA EN VIVO DE MAIRED, MONITOREADA TURNO A TURNO: 3 bugs de código cazados y desplegados
 
 **Maired probó en vivo (00:35–00:52) con el bot sin redes de estilo, monitoreado en tiempo real
