@@ -32,11 +32,11 @@ RECIBO = (
     "Retiro en La Mendera — sin costo\n"
     "Total: $12\nEntrega: lunes 20 de julio"
 )
-# El texto que de verdad arma `generar_datos_pago` hoy (retiro: $12, sin envío, EFECTIVO).
+# El texto que de verdad arma `generar_datos_pago` hoy (retiro: $12, sin envío, DÓLARES).
 # Lleva a propósito separador de miles Y decimales: son los que el recorte viejo partía.
 COBRO = (
     "Por Pago Móvil o transferencia son 8.729,41 Bs (precio completo). "
-    "Si pagas en efectivo en dólares son $9.60, "
+    "Si pagas en dólares (efectivo, Zelle o Binance) son $9.60, "
     "con el 20% de descuento"
 )
 

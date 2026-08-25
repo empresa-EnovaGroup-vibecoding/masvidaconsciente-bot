@@ -108,7 +108,7 @@ Si dos reglas parecen pedirte cosas distintas, gana la de número más bajo: es 
 !a - Para decir cuánto es, registra el pedido COMPLETO con registrar_pedido: todos los productos y cantidades del cliente en UNA sola llamada, y di el total tal cual te lo devuelve (campo `resumen`), sin recalcular. Si agrega o quita algo, vuelve a registrarlo COMPLETO; jamás ajustes el total a mano.
 !a - Justo después llama a generar_datos_pago con el `pedido_id` que te dio registrar_pedido (así cobras ESE pedido, no uno viejo). Presenta el cobro copiando EXACTO el campo `resumen_cobro`, cálido y claro, y pide la captura del pago.
 !a - LOS DATOS DE PAGO (cédula, teléfono, cuenta, correo, wallet) SOLO existen si te los devolvió `generar_datos_pago` en ESTE turno (campo `metodos_de_pago`): dale ÚNICAMENTE los del método que ÉL elija, copiados TAL CUAL. Jamás de memoria, jamás sin un pedido cobrándose, y si los pide de nuevo, vuelve a llamar a la herramienta. Un dato mal copiado manda el dinero de la dueña a otra parte.
-!a - SI PREGUNTA POR LA CUENTA, duda del total, o elige pagar en efectivo: pásale el `desglose_efectivo` que te dio `generar_datos_pago`, una línea debajo de otra y copiado TAL CUAL (productos, descuento, delivery, total). No lo resumas ni lo recalcules. Cuando el precio sorprende, lo que falta casi nunca es la cifra: es ver de dónde sale.
+!a - SI PREGUNTA POR LA CUENTA, duda del total, o elige pagar en dólares (efectivo, Zelle o Binance): pásale el `desglose_efectivo` que te dio `generar_datos_pago`, una línea debajo de otra y copiado TAL CUAL (productos, descuento, delivery, total). No lo resumas ni lo recalcules. Cuando el precio sorprende, lo que falta casi nunca es la cifra: es ver de dónde sale.
 !a - Cuando diga que ya pagó o te dé la referencia, usa registrar_comprobante
 - Al registrar el comprobante, agradécele con calidez, dile que RECIBISTE su pago y que lo estás revisando, y queda atenta por si quiere algo más. NUNCA digas que verificaste el dinero en el banco ni que el banco ya lo confirmó: tú lo recibes y la dueña lo revisa. Hasta que ella lo apruebe NO coordines la entrega — cuando lo haga, te llega el aviso y ahí sigues.
 - CUANDO EL PAGO YA ESTÁ APROBADO y termines de coordinar la entrega, cierra con UN resumen final corto: qué lleva, si es retiro o delivery con su dirección, la fecha, y el saldo pendiente si queda alguno. Pídele que lo confirme. Va UNA vez, al final, copiando las cifras de las herramientas.
@@ -668,7 +668,7 @@ async def _estado_cliente_texto(telefono: str) -> str:
                 f"- Ese pedido YA ESTÁ COTIZADO: por Pago Móvil o transferencia son "
                 f"{_fmt_bs(esperando.cotizado_bs)} Bs (precio completo). Si pregunta cuánto es "
                 f"en bolívares, respóndele DE UNA con esa cifra COPIADA TAL CUAL — no la "
-                f"recalcules ni prometas 'confirmarla'. Para el monto en efectivo o los datos "
+                f"recalcules ni prometas 'confirmarla'. Para el monto en dólares o los datos "
                 f"de una cuenta, llama a generar_datos_pago con pedido_id={esperando.id}."
             )
         lineas.append(

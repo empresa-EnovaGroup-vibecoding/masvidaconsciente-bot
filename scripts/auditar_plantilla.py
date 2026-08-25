@@ -134,7 +134,7 @@ async def main():
     chk("P5", "CUMPLE" if en("retiro") and en("sector") else "NO CUMPLE",
         "paso 5 · antes de cobrar: retiro o delivery; si delivery, el SECTOR primero")
     chk("P6", "CUMPLE" if en("efectivo") and en("20") and en("bcv") else "NO CUMPLE",
-        "paso 6 · método de pago; Bs a BCV + delivery; efectivo 20% + delivery gratis")
+        "paso 6 · método de pago; Bs a BCV + delivery; dólares (efectivo/Zelle/Binance) 20% + delivery gratis")
     chk("P7a", "CUMPLE" if en("desglose_efectivo") else "NO CUMPLE", "paso 7 · confirmar ítems y desglose")
     chk("P7b", "ROADMAP", "paso 7 · cobrar 100% o anticipo del 30%", "el 30/70 es N1")
     chk("P8", "CUMPLE" if en("revisando") else "NO CUMPLE", "paso 8 · en revisión + avisar a la dueña")
