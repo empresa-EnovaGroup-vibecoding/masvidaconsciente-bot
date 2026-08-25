@@ -429,14 +429,16 @@ def schemas_para(activas) -> list[dict]:
 # ─── Implementaciones ────────────────────────────────────────────────
 
 def monto_en_efectivo(total, envio) -> Decimal:
-    """Lo que se cobra pagando en EFECTIVO en dólares: 20% de descuento sobre los PRODUCTOS y el
-    delivery por cuenta de la casa (plantilla de negocio de Maired, 2026-08-22).
+    """Lo que se cobra pagando en DÓLARES — efectivo, Zelle o Binance—: 20% de descuento sobre
+    los PRODUCTOS y el delivery por cuenta de la casa (decisión de Maired del 2026-08-24, que
+    extiende a Zelle/Binance la regla del 22-ago; el nombre `monto_en_efectivo` queda como
+    reliquia histórica — renombrarlo arrastraría a sus dos llamadores sin ganar nada).
 
     🔴 UNA SOLA FUENTE, Y ESA ES LA RAZÓN DE QUE EXISTA. Esta cuenta vivía DUPLICADA en dos
     sitios que tienen que dar EXACTAMENTE lo mismo: `generar_datos_pago` (lo que se le cobra al
     cliente) y `registrar_comprobante` (el monto contra el que se compara su captura). Lo único
     que las mantenía sincronizadas era un comentario pidiéndolo — y un comentario no es un
-    candado. Si se separan, el comprobante no calza y **cada venta en efectivo sale marcada como
+    candado. Si se separan, el comprobante no calza y **cada venta en dólares sale marcada como
     "no cuadra"**, que es el carril del dinero fallando en silencio.
 
     ⚠️ El delivery NO se suma. Hasta el 2026-08-22 sí se sumaba, con este motivo escrito: "si no,
@@ -2575,26 +2577,22 @@ async def generar_datos_pago(session, telefono, pedido_id=None):
 
     monto_usd = Decimal(str(pedido.total))
     monto_bs = (monto_usd * tasa).quantize(Decimal("0.01"))
-    # 20% de descuento sobre los PRODUCTOS + DELIVERY GRATIS, por pagar en EFECTIVO en dólares.
-    # En Bs (Pago Móvil/transferencia) NO aplica: va el precio completo.
+    # 20% de descuento sobre los PRODUCTOS + DELIVERY GRATIS, por pagar en DÓLARES — efectivo,
+    # Zelle o Binance. En Bs (Pago Móvil/transferencia) NO aplica: va el precio completo.
     #
-    # 🔴 CAMBIO DE REGLA DE NEGOCIO — plantilla de negocio de Maired, 2026-08-22. Lo que decía
-    # aquí hasta hoy, y por qué se invierte:
+    # 🔴 CAMBIO DE REGLA — decisión de Maired del 2026-08-24, que REVIERTE parcialmente la del
+    # 22-ago. La plantilla del 22-ago decía "dólares físicos" y le negaba el 20% a Zelle y
+    # Binance (por su comisión); Maired lo corrigió en vivo el 24-ago: **el descuento se ata a
+    # la MONEDA, no a la vía** — cualquier pago en dólares (efectivo, Zelle, Binance) lleva el
+    # 20% y el delivery gratis; los bolívares pagan completo. La historia completa y el mapa del
+    # cambio: SESIONES.md entrada 2026-08-24 (3).
     #
-    #   «EL DESCUENTO NO TOCA EL FLETE: si se aplicara al total, ($20+$3)×0,80 = $18,40 ⇒ la dueña
-    #    estaría pagando el delivery de su bolsillo en CADA venta cobrada en dólares.»
-    #
-    # El documento decide EXACTAMENTE eso, a propósito y repetido en sus TRES apartados de pago:
-    # «20 % de descuento sobre los productos y delivery gratis en cualquier zona atendida». O sea
-    # que sí, la casa asume el flete — pero como PALANCA para cobrar en efectivo (sin comisión,
-    # sin reverso, y el billete en mano al entregar), no por descuido. El costo queda escrito con
-    # su número para que nadie lo descubra por sorpresa: **$3 en la zona centro, $5 en la oeste.**
-    #
-    # 🔴 Y el descuento deja de ser "en divisas" para ser SOLO EFECTIVO FÍSICO. El documento dice
-    # "dólares físicos" en los tres sitios y NUNCA le da el 20% a Zelle ni a Binance, que sí
-    # cobran comisión. Los dos siguen ACTIVOS como método de pago (su cláusula de recorte era
-    # condicional —"mientras el flujo multimétodo no esté activo"— y hoy sí lo está), pero cobran
-    # el precio COMPLETO, igual que el Pago Móvil.
+    # Lo que NO cambió (sigue siendo la plantilla del 22-ago, a propósito):
+    #   · La casa asume el flete como PALANCA para cobrar en dólares (sin reverso, sin tasa de
+    #     por medio). El costo queda escrito para que nadie lo descubra por sorpresa: **$3 en la
+    #     zona centro, $5 en la oeste.**
+    #   · El descuento es sobre los PRODUCTOS, no sobre el total: el flete no se descuenta, se
+    #     REGALA (ver monto_en_efectivo).
     #
     # ⚠️ El nombre `monto_usd_divisas` (y su columna `cotizado_usd_divisas`) se CONSERVA a
     # propósito: renombrarlo obligaría a una migración y a tocar `_montos_cobrados`, que compara
@@ -2675,15 +2673,16 @@ async def generar_datos_pago(session, telefono, pedido_id=None):
     # prometía un descuento en Pago Móvil que NO existe (los Bs son el precio COMPLETO), y una
     # clienta lo reclamó. El descuento del 20% es SOLO en divisas. Ahora la frase lo separa.
     #
-    # 🔴 Y DESDE EL 2026-08-22 dice EFECTIVO, no "dólares": el 20% dejó de aplicar a Zelle y a
-    # Binance (ver el bloque del cálculo, arriba). Nombrar mal el método aquí es prometerle un
-    # descuento a quien no lo tiene — el mismo error que ya se cometió con los bolívares.
+    # 🔴 Y DESDE EL 2026-08-24 vuelve a nombrar las TRES vías (efectivo, Zelle o Binance): el
+    # 20% se ata a la MONEDA, no a la vía (ver el bloque del cálculo, arriba). Nombrar solo
+    # "efectivo" aquí sería negarle el descuento a quien sí lo tiene — el espejo exacto del
+    # error del 2026-07-12 con los bolívares.
     # El "delivery por nuestra cuenta" solo se nombra si de verdad hay flete que perdonar: en un
     # retiro no hay envío, y presumir de regalar algo que no existe suena a vendedor de feria.
     _flete_gratis = " y el delivery corre por nuestra cuenta" if envio > 0 else ""
     resumen_cobro = (
         f"Por Pago Móvil o transferencia son {_fmt_bs(monto_bs)} Bs (precio completo). "
-        f"Si pagas en efectivo en dólares son {_fmt_usd(monto_usd_divisas)}, "
+        f"Si pagas en dólares (efectivo, Zelle o Binance) son {_fmt_usd(monto_usd_divisas)}, "
         f"con el 20% de descuento{_flete_gratis}"
     )
     # 🧾 EL DESGLOSE DEL EFECTIVO, línea por línea. Lo pide el documento con esas palabras:
@@ -2701,7 +2700,7 @@ async def generar_datos_pago(session, telefono, pedido_id=None):
     ]
     if envio > 0:
         desglose_efectivo.append(f"Delivery: $0 (normalmente {_fmt_usd(envio)}, va por nuestra cuenta)")
-    desglose_efectivo.append(f"Total en efectivo: {_fmt_usd(monto_usd_divisas)}")
+    desglose_efectivo.append(f"Total en dólares: {_fmt_usd(monto_usd_divisas)}")
 
     return {
         "ok": True,
@@ -2712,7 +2711,8 @@ async def generar_datos_pago(session, telefono, pedido_id=None):
         "monto_bs": float(monto_bs),
         "resumen_cobro": resumen_cobro,
         # El desglose va aparte del resumen: el modelo lo copia TAL CUAL cuando el cliente
-        # pregunta por la cuenta o elige pagar en efectivo. Nunca lo recalcula.
+        # pregunta por la cuenta o elige pagar en dólares (efectivo, Zelle o Binance).
+        # Nunca lo recalcula.
         "desglose_efectivo": desglose_efectivo,
         "banco": (pm.banco if pm else None) or config.get("pago_movil_banco"),
         "cedula": (pm.cedula if pm else None) or config.get("pago_movil_cedula"),

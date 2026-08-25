@@ -169,8 +169,12 @@ async def main() -> None:
         check(f"en efectivo: producto×0,80 sin flete = ${div_ok:g} (ya NO ${div_viejo:g})",
               cobro.get("ok") and abs(cobro["monto_usd_divisas"] - div_ok) < 0.01,
               f"dio {cobro.get('monto_usd_divisas')} — si diera {div_viejo:g}, el flete se está cobrando")
-        check("y el texto del cobro dice EFECTIVO, no 'dólares' a secas (Zelle/Binance pagan completo)",
-              "efectivo" in (cobro.get("resumen_cobro") or "").lower(),
+        # 🔴 Desde el 2026-08-24 el 20% se ata a la MONEDA: dólares por CUALQUIER vía
+        # (efectivo, Zelle o Binance). El check de antes fijaba lo contrario ("Zelle/Binance
+        # pagan completo") — decisión revertida por Maired; ver SESIONES 2026-08-24 (3).
+        check("y el cobro nombra las TRES vías del dólar (efectivo, Zelle o Binance)",
+              "zelle" in (cobro.get("resumen_cobro") or "").lower()
+              and "binance" in (cobro.get("resumen_cobro") or "").lower(),
               str(cobro.get("resumen_cobro"))[:120])
         check("y nombra que el delivery va por cuenta de la casa",
               "cuenta" in (cobro.get("resumen_cobro") or "").lower(),

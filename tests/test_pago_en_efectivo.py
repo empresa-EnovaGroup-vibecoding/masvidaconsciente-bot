@@ -1,8 +1,10 @@
-"""EL 20% Y EL DELIVERY GRATIS — la cuenta del pago en EFECTIVO en dólares.
+"""EL 20% Y EL DELIVERY GRATIS — la cuenta del pago en DÓLARES (efectivo, Zelle o Binance).
 
-**Regla vigente** (plantilla de negocio de Maired, 2026-08-22, repetida en sus TRES apartados de
-pago): *"20 % de descuento sobre los productos y delivery gratis en cualquier zona atendida"*,
-pagando en **dólares físicos**.
+**Regla vigente** (decisión de Maired del 2026-08-24, que EXTIENDE la del 22-ago): *"20 % de
+descuento sobre los productos y delivery gratis"*, pagando en **dólares por CUALQUIER vía** —
+efectivo, Zelle o Binance. Los bolívares (Pago Móvil/transferencia) pagan el precio completo.
+El 22-ago la regla decía "dólares físicos" y negaba el 20% a Zelle/Binance; el 24-ago Maired la
+ató a la MONEDA, no a la vía. La cuenta de este fichero NO cambió: solo a quién se le aplica.
 
 🔴 POR QUÉ ESTE FICHERO EXISTE. Hasta hoy la regla era la CONTRARIA —el 20% no tocaba el flete—
 y estaba defendida así en el código: *"si se aplicara al total, la dueña estaría pagando el
@@ -151,7 +153,7 @@ def test_el_desglose_muestra_las_cuatro_lineas():
 
     fuente = inspect.getsource(tools.generar_datos_pago)
     assert "desglose_efectivo" in fuente
-    for linea in ("Productos:", "Descuento 20%:", "Delivery: $0", "Total en efectivo:"):
+    for linea in ("Productos:", "Descuento 20%:", "Delivery: $0", "Total en dólares:"):
         assert linea in fuente, f"falta la línea del desglose: {linea!r}"
 
 
