@@ -12,6 +12,7 @@ import unicodedata
 from datetime import UTC, datetime, timedelta
 
 import httpx
+from sqlalchemy import select
 
 from app.agent.hoja import HojaDeHechos
 from app.agent.system_prompt import (
@@ -32,6 +33,8 @@ from app.agent.tools import (
     tamanos_hermanos,
 )
 from app.config import get_settings
+from app.models import Pedido
+from app.services.db import get_session_factory
 
 # La telemetría del modelo (migración 032). `app.services.*` ya se importa aquí arriba
 # (`tools_config`), así que no abre ningún ciclo: telemetria importa `models` y `db` de forma
@@ -1023,6 +1026,69 @@ def _afirma_pedido_registrado(texto: str) -> bool:
         if any(p.search(limpia) for p in _AFIRMA_PEDIDO):
             return True
     return False
+
+
+async def _pedido_reciente(telefono: str):
+    """El último pedido NO cancelado del cliente (o None). Es la vista de la red del pedido
+    fantasma sobre la BD: las PALABRAS solo levantan la sospecha; la sentencia la dicta el
+    ESTADO — el mismo principio por el que la red del día imposible consulta el calendario
+    antes de regañar. Nunca lanza: si la BD falla, devuelve None y la red se comporta como
+    siempre (fail-safe hacia el regaño clásico, que es el lado que protege el caso de julio)."""
+    try:
+        factory = get_session_factory()
+        async with factory() as session:
+            return (
+                await session.execute(
+                    select(Pedido)
+                    .where(
+                        Pedido.cliente_telefono == telefono,
+                        Pedido.estado != "cancelado",
+                    )
+                    .order_by(Pedido.created_at.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+    except Exception:  # noqa: BLE001 — consultar la BD nunca puede tumbar el turno
+        return None
+
+
+def _correccion_fantasma(pedido) -> str:
+    """El regaño de la red del pedido fantasma, dictado por el ESTADO de la BD — nunca miente.
+
+    🔴 POR QUÉ EXISTE (25-ago-2026, cazado por Maired). Con el pedido #2073 YA PAGADO y
+    confirmado, la clienta dio la hora de entrega y el modelo respondió "Perfecto, te lo
+    anoto. La dueña te confirma la hora..." — anotaba la HORA, no un pedido. El regaño de
+    entonces era uno solo y DOBLEMENTE falso: afirmaba "en la base de datos NO existe"
+    (existía, pagado) y ordenaba "llama AHORA a registrar_pedido". El modelo obedeció la
+    mentira y fabricó un pedido DUPLICADO (#2074) con su cobro completo.
+
+    Y la lista de palabras NO se puede afinar para evitarlo (probado contra los regex reales:
+    "anoto tu dirección", "registro tu comprobante y la dueña lo revisa", "anoto que eres
+    alérgica al maní" y hasta la frase VERDADERA "tu pedido ya está pagado" disparan igual —
+    además _REGLAS le ORDENA al modelo ese vocabulario). Por eso la corrección deja de
+    adivinar: consulta el estado y le dice al modelo LA VERDAD, con las dos salidas."""
+    if pedido is None:
+        # El caso original de julio: CERO pedidos en la BD y el bot dijo "te agendo empanadas".
+        # Este regaño se conserva LITERAL: aquí la mentira del bot es real y la orden es justa.
+        return (
+            "[SISTEMA] ACABAS DE DECIR QUE EL PEDIDO QUEDÓ AGENDADO Y NO LO "
+            "REGISTRASTE. En la base de datos NO existe. El cliente se irá "
+            "creyendo que tiene su pedido y la dueña no tendrá nada que cocinar. "
+            "Llama AHORA a `registrar_pedido` con el `variante_id` (el "
+            "`id_para_pedir` del catálogo), la cantidad y la fecha de entrega. Si "
+            "te falta algún dato, PREGÚNTASELO al cliente en vez de afirmar que "
+            "ya está. No le menciones al cliente este aviso."
+        )
+    return (
+        f"[SISTEMA] Usaste un verbo de registro (anotar/agendar/registrar) pero en ESTE "
+        f"turno no registraste nada. OJO: el cliente YA TIENE el pedido #{pedido.id} "
+        f"(estado: {pedido.estado}). NO llames a `registrar_pedido` para repetirlo — "
+        f"duplicarías su pedido y su cobro. Si el cliente pidió productos NUEVOS que no "
+        f"están en ese pedido, regístralos de verdad ANTES de afirmarlo. Si solo estás "
+        f"confirmando un detalle (la hora, la dirección, una referencia, una preferencia), "
+        f"reescribe tu mensaje diciéndolo con naturalidad, SIN afirmar que registraste un "
+        f"pedido. No le menciones al cliente este aviso."
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════
@@ -2369,32 +2435,43 @@ async def responder(
             # tenía nada que cocinar. Las otras cuatro redes no lo veían: no inventó un precio,
             # no prometió averiguar, no dijo nada prohibido y no sonó a robot. Solo MINTIÓ.
             if _afirma_pedido_registrado(texto) and not registro_ok:
+                # 🔴 LA SENTENCIA LA DICTA EL ESTADO (25-ago). `registro_ok` solo ve ESTE
+                # turno: con un pedido vivo de un turno anterior (registrado o ya PAGADO),
+                # el regaño viejo ("en la BD NO existe, llama AHORA a registrar_pedido")
+                # era mentira — y el modelo, obediente, fabricó el duplicado #2074 con su
+                # cobro. La corrección ahora consulta la BD y dice la verdad que toque
+                # (ver _correccion_fantasma).
+                pedido_previo = await _pedido_reciente(telefono)
                 logger.error(
-                    "PEDIDO FANTASMA de %s: dijo que lo agendó y NO llamó a registrar_pedido "
-                    "(o falló) — texto=%r",
-                    telefono, texto[:140],
+                    "PEDIDO FANTASMA de %s: verbo de registro sin registrar_pedido en el "
+                    "turno (pedido previo en BD: %s) — texto=%r",
+                    telefono,
+                    f"#{pedido_previo.id} {pedido_previo.estado}" if pedido_previo else "ninguno",
+                    texto[:140],
                 )
                 if not reclamo_pedido:
                     reclamo_pedido = True
                     messages.append({
                         "role": "user",
-                        "content": (
-                            "[SISTEMA] ACABAS DE DECIR QUE EL PEDIDO QUEDÓ AGENDADO Y NO LO "
-                            "REGISTRASTE. En la base de datos NO existe. El cliente se irá "
-                            "creyendo que tiene su pedido y la dueña no tendrá nada que cocinar. "
-                            "Llama AHORA a `registrar_pedido` con el `variante_id` (el "
-                            "`id_para_pedir` del catálogo), la cantidad y la fecha de entrega. Si "
-                            "te falta algún dato, PREGÚNTASELO al cliente en vez de afirmar que "
-                            "ya está. No le menciones al cliente este aviso."
-                        ),
+                        "content": _correccion_fantasma(pedido_previo),
                     })
                     continue
-                # Insistió: NO se le manda al cliente una confirmación falsa. Se escala.
+                # Insistió: NO se le manda al cliente una confirmación falsa. Se escala,
+                # contándole a la dueña el estado REAL para que no busque un pedido que no
+                # existe (o ignore uno que sí).
                 await _escalar(
                     ejecutar, telefono, "reclamo",
-                    "el bot le dijo al cliente que le AGENDÓ el pedido pero NO lo "
-                    "registró (no existe en el sistema). NO se le envió esa "
-                    "confirmación falsa. Entra tú al chat y agéndalo.",
+                    (
+                        f"el bot insiste en verbos de registro sin registrar nada en este "
+                        f"turno; el cliente YA tiene el pedido #{pedido_previo.id} "
+                        f"({pedido_previo.estado}). NO se le envió el mensaje. Revisa el "
+                        f"chat y coordina tú."
+                        if pedido_previo
+                        else
+                        "el bot le dijo al cliente que le AGENDÓ el pedido pero NO lo "
+                        "registró (no existe en el sistema). NO se le envió esa "
+                        "confirmación falsa. Entra tú al chat y agéndalo."
+                    ),
                     ya_fallo=relevo_imposible,
                 )
                 return RESPUESTA_SEGURA
@@ -3110,13 +3187,25 @@ async def _responder_dos_agentes(
 
     # El PEDIDO FANTASMA y el ENVÍO FANTASMA, re-anclados a la HOJA (no a unos flags sueltos).
     if _afirma_pedido_registrado(texto) and hoja.pedido_id is None:
-        logger.error("VOZ: pedido fantasma para %s — NO sale", telefono)
-        await _escalar(
-            ejecutar, telefono, "reclamo",
-            "la Voz le dijo al cliente que le AGENDÓ el pedido pero NO existe. Entra tú y agéndalo.",
-            ya_fallo=relevo_imposible,
+        # 🔴 LA SENTENCIA LA DICTA EL ESTADO (25-ago, igual que en modo uno). La hoja solo ve
+        # ESTE turno: con un pedido vivo de un turno anterior (registrado o pagado), el verbo
+        # de registro casi siempre confirma un DETALLE (la hora, la dirección) de ese pedido.
+        # La Voz no tiene reintento — las opciones son pasar o escalar — y con un pedido vivo,
+        # escalar por "fantasma" sería un falso reclamo a la dueña. Sin pedido en la BD, el
+        # fantasma es real y se escala como siempre.
+        pedido_previo = await _pedido_reciente(telefono)
+        if pedido_previo is None:
+            logger.error("VOZ: pedido fantasma para %s — NO sale", telefono)
+            await _escalar(
+                ejecutar, telefono, "reclamo",
+                "la Voz le dijo al cliente que le AGENDÓ el pedido pero NO existe. Entra tú y agéndalo.",
+                ya_fallo=relevo_imposible,
+            )
+            return RESPUESTA_SEGURA
+        logger.info(
+            "VOZ: verbo de registro con pedido #%s (%s) vivo en BD para %s — pasa",
+            pedido_previo.id, pedido_previo.estado, telefono,
         )
-        return RESPUESTA_SEGURA
 
     if _afirma_envio_fotos(
         texto,

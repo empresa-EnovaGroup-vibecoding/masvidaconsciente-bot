@@ -24,6 +24,42 @@
 
 ---
 
+## 2026-08-25 — 🕵️ LA RED ANTI-FANTASMA FABRICÓ UN PEDIDO DUPLICADO — y ahora dicta su regaño mirando la BD
+
+**El bug (cazado por Maired probando en vivo, 11:45am):** con el pedido #2073 YA PAGADO y
+confirmado (ciclo completo: comprobante → visión → clic de «Pago aprobado» → notificación — todo
+eso funcionó de libro), la clienta dio la hora de entrega y el modelo (Sonnet 4.6, recién puesto
+por Maired) respondió PERFECTO: *"Perfecto, te lo anoto. La dueña te confirma la hora..."*. La
+**red del pedido fantasma** leyó "te lo anoto" como afirmación de registro sin registrar, y su
+regaño —único y DOBLEMENTE falso: *"en la base de datos NO existe"* (existía, pagado) + *"llama
+AHORA a registrar_pedido"*— empujó al modelo a **fabricar el duplicado #2074** y cobrarlo
+(Pago Móvil, sin que la clienta eligiera método). La red anti-mentira fabricó la mentira peor.
+
+**Por qué NO se arregla afinando palabras** (probado ejecutando los regex reales de
+`_AFIRMA_PEDIDO` contra 30 frases): "anoto tu dirección", "registro tu comprobante", "anoto que
+eres alérgica al maní" y hasta la frase VERDADERA "tu pedido ya está pagado" disparan igual — y
+`_REGLAS` le ORDENA al modelo ese vocabulario. La lista es porosa en ambos sentidos.
+
+**El arreglo (`arreglo-red-fantasma-estado`): las palabras levantan la SOSPECHA; la sentencia la
+dicta el ESTADO.** Nuevo `_pedido_reciente()` (último pedido no cancelado; fail-safe a None) y
+`_correccion_fantasma(pedido)`: sin pedido en BD → el regaño de julio LITERAL (ese caso era real
+y se sigue cazando); con pedido vivo → regaño VERAZ: nombra el #id y su estado, PROHÍBE
+re-registrar, y deja las dos salidas (registrar solo lo NUEVO / reformular el detalle sin verbos
+de registro). La escalada también cuenta el estado real. En modo DOS (la Voz, sin reintento):
+con pedido vivo el mensaje PASA (escalar sería un falso reclamo); sin pedido, escala como
+siempre. Mismo principio que la red del día imposible: consultar antes de regañar.
+La detección NO cambió (tests de test_redes.py intactos). 7 tests nuevos
+(`test_red_fantasma_estado.py`), incluido el caso literal de Maired. El duplicado #2074 se
+canceló con ensayo+ROLLBACK; el #2073 pagado quedó intacto.
+
+**Además hoy:** modelo cambiado por Maired a **`anthropic/claude-sonnet-4.6`** (absuelto del
+incidente: su borrador era correcto y con la bendición de la caja; antes probó DeepSeek V4
+Flash 0731 — rápido y fino, avisó "llevan huevo" proactivo). Queda mapeado el **bug del
+corte/anticipación** (`_validar_entrega` ignora `hora_corte` para fechas futuras: aceptó kéfir
+de 1 día a las 9:57pm PARA MAÑANA, mientras el proponedor de fechas sí corre la base tras el
+corte — dos relojes contradictorios; rama pendiente) y pendiente el **MAPA DEL COBRO** (el
+plano de vigilantes/candados con su interruptor encendido/apagado, pedido por Maired).
+
 ## 2026-08-24 (3) — 🌿 PRIMERA RAMA + PR (flujo nuevo) · la cifra en Bs viaja en ESTADO DEL CLIENTE · caja Personalidad limpia · DeepSeek V4 Pro
 
 **Sesión conducida por Maired, aprendiendo el flujo profesional: RAMAS + PULL REQUEST** (sugerencia
