@@ -596,6 +596,14 @@ async def _numero_permitido(telefono: str) -> bool:
       · settings.numeros_permitidos (variable de entorno, la fija) y
       · el config `numeros_permitidos_extra` (editable SIN redeploy: para añadir un numero de
         prueba al vuelo sin tocar Coolify — que reiniciaria el contenedor).
+
+    🔓 EL INTERRUPTOR "todos" (pedido de Maired, 29-ago): si `numeros_permitidos_extra` dice
+    exactamente `todos`, el bot responde a CUALQUIER numero — aunque la variable de entorno
+    traiga su lista. El porque: el numero del taller es PRIVADO de Maired (solo lo tiene quien
+    ella invita a probar), y abrirlo requeria vaciar la variable fija en Coolify — cuyo token
+    no estaba a mano y cuyo redeploy es friccion pura. Con el centinela, abrir y cerrar es un
+    UPDATE en la BD: `todos` = abierto; los numeros de vuelta = cerrado. En produccion (netcup)
+    ese config no dice `todos`, asi que nada cambia alla.
     """
     from sqlalchemy import select
 
@@ -623,6 +631,11 @@ async def _numero_permitido(telefono: str) -> bool:
             ).scalars().first() or ""
     except Exception:  # noqa: BLE001 — si la BD falla, manda solo la lista de entorno
         pass
+
+    # 🔓 El centinela mata la lista entera, incluida la de entorno (ver docstring). Se compara
+    # normalizado para que "Todos" o " TODOS " del panel no dejen el bot cerrado por un espacio.
+    if extra.strip().lower() == "todos":
+        return True
 
     juntos = ",".join(x for x in (permitidos, extra.strip()) if x)
     if not juntos:
