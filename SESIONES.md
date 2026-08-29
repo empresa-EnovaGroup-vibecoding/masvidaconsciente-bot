@@ -24,6 +24,24 @@
 
 ---
 
+## 2026-08-29 — 🔓 EL INTERRUPTOR `todos` DE LA LISTA BLANCA (+ merge del arreglo de la red fantasma)
+
+**Maired fusionó el PR #3** (la red del pedido fantasma consulta la BD antes de regañar — ver la
+entrada del 25-ago): CI + bancos verdes, desplegado al taller.
+
+**Y decidió abrir el bot del taller a cualquier número** — con razón: ese WhatsApp es SU número
+privado de pruebas; solo lo tiene quien ella invita (amigos, futuros clientes de Enova probando).
+La lista blanca ahí era pura fricción. Abrirla exigía vaciar `NUMEROS_PERMITIDOS` en Coolify
+(token no disponible, redeploy de por medio), así que se resolvió por el carril correcto: **el
+centinela `todos`** en `numeros_permitidos_extra` (`_numero_permitido`, tasks.py) — si la clave
+dice exactamente `todos`, el bot responde a cualquiera, aunque la variable de entorno traiga su
+lista. Abrir/cerrar queda siendo un UPDATE en la BD. 5 tests nuevos
+(`test_lista_blanca_todos.py`): el centinela abre sobre la lista de entorno, tolera
+mayúsculas/espacios, NO abre si viene mezclado con números, y la conducta clásica (colas de 10
+dígitos, internos `__*`) queda probada intacta. Producción no dice `todos` en esa clave: allá
+nada cambia. El valor viejo de la clave (por si se quiere volver a cerrar con los mismos
+números): `593993314532,584247490499`.
+
 ## 2026-08-25 — 🕵️ LA RED ANTI-FANTASMA FABRICÓ UN PEDIDO DUPLICADO — y ahora dicta su regaño mirando la BD
 
 **El bug (cazado por Maired probando en vivo, 11:45am):** con el pedido #2073 YA PAGADO y
