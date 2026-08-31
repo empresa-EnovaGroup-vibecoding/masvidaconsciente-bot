@@ -319,7 +319,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "enviar_fotos_producto",
-            "description": "Envía al cliente las FOTOS y VIDEOS de UN producto por WhatsApp. Es tu arma de venta, ÚSALA PROACTIVA: en cuanto el cliente se enfoque en UN producto concreto (lo elija, te pida su info o pregunte por él), muéstraselo SIN esperar a que pida la foto; y también cuando pida ver/mostrar ('muéstrame', 'mándame una foto', 'quiero verlo'), pregunte cómo se ve, o dude. UN producto a la vez (no mandes fotos de varios a la vez). Es la ÚNICA forma de saber si el producto tiene fotos: NO asumas que no hay sin llamarla primero. Manda las mejores (hasta 3). Si no tiene fotos cargadas, te avisa para que lo digas con sinceridad. Si el cliente ya eligió una VERSIÓN (la de yuca, la de plátano…), pásala en `etiqueta`. (Para ver el menú/opciones en general usa enviar_catalogo.)",
+            "description": "Envía al cliente las FOTOS y VIDEOS de UN producto por WhatsApp. Es tu arma de venta, ÚSALA PROACTIVA: en cuanto el cliente se enfoque en UN producto concreto (lo elija, te pida su info o pregunte por él), muéstraselo SIN esperar a que pida la foto; y también cuando pida ver/mostrar ('muéstrame', 'mándame una foto', 'quiero verlo'), pregunte cómo se ve, o dude. UN producto a la vez (no mandes fotos de varios a la vez). Es la ÚNICA forma de saber si el producto tiene fotos: NO asumas que no hay sin llamarla primero. Manda las mejores (hasta 3). Si no tiene fotos cargadas, te avisa para que lo digas con sinceridad. Si el cliente ya eligió una VERSIÓN (la de yuca, la de plátano…), pásala en `etiqueta`. Si ese producto YA se le mostró antes en este chat, NO se reenvía y te aviso (repetirlas es spam); para reenviar de verdad está `reenviar`. (Para ver el menú/opciones en general usa enviar_catalogo.)",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -351,6 +351,15 @@ TOOL_SCHEMAS = [
                             "tal cual. Si hay una foto de esa versión se le manda ESA; si no la "
                             "hay, se le mandan las generales y te aviso para que NO le digas que "
                             "la foto era de eso. Si no dijo cuál, NO lo pongas."
+                        ),
+                    },
+                    "reenviar": {
+                        "type": "boolean",
+                        "description": (
+                            "OPCIONAL. Ponlo en true SOLO si el cliente PIDE volver a ver las "
+                            "fotos ('mándamela otra vez', 'no me llegó', 'se me borró'): con él "
+                            "se reenvían aunque ya se le hubieran mostrado. Sin él, un producto "
+                            "ya mostrado en este chat NO se repite (te aviso y sigues la venta)."
                         ),
                     },
                 },
@@ -3328,8 +3337,10 @@ async def _guardar_media_saliente(
         logger.exception("No se pudo meter en el hilo la media saliente de %s", telefono)
 
 
-async def media_ya_mostrada(telefono: str, nombre: str) -> bool:
-    """¿Este cliente YA recibió una foto/video de ESTE producto? (candado de la RED DE LA FOTO)
+async def media_ya_mostrada(
+    telefono: str, nombre: str, etiqueta: str | None = None, *, si_falla: bool = True
+) -> bool:
+    """¿Este cliente YA recibió una foto/video de ESTE producto? (el candado de la memoria)
 
     POR QUÉ SE MIRA LA TABLA `mensajes` Y NO EL HISTORIAL DE REDIS: la media NUNCA entra al
     historial (decisión del 2026-08-08 — el historial es conversación, y la media ya la narra
@@ -3340,17 +3351,26 @@ async def media_ya_mostrada(telefono: str, nombre: str) -> bool:
 
     Que el candado abarque TODO el hilo (no solo "esta conversación") es a propósito y es el
     lado barato del error: repetir una foto no pedida es spam que le baja la calidad al número;
-    si el cliente la quiere otra vez, la PIDE y el modelo se la reenvía por su cuenta (la regla
-    de FOTOS del prompt ya lo contempla). Esta red solo empuja la PRIMERA vez.
+    si el cliente la quiere otra vez, la PIDE y se reenvía (`reenviar=True` en la herramienta,
+    que el código enciende solo cuando el cliente pide ver — `_ejecutar_con_guardas`).
 
-    Ante cualquier fallo devuelve True (= NO se envía): el lado seguro de una red que EMPUJA
-    media es callarse — el mismo criterio que `_la_duena_tomo_el_chat`.
+    Con `etiqueta` (rama fotos-con-memoria) la pregunta se afina a ESA versión: el pie guarda
+    "(foto de Empanadas — base de yuca)", así que quien vio la de yuca NO queda bloqueado para
+    la de plátano — versiones distintas son fotos distintas.
+
+    `si_falla` es la dirección del fail-safe, porque el lado seguro DEPENDE DE QUIÉN LLAMA:
+    - La RED DE LA FOTO (empuja sin que nadie pida) usa el default True = ante la duda, callarse
+      — el mismo criterio que `_la_duena_tomo_el_chat`.
+    - La HERRAMIENTA (responde al modelo en plena venta) pasa False = ante la duda, enviar: un
+      hipo de Postgres jamás puede dejar al bot "sin fotos para siempre".
     """
     if not (telefono or "") or not (nombre or "").strip():
-        return True
-    # El nombre del producto lo escribió la dueña: se escapan los comodines de LIKE por si un
-    # día un nombre trae '%' o '_' (el patrón lo armamos nosotros, no ella).
-    escapado = nombre.replace("\\", r"\\").replace("%", r"\%").replace("_", r"\_")
+        return si_falla
+    # El nombre (y la etiqueta) los escribió la dueña: se escapan los comodines de LIKE por si
+    # un día traen '%' o '_' (el patrón lo armamos nosotros, no ella). Con etiqueta se busca el
+    # pie exacto que arma `_envio_de_un_archivo`: "nombre — etiqueta".
+    objetivo = f"{nombre} — {etiqueta}" if (etiqueta or "").strip() else nombre
+    escapado = objetivo.replace("\\", r"\\").replace("%", r"\%").replace("_", r"\_")
     try:
         factory = get_session_factory()
         async with factory() as session:
@@ -3367,9 +3387,34 @@ async def media_ya_mostrada(telefono: str, nombre: str) -> bool:
                 )
             ).scalar_one_or_none()
             return fila is not None
-    except Exception:  # noqa: BLE001 — ante la duda, no repetir: la foto es un extra
-        logger.exception("media_ya_mostrada: no se pudo leer mensajes; se asume que SÍ se mostró")
-        return True
+    except Exception:  # noqa: BLE001 — el lado seguro lo decide quien llama (ver docstring)
+        logger.exception(
+            "media_ya_mostrada: no se pudo leer mensajes; se asume que %s",
+            "SÍ se mostró (la red no empuja)" if si_falla else "NO se mostró (la tool sí envía)",
+        )
+        return si_falla
+
+
+async def _memoria_de_fotos_apagada(session) -> bool:
+    """El interruptor de la garantía de la memoria (clave `fotos_memoria` en `configuracion`).
+
+    Solo un 'off' escrito con todas sus letras la apaga; clave ausente, con basura o BD tosiendo
+    ⇒ la garantía queda PUESTA (mismo criterio que `tools_activas`: un fallo de configuración
+    jamás cambia la conducta). Existe por la doctrina del repo —cada garantía con su
+    interruptor— y se maneja desde la BD sin desplegar, como el centinela 'todos' de la lista
+    blanca. OJO: apaga solo la memoria ENTRE turnos; el de-dup del mismo turno (no encolar dos
+    veces el mismo archivo) no es una garantía apagable, es corrección a secas.
+    """
+    try:
+        valor = (
+            await session.execute(
+                select(Configuracion.valor).where(Configuracion.clave == "fotos_memoria")
+            )
+        ).scalars().first()
+        return (valor or "").strip().lower() == "off"
+    except Exception:  # noqa: BLE001 — config rota ⇒ la garantía sigue puesta
+        logger.exception("fotos_memoria: no se pudo leer el interruptor; la memoria sigue PUESTA")
+        return False
 
 
 async def enviar_catalogo(session, telefono):
@@ -3487,7 +3532,7 @@ def _envio_de_un_archivo(
 
 
 async def enviar_fotos_producto(
-    session, telefono, nombre, variante_id=None, etiqueta=None, maximo=3
+    session, telefono, nombre, variante_id=None, etiqueta=None, maximo=3, reenviar=False
 ):
     """Envía al cliente las fotos/videos de UN producto por WhatsApp (cuando las pide).
 
@@ -3505,14 +3550,27 @@ async def enviar_fotos_producto(
     Con `etiqueta` (las PALABRAS DEL CLIENTE: "de yuca") manda la foto que la dueña nombró así.
     Sin `etiqueta` no se filtra NADA: se comporta igual que siempre.
 
+    🔒 `reenviar` (rama fotos-con-memoria, caso Omaira 2026-08-29): desde hoy la herramienta
+    TIENE MEMORIA — un producto ya mostrado en este chat no se repite, se avisa y la venta
+    sigue. `reenviar=True` es la válvula del reenvío legítimo ("mándamela otra vez", "no me
+    llegó"): la pone el modelo, y el código la enciende solo cuando el cliente pide ver
+    (`_ejecutar_con_guardas`), para que la garantía no dependa de ningún modelo.
+
     Usa el link público de R2 que Meta descarga. Si el producto no tiene media cargada, lo dice
     con sinceridad (NUNCA afirmar que se envió algo que no se envió)."""
     from app.services import r2
 
     logger.info(
-        "enviar_fotos_producto LLAMADA: nombre=%r variante_id=%r etiqueta=%r",
-        nombre, variante_id, etiqueta,
+        "enviar_fotos_producto LLAMADA: nombre=%r variante_id=%r etiqueta=%r reenviar=%r",
+        nombre, variante_id, etiqueta, reenviar,
     )
+    # El tope anti-spam es del CÓDIGO, no del schema: `maximo` lo manda el modelo, y sin este
+    # techo un maximo=50 alucinado serían 50 archivos seguidos (el log de abajo ya prometía
+    # "se envían los 3 primeros" — ahora es verdad venga el número que venga).
+    try:
+        maximo = max(1, min(int(maximo), 3))
+    except (TypeError, ValueError):
+        maximo = 3
     prod = None
     variante = None
     if variante_id:
@@ -3628,8 +3686,49 @@ async def enviar_fotos_producto(
             ),
         }
 
+    # 🔒 LA MEMORIA DE LA HERRAMIENTA (2026-08-29, caso Omaira: las MISMAS fotos 3 veces en una
+    # venta). El de-duplicador vivía SOLO en la RED DE LA FOTO — pero cuando el MODELO llama esta
+    # herramienta directo (Sonnet obedece "ÚSALA PROACTIVA" cada turno), ese camino no pasaba por
+    # ningún candado y se reenviaba ciego. La garantía va aquí, en la capa que EJECUTA, para que
+    # no dependa del modelo. Va DESPUÉS del simulador a propósito: el teléfono fijo del panel
+    # ("__simulador__") acumula filas para siempre y cada demo de la dueña parecería rota.
+    # `reenviar=True` la salta (el cliente PIDIÓ verlas de nuevo — la válvula prometida), y con
+    # `et_enviada` la memoria pregunta por ESA versión: ver la de yuca no bloquea la de plátano.
+    if (
+        not reenviar
+        and not await _memoria_de_fotos_apagada(session)
+        and await media_ya_mostrada(telefono, prod.nombre, et_enviada, si_falla=False)
+    ):
+        logger.info(
+            "MEMORIA DE FOTOS: '%s'%s ya se le mostró a %s — no se reenvía (el modelo puede "
+            "reenviar con reenviar=true si el cliente lo pide)",
+            prod.nombre, f" ({et_enviada})" if et_enviada else "", telefono,
+        )
+        _otras = [e for e in ets_disp if e != et_enviada]
+        return {
+            "enviadas": 0,
+            "ya_mostrado": True,
+            "producto": prod.nombre,
+            "etiquetas_disponibles": ets_disp,
+            "nota": (
+                f"a este cliente YA le mostraste '{prod.nombre}'"
+                + (f" — la(s) de {et_enviada}" if et_enviada else "")
+                + " antes en esta conversación y NO se reenviaron (repetirlas es spam). Las "
+                "fotos están más arriba en el chat: NO digas que se las acabas de mandar; sigue "
+                "la venta donde va. Si el cliente pide verlas OTRA VEZ o dice que no le "
+                "llegaron, llama de nuevo con reenviar=true"
+                + (
+                    f". Si pregunta por OTRA versión ({', '.join(_otras)}), llama con esa "
+                    "`etiqueta`"
+                    if _otras
+                    else ""
+                )
+            ),
+        }
+
     enviadas = 0
     sin_url = 0
+    repetidas_en_turno = 0  # archivos que YA estaban en la cola de ESTE mismo turno
     diferidas = 0  # cuántas quedaron EN LA COLA para salir después del texto
     # PIE DE FOTO (caption): SOLO el nombre del producto (y su etiqueta, si la tiene). Sin precio
     # —el precio vive en el tamaño y lo dice el cobro— y desde el 2026-08-22, TAMPOCO la ficha.
@@ -3668,11 +3767,22 @@ async def enviar_fotos_producto(
             telefono=telefono, producto=prod.nombre, url=url, cap=cap,
             es_video=es_video, etiqueta=_et,
         )
+        # La descripción lleva el id del archivo para que sea ÚNICA: así el candado de abajo
+        # distingue "los 3 ángulos de esta llamada" (ids distintos, pasan) de "el MISMO archivo
+        # encolado por una llamada anterior de este turno" (id repetido, se frena).
+        desc = f"{prod.nombre}" + (f" ({_et})" if _et else "") + f" · media {m.id}"
+        # 🔒 EL CANDADO INTRA-TURNO (rama fotos-con-memoria): la fila de `mensajes` se escribe
+        # recién al VACIAR la cola —después del texto—, así que si el modelo llama la herramienta
+        # dos veces en el MISMO turno la memoria de arriba no ve nada en BD. La cola sí lo sabe.
+        if cola_media.ya_encolada(desc):
+            repetidas_en_turno += 1
+            logger.info("enviar_fotos_producto: %s ya está en la cola de este turno — no se duplica", desc)
+            continue
         # 🔴 EL TEXTO SALE PRIMERO. Si `tasks.py` abrió la cola de este turno, la foto NO se manda
         # aquí: se encola y sale justo DESPUÉS del texto del bot — que es como lo hace Whuilianny
         # ("por aquí te dejo nuestro catálogo" y ENTONCES el archivo). Ver `services/cola_media.py`.
         # Sin cola abierta (worker de visión, avisos) se envía en el momento, como siempre.
-        if cola_media.encolar(f"{prod.nombre}" + (f" ({_et})" if _et else ""), envio):
+        if cola_media.encolar(desc, envio):
             enviadas += 1
             diferidas += 1
             continue
@@ -3689,6 +3799,19 @@ async def enviar_fotos_producto(
             "enviar_fotos_producto: %s TIENE %d archivo(s) pero R2_PUBLIC_URL no está puesta: "
             "no se envió ninguno", prod.nombre, sin_url,
         )
+    if enviadas == 0 and repetidas_en_turno:
+        # Todo lo que tocaba mandar YA está en la cola de ESTE turno: no es un fallo, es la
+        # segunda llamada del mismo turno. Se le dice la verdad al modelo y la venta sigue.
+        return {
+            "enviadas": 0,
+            "ya_mostrado": True,
+            "producto": prod.nombre,
+            "nota": (
+                f"las fotos de '{prod.nombre}' YA van saliendo con ESTE mismo mensaje (las "
+                "encolaste hace un momento): no se duplican. Anúncialas UNA sola vez y sigue "
+                "la venta"
+            ),
+        }
     if enviadas == 0:
         return {
             "enviadas": 0,

@@ -103,6 +103,18 @@ def encolar(descripcion: str, envio: Callable[[], Awaitable[None]]) -> bool:
     return True
 
 
+def ya_encolada(descripcion: str) -> bool:
+    """True si un envío con EXACTAMENTE esta descripción ya espera en la cola de este turno.
+
+    Existe para el candado intra-turno de `enviar_fotos_producto` (rama fotos-con-memoria): la
+    fila de `mensajes` que deja `_guardar_media_saliente` se escribe recién al VACIAR la cola
+    —después del texto—, así que si el modelo llama la herramienta dos veces en el MISMO turno,
+    la BD todavía no sabe nada del primer envío. La única que ya lo sabe es esta cola.
+    Con la cola cerrada devuelve False: en ese carril el envío fue inmediato y la fila ya existe.
+    """
+    return any(d == descripcion for d, _ in (_COLA.get() or []))
+
+
 async def vaciar() -> int:
     """Manda lo encolado, EN ORDEN, y devuelve cuántos salieron.
 
