@@ -1012,7 +1012,12 @@ async def ver_catalogo(session, telefono, categoria=None, busqueda=None):
             "Calzan VARIOS productos. NO sueltes un folleto: nómbrale SOLO los TIPOS por su "
             "nombre (SIN el 'de_que_es' de cada uno) y pregúntale de cuál quiere saber. El "
             "'de_que_es' (rellenos/ingredientes) se lo das de UNO, DESPUÉS, cuando el cliente "
-            "elija cuál. NO agregues otros productos aunque tengan nombre parecido. " + _nota_interno
+            "elija cuál. NO agregues otros productos aunque tengan nombre parecido. "
+            # 🔴 SIGUE EL HILO también aquí (31-ago): esta rama ORDENABA preguntar "de cuál"
+            # sin excepción — si el cliente YA había elegido uno y el modelo re-consultaba la
+            # familia, la orden fresca le ganaba a la elección vieja (la mecánica de la masa).
+            "PERO SIGUE EL HILO: si el cliente YA eligió uno de estos (míralo en el chat y en "
+            "EL HILO DE LA VENTA del sistema), NO le repreguntes cuál — sigue con ESE. " + _nota_interno
         )
     else:
         # UN solo producto: preséntalo corto y sigue el hilo (no sumar otra variante).
@@ -1069,7 +1074,8 @@ async def ver_catalogo(session, telefono, categoria=None, busqueda=None):
     if any(len(f["tamanos"]) > 1 for f in salida):
         nota += (
             " OJO: alguno tiene VARIOS TAMAÑOS con precios distintos — PREGÚNTALE al cliente "
-            "cuál quiere antes de registrar, y usa el `id_para_pedir` de ESE tamaño."
+            "cuál quiere antes de registrar, y usa el `id_para_pedir` de ESE tamaño. Salvo que "
+            "YA te lo haya dicho: entonces usa ESE sin repreguntar."
         )
     if sin_precio:
         nota += (
@@ -1771,7 +1777,15 @@ async def info_producto(session, telefono, nombre):
         ).scalars().all()
         return {
             "encontrado": False,
-            "nota": f"no hay un producto que calce exacto con '{nombre}'; ofrece el mas parecido de la lista",
+            # 🔴 CON GUARDIA DE HILO (31-ago): esta rama volcaba hasta 40 nombres frescos en
+            # plena venta (bastaba que el propio modelo tipeara mal el nombre) y la orden de
+            # "ofrecer" podía sacar la conversación del producto ya elegido.
+            "nota": (
+                f"no hay un producto que calce exacto con '{nombre}'. Si YA estaban hablando "
+                "de un producto, corrige el nombre y consulta ESE — NO le reofrezcas el "
+                "catálogo entero. Solo si de verdad no había producto en juego, ofrece el más "
+                "parecido de la lista"
+            ),
             "productos_disponibles": disponibles,
         }
     vs = (await _tamanos_de(session, [prod.id])).get(prod.id) or []
@@ -1810,7 +1824,9 @@ async def info_producto(session, telefono, nombre):
         # El precio vive en el TAMAÑO. Con uno solo se ve igual que siempre; con varios, el bot
         # TIENE que preguntar cuál quiere (cada uno cuesta distinto).
         "tamanos": tamanos,
-        "precio_usd": tamanos[0]["precio_usd"] if len(tamanos) == 1 else "depende del tamaño: pregúntale cuál quiere",
+        # 🔴 La orden de repreguntar iba EMBEBIDA EN EL DATO (31-ago): "pregúntale cuál
+        # quiere" sin excepción de hilo contradecía la nota de abajo si el cliente ya lo dijo.
+        "precio_usd": tamanos[0]["precio_usd"] if len(tamanos) == 1 else "depende del tamaño: si ya te dijo cuál, usa ese; si no, pregúntale cuál quiere",
         # Izada al nivel de la ficha con UN solo tamaño, igual que hace `ver_catalogo` — es de aquí
         # de donde la hoja del modo dos lee el precio.
         "precio_texto": tamanos[0]["precio_texto"] if len(tamanos) == 1 else None,
@@ -2036,7 +2052,13 @@ async def proxima_fecha_entrega(session, telefono, productos=None):
             "Estas son LAS ÚNICAS fechas que puedes ofrecer. No sumes ni restes días por tu "
             "cuenta, no supongas que mañana se entrega, y no inventes una hora: si el cliente "
             "pide un día que no está en esta lista, dile con cariño cuál es el más cercano que "
-            "sí puedes y ofréceselo. La HORA exacta no la cierras tú: la coordina Whuilianny."
+            "sí puedes y ofréceselo. La HORA exacta no la cierras tú: la coordina Whuilianny. "
+            # 🔴 GUARDIA DE HILO (31-ago): re-consultar el calendario (por una duda o un
+            # producto nuevo) traía 4 fechas frescas sin memoria de la ya acordada — y el
+            # modelo podía repreguntar "¿para cuándo?" con la fecha firme en la conversación.
+            "Y si YA habían acordado una fecha (mírala en el chat y en ESTADO DEL CLIENTE) y "
+            "sigue apareciendo aquí, dala por FIJA y NO la repreguntes; solo si dejó de servir "
+            "ofrécele la primera_fecha."
         ),
     }
 
@@ -2200,7 +2222,8 @@ async def registrar_pedido(
                 "nota": (
                     f"El id {it.get('variante_id')!r} no existe. NO lo inventes: usa el "
                     "`id_para_pedir` EXACTO que ves en el catálogo y vuelve a registrar el "
-                    "pedido COMPLETO."
+                    "pedido COMPLETO. Las opciones_validas son SOLO para corregir ese id — "
+                    "NO son un catálogo para reofrecerle cosas al cliente."
                 ),
                 "opciones_validas": await _lista_para_pedir(session),
             }
@@ -2407,6 +2430,14 @@ async def info_negocio(session, telefono):
         "ubicacion": config.get("negocio_ubicacion", "Cabudare, Venezuela"),
         "pago": config.get("negocio_pago", "Pago Móvil"),
         "instagram": config.get("negocio_instagram", "@masvidaconsciente"),
+        # 🔴 Era la ÚNICA herramienta sin nota (31-ago): una pregunta inocente ("¿dónde
+        # están?") a mitad de cobro volcaba `pago` y tentaba a reofrecer el método ya elegido.
+        # Los datos de cuentas siguen saliendo SOLO de generar_datos_pago, como siempre.
+        "nota": (
+            "Si el cliente ya está pagando o ya eligió cómo pagar, NO le reofrezcas formas de "
+            "pago con esto: responde su duda y sigue. Los datos de las cuentas salen SOLO de "
+            "generar_datos_pago."
+        ),
     }
 
 
@@ -2537,7 +2568,12 @@ async def buscar_info(session, telefono, consulta):
             "Usa esto SOLO si de verdad responde lo que preguntó el cliente. Si es un tema "
             "PARECIDO pero DISTINTO (ej. te preguntan por envío NACIONAL / a otra ciudad y esto "
             "es la entrega LOCAL), NO lo des como la respuesta: dile que eso puntual se lo "
-            "confirmas. No confundas un tema con otro."
+            "confirmas. No confundas un tema con otro. "
+            # 🔴 GUARDIA DE HILO (31-ago): estas entradas son texto libre de la dueña y pueden
+            # traer listas de opciones (masas, sabores, métodos) — consultadas a mitad de venta
+            # reabrían lo ya elegido, igual que la ficha reabrió las dos masas.
+            "Y SIGUE EL HILO: si el cliente ya eligió una versión/opción, responde su duda SIN "
+            "reofrecerle las otras opciones que este texto mencione."
         ),
     }
 

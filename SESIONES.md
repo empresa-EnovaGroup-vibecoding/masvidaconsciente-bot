@@ -24,6 +24,58 @@
 
 ---
 
+## 2026-08-31 (4) — 📋 EL PEDIDO COMPLETO COMO ESTADO (rama A del mapa) + 8 guardias de hilo
+
+**La rama A del plan de la clase "pero ya te lo dije" (Maired fusionó el PR #6 y dio luz
+verde al orden A→B→C→D).** Dos mitades, ambas ADITIVAS:
+
+**1. Lo registrado se MUESTRA cada turno — la tapa más barata de toda la clase.** El bloque
+ESTADO DEL CLIENTE decía el id del pedido y el monto en Bs, pero NO el contenido: con el
+historial rodado (cotizar hoy y pagar mañana es lo normal aquí), el bot podía repreguntar
+"¿cuántos eran?", "¿de qué relleno?" o "¿para cuándo?" con la respuesta firme en la BD —
+verificado en vivo: la venta de Enova nunca llegó a registrarse, pero el pedido del kéfir
+mostró el mismo hueco. Ahora, para el pedido ABIERTO (esperando_pago o pendiente):
+- "Lo que LLEVA el pedido #X: 2× Empanadas… (8 unidades) — carne mechada, masa de yuca. Eso
+  YA está registrado: NO se lo repreguntes…" (nueva pieza pura `_items_sin_dinero`).
+- "Entrega YA ACORDADA: delivery en Cabudare — para el 2026-09-05. NO la vuelvas a preguntar…"
+- ⚠️ SIN CIFRAS DE DINERO a propósito (ni precio_unitario ni costo_envio): este texto lo lee
+  la red del dinero, y un USD sin herramienta chocaría con la red del TOTAL — el mismo motivo
+  del solo-Bs del PR #1. Hay test que lo fija ("47" no aparece con precio 47.5).
+- El pedido CERRADO sigue diciendo "IGNORA esos productos" (la lección del duplicado #2074:
+  revivir items de un pedido pagado es lo que fabricó el clon). Test de no-disparo.
+- `getattr` con default en el render: el armado del prompt jamás revienta por forma parcial.
+
+**2. Las 8 GUARDIAS DE HILO en los tentadores** (la auditoría encontró que varias notas de
+herramienta ORDENABAN repreguntar sin excepción — la mecánica exacta del bug de la masa, la
+ficha fresca reabriendo lo elegido):
+- `ver_catalogo` rama MULTI: "pregúntale de cuál quiere saber" ahora exceptúa lo ya elegido.
+- `ver_catalogo` apéndice de tamaños: "PREGÚNTALE cuál quiere… salvo que YA te lo haya dicho".
+- `info_producto` con varios tamaños: el string embebido en `precio_usd` decía "pregúntale
+  cuál quiere" a secas — ahora "si ya te dijo cuál, usa ese".
+- `info_producto` producto no encontrado: volcaba 40 nombres + "ofrece el más parecido" en
+  plena venta (bastaba un nombre mal tipeado por el propio modelo) — ahora ordena corregir el
+  nombre y seguir con el producto en juego, sin reofrecer el catálogo.
+- `buscar_info`: las entradas de Conocimiento son texto libre de la dueña y pueden traer
+  listas de opciones — la nota gana el SIGUE EL HILO genérico.
+- `info_negocio`: era la ÚNICA herramienta sin nota, y vuelca `pago` — ahora avisa no
+  reofrecer formas de pago a quien ya está pagando (los datos de cuentas siguen saliendo
+  SOLO de generar_datos_pago).
+- `registrar_pedido` (id inexistente): `opciones_validas` marcadas como corrección de id,
+  NO catálogo para reofrecer.
+- `proxima_fecha_entrega`: "si YA habían acordado una fecha y sigue en esta lista, dala por
+  FIJA y no la repreguntes".
+
+19 tests nuevos (`test_estado_del_pedido.py`): la pieza pura, el cableado con BD falseada,
+los no-disparos (cerrado sigue en IGNORA; sin entrega no se inventa) y los contratos de las
+8 guardias (con fuente "aplanada": las notas van partidas en varias líneas de string). Los 3
+tests del cotizado (PR #1) siguen verdes sin tocarlos. Suite 722 ✓ · ruff ✓ · compileall ✓.
+
+**Pendientes del plan (en orden):** B método de pago en 2 pasos (el peor hueco: la elección
+no tiene casilla en NINGUNA parte y generar_datos_pago re-pitchea las dos monedas — toca
+dinero, va con calma) → C hilo a tamaños/sabores (prerrequisito de datos: Maired muda los
+rellenos de la descripción a la casilla "Sabores de ESTE tamaño" del panel) → D el vigilante
+pregunta-vs-estado (la garantía que IMPIDE; regaño [SISTEMA], patrón _correccion_fantasma).
+
 ## 2026-08-31 (3) — 🔬 LA AUTOPSIA CERRADA CON LOS OJOS (SSH al taller) + el pie de foto limpio
 
 **Maired activó bypass de permisos y se entró al taller (SOLO lectura).** Resultados, todos
