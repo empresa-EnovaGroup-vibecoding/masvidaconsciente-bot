@@ -3864,8 +3864,16 @@ async def enviar_fotos_producto(
         # EL NOMBRE DE LA FOTO VA EN TODAS (aquí SÍ hay que repetirlo: es lo único que las
         # distingue cuando son dos del mismo producto al mismo precio). No es texto del modelo:
         # lo escribe el código copiando lo que puso la dueña. Sigue SIN precio.
+        #
+        # 🔴 CON ETIQUETA, EL PIE ES LA ETIQUETA A SECAS (31-ago, lo pidió Maired viendo el chat
+        # real): "Empanadas de masa de yuca o de masa de plátano — empanada de yuca" era un
+        # trabalenguas para el cliente; "empanada de yuca" dice todo. La etiqueta distingue
+        # mejor que el nombre (para eso existe). OJO: esto es SOLO el caption de WhatsApp; el
+        # registro interno del panel (`_guardar_media_saliente`, "(foto de {producto} — {et})")
+        # NO se toca — ahí el nombre del producto es la única referencia que la MEMORIA de
+        # fotos puede buscar (media_ya_mostrada busca por nombre en ese pie).
         _et = (m.etiqueta or "").strip()
-        cap = f"{prod.nombre} — {_et}" if _et else prod.nombre
+        cap = _et if _et else prod.nombre
         envio = _envio_de_un_archivo(
             telefono=telefono, producto=prod.nombre, url=url, cap=cap,
             es_video=es_video, etiqueta=_et,
