@@ -24,6 +24,68 @@
 
 ---
 
+## 2026-08-31 (2) — 🧵 EL HILO DE LA VENTA: lo ya elegido viaja al prompt como ESTADO ("pero ya te lo dije")
+
+**El bug (cazado por Maired EN VIVO, 3:50-3:54pm, chat "Enova"):** la clienta dijo *"Me
+gustarían las empanadas de yucas"* (3:51) y dos turnos después, al pedir los rellenos, el bot
+contestó *"Y recuerda que puedes elegir la masa de yuca o de plátano. ¿Cuál prefieres?"*
+(3:52). Tuvo que repetirse: *"Carne mechada. Y será de yuca"*. Su pregunta exacta: *"¿qué
+hueco tengo en el sistema, que no recuerda toda mi conversación?"*.
+
+**La autopsia (5 lectores sobre el código; las vías de pérdida descartadas UNA a UNA):**
+- **El mensaje SÍ le llegó al modelo.** El turno se arma como system + historial de Redis
+  (`hist:{telefono}`, últimos 20 renglones, y aquí eran ~7) + mensaje nuevo, todo verbatim
+  (`messages.extend(historial)`, agent.py). El 'user' se escribe ANTES de pensar; el lock por
+  teléfono impide solaparse; el rescate de Postgres no aplicó. La elección estaba a 4 renglones.
+- **La regla que lo prohíbe existía y viajó en ese mismo turno.** SIGUE EL HILO
+  (system_prompt.py:83: *"No le sumes la otra variante… ni le repreguntes esa variante"*),
+  más NO REPREGUNTES LO QUE YA SABES (:87) y UN SOLO PASO A LA VEZ (:88). Violación frontal.
+- **El disparador:** para responder los rellenos el modelo consultó la ficha
+  (info_producto/ver_catalogo), y la ficha fresca trae LAS DOS masas (nombre del producto,
+  `descripcion`, `fotos_etiquetadas`) sin ninguna marca de "una ya está elegida". Dato fresco
+  de herramienta le ganó a chat viejo. La frase "recuerda que puedes elegir" NO existe en el
+  código (grep: cero): la compuso el modelo con la ficha delante.
+- **El hueco estructural real (la respuesta a Maired):** antes de `registrar_pedido`, la
+  elección NO EXISTE como estado en ninguna parte — ESTADO DEL CLIENTE decía "No tiene un
+  pedido abierto ahora". Solo era una línea de chat viejo. El repo ya arregló DOS veces esta
+  misma clase (fotos → `etiqueta_recordada`; cifra en Bs → `_estado_cliente_texto`): faltaba
+  la pieza para las ELECCIONES de la venta.
+- Asimetría encontrada de paso: la nota de `ver_catalogo` con UN producto ya ordenaba "SIGUE
+  EL HILO…"; la de `info_producto` (la ficha del disparador) NO la traía.
+
+**El arreglo (rama `hilo-de-la-venta`, mismo patrón probado — el estado en la capa que EJECUTA):**
+- **`hilo_de_la_venta_en` (pura) + `hilo_de_la_venta` (envoltorio)** en tools.py: destilan del
+  historial las elecciones de VERSIÓN vigentes, por producto. Reglas: la más reciente gana; la
+  duda ("la de yuca… no, la de plátano") no fija nada y bloquea lo viejo; el "de platano"
+  pelado se atribuye solo si UN único compuesto lo reclama (dos con "yuca" ⇒ no se adivina,
+  doctrina $12/$14); ventana propia `_TURNOS_HILO_VENTA = 10` (la de fotos sigue en 3: costos
+  de error opuestos, constantes separadas); y NO se corta al nombrarse otro producto — la
+  elección es POR PRODUCTO (un pitch del bot no des-elige la masa; diferencia a consciencia
+  con `etiqueta_recordada_en`, que sí corta porque su costo es otra foto).
+- **`responder()` inyecta el estado en la parte DINÁMICA** (la estable va cacheada, no se
+  toca): bloque "EL HILO DE LA VENTA (…es un HECHO…): De '…' el cliente YA eligió: YUCA. NO
+  le vuelvas a preguntar… Si el cliente la cambia en su último mensaje, vale lo nuevo." Sin
+  cifras a propósito (ese texto lo lee `autorizados_por_moneda`). Fail-safe L20: cualquier
+  fallo ⇒ sin línea, el turno queda como hoy.
+- **La nota de `info_producto` gana el recordatorio** SIGUE EL HILO pegado al dato que tienta
+  (espejo de la de ver_catalogo).
+- 15 tests nuevos (`test_hilo_de_la_venta.py`): la conversación de Enova LITERAL como caso
+  central, y la mitad son NO-fijar. Suite completa 703 ✓ (los 2 cp1252 de Windows de siempre)
+  · ruff ✓ · compileall ✓.
+
+**Honestidad del alcance (dicho también en el PR):** esto es estado destilado + aviso pegado
+al disparador — la palanca que ya funcionó con la cifra en Bs — pero NO es un candado mecánico
+como los del dinero: un modelo puede desobedecer un hecho del sistema. Si repregunta AUN con
+el hilo inyectado, la señal queda limpia: el techo es el MODELO (palanca: modelo/modo dos, no
+más redes de estilo). Y NO cubre los RELLENOS (viven en `descripcion`, no en el nombre del
+producto): si el caso aparece en vivo, la extensión natural es leer `variantes.sabores`.
+
+**Pendiente de verificación en el servidor (SSH bloqueado por permisos esta sesión):** el
+LRANGE de `hist:` en Redis (la prueba reina, TTL 24h — se pudre rápido), la ausencia de
+"MEMORIA RESCATADA" en docker logs a esa hora, y `SELECT items FROM pedidos` del pedido de las
+3:54 para confirmar que registró "masa de yuca" en `opciones` (regla: el cobro se verifica en
+la BD, no en el texto).
+
 ## 2026-08-31 — 📸 LA HERRAMIENTA DE FOTOS TIENE MEMORIA (el caso Omaira: las mismas fotos 3 veces)
 
 **El bug (cazado por Maired en la primera venta real con el bot ABIERTO, 29-ago 4:39-4:50pm):**
