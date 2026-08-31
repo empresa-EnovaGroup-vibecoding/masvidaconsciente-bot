@@ -24,6 +24,32 @@
 
 ---
 
+## 2026-08-31 (5) — ✅ CIERRE DE SESIÓN: los 4 PRs fusionados + el plan escrito en ROADMAP
+
+**Maired fusionó los CUATRO** (#5 fotos con memoria · #6 el hilo de la venta · #7 pie de foto
+limpio · #8 el pedido completo como estado). `master` limpio y desplegado al taller. La única
+rama local sin fusionar sigue siendo `identidad-alejandra` (aparcada desde el 24-ago).
+
+**El plan de lo que falta se escribió en `ROADMAP.md` → "EN QUÉ ESTAMOS AHORA"** (que estaba
+vacío): la clase de bug nombrada —*LA VENTANA SIN ESTADO*—, el test que la decide (*"¿ese dato
+tiene casilla?"*), y las ramas **B (método de pago), C (tamaños y sabores) y D (el vigilante)**
+con su diseño, sus prerrequisitos y sus trampas. Una pestaña nueva arranca ahí, como manda
+CLAUDE.md §0.
+
+**🔴 Hallazgo de Maired que define la rama B:** revisando el plan detectó ella misma —bien leído—
+que el #8 NO cubre el método de pago: *"vuelve a preguntar los métodos de pago cuando ya mandó
+los datos"*. Es el peor hueco que queda y quedó documentado con su causa estructural (la
+elección no tiene casilla en NINGUNA parte + `generar_datos_pago` vuelca todos los métodos).
+
+**Documento para Maired (y para enseñárselo a Erwin/Jorge), publicado como artifact:** el
+vocabulario (rama · PR · fusionar), el tablero de los 4 trabajos, qué hace cada uno en palabras
+suyas, el plan A→D y lo que NO se puede prometer →
+https://claude.ai/code/artifact/7795d0bb-4a81-433b-889a-fa5712ed8e28
+*(Nació de que ella dijo "no entiendo nada": el error fue mío, por mezclar dos sistemas de
+nombres —letras del plan vs números de PR— y dar el plan por chat, donde se pierde con el
+scroll. Lección de comunicación: los planes que ella debe consultar van a un documento, no al
+chat.)*
+
 ## 2026-08-31 (4) — 📋 EL PEDIDO COMPLETO COMO ESTADO (rama A del mapa) + 8 guardias de hilo
 
 **La rama A del plan de la clase "pero ya te lo dije" (Maired fusionó el PR #6 y dio luz
