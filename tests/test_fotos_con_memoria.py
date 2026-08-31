@@ -19,6 +19,7 @@ versión nueva de un producto compuesto (la de yuca no bloquea la de plátano), 
 simulador del panel (su teléfono fijo acumularía filas y cada demo parecería rota).
 Frenar de más rompe la venta.
 """
+import inspect
 from types import SimpleNamespace
 
 import pytest
@@ -247,6 +248,34 @@ async def test_maximo_va_capado_a_3_en_codigo(monkeypatch):
     assert r.get("enviadas") == 3
     r2 = await _correr_tool(monkeypatch, medios=medios, maximo="basura")
     assert r2.get("enviadas") == 0 and r2.get("ya_mostrado") is True  # mismos 3 del turno
+
+
+async def test_el_pie_que_ve_el_cliente_es_la_etiqueta_a_secas(monkeypatch):
+    """Lo pidió Maired viendo el chat real (31-ago): el caption que llegaba al cliente era el
+    nombre compuesto ENTERO más la etiqueta ("Empanadas de masa de yuca o de masa de plátano —
+    empanada de yuca") — un trabalenguas. Con etiqueta, el pie es la etiqueta a secas; sin
+    etiqueta, el nombre del producto como siempre."""
+    caps: list = []
+
+    async def _imagen(telefono, url, cap):
+        caps.append(cap)
+        return {"messages": [{"id": "wamid.X"}]}
+
+    monkeypatch.setattr(tl, "enviar_imagen", _imagen)
+    monkeypatch.setattr(tl, "enviar_video", _imagen)
+    medios = [_foto(1, "empanada de yuca"), _foto(3)]
+    r = await _correr_tool(monkeypatch, ya_mostrada=False, medios=medios)
+    assert r.get("enviadas") == 2
+    await cola_media.vaciar()
+    assert caps == ["empanada de yuca", "Quesillo"]
+
+
+def test_el_registro_interno_conserva_el_nombre_del_producto():
+    """El pie del PANEL ("(foto de {producto} — {etiqueta})") NO cambia con el caption nuevo:
+    es la única referencia al producto que tiene la MEMORIA de fotos (media_ya_mostrada busca
+    el nombre ahí). Si alguien lo 'limpia' también, la memoria entera se apaga en silencio."""
+    fuente = inspect.getsource(tl._envio_de_un_archivo)
+    assert "de {producto}" in fuente, "el pie interno perdió el nombre del producto"
 
 
 # ══════════════════════════════════════════════════════════════════════════════════

@@ -24,6 +24,45 @@
 
 ---
 
+## 2026-08-31 (3) — 🔬 LA AUTOPSIA CERRADA CON LOS OJOS (SSH al taller) + el pie de foto limpio
+
+**Maired activó bypass de permisos y se entró al taller (SOLO lectura).** Resultados, todos
+sobre el chat "Enova" (`584264399792`):
+
+- **La prueba reina, confirmada:** `LRANGE hist:584264399792` en Redis muestra la lista EXACTA
+  que recibe el modelo — *"Me gustarían las empanadas de yucas"* estaba a 4 renglones del
+  final en el turno de las 3:52 (12 renglones en total, ventana de 20 sobrada). "MEMORIA
+  RESCATADA" en logs de ambos contenedores: 0 y 0 (el contexto vino de Redis vivo). El
+  diagnóstico de la entrada (2) pasa de deducción a hecho: **lo tenía delante y repreguntó**.
+- **🔴 La venta de las empanadas NUNCA se registró:** los últimos pedidos de ese chat siguen
+  siendo #2073 (pagado) y #2074 (cancelado) — los del kéfir del 25-ago. El "Carne mechada. Y
+  será de yuca" de las 3:54 no quedó en NINGUNA casilla: si la conversación retoma días
+  después, esa elección vive solo en un historial que rueda. La "ventana sin estado" en pleno.
+- **La telemetría responde el miedo de Maired a los tokens** (está usando Sonnet): 8 llamadas
+  al modelo en los 6 turnos de la conversación, ~23.400 tokens de entrada por llamada de los
+  cuales **22.408 CACHEADOS (96%)** — la parte estable del prompt se cobra a ¼ y el diseño ya
+  lo aprovecha. Costo real: ~$0,011 por llamada, y **$1,99 EN TOTAL en los últimos 7 días**
+  (139 llamadas de agente). La línea del HILO (~100 tokens, solo cuando hay elección) cuesta
+  ~$0,0003 por llamada; UNA repregunta evitada ahorra un turno entero (~$0,02) — la línea se
+  paga sola ~70 veces. El estado destilado es la palanca BARATA; lo caro es repreguntar.
+
+**Y el arreglo chiquito que Maired pidió viendo el chat (esta rama, `pie-de-foto-limpio`,
+montada sobre la del hilo — fusionar #6 primero):** el caption que le llegaba al CLIENTE con
+cada foto etiquetada era el trabalenguas *"Empanadas de masa de yuca o de masa de plátano —
+empanada de yuca"*. Ahora, con etiqueta, el pie es LA ETIQUETA a secas ("empanada de yuca");
+sin etiqueta, el nombre como siempre. ⚠️ El registro INTERNO del panel ("(foto de {producto}
+— {etiqueta})") NO se tocó a propósito: es la única referencia al producto que tiene la
+memoria de fotos (`media_ya_mostrada` busca el nombre en ese pie) — quedó un test de contrato
+vigilando que nadie lo "limpie" también.
+
+**Guía de ficha acordada con Maired (tarea de PANEL, no de código):** los rellenos de las
+Empanadas ("carne mechada, pollo, queso de cabra") van en la casilla **"Sabores de ESTE
+tamaño"** — hoy están en PROSA dentro de la descripción (deuda D3: el panel mismo advierte
+"si el mismo dato vive en dos sitios, un día cambias uno y el bot lee el otro"). Ese traslado
+es el prerrequisito de datos para extender el hilo a sabores (rama C del plan de la clase
+repreguntas). Los nombres bajo cada foto los pone ella (si una quedó cruzada, se corrige ahí
+y el bot copia).
+
 ## 2026-08-31 (2) — 🧵 EL HILO DE LA VENTA: lo ya elegido viaja al prompt como ESTADO ("pero ya te lo dije")
 
 **El bug (cazado por Maired EN VIVO, 3:50-3:54pm, chat "Enova"):** la clienta dijo *"Me
