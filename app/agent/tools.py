@@ -1509,6 +1509,102 @@ async def etiqueta_recordada(
         return None
 
 
+# Cuántos turnos del CLIENTE hacia atrás mira EL HILO DE LA VENTA (la línea de estado que el
+# código inyecta al prompt con lo que el cliente YA eligió). MÁS LARGA que la de las fotos
+# (_TURNOS_ETIQUETA_RECORDADA = 3) a propósito, porque el costo del error es el CONTRARIO:
+# la foto de más molesta (mejor recordar de menos), pero el estado que se evapora a media venta
+# ES el bug que esta línea tapa. Diez turnos del cliente cubren una venta entera, y el tope
+# real sigue siendo el historial de Redis (20 renglones).
+_TURNOS_HILO_VENTA = 10
+
+
+def hilo_de_la_venta_en(
+    mensaje_usuario: str, historial: list | None, nombres_catalogo: list[str]
+) -> list[tuple[str, str]]:
+    """Las elecciones de VERSIÓN que siguen vigentes en esta conversación, más reciente
+    primero: [("Empanadas de masa de yuca o de masa de plátano", "yuca")]. Función PURA.
+
+    🔴 POR QUÉ EXISTE (caso real cazado por Maired, 2026-08-31 3:50-3:54pm, taller): la clienta
+    dijo "Me gustarían las empanadas de yucas" y dos turnos después, al pedir los rellenos, el
+    bot contestó "Y recuerda que puedes elegir la masa de yuca o de plátano. ¿Cuál prefieres?".
+    La elección SÍ viajaba en el historial (a 4 renglones del final) y la regla SIGUE EL HILO
+    SÍ viajaba en el prompt — y el modelo repreguntó igual, porque la ficha fresca de la
+    herramienta (consultada por los rellenos) le reabrió las dos masas. Es la moraleja de
+    siempre: el prompt SUGIERE; lo que se quiera garantizar se entrega como ESTADO. Esta
+    función destila la elección del chat crudo para que `responder()` la inyecte como hecho —
+    el mismo patrón de `_estado_cliente_texto` (la cifra en Bs) y de `etiqueta_recordada`
+    (las fotos): el estado vive en la capa que EJECUTA, no en la memoria del modelo.
+
+    Las reglas se parecen a las de `etiqueta_recordada_en`, con DOS diferencias a consciencia:
+    - Ventana de `_TURNOS_HILO_VENTA` turnos del cliente (no 3): el estado que se esfuma a
+      media venta es exactamente el bug. El error contrario (recordar una elección vieja) se
+      cura solo: la línea inyectada ordena que lo último que diga el cliente mande.
+    - NO se corta al nombrarse otro producto: la elección es POR PRODUCTO (un pitch del bot o
+      un segundo producto en la conversación no pueden borrar la masa ya elegida). El cruce
+      entre productos se evita ATRIBUYENDO cada elección: los tokens de versión solo cuentan
+      si ese mensaje nombra al producto, o si ningún otro compuesto reclama esos tokens.
+    - Igual que allá: la más reciente gana, y un mensaje que toque LAS DOS versiones deja al
+      producto SIN elección (una duda no se resuelve por mayoría) — y bloquea las anteriores.
+    """
+    compuestos = [
+        (n, d) for n in (nombres_catalogo or []) if (d := _versiones_distintivas(n))
+    ]
+    if not compuestos:
+        return []
+    turnos = [
+        str(h.get("content") or "")
+        for h in (historial or [])
+        if isinstance(h, dict) and h.get("role") == "user"
+    ]
+    turnos.append(mensaje_usuario or "")
+    decididos: dict[str, str | None] = {}
+    for contenido in reversed(turnos[-_TURNOS_HILO_VENTA:]):
+        pendientes = [(n, d) for n, d in compuestos if n not in decididos]
+        if not pendientes:
+            break
+        tocados = {
+            n: t for n, d in pendientes if (t := _versiones_tocadas(d, contenido))
+        }
+        if not tocados:
+            continue
+        nombrados = set(_productos_nombrados_en(contenido, nombres_catalogo))
+        for n, tocadas in tocados.items():
+            # La elección es de ESTE producto si el mensaje lo nombra ("las empanadas de
+            # yuca"), o si nadie más la reclama (el "de platano" pelado del caso 2026-08-09:
+            # un solo compuesto tocado y ningún OTRO producto nombrado en el mensaje).
+            es_suya = n in nombrados or (len(tocados) == 1 and not (nombrados - {n}))
+            if not es_suya:
+                continue
+            decididos[n] = " ".join(sorted(tocadas[0])) if len(tocadas) == 1 else None
+    return [(n, e) for n, e in decididos.items() if e]
+
+
+async def hilo_de_la_venta(
+    mensaje_usuario: str, historial: list | None
+) -> list[tuple[str, str]]:
+    """`hilo_de_la_venta_en` con el catálogo puesto. La usa `responder()` para inyectar el
+    estado de lo ya elegido en la parte DINÁMICA del prompt, cada turno.
+
+    Abre su propia sesión (mismo patrón que `etiqueta_recordada`) y ante cualquier fallo
+    devuelve [] — sin hilo el bot queda exactamente como hoy: la línea de estado es un
+    empujón de venta y jamás puede tumbar un turno.
+    """
+    if not (mensaje_usuario or "").strip() and not historial:
+        return []
+    try:
+        factory = get_session_factory()
+        async with factory() as session:
+            nombres = (
+                await session.execute(
+                    select(Producto.nombre).where(Producto.disponible.is_(True))
+                )
+            ).scalars().all()
+        return hilo_de_la_venta_en(mensaje_usuario, historial, list(nombres))
+    except Exception:  # noqa: BLE001 — sin hilo se sigue como hoy; jamás tumba el turno
+        logger.exception("hilo_de_la_venta: no se pudo leer el catálogo; va sin línea de hilo")
+        return []
+
+
 async def tamanos_hermanos(variante_id) -> dict | None:
     """(SOLO LECTURA) El tamaño que el modelo eligió y los HERMANOS que competían con él.
 
@@ -1734,7 +1830,14 @@ async def info_producto(session, telefono, nombre):
             "Las `fotos_etiquetadas` son los nombres que la dueña le puso a CADA FOTO: sirven "
             "SOLO para escoger cuál mandarle (pásalo en `etiqueta` de enviar_fotos_producto). "
             "NO son la lista de opciones del producto: lo que se puede pedir está en "
-            "`descripcion` y en los tamaños. NO ofrezcas una versión que no esté ahí."
+            "`descripcion` y en los tamaños. NO ofrezcas una versión que no esté ahí. "
+            # 🔴 El mismo recordatorio que ya traía ver_catalogo con UN producto — aquí faltaba,
+            # y ESTA ficha fue la que reabrió las dos masas en el caso real del 31-ago: el
+            # cliente pidió los rellenos, la ficha fresca trajo "yuca o plátano", y el modelo
+            # repreguntó la masa ya elegida. El aviso viaja PEGADO al dato que tienta.
+            "SIGUE EL HILO: si el cliente ya dijo una masa/versión (mira EL HILO DE LA VENTA "
+            "del sistema y el chat), NO se la vuelvas a preguntar ni le reofrezcas la otra: "
+            "quédate en la suya y ofrécele SOLO lo que aún no eligió (ej. el relleno)."
         ),
     }
 
