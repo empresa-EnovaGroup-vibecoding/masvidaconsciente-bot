@@ -1452,6 +1452,15 @@ async def _ejecutar_con_guardas(
                 telefono, str(args)[:200],
             )
             return rechazo
+    if nombre_tool == "enviar_fotos_producto" and _pide_fotos(mensaje_usuario):
+        # 🔒 LA VÁLVULA EN CÓDIGO (rama fotos-con-memoria): la herramienta ahora tiene memoria y
+        # no repite un producto ya mostrado — pero si el CLIENTE está pidiendo ver ("mándame la
+        # foto", "muéstramela otra vez", "no me llegó el video"), reenviar es lo correcto y no
+        # puede depender de que el modelo se acuerde de pasar `reenviar`: lo enciende el código
+        # leyendo las palabras del cliente. Un cliente pidiendo VER nunca es spam. Las llamadas
+        # de la RED DE LA FOTO no pasan por esta puerta (van por `ejecutar` directo): su empuje
+        # proactivo sigue frenado por su propio filtro de `media_ya_mostrada`.
+        args = {**args, "reenviar": True}
     return await ejecutar(nombre_tool, args, telefono)
 
 
@@ -2194,6 +2203,9 @@ async def responder(
     reclamo_pedido = False  # ya se le llamó la atención una vez por decir que agendó sin agendar
     fotos_ok = False  # ¿enviar_fotos_producto ENVIÓ algo de verdad en este turno?
     fotos_intentadas = False  # ¿se LLAMÓ a enviar_fotos_producto este turno? (aunque no enviara)
+    # ¿La MEMORIA de la herramienta frenó un re-envío? El cliente ya tiene esas fotos más arriba
+    # en el chat: "ya te las mandé" sería VERDAD, y la red del envío fantasma no debe castigarlo.
+    fotos_ya_mostradas = False
     reclamo_fotos = False  # ya se le llamó la atención por afirmar un envío de fotos falso
     reclamo_opcion = False  # ya se le llamó la atención por trabarse pidiendo el sabor
     # 🔴 EL GUARD DEL COMPROBANTE, TRAÍDO AL MODO QUE CORRE HOY (auditoría 2026-08-02, PRM-3).
@@ -2525,11 +2537,16 @@ async def responder(
             # Caso real (2026-07-14, confirmado en el log): a "mándame la foto de la torta keto"
             # contestó "Ya te la envié hace poco 💚" con CERO llamadas a la herramienta — y su
             # propia mentira del turno anterior en la memoria como excusa.
+            # `fotos_ya_mostradas` ABSUELVE (rama fotos-con-memoria): si la memoria de la
+            # herramienta frenó el re-envío, las fotos EXISTEN más arriba en el chat — "ya te
+            # las mandé" es verdad histórica, no una mentira. Sin esta absolución, la red
+            # ordenaría re-llamar la herramienta (que volvería a negarse) y a la segunda vuelta
+            # escalaría a la dueña una falsa alarma — un bucle de castigo por comportarse bien.
             if _afirma_envio_fotos(
                 texto, pidio_fotos,
                 pidio_media_explicita=pidio_media,
                 catalogo_enviado=catalogo_ok,
-            ) and not fotos_ok:
+            ) and not fotos_ok and not fotos_ya_mostradas:
                 logger.error(
                     "ENVÍO FANTASMA de fotos a %s: dijo que las envió y NO llamó a "
                     "enviar_fotos_producto (o falló) — texto=%r",
@@ -2822,6 +2839,14 @@ async def responder(
             ):
                 # Salió al menos UNA foto/video de verdad: "ahí tienes las fotos" es verdad.
                 fotos_ok = True
+            if (
+                nombre_tool == "enviar_fotos_producto"
+                and isinstance(resultado, dict)
+                and resultado.get("ya_mostrado")
+            ):
+                # La memoria de la herramienta frenó el re-envío: el cliente YA tiene esas fotos
+                # más arriba en el chat. No es un envío fantasma — es historia verdadera.
+                fotos_ya_mostradas = True
             # Todo monto que devuelve una herramienta queda AUTORIZADO para este turno — pero
             # CADA UNO EN SU MONEDA (el total en $ del `resumen`, los bolívares del `resumen_cobro`,
             # la tasa BCV). Así el bot puede copiar el monto en bolívares… y solo ESE.
@@ -3207,12 +3232,14 @@ async def _responder_dos_agentes(
             pedido_previo.id, pedido_previo.estado, telefono,
         )
 
+    # `hoja.fotos_ya_mostradas` absuelve igual que en el modo uno: la memoria de la herramienta
+    # frenó un re-envío, así que las fotos existen más arriba — no es un envío fantasma.
     if _afirma_envio_fotos(
         texto,
         _pide_fotos(pregunta_cliente),
         pidio_media_explicita=_pide_media_explicita(pregunta_cliente),
         catalogo_enviado=hoja.catalogo_enviado,
-    ) and hoja.fotos_enviadas == 0:
+    ) and hoja.fotos_enviadas == 0 and not hoja.fotos_ya_mostradas:
         logger.error("VOZ: envío fantasma de fotos para %s — NO sale", telefono)
         await _escalar(
             ejecutar, telefono, "no_se",

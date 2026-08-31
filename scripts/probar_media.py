@@ -269,8 +269,23 @@ async def main() -> None:
             check("hay alguna fila con variante_id para probar el orden de siempre", False,
                   "ninguna media tiene tamaño asignado")
         if prod is not None:
-            r_retro = await tools.enviar_fotos_producto(session, TEL, prod.nombre)
-            check("end-to-end sin `etiqueta`: manda lo MISMO que antes de la 029",
+            # 🔒 LA MEMORIA DE LA HERRAMIENTA (rama fotos-con-memoria), contra la BD REAL: la
+            # primera tanda de este banco ya dejó sus filas en `mensajes` (aquí la cola está
+            # cerrada ⇒ el envío fue inmediato), así que llamarla OTRA VEZ a ciegas tiene que
+            # FRENAR — que es justo lo que no pasó con Omaira (2026-08-29). OJO: antes de la
+            # memoria, esta llamada era el "end-to-end retro" y esperaba enviadas>0; ese caso
+            # vive ahora en la llamada con reenviar=True de abajo.
+            if await tools._memoria_de_fotos_apagada(session):
+                print("   [--] el interruptor `fotos_memoria` está en 'off': el freno no se exige")
+            else:
+                r_dedup = await tools.enviar_fotos_producto(session, TEL, prod.nombre)
+                check("llamarla OTRA VEZ a ciegas NO reenvía (la memoria de la herramienta)",
+                      r_dedup.get("enviadas") == 0 and r_dedup.get("ya_mostrado") is True,
+                      str(r_dedup)[:100])
+                check("…y la nota le enseña al modelo la válvula (`reenviar`)",
+                      "reenviar" in (r_dedup.get("nota") or ""), str(r_dedup.get("nota"))[:100])
+            r_retro = await tools.enviar_fotos_producto(session, TEL, prod.nombre, reenviar=True)
+            check("con reenviar=True (el cliente la pidió) manda lo MISMO que antes de la 029",
                   r_retro.get("enviadas") == enviadas and r_retro.get("etiqueta_enviada") is None,
                   f"antes {enviadas}, ahora {r_retro.get('enviadas')}")
 

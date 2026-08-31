@@ -75,6 +75,9 @@ class HojaDeHechos:
 
     pedido_id: int | None = None
     fotos_enviadas: int = 0
+    # ¿La memoria de la herramienta frenó un re-envío? Las fotos existen más arriba en el chat:
+    # la red del envío fantasma de la Voz no debe castigar la referencia a esa historia.
+    fotos_ya_mostradas: bool = False
     catalogo_enviado: bool = False
     escalado: bool = False          # ¿se llamó a pedir_ayuda en este turno?
     pago_registrado: bool = False   # ¿registrar_comprobante dio ok? → autoriza "recibí tu pago"
@@ -112,6 +115,8 @@ class HojaDeHechos:
             self.catalogo_enviado = True
         if nombre == "enviar_fotos_producto":
             self.fotos_enviadas += int(resultado.get("enviadas") or 0)
+            if resultado.get("ya_mostrado"):
+                self.fotos_ya_mostradas = True
         if nombre == "pedir_ayuda" and resultado.get("ok"):
             # 🔴 EL RESULTADO, NO EL NOMBRE. Si `pedir_ayuda` reventó (timeout de BD, pool
             # agotado), `ejecutar_tool` devuelve `{"error": ...}` y aquí se encendía IGUAL: la
@@ -253,6 +258,13 @@ def _renderizar(nombre: str, r: dict) -> str:
             # la Voz tiene que saber cuál salió, o se lo inventa.
             de = f" de {r['etiqueta_enviada']}" if r.get("etiqueta_enviada") else ""
             return f"Le ENVIASTE {n} foto(s)/video(s){de} por WhatsApp: ya las tiene."
+        if r.get("ya_mostrado"):
+            # La memoria de la herramienta frenó el re-envío. Sin este caso, la rama de abajo le
+            # dictaría a la Voz "NO se pudo enviar" — un hecho FALSO: sí se enviaron, antes.
+            return (
+                "Esas fotos YA se le habían mostrado antes en este chat y NO se reenviaron "
+                "(repetirlas es spam). No digas que acabas de mandarlas; sigue la venta."
+            )
         return "NO se pudo enviar ninguna foto: NO le digas que se las mandaste."
 
     if nombre == "enviar_catalogo":
