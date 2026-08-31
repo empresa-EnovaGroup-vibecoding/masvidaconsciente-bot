@@ -26,6 +26,7 @@ from app.agent.tools import (
     ejecutar_tool,
     etiqueta_del_cliente,
     etiqueta_recordada,
+    hilo_de_la_venta,
     horas_de_silencio,
     media_ya_mostrada,
     productos_enfocados,
@@ -2123,6 +2124,27 @@ async def responder(
     # cobra a ¼ en los siguientes mensajes (mismo prompt → misma calidad, solo más barato).
     # La parte DINÁMICA (hora, ficha, estado) va aparte, sin cachear.
     estable, dinamico = await construir_partes_prompt(nombre_cliente, telefono, activas=activas)
+    # 🧵 EL HILO DE LA VENTA (2026-08-31, el "pero ya te lo dije" de Maired): lo que el cliente
+    # YA eligió no puede vivir SOLO como chat viejo — la ficha fresca de una herramienta lo
+    # reabre y el modelo repregunta (pasó EN VIVO con la masa de yuca: la elección estaba a 4
+    # renglones y la regla SIGUE EL HILO en el prompt, y repreguntó igual). El código destila
+    # la elección (`hilo_de_la_venta`, tools.py) y la inyecta como ESTADO en la parte DINÁMICA
+    # (la estable va cacheada y no se toca). Sin cifras a propósito: este texto lo lee la red
+    # del dinero (`autorizados_por_moneda`, más abajo) y una cifra aquí sería autorizarla.
+    elecciones_hilo = await hilo_de_la_venta(mensaje_usuario, historial)
+    if elecciones_hilo:
+        dinamico += (
+            "\n\nEL HILO DE LA VENTA (lo dedujo el código de los mensajes del cliente — es un "
+            "HECHO del sistema, no una opinión):\n"
+            + "\n".join(
+                f"- De '{_p}' el cliente YA eligió: {_e.upper()}."
+                for _p, _e in elecciones_hilo[:2]
+            )
+            + "\nNO le vuelvas a preguntar esa elección ni le reofrezcas la otra versión; "
+            "confírmala con naturalidad si hace falta y avanza SOLO con lo que aún falte "
+            "(relleno, cantidad, fecha, cobro). Si el cliente la cambia en su último mensaje, "
+            "vale lo nuevo que diga."
+        )
     messages: list = [
         {
             "role": "system",
