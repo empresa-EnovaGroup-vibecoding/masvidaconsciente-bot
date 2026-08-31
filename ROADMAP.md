@@ -23,6 +23,95 @@ Las **FASES 0 a 3 ya están hechas y desplegadas**:
 
 > 📍 **Pestaña NUEVA de Claude: empieza leyendo este bloque + la última entrada de SESIONES.** Ahí está el estado REAL (no asumir de memoria vieja).
 
+### 🧵 EL TRABAJO EN CURSO: "que no repregunte lo que la clienta YA dijo" (abierto el 2026-08-31)
+
+**La clase de bug, nombrada:** *LA VENTANA SIN ESTADO*. Entre que el cliente dice un dato y
+que una herramienta lo guarda en una casilla de la BD, ese dato vive SOLO como chat crudo — y
+en esa ventana, cualquier resultado FRESCO de herramienta que traiga las opciones reabre la
+elección y el modelo repregunta. **Verificado con los ojos** (SSH al taller, entradas 3 y 4 de
+SESIONES del 31-ago): la elección SÍ le llegaba al modelo y SÍ existía la regla en el prompt —
+repreguntó igual. **El dato fresco le gana al chat viejo; solo el ESTADO le gana al dato
+fresco.** De ahí la doctrina aplicada: cada dato de la venta necesita su casilla, su línea de
+estado y (rama D) su vigilante.
+
+**El test que decide todo:** *¿ese dato tiene casilla?* Si no la tiene, es repreguntable.
+
+**HECHO y fusionado el 31-ago** (PRs #5→#8, todos desplegados al taller):
+- **#5 fotos con memoria** · **#6 EL HILO DE LA VENTA** (`hilo_de_la_venta` en tools.py: destila
+  del historial la VERSIÓN elegida —masa yuca/plátano— y `responder()` la inyecta como HECHO en
+  la parte DINÁMICA del prompt) · **#7 pie de foto limpio** · **#8 EL PEDIDO COMPLETO COMO
+  ESTADO** (`_items_sin_dinero` + "Lo que LLEVA el pedido #X" + "Entrega YA ACORDADA" en
+  `_estado_cliente_texto`, SIN cifras de dinero a propósito — la red del dinero lee ese texto;
+  más 8 guardias de hilo en las notas de las herramientas que "tentaban").
+
+### 🟢 RAMA B — EL MÉTODO DE PAGO NECESITA SU CASILLA *(la siguiente; esfuerzo medio, toca DINERO)*
+
+🔴 **El peor hueco que queda, CONFIRMADO EN VIVO por Maired:** *"vuelve a preguntar los métodos
+de pago cuando ya mandó los datos"*. La causa es estructural, no del modelo:
+- La elección del cliente ("te pago por Zelle") **NO SE GUARDA EN NINGUNA PARTE**: `Pedido` no
+  tiene columna de método, y `Pago.metodo` nace recién cuando llega el comprobante.
+- `generar_datos_pago` (schema: solo `pedido_id`) **no puede saber** qué eligió, así que devuelve
+  SIEMPRE `metodos_de_pago` con TODOS los métodos activos, y su `resumen_cobro` re-pitchea las
+  DOS monedas ("...o transferencia son X Bs / si pagas en dólares son Y con el 20%") — con la
+  nota ORDENANDO copiarlo EXACTO. Es reapertura *mandada por la herramienta*.
+
+**El arreglo (es el pendiente viejo "partir `generar_datos_pago` en 2 pasos", ahora con motivo):**
+1. La tool acepta `metodo` (opcional), matcheado contra los **títulos de la tabla `metodos_pago`**
+   = vocabulario CERRADO de la BD (seguro por doctrina; NO regex sobre lenguaje libre).
+2. Sin `metodo` → cotiza y devuelve solo los NOMBRES de los métodos. Con `metodo` → devuelve SOLO
+   los datos de ESE y un `resumen_cobro` de UNA sola moneda.
+3. **Persistir la elección en el pedido** (patrón `cotizado_*` de la migración 027: migración
+   nueva, aditiva) y **imprimirla en `_estado_cliente_texto`** ("Ya eligió pagar por: Zelle").
+⚠️ Toca el camino del dinero: el validador del comprobante valida por MONTO y **no se toca**;
+tests duros + prueba en vivo de Maired antes de fusionar.
+
+### 🟡 RAMA C — EL HILO, EXTENDIDO A TAMAÑOS Y SABORES *(bloqueada por una tarea de panel)*
+
+Generalizar lo del #6 a las otras elecciones **pre-registro** (hoy solo cubre la versión que vive
+en el NOMBRE del producto):
+- **Tamaños:** fuente cerrada perfecta y ya lista (`ProductoVariante.presentacion` + `id_para_pedir`).
+- **Sabores/rellenos:** el caso de Maired ("carne mechada"). 🔴 **PRERREQUISITO DE DATOS, es de
+  ELLA:** los rellenos de las Empanadas viven en PROSA dentro de `productos.descripcion`; tienen
+  que estar en la casilla **"Sabores de ESTE tamaño"** (`variantes.sabores`) — es la deuda D3
+  ("el mismo dato en dos sitios"). **NO parsear la prosa**: eso es el regex poroso prohibido.
+- Reusar la regla de atribución de `hilo_de_la_venta_en` (un token solo cuenta si ese mensaje
+  nombra el producto, o si ningún otro compuesto lo reclama) — sin ella vuelve el bug del Kéfir
+  de cabra vs "queso de cabra".
+
+### 🟡 RAMA D — EL VIGILANTE PREGUNTA-vs-ESTADO *(la única pieza que IMPIDE)*
+
+Antes de que el mensaje salga, comparar lo que el borrador PREGUNTA contra `elecciones_hilo` /
+el estado del pedido. Si va a repreguntar algo ya elegido: **regaño `[SISTEMA]` + `continue`** —
+el modelo redacta de nuevo; el código NO reescribe (la frontera del 24-ago sigue vigente).
+Precedente exacto: `_correccion_fantasma` ("la sentencia la dicta el estado").
+- **Dispara solo** si el borrador PREGUNTA u OFRECE la alternativa (mencionar la elegida es
+  confirmación legítima, no dispara). UNA pasada y dejar salir si insiste (patrón red del cierre).
+- **NO matar:** el resumen final tras el pago aprobado, la 1ª pregunta de un dato faltante, la 2ª
+  insistencia legítima de algo no contestado.
+- 🕳️ **Hueco conocido:** el hilo se calcula DESPUÉS del early-return del modo 'dos' — si algún día
+  se enciende `agente_modo='dos'`, ni el #6 ni el vigilante aplican ahí. Bandera hoy en 'uno'.
+
+### ⚪ Lo que NO se puede prometer (dicho a Maired, 31-ago)
+
+Con B+C+D las repreguntas de datos del negocio quedan entre "casi nunca" y "frenadas antes de
+salir". El **"nunca jamás con cualquier palabra" NO existe**: frases 100% libres ("lo de la otra
+vez", "como el mes pasado") no se convierten en dato sin adivinar — y adivinar fabricó el pedido
+duplicado #2074. La vía es registrar temprano + estado + vigilante, no un segundo NLU.
+
+**Cómo se hace una autopsia en el taller (método, verificado el 31-ago).** 🔴 Este repositorio
+es PÚBLICO: los nombres de contenedor, usuarios y claves NO se escriben aquí — se leen del
+servidor en el momento (`docker ps`, y la clave de Redis sale de
+`docker exec <bot> sh -c 'echo $REDIS_URL'`). Los pasos que cerraron el caso del 31-ago:
+1. Ubicar el chat por su texto en la tabla `mensajes` (o por `clientes.nombre`).
+2. `LRANGE hist:<telefono>` en Redis = **la lista EXACTA que recibió el modelo** (TTL 24h: se
+   pudre rápido, es lo primero que hay que sacar). Es la prueba reina de "¿lo tenía delante?".
+3. `grep 'MEMORIA RESCATADA'` en los logs del bot y del worker: si NO aparece, el contexto vino
+   de Redis vivo y no del respaldo de Postgres (que filtra).
+4. `SELECT items … FROM pedidos` → verificar el cobro **en la BD, no en el texto** (regla de oro
+   del repo, CLAUDE.md §8).
+5. `llamadas_ia` NO guarda los messages, solo métricas — sirve para tokens y costo, no para
+   reconstruir el prompt. *(Medido: 96% del prompt viaja cacheado; $1,99 en 7 días de pruebas.)*
+
 ---
 
 # 🎯 QUÉ SIGNIFICA "TERMINADO" (la meta — todo lo demás es camino)
