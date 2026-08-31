@@ -24,6 +24,80 @@
 
 ---
 
+## 2026-08-31 — 📸 LA HERRAMIENTA DE FOTOS TIENE MEMORIA (el caso Omaira: las mismas fotos 3 veces)
+
+**El bug (cazado por Maired en la primera venta real con el bot ABIERTO, 29-ago 4:39-4:50pm):**
+Omaira Mendez recibió las MISMAS fotos TRES veces en una sola venta. El de-duplicador existía —
+pero vivía SOLO en la RED DE LA FOTO (`_asegurar_foto` filtra con `media_ya_mostrada` ANTES de
+llamar la herramienta). Cuando el MODELO llama `enviar_fotos_producto` directo en el bucle, ese
+camino no pasaba por ningún candado y reenviaba ciego. El hueco existió SIEMPRE (verificado con
+git: nuestras 4 ramas tienen cero líneas de foto); lo destapó Sonnet 4.6, que obedece "ÚSALA
+PROACTIVA" cada turno. El propio docstring declaraba la asunción rota: *"si el cliente la quiere
+otra vez, la PIDE y el modelo se la reenvía por su cuenta. Esta red solo empuja la PRIMERA vez"*
+— con un modelo obediente, ese "por su cuenta" ERA el spam.
+
+**El arreglo (rama `fotos-con-memoria`): la memoria va en la capa que EJECUTA, no en el
+vigilante ni en el modelo** — la meta arquitectónica declarada por Maired el 29-ago (la garantía
+vale sea Sonnet, DeepSeek o GPT). Piezas, todas ADITIVAS:
+
+- **El candado en la herramienta:** antes de enviar (después del relevo), consulta la MISMA
+  fuente que ya usaba la red (`media_ya_mostrada`, tabla `mensajes`) y si el producto ya se
+  mostró devuelve `{enviadas: 0, ya_mostrado: true}` con una nota que dirige el turno (no
+  afirmar envío nuevo, seguir la venta) y le enseña la válvula.
+- **La válvula `reenviar` (el reenvío legítimo NO muere):** parámetro nuevo declarado en el
+  schema (lección R51: lo no declarado se tira). Y no depende del modelo: si el CLIENTE pide ver
+  ("mándame la foto otra vez"), `_ejecutar_con_guardas` lo enciende por CÓDIGO leyendo sus
+  palabras (`_pide_fotos`). Las llamadas de la red no pasan por esa puerta: su empuje sigue
+  frenado por su propio filtro.
+- **La memoria respeta la VERSIÓN:** `media_ya_mostrada` acepta ahora `etiqueta` — el pie ya
+  guardaba "(foto de Empanadas — base de yuca)", así que ver la de yuca NO bloquea la de
+  plátano. Y `si_falla` invierte el fail-safe según quién llama: la red que empuja se calla
+  (True, como siempre); la herramienta en plena venta ENVÍA (False) — un hipo de Postgres no
+  puede dejar al bot sin fotos.
+- **El candado intra-turno:** la fila de `mensajes` se escribe recién al VACIAR la cola (después
+  del texto), así que dos llamadas en el MISMO turno no se ven en BD. Ahora la descripción de
+  cada envío encolado lleva el id del archivo y `cola_media.ya_encolada` frena el duplicado —
+  por archivo exacto, así los 3 ángulos de una llamada pasan y la neutra repetida entre dos
+  llamadas del mismo turno no.
+- **La red del envío fantasma queda ABSUELTA, no desarmada:** flag `fotos_ya_mostradas` (modo
+  uno y hoja/Voz). Si la memoria frenó el re-envío, "ya te las mandé" es verdad histórica — sin
+  el flag, la red ordenaba re-llamar (la herramienta se niega) y a la 2ª vuelta ESCALABA a la
+  dueña una falsa alarma. La mentira de verdad (no envió y no era "ya mostrada") se sigue
+  frenando igual, probado.
+- **El simulador queda EXENTO** (el candado va después de su rama): su teléfono fijo
+  `__simulador__` acumula filas para siempre y la SEGUNDA demo de la dueña parecería rota —
+  exactamente la confusión que ya se arregló una vez.
+- **Interruptor de la garantía** (doctrina: cada garantía con su interruptor): clave
+  `fotos_memoria` en `configuracion`; solo `off` con todas sus letras la apaga; ausente, basura
+  o BD tosiendo ⇒ puesta. Como el centinela `todos`: un UPDATE en la BD, sin desplegar.
+- **De paso, el tope anti-spam es de verdad:** `maximo` se capa a 1..3 en código (el log ya
+  prometía "se envían los 3 primeros", pero un maximo=50 del modelo habría mandado 50).
+- **La hoja (modo dos, dormido):** caso nuevo en `_renderizar` — antes, `enviadas=0` con
+  "ya mostrado" le habría dictado a la Voz el hecho FALSO "NO se pudo enviar ninguna foto".
+
+**25 tests nuevos (`test_fotos_con_memoria.py`), con el molde que la suite NO tenía:** un `llm`
+falso que EMITE `tool_calls` y una `ejecutar` que delega en la herramienta REAL — el camino
+exacto del bug (en toda la suite vieja, el llm falso solo devolvía texto). La mitad son
+NO-disparos: reenviar pedido, etiqueta nueva, interruptor off, fallo de BD, simulador, cliente
+nuevo. 🔴 Ojo de parcheo: la llamada nueva vive en `tools` — parchear `ag.media_ya_mostrada`
+(lo que hacen los tests de la red) NO la alcanza; los tests nuevos parchean en `tl`.
+
+**El banco `probar_media.py` se adaptó ANTES de que mordiera:** su llamada "retro" (2ª del mismo
+run, con las filas de la 1ª ya escritas) habría salido ROJA en el primer deploy tras el merge y
+mandado la falsa alarma por WhatsApp. Ahora esa 2ª llamada VERIFICA el freno (`ya_mostrado`) y
+la 3ª, con `reenviar=True`, verifica que manda lo mismo de siempre. Si el interruptor está en
+`off`, el freno no se exige (aviso `[--]`, no rojo).
+
+**Verificado local:** pytest 688 ✓ (+25 nuevos; solo los 2 cp1252 de Windows preexistentes,
+confirmados con stash contra master limpio) · ruff ✓ · compileall ✓. PR listo para revisión de
+Maired; al fusionar, despliega SOLO al taller y los bancos corren solos.
+
+**Pendiente que este arreglo NO toca (a consciencia):** el match sigue siendo ILIKE por
+substring del nombre sobre el pie — un producto cuyo nombre contiene a otro ("Torta" ⊂ "Torta
+keto") puede dar falso "ya mostrada" (mismo sesgo que la red tenía desde siempre, ahora con más
+alcance). Si aparece en vivo, la señal es la nota "ya le mostraste" sobre un producto que el
+cliente ve por primera vez.
+
 ## 2026-08-29 — 🔓 EL INTERRUPTOR `todos` DE LA LISTA BLANCA (+ merge del arreglo de la red fantasma)
 
 **Maired fusionó el PR #3** (la red del pedido fantasma consulta la BD antes de regañar — ver la
