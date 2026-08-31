@@ -623,6 +623,34 @@ async def _conocimiento_indice() -> str:
     return texto if len(texto) <= 2000 else texto[:2000] + "…"
 
 
+def _items_sin_dinero(items) -> str:
+    """Los renglones de un pedido como texto para el prompt, SIN cifras de dinero.
+
+    ⚠️ El `precio_unitario` se OMITE a propósito: `_estado_cliente_texto` entra a la parte
+    dinámica del prompt que lee la red del dinero (`autorizados_por_moneda`), y un monto en
+    USD inyectado sin herramienta en el turno chocaría con la red del TOTAL — el mismo motivo
+    por el que ese bloque imprime SOLO la cifra en bolívares. La cantidad, la presentación y
+    las opciones (relleno/masa) no son dinero: esas SÍ viajan — son justo lo repreguntable.
+    """
+    partes = []
+    for it in items or []:
+        if not isinstance(it, dict):
+            continue
+        producto = str(it.get("producto") or "").strip()
+        if not producto:
+            continue
+        cantidad = it.get("cantidad")
+        linea = f"{cantidad}× {producto}" if cantidad else producto
+        presentacion = str(it.get("presentacion") or "").strip()
+        if presentacion and presentacion != "única":
+            linea += f" ({presentacion})"
+        opciones = str(it.get("opciones") or "").strip()
+        if opciones:
+            linea += f" — {opciones}"
+        partes.append(linea)
+    return " · ".join(partes)
+
+
 async def _estado_cliente_texto(telefono: str) -> str:
     """Estado REAL de los pedidos del cliente (desde la BD), inyectado cada turno
     para que el modelo NO lo adivine del chat. Mismo principio que el dinero: la
@@ -687,6 +715,39 @@ async def _estado_cliente_texto(telefono: str) -> str:
             )
         else:
             lineas.append("- No tiene un pedido abierto ahora.")
+    # 🔴 LO QUE YA ESTÁ REGISTRADO SE MUESTRA, NO SE REPREGUNTA (31-ago, el mapa del "pero ya
+    # te lo dije"). Hasta hoy este bloque decía el id y el monto pero NO el contenido: con el
+    # historial rodado (cotizar hoy y pagar mañana es lo NORMAL aquí), el bot podía repreguntar
+    # "¿cuántos eran?" o "¿de qué relleno?" con la respuesta firme en la BD. Copia literal de
+    # la fila del pedido — cero adivinanza, y las 4 repreguntas post-registro (cantidad,
+    # relleno/masa, tamaño, entrega/fecha) se quedan sin excusa. SIN dinero: ver _items_sin_dinero.
+    abierto = esperando if esperando is not None else pendiente
+    if abierto is not None:
+        # `getattr` con default a propósito (fail-safe): el armado del prompt JAMÁS revienta
+        # por una fila con forma parcial — sin el dato, simplemente no sale la línea. (Y los
+        # dobles de los tests viejos, que no traen estos campos, siguen midiendo lo suyo.)
+        contenido = _items_sin_dinero(getattr(abierto, "items", None))
+        if contenido:
+            lineas.append(
+                f"- Lo que LLEVA el pedido #{abierto.id}: {contenido}. Eso YA está registrado: "
+                "NO se lo repreguntes (ni la cantidad, ni el relleno/masa, ni el tamaño). Si el "
+                "cliente CAMBIA algo, vale lo nuevo: registra el pedido corregido."
+            )
+        entrega = str(getattr(abierto, "entrega", None) or "").strip()
+        zona = str(getattr(abierto, "zona_nombre", None) or "").strip()
+        fecha = getattr(abierto, "entrega_fecha", None)
+        entrega_partes = []
+        if entrega:
+            entrega_partes.append(entrega)
+        elif zona:
+            entrega_partes.append(f"entrega en {zona}")
+        if fecha is not None:
+            entrega_partes.append(f"para el {fecha.isoformat()}")
+        if entrega_partes:
+            lineas.append(
+                "- Entrega YA ACORDADA: " + " — ".join(entrega_partes) + ". NO la vuelvas a "
+                "preguntar; si el cliente la cambia, vale lo nuevo que diga."
+            )
     lineas.append(
         "Si en ESTE turno registras un pedido nuevo, ese manda (esto es el estado al inicio del turno). NO calcules saldos ni si un pago entró."
     )
