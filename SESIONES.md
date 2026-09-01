@@ -49,13 +49,18 @@ taller primero:
 `/salud` ok, bot cerrado a clientas, límites de recursos EN CALIENTE vivos en ambos. Dos cosas
 quedan abiertas, ninguna urgente:
 
-1. 🔁 **REINICIO de producción pendiente** (kernel/paquetes nuevos instalados esperando reboot).
-   NO se hizo hoy: quedaba muy poco token y el reinicio necesita VERIFICACIÓN completa después
-   (no dejar producción a medias sin poder reaccionar). **Mañana, con sesión llena: Maired dice
-   "dale al reinicio" y Claude lo hace en ~5 min + verifica** (contenedores vuelven solos con
-   `unless-stopped`/`always`, verificado; el bot está cerrado; hay respaldos). ⚠️ El reinicio es
-   un REBOOT, NO un deploy: los contenedores vuelven con su imagen ACTUAL (f4e200c, sana) — el
-   problema de deploy del taller de abajo NO lo afecta.
+1. ✅ **REINICIO de producción HECHO (Maired lo pidió y se hizo en el acto).** La verificación
+   PREVIA reveló el dato que decidió todo: `reboot-required` no estaba marcado, PERO el kernel
+   corriendo era `6.12.94` con el `6.12.107` ya instalado esperando, y **0 paquetes/seguridad
+   pendientes** (ChatGPT ya los había aplicado). O sea: el reinicio SÍ aportaba (activar el
+   kernel parcheado) y era el último paso del punto 1. Reinicio con `shutdown -r now`; **volvió
+   en ~30s**. Verificado post-reboot: kernel **6.12.107 activo**, TODOS los contenedores arriba
+   (bot/worker/panel/postgres/redis/backup/coolify, los de datos healthy), `/salud` **ok**
+   (Meta GREEN, 36 migraciones, saldo $3.22), firewall + fail2ban **activos**, RAM 1.3/3.9GB.
+   **Punto 1 del hardening CERRADO.** ⚠️ Los límites de recursos EN CALIENTE de producción se
+   perdieron con el reboot (docker update no persiste) — al volver, los contenedores nacieron
+   sin límites. Re-aplicar en caliente (o resolver la persistencia por la UI de Coolify) es
+   parte del pendiente de abajo.
 
 2. 🔴 **El deploy del TALLER falla en `rolling_update` (2 veces hoy) — SIN diagnosticar del
    todo.** El 1º fue por mi `custom_docker_run_options` (revertido a NULL). El 2º, tras
