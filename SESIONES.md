@@ -52,12 +52,18 @@ persistencia va por la UI de Coolify (formato guiado/validado) o por los campos 
 `limits_memory`/`limits_cpus` (no por `custom_docker_run_options`). A producción NUNCA se le
 puso el campo roto — se salvó por hacer taller primero.
 
-**ESTADO REAL tras la tanda:** la PROTECCIÓN (límites en caliente) está VIVA en producción y
-taller — es lo que importa y funciona. La PERSISTENCIA quedó PENDIENTE (configurar por la UI de
-Coolify, con Maired/Erwin, o investigando el formato exacto con calma). El en-caliente de
-producción dura hasta el próximo deploy MANUAL (no inminente); el del taller se pierde en su
-próximo deploy por push (no crítico, sin clientas). El token de `~/.ssh/coolify_token.txt` es de
-producción (401 contra el taller).
+**DESENLACE (verificado):** el push siguiente a la reversión salió **VERDE completo** (deploy del
+taller + bancos) — la causa del fallo era el `custom_docker_run_options` con mi formato,
+confirmado por reversión. Tal como estaba previsto, el taller redesplegado **nació sin límites**
+(mem=0): los en-caliente se pierden al recrear el contenedor. Se re-aplican al taller al FINAL
+de la jornada (cada push los borra; re-aplicarlos entre pushes es ruido).
+
+**ESTADO REAL tras la tanda:** 🟢 **PRODUCCIÓN protegida** (límites en caliente vivos: bot 640M ·
+worker 768M · panel 512M · pids 200-300; duran hasta su próximo deploy MANUAL, no inminente).
+🟡 TALLER sin límites entre deploys (aceptable: sin clientas). ⏳ PERSISTENCIA pendiente:
+configurar por la UI de Coolify (formato guiado) o los campos dedicados
+`limits_memory`/`limits_cpus` — validándolo en el taller ANTES de producción, como esta vez.
+El token de `~/.ssh/coolify_token.txt` es de producción (401 contra el taller).
 
 **Pendientes del hardening (los siguientes, en orden de impacto):** punto 1 actualizar el SO
 (45 paquetes, necesita ventana/posible reinicio) · punto 5+7 no-root en los Dockerfiles +
