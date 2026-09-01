@@ -25,6 +25,8 @@ from app.agent.tools import (
     _frase_comparable,
     _palabras_busqueda,
     _productos_nombrados_en,
+    _versiones_distintivas,
+    _versiones_tocadas,
     avisar_relevo_caido,
     catalogo_variantes_para_hilo,
     ejecutar_tool,
@@ -1627,6 +1629,82 @@ async def elecciones_de_variante(
         return []
 
 
+# ══════════════════════════════════════════════════════════════════════════════════════
+#  EL VIGILANTE PREGUNTA-vs-ESTADO (rama D): lo que IMPIDE, no lo que sugiere
+# ══════════════════════════════════════════════════════════════════════════════════════
+#
+# 🔴 LA ÚLTIMA PIEZA DEL PLAN "que no repregunte" (B método · C tamaño/sabor · D el vigilante).
+# Las ramas #6 y C INYECTAN lo ya elegido como ESTADO — pero eso es el prompt, y el prompt
+# SUGIERE. Si el modelo repregunta u OFRECE la alternativa igual (el techo del modelo, medido el
+# 24-ago), esta red lo IMPIDE antes de que el mensaje salga: regaño `[SISTEMA]` + `continue`, el
+# modelo redacta de nuevo. El CÓDIGO NO reescribe el texto (la frontera del 24-ago: las redes de
+# estilo se quitaron; esta no fabrica texto, solo devuelve la decisión al modelo).
+#
+# Precedente exacto: `_correccion_fantasma` — la sentencia la dicta el ESTADO, no una lista de
+# palabras. Y nace con la regla de los guardias del 1-sep (2): mira lo que el CLIENTE acaba de
+# hacer. Si el cliente PREGUNTÓ por ese dato o lo CAMBIÓ en su último mensaje, responder no es
+# reabrir — no dispara.
+
+# Preguntar el TAMAÑO de frente ("¿de qué tamaño?", "¿cuál tamaño quieres?"). El tamaño no tiene
+# un detector de petición como el sabor (`_dato_opcional_pedido`), así que va este, chico y
+# estable — solo la PREGUNTA por el tamaño, no una frase que lo mencione de pasada.
+_PREGUNTA_TAMANO = re.compile(
+    r"(¿?\s*(de|en|por)?\s*(qu[ée]|cu[áa]l|cu[áa]nt[oa]s?)\s+(tama[nñ]o|presentaci[óo]n|"
+    r"porci[óo]n|de\s+cu[áa]nto))"
+    r"|\b(tama[nñ]o|presentaci[óo]n)\b[^.?!]*\?",
+    re.I,
+)
+
+
+def _reabre_eleccion_ya_hecha(
+    texto: str,
+    elecciones_hilo: list[tuple[str, str]],
+    elecciones_var: list[tuple[str, str, str]],
+    mensaje_cliente: str,
+) -> str | None:
+    """El nombre del dato que el BORRADOR reabre pese a estar YA elegido, o None.
+
+    Reabrir = PREGUNTAR ese dato otra vez, u OFRECER la alternativa a lo elegido. Mencionar solo
+    lo elegido es CONFIRMACIÓN, no reapertura — no cuenta. Y por la regla de los guardias, si el
+    cliente acaba de tocar ese dato (lo pidió o lo cambió), el bot está RESPONDIENDO: tampoco.
+    """
+    # ── SABOR / RELLENO ──────────────────────────────────────────────────────────────
+    # Vigente si hay una elección de sabor Y el cliente no acaba de pedir/cambiar el sabor.
+    if any(dim == "sabor" for _, dim, _ in elecciones_var) and not _cliente_pidio_ese_dato(
+        mensaje_cliente
+    ):
+        # `_dato_opcional_pedido` ya distingue PREGUNTAR el sabor/relleno de describirlo.
+        pedido = _dato_opcional_pedido(texto)
+        if pedido in ("el sabor", "el relleno", "el topping", "la mezcla"):
+            return pedido
+
+    # ── VERSIÓN (masa de yuca / plátano, etc.) ───────────────────────────────────────
+    for prod, version in elecciones_hilo:
+        distintivos = _versiones_distintivas(prod)
+        if not distintivos:
+            continue
+        # El cliente cambió/tocó la versión en su mensaje ⇒ el bot responde, no reabre.
+        if _versiones_tocadas(distintivos, mensaje_cliente):
+            continue
+        tocadas = _versiones_tocadas(distintivos, texto)
+        elegida = set(version.split())
+        otras = [t for t in tocadas if not (t & elegida)]
+        # Ofrece la OTRA versión, o las nombra las dos ("puedes elegir yuca o plátano"):
+        # reapertura. Nombrar SOLO la elegida (tocadas == [elegida]) es confirmación.
+        if otras or len(tocadas) >= 2:
+            return "la versión (masa) ya elegida"
+
+    # ── TAMAÑO ───────────────────────────────────────────────────────────────────────
+    # Solo la PREGUNTA genérica de tamaño (ofrecer un tamaño concreto equivocado ya lo frena la
+    # RED DEL TAMAÑO ADIVINADO al registrar). Absuelto si el cliente tocó el tamaño.
+    tamano_elegido = next((v for _, dim, v in elecciones_var if dim == "tamaño"), None)
+    if tamano_elegido and not _menciona_tamano(mensaje_cliente, tamano_elegido):
+        if _PREGUNTA_TAMANO.search(texto or ""):
+            return "el tamaño ya elegido"
+
+    return None
+
+
 async def _ejecutar_con_guardas(
     ejecutar, nombre_tool: str, args: dict, telefono: str,
     mensaje_usuario: str, historial: list | None,
@@ -2438,6 +2516,7 @@ async def responder(
     fotos_ya_mostradas = False
     reclamo_fotos = False  # ya se le llamó la atención por afirmar un envío de fotos falso
     reclamo_opcion = False  # ya se le llamó la atención por trabarse pidiendo el sabor
+    reclamo_reapertura = False  # ya se le corrigió una vez por reabrir algo YA elegido (rama D)
     # 🔴 EL GUARD DEL COMPROBANTE, TRAÍDO AL MODO QUE CORRE HOY (auditoría 2026-08-02, PRM-3).
     # La regla 79 del prompt ORDENA: "al registrar el comprobante… dile que RECIBISTE su pago".
     # El bot obedecía, y `_PROHIBIDO_EN_CHARLA` ("afirmó que el pago ya llegó") lo frenaba con un
@@ -2771,6 +2850,48 @@ async def responder(
                 logger.error(
                     "BUCLE DEL CIERRE con %s: insistió con %s tras el aviso. El mensaje sale, "
                     "pero la venta está trabada en el cierre.", telefono, dato_opcional,
+                )
+
+            # 🔴 EL VIGILANTE PREGUNTA-vs-ESTADO (rama D): si el borrador REABRE algo que el
+            # cliente YA eligió (le repregunta el sabor, le ofrece la otra masa, le pregunta el
+            # tamaño), se le corrige UNA vez y redacta de nuevo. Es lo que IMPIDE cuando el hilo
+            # inyectado (ramas #6 y C) no bastó — el prompt sugiere, esto impide. NO mata el
+            # texto: a la segunda sale igual (como la red del cierre), porque insistir no es
+            # mentir. Va DESPUÉS de la red del cierre (su prima: aquella cuida lo NO elegido,
+            # esta lo YA elegido) y usa `pregunta_cliente` para heredar la regla de los guardias.
+            reabierto = _reabre_eleccion_ya_hecha(
+                texto, elecciones_hilo, elecciones_var, pregunta_cliente
+            )
+            if reabierto and not reclamo_reapertura:
+                reclamo_reapertura = True
+                logger.error(
+                    "REAPERTURA de %s: el borrador reabre '%s' que el cliente YA eligió — "
+                    "texto=%r", telefono, reabierto, texto[:140],
+                )
+                _ya = "; ".join(
+                    [f"{p} → {e}" for p, e in elecciones_hilo]
+                    + [f"{p} → {dim} {v}" for p, dim, v in elecciones_var]
+                )
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        f"[SISTEMA] Estás VOLVIENDO A PREGUNTAR u ofreciendo {reabierto}, y el "
+                        f"cliente YA lo eligió. Lo que ya decidió (es un HECHO del sistema): "
+                        f"{_ya}. NO se lo repreguntes ni le ofrezcas la otra opción — se siente "
+                        "como que no le prestas atención. Reescribe tu mensaje dando por HECHA "
+                        "esa elección (confírmala con naturalidad si hace falta) y avanza SOLO "
+                        "con lo que de verdad falte (cantidad, entrega, cobro). Si el cliente "
+                        "la cambió en su último mensaje, vale lo nuevo. No le menciones al "
+                        "cliente este aviso."
+                    ),
+                })
+                continue
+            # Insistió tras el aviso: el texto SALE igual (no es una mentira; callarlo dejaría al
+            # cliente peor). Queda medido, como en la red del cierre.
+            if reabierto and reclamo_reapertura:
+                logger.error(
+                    "REAPERTURA con %s: insistió en reabrir '%s' tras el aviso. El mensaje sale.",
+                    telefono, reabierto,
                 )
 
             # 🔴 RED DEL ENVÍO FANTASMA DE FOTOS: "ya te la envié" sin haberla enviado NO SALE.

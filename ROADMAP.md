@@ -36,6 +36,11 @@ estado y (rama D) su vigilante.
 
 **El test que decide todo:** *¿ese dato tiene casilla?* Si no la tiene, es repreguntable.
 
+> 🎯 **ESTADO AL 1-SEP: EL PLAN A→D ESTÁ COMPLETO** (construido; falta fusionar los últimos PRs
+> y la prueba en vivo de Maired). B método de pago (#10 fusionado + #11) · C hilo a tamaño/sabor
+> (#13) · D el vigilante (#14) · más la rama de GUARDIAS (#12) que destapó la prueba de Maired
+> ("los guardias miran al cliente"). El detalle de cada una, abajo y en SESIONES 1-sep (1)-(4).
+
 **HECHO y fusionado el 31-ago** (PRs #5→#8, todos desplegados al taller):
 - **#5 fotos con memoria** · **#6 EL HILO DE LA VENTA** (`hilo_de_la_venta` en tools.py: destila
   del historial la VERSIÓN elegida —masa yuca/plátano— y `responder()` la inyecta como HECHO en
@@ -100,18 +105,21 @@ la BD, no en el nombre). Detalle en SESIONES 1-sep (3). Resumen:
 - ✅ **Atribución por producto reusada** — el bug del Kéfir de cabra vs "queso de cabra" tiene
   test y reversión-roja.
 
-### 🟡 RAMA D — EL VIGILANTE PREGUNTA-vs-ESTADO *(la única pieza que IMPIDE)*
+### ✅ RAMA D — EL VIGILANTE PREGUNTA-vs-ESTADO *(CONSTRUIDA el 1-sep: **PR #14**; falta fusionar + prueba en vivo)*
 
-Antes de que el mensaje salga, comparar lo que el borrador PREGUNTA contra `elecciones_hilo` /
-el estado del pedido. Si va a repreguntar algo ya elegido: **regaño `[SISTEMA]` + `continue`** —
-el modelo redacta de nuevo; el código NO reescribe (la frontera del 24-ago sigue vigente).
-Precedente exacto: `_correccion_fantasma` ("la sentencia la dicta el estado").
-- **Dispara solo** si el borrador PREGUNTA u OFRECE la alternativa (mencionar la elegida es
-  confirmación legítima, no dispara). UNA pasada y dejar salir si insiste (patrón red del cierre).
-- **NO matar:** el resumen final tras el pago aprobado, la 1ª pregunta de un dato faltante, la 2ª
-  insistencia legítima de algo no contestado.
-- 🕳️ **Hueco conocido:** el hilo se calcula DESPUÉS del early-return del modo 'dos' — si algún día
-  se enciende `agente_modo='dos'`, ni el #6 ni el vigilante aplican ahí. Bandera hoy en 'uno'.
+La pieza que IMPIDE: antes de que el mensaje salga, `_reabre_eleccion_ya_hecha` compara el
+borrador contra las elecciones vigentes y, si reabre algo ya elegido (repregunta sabor, ofrece
+la otra masa, pregunta el tamaño), **regaño `[SISTEMA]` + `continue`** — una pasada, el texto
+sale si insiste. Detalle en SESIONES 1-sep (4). Cumple el diseño:
+- ✅ Dispara solo si PREGUNTA u OFRECE la alternativa; mencionar la elegida es confirmación.
+- ✅ Precedente `_correccion_fantasma`; el código NO reescribe (frontera del 24-ago intacta).
+- ✅ Nace con la regla de los guardias: `pregunta_cliente` absuelve si el cliente pidió/cambió.
+- 🕳️ **Hueco conocido, sin cambio:** en `agente_modo='dos'` ni el #6 ni el vigilante aplican
+  (se calculan en el camino del modo 'uno', el activo hoy).
+
+**PLAN A→D COMPLETO** (B #10/#11 · C #13 · D #14 · + la rama de guardias #12). Falta fusionar
+#14 y la prueba en vivo: elegir masa/sabor/tamaño → seguir la venta → el bot NO debe
+repreguntarlo ni ofrecer la otra opción.
 
 ### ⚪ Lo que NO se puede prometer (dicho a Maired, 31-ago)
 
