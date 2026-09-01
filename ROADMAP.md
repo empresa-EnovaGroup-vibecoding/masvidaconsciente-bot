@@ -50,11 +50,12 @@ estado y (rama D) su vigilante.
 > check el estricto, no el código (en la tabla real el tipo dice `'Zelle'` con mayúscula; el
 > flujo entero de dos pasos PASÓ en el VPS). El **PR #11** (`metodo-de-pago-afinado`) lo arregla
 > de raíz (`_tipo_canonico`, y el mapa de monedas entiende los tipos REALES del panel, incluida
-> `'Transferencia'`) y añade lo que pidió Maired en la revisión: **"voy a pagar en bolívares"
-> ES la elección** — se entregan JUNTOS los datos de pago móvil y transferencia (son la misma
-> plata; guion de ella, 1-sep) — y **"en dólares" pregunta afinando** ("¿efectivo, Zelle o
-> Binance?": tres vías realmente distintas). Detalle: SESIONES 2026-09-01 (1). **Fusionar el
-> #11 debe devolver el flujo a VERDE.**
+> `'Transferencia'` = bolívares) y añade la decisión de Maired (1-sep, preguntada con opciones):
+> **decir la MONEDA no elige la vía** — "en bolívares" hace preguntar "¿pago móvil o
+> transferencia?" y se mandan SOLO los datos de la elegida (*"si te dice pago móvil, no tiene
+> que mandarle al Banesco"*); "en dólares" igual entre efectivo/Zelle/Binance; con UNA sola vía
+> de esa moneda, calza directo. Detalle: SESIONES 2026-09-01 (1). **Fusionar el #11 debe
+> devolver el flujo a VERDE.**
 
 🔴 **El peor hueco que quedaba, CONFIRMADO EN VIVO por Maired:** *"vuelve a preguntar los métodos
 de pago cuando ya mandó los datos"*. La causa era estructural, no del modelo: la elección no se
@@ -74,8 +75,8 @@ las DOS monedas con la nota ordenando copiarlo EXACTO — reapertura *mandada po
 **Lo que falta para cerrarla:** Maired fusiona el **PR #11** (el remate) → el taller se
 despliega solo y el flujo debe volver a VERDE → **su prueba en vivo**: cotizar → "te pago por
 Zelle" → pedir los datos DOS veces (no debe re-ofrecer ni re-pitchear Bs) → "mejor Pago Móvil"
-(cambio limpio) → y de paso "voy a pagar en bolívares" (debe dar JUNTOS los datos del Pago
-Móvil y la transferencia Banesco, sin repreguntar cuál) → verificar `pedidos.metodo_elegido`
+(cambio limpio) → y de paso "voy a pagar en bolívares" (debe preguntar "¿pago móvil o
+transferencia?" y mandar SOLO los datos de la que elija) → verificar `pedidos.metodo_elegido`
 en la BD.
 
 ### 🟡 RAMA C — EL HILO, EXTENDIDO A TAMAÑOS Y SABORES *(bloqueada por una tarea de panel)*
@@ -390,6 +391,7 @@ Decisión de Maired (2026-07-12): **NO al parche de renombrar la Kombucha.** Se 
 
 ### 3) 🎛️ Control del Bot
 - 🟡 **Horario de atención** — el bot ya lo INFORMA (vía Conocimiento); falta que avise/bloquee solo fuera de horario. *(bajo)*
+- ⚪ **Freno a conversaciones que no son del negocio** — lo pidió Maired (1-sep): "si alguna persona habla algo que no tiene nada que ver con el negocio, construir algo aparte para evitar eso". Hoy existen el tope de gasto y el anti-abuso; esto sería la pieza de TEMA. Diseñar con ella qué corta y qué no antes de construir. *(medio)*
 
 ### 4) 📈 Crecimiento y Analítica
 - 🟢 **Motor de plantillas HSM** (fuera de 24h) — el ladrillo obligatorio para avisar fuera de la ventana de WhatsApp. *(medio)*

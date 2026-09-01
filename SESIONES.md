@@ -29,21 +29,26 @@
 **Maired fusionó el PR #10 apenas lo revisó** — y su revisión trajo DOS mejoras reales que van
 en el PR #11 (rama `metodo-de-pago-afinado`):
 
-**1. "En bolívares" ES la elección — de GRUPO (lo dijo ella con sus palabras y su pantallazo):**
-*"cuando la persona aquí en Venezuela dice 'voy a pagar en bolívares', quiere decir pago móvil
-o transferencia — SON LO MISMO: cuentas venezolanas, la moneda oficial"*. Y su tabla real tiene
-DOS métodos en Bs (Pago Móvil + la cuenta Banesco). Entonces:
-- **"bolívares"/"bs" ⇒ elección de GRUPO** (`_pide_bolivares` + `_grupo_bolivares`): la tool
-  entrega los datos de TODOS los métodos en Bs JUNTOS —como haría una vendedora de verdad— y
-  guarda la casilla como `'Bolívares'` con el PSEUDO-TIPO `'bolivares'` (con una sola vía en
-  Bs, guarda esa vía directa). Nada que repreguntar.
-- **"dólares"/"divisas" ⇒ pregunta AFINANDO** ("¿efectivo, Zelle o Binance?") — a ella le
-  gustó así, y con razón: las tres vías del dólar SÍ son mundos distintos (efectivo en mano,
-  correo de Zelle, wallet de Binance). `dolares fisicos` → efectivo directo (el sinónimo
-  EXACTO gana antes que la contención). `usdt` → Binance.
+**1. Las palabras de MONEDA afinan la pregunta — decisión de Maired, PREGUNTADA con las
+opciones delante (1-sep).** El camino tuvo dos vueltas y vale la pena dejarlas escritas:
+primero se implementó "bolívares → candidatos"; su pantallazo (DOS métodos en Bs: Pago Móvil +
+cuenta Banesco tipo `'Transferencia'`) se leyó como "dáselos JUNTOS" y se cambió a entrega de
+grupo; **ella corrigió y pidió que se le preguntara** — se le pusieron las 3 conductas con
+diálogos de ejemplo y eligió: **preguntar cuál de las vías y mandar SOLO la elegida** (*"si te
+dice pago móvil, no tiene que mandarle al Banesco"*). Lo que quedó:
+- **"bolívares"/"bs"** son sinónimos de TODOS los tipos en Bs ⇒ con varias vías salen como
+  CANDIDATOS y el bot pregunta "¿pago móvil o transferencia?" (solo esas); con UNA sola vía,
+  calza directo. La casilla siempre guarda UNA vía concreta.
+- **"dólares"/"divisas"** igual, entre las tres vías del dólar ("¿efectivo, Zelle o
+  Binance?"). `dolares fisicos` → efectivo directo (el sinónimo EXACTO gana antes que la
+  contención). `usdt` → Binance.
 Su pregunta de si necesita "un diccionario aparte": NO — vive en el código
-(`_ELECCION_BOLIVARES` + `_SINONIMOS_TIPO_METODO`); si las clientas usan más palabras
-("chapas"?), se añaden ahí en minutos.
+(`_SINONIMOS_TIPO_METODO`); si las clientas usan más palabras, se añaden ahí en minutos.
+🪦 **Lección de método (me la ganó ella):** entendí su corrección de negocio como un cambio de
+conducta y lo construí SIN confirmarle — hubo que revertirlo. Con una instrucción de producto
+ambigua, primero la pregunta con opciones, después el código.
+📌 **Idea suya anotada para DESPUÉS (no construir ahora):** algo aparte que frene las
+conversaciones que no tienen nada que ver con el negocio (quedó en el ROADMAP, Control del Bot).
 
 **2. 🔴 El banco del VPS salió ROJO tras fusionar el #10 — y el rojo enseñó algo que valía la
 pena.** ÚNICO check caído: `metodo_elegido_tipo == "zelle"`… porque **en la tabla real del

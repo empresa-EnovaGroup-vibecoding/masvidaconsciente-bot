@@ -39,7 +39,7 @@ from app.agent.agent import (
     _datos_sensibles,
     _datos_sensibles_inventados,
 )
-from app.agent.tools import _grupo_bolivares, _tipo_canonico, generar_datos_pago
+from app.agent.tools import _MONEDA_POR_TIPO, _tipo_canonico, generar_datos_pago
 from app.models import Cliente, MetodoPago, Pedido, ZonaEntrega, hoy_venezuela
 from app.services.db import get_session_factory
 
@@ -222,7 +222,9 @@ async def main() -> None:
           f"métodos: {[(m.tipo, m.titulo) for m in activos]}")
     # Los métodos en BOLÍVARES de la tabla real (pago móvil, transferencia) — los usa el
     # escenario "en bolívares" de abajo. Se calculan AQUÍ, de la misma consulta.
-    metodos_activos_bs = _grupo_bolivares(activos)
+    metodos_activos_bs = [
+        m for m in activos if _MONEDA_POR_TIPO.get(_tipo_canonico(m.tipo)) == "bs"
+    ]
 
     await _limpiar()
     try:
@@ -306,30 +308,33 @@ async def main() -> None:
         check("   ...las llaves viejas siguen (compatibilidad)",
               bool(r5.get("telefono_pago") and r5.get("cedula")), str(r5)[:250])
 
-        # "VOY A PAGAR EN BOLÍVARES" = elección de GRUPO (Maired, 1-sep): pago móvil y
-        # transferencia son la misma plata — se dan JUNTOS, sin repreguntar cuál vía, y sin
-        # una sola cuenta en dólares en el resultado.
+        # "VOY A PAGAR EN BOLÍVARES" (decisión de Maired, 1-sep): la moneda NO elige la vía.
+        # Con varias vías en Bs, el bot pregunta AFINANDO solo entre ESAS (pago móvil o
+        # transferencia) — quien dice pago móvil no recibe la cuenta del banco; con una sola,
+        # calza directo. Ni un dato ni un método en dólares en la respuesta.
         async with f() as s:
             r6 = await generar_datos_pago(s, TEL, metodo="en bolívares")
-        m6 = r6.get("metodos_de_pago") or []
         en_bs = metodos_activos_bs
-        check("🔴 'en bolívares' entrega TODOS los métodos en Bs JUNTOS (sin repreguntar)",
-              r6.get("ok") and len(m6) == len(en_bs) >= 1, f"{len(m6)} vs {len(en_bs)} · {str(m6)[:200]}")
-        check("   ...y NINGUNO es de dólares (ni Zelle ni Binance ni efectivo)",
-              not any("zelle" in str(m.get("metodo", "")).lower()
-                      or "binance" in str(m.get("metodo", "")).lower() for m in m6), str(m6)[:200])
-        check("   ...el resumen es SOLO bolívares (sin $ ni descuento)",
-              "$" not in (r6.get("resumen_cobro") or "") and r6.get("monto_usd_divisas") is None,
-              str(r6.get("resumen_cobro")))
-        async with f() as s:
-            ped = (await s.execute(
-                select(Pedido).where(Pedido.cliente_telefono == TEL)
-            )).scalars().first()
-            esperado = ("bolivares" if len(en_bs) > 1
-                        else _tipo_canonico(en_bs[0].tipo))
-            check("   ...y la casilla guarda la elección (la moneda, si hay varias vías)",
-                  _tipo_canonico(ped.metodo_elegido_tipo) == esperado,
-                  f"metodo_elegido={ped.metodo_elegido!r} tipo={ped.metodo_elegido_tipo!r}")
+        if len(en_bs) > 1:
+            nombres6 = r6.get("metodos_disponibles") or []
+            check("🔴 'en bolívares' con varias vías ⇒ pregunta AFINANDO entre ESAS (no da datos)",
+                  r6.get("ok") is False and not r6.get("metodos_de_pago")
+                  and set(nombres6) == {m.titulo for m in en_bs},
+                  f"candidatos={nombres6} vs en_bs={[m.titulo for m in en_bs]}")
+            check("   ...sin nombrar las vías en dólares como opción",
+                  not any("zelle" in str(n).lower() or "binance" in str(n).lower()
+                          for n in nombres6), str(nombres6))
+            async with f() as s:
+                ped = (await s.execute(
+                    select(Pedido).where(Pedido.cliente_telefono == TEL)
+                )).scalars().first()
+                check("   ...y la casilla NO se pisó (sigue la elección anterior)",
+                      _tipo_canonico(ped.metodo_elegido_tipo) == "pago movil",
+                      f"tipo={ped.metodo_elegido_tipo!r}")
+        else:
+            m6 = r6.get("metodos_de_pago") or []
+            check("🔴 'en bolívares' con UNA sola vía ⇒ calza directo con esa",
+                  r6.get("ok") and len(m6) == 1, str(r6)[:200])
     finally:
         await _limpiar()
 
