@@ -50,11 +50,19 @@ y salud, memoria que no se olvida a las 24h, y 8 migraciones nuevas (hasta la 03
 correo familiapenazabala@gmail.com). Copiada con los datos EXACTOS del taller (leídos primero,
 sin inventar nada), verificada con el banco específico y con el paquete completo: **27/27**.
 
+✅ **CORREGIDO el 1-sep: el riesgo de Meta/OpenRouter/R2 era menor de lo que se dijo primero.**
+Verificado con `docker inspect` (variables REALES, no de memoria) + el código del dashboard: el
+panel SOLO tiene `NEXT_PUBLIC_API_URL` (pública por diseño) — CERO secretos. Esas llaves viven
+únicamente en el contenedor del BOT, que nunca se comprometió (solo el panel viejo). Rotarlas
+sigue siendo buena higiene (la deuda D5, "antes de abrir con clientes reales") pero **NO es una
+urgencia nueva que dejó el minero** — se hace en su momento, sin apuro por el incidente.
+
 🔴 **LO QUE QUEDA DEL INCIDENTE (además de los 12 pendientes del relevo de ChatGPT):**
-1. **ROTAR las llaves que el relevo NO lista (la deuda D5):** `META_ACCESS_TOKEN`/`APP_SECRET`
-   (**prioridad #1**: la cuenta Tech Provider), `OPENROUTER_API_KEY`, llaves R2. El relevo solo
-   cubre token Coolify, JWT, contraseña del panel y Postgres/Redis (su punto 12).
-2. **Pruebas de humo con el número real** (checklist de la meta, punto 5).
+1. **Rotar la contraseña del panel + el JWT** (punto 4 del relevo de ChatGPT) — cierra cualquier
+   sesión que hubiera quedado abierta durante el incidente. 5 minutos, pero necesita a Maired
+   presente (la desloguea a ella también).
+2. **Pruebas de humo con el número real** (checklist de la meta, punto 5) — el siguiente paso
+   que de verdad avanza el proyecto; la seguridad ya está estable.
 
 ### 🔬 2026-08-24 (2) — LA PRUEBA EN VIVO DE MAIRED: 3 bugs de código y EL TECHO DEL MODELO
 
