@@ -2649,23 +2649,27 @@ _MONEDA_POR_TIPO = {
     "efectivo": "usd",
 }
 
-# Sinónimos FIJOS y unívocos por TIPO de método, para matchear lo que el modelo escribe
-# ("transferencia") contra la fila real (tipo 'banco'). Son mapeos 1:1 al vocabulario cerrado
-# del panel, NO un NLU: "dólares" o "divisas" NO están a propósito — calzan con tres métodos
-# distintos, y ambiguo real se pregunta, jamás se adivina.
+# Sinónimos FIJOS por TIPO de método, para matchear lo que el modelo escribe ("transferencia",
+# "en bolívares") contra la fila real. Son mapeos al vocabulario cerrado del panel, NO un NLU.
+# Las palabras de MONEDA ("bolívares", "dólares", "divisas") están EN VARIOS tipos a propósito
+# (lo pidió Maired el 31-ago: "voy a pagar en bolívares" también es información): si el negocio
+# tiene UN solo método de esa moneda, calza directo; si tiene varios, salen como CANDIDATOS y
+# el bot pregunta AFINANDO ("¿efectivo, Zelle o Binance?") — se pregunta, jamás se adivina.
 _SINONIMOS_TIPO_METODO = {
-    "pago_movil": ("pago movil", "pagomovil"),
-    "banco": ("transferencia", "cuenta bancaria"),
-    "binance": ("usdt",),
-    "efectivo": ("cash",),
+    "pago_movil": ("pago movil", "pagomovil", "bolivares", "bs"),
+    "banco": ("transferencia", "cuenta bancaria", "bolivares", "bs"),
+    "zelle": ("dolares", "divisas"),
+    "binance": ("usdt", "dolares", "divisas"),
+    "efectivo": ("cash", "dolares fisicos", "dolares en efectivo", "dolares", "divisas"),
 }
 
 
 def _matchear_metodo(texto, metodos):
     """El `metodo` que mandó el modelo, contra los métodos ACTIVOS de la tabla `metodos_pago`
     (vocabulario CERRADO: se ELIGE una fila de la BD, jamás se escribe un dato). Mismo espíritu
-    que `_buscar_producto`: exacto primero; luego contención; ambiguo real ⇒ se devuelven los
-    candidatos para PREGUNTAR; sin calce ⇒ (None, []) y quien llama enseña la lista completa.
+    que `_buscar_producto`: título exacto → sinónimo exacto → contención; ambiguo real ⇒ se
+    devuelven los candidatos para PREGUNTAR afinando; sin calce ⇒ (None, []) y quien llama
+    enseña la lista completa.
 
     Devuelve (metodo, candidatos): con match único, (fila, []); si no, (None, [títulos])."""
     t = " ".join(_sin_acentos(texto or "").split())
@@ -2676,13 +2680,21 @@ def _matchear_metodo(texto, metodos):
         return exactos[0], []
     if exactos:
         return None, [m.titulo for m in exactos]
+
+    def _alias(m):
+        return [_sin_acentos(a) for a in _SINONIMOS_TIPO_METODO.get((m.tipo or "").strip().lower(), ())]
+
+    # Sinónimo EXACTO antes que contención: así "dólares físicos" gana en efectivo (su alias
+    # completo) en vez de desparramarse a Zelle/Binance porque contiene la palabra "dolares".
+    por_alias = [m for m in metodos if t in _alias(m)]
+    if len(por_alias) == 1:
+        return por_alias[0], []
+    if por_alias:
+        return None, [m.titulo for m in por_alias]
+
     candidatos = []
     for m in metodos:
-        tipo = (m.tipo or "").strip().lower()
-        textos = [
-            _sin_acentos(f"{m.tipo or ''} {m.titulo or ''}"),
-            *[_sin_acentos(a) for a in _SINONIMOS_TIPO_METODO.get(tipo, ())],
-        ]
+        textos = [_sin_acentos(f"{m.tipo or ''} {m.titulo or ''}"), *_alias(m)]
         if any(t in x or x in t for x in textos if x.strip()):
             candidatos.append(m)
     if len(candidatos) == 1:
@@ -2796,23 +2808,29 @@ async def generar_datos_pago(session, telefono, pedido_id=None, metodo=None):
         if metodo:
             elegido, candidatos = _matchear_metodo(metodo, metodos)
             if elegido is None:
-                # Vocabulario CERRADO: lo que no calza no se adivina. Se devuelven los nombres
-                # reales (los candidatos si el calce fue ambiguo; todos si no calzó ninguno)
-                # y el modelo corrige o le pregunta al cliente. La BD no se tocó.
+                # Vocabulario CERRADO: lo que no calza no se adivina. Con calce AMBIGUO (dijo
+                # "en bolívares" y hay Pago Móvil Y transferencia) se devuelven SOLO los
+                # candidatos, para que el bot pregunte AFINANDO en vez de recitar la lista
+                # entera; sin calce ninguno, la lista real completa. La BD no se tocó.
                 nombres = candidatos or [m.titulo for m in metodos]
-                return {
-                    "ok": False,
-                    "metodos_disponibles": nombres,
-                    "nota": (
-                        f"'{metodo}' no calza con un método de pago del negocio"
-                        + (" (calza con varios)" if candidatos else "")
-                        + ". Los métodos REALES son EXACTAMENTE estos: "
+                if candidatos:
+                    nota = (
+                        f"'{metodo}' calza con VARIOS métodos del negocio: "
+                        + " · ".join(nombres)
+                        + ". Pregúntale al cliente CUÁL de ESOS prefiere (solo esos, no la "
+                        "lista entera) y vuelve a llamarme con ese nombre TAL CUAL en "
+                        "`metodo`."
+                    )
+                else:
+                    nota = (
+                        f"'{metodo}' no calza con ningún método de pago del negocio. Los "
+                        "métodos REALES son EXACTAMENTE estos: "
                         + " · ".join(nombres)
                         + ". Si el cliente ya eligió uno de esos, vuelve a llamarme con ese "
                         "nombre TAL CUAL en `metodo`; si no, pregúntale cuál prefiere "
                         "nombrándoselos — sin inventar métodos que no están en la lista."
-                    ),
-                }
+                    )
+                return {"ok": False, "metodos_disponibles": nombres, "nota": nota}
         elif getattr(pedido, "metodo_elegido", None):
             # EL ESTADO LE GANA AL DATO FRESCO: si el cliente YA eligió (quedó en la casilla)
             # y el modelo re-llama sin `metodo` (el "dame los datos otra vez" típico), la

@@ -91,11 +91,42 @@ def test_lo_que_no_calza_no_se_inventa():
     assert candidatos == []
 
 
-def test_dolares_NO_es_sinonimo_de_nada():
-    """'dólares' calza con Zelle, Binance Y Efectivo a la vez: si el matcher lo resolviera
-    solo, estaría adivinando la vía. Tiene que salir ambiguo (o vacío), nunca un match único."""
-    m, _ = _matchear_metodo("dolares", _METODOS)
+def test_dolares_pregunta_afinando_entre_las_tres_vias():
+    """(Lo pidió Maired, 31-ago: 'voy a pagar en dólares' también es información.) 'dólares'
+    calza con Zelle, Binance Y Efectivo a la vez: si el matcher lo resolviera solo estaría
+    adivinando la vía, así que salen los TRES como candidatos — el bot pregunta '¿efectivo,
+    Zelle o Binance?' en vez de recitar la lista entera. Jamás un match único."""
+    m, candidatos = _matchear_metodo("dolares", _METODOS)
     assert m is None
+    assert set(candidatos) == {"Zelle", "Binance", "Efectivo"}
+    m, candidatos = _matchear_metodo("divisas", _METODOS)
+    assert m is None
+    assert set(candidatos) == {"Zelle", "Binance", "Efectivo"}
+
+
+def test_bolivares_pregunta_afinando_entre_los_metodos_en_bs():
+    """'voy a pagar en bolívares' con Pago Móvil Y transferencia activas: candidatos SOLO los
+    de esa moneda, para afinar la pregunta."""
+    metodos = [*_METODOS, _metodo(5, "banco", "Transferencia Banesco")]
+    m, candidatos = _matchear_metodo("bolivares", metodos)
+    assert m is None
+    assert set(candidatos) == {"Pago Móvil", "Transferencia Banesco"}
+
+
+def test_bolivares_con_un_solo_metodo_en_bs_calza_directo():
+    """Si el negocio solo cobra Bs por Pago Móvil, 'en bolívares' YA es la elección: se guarda
+    sin repreguntar (no hay nada que afinar)."""
+    m, candidatos = _matchear_metodo("bolivares", _METODOS)
+    assert m is _METODOS[0]
+    assert candidatos == []
+
+
+def test_dolares_fisicos_es_el_efectivo():
+    """El sinónimo COMPLETO ('dólares físicos', como lo dice Maired) gana en Efectivo y no se
+    desparrama a Zelle/Binance por contener la palabra 'dólares'."""
+    m, candidatos = _matchear_metodo("dolares fisicos", _METODOS)
+    assert m is _METODOS[3]
+    assert candidatos == []
 
 
 # ══════════════════════════════════════════════════════════════════════════════════
