@@ -31,7 +31,9 @@ from app.agent.hoja import _renderizar
 from app.agent.tools import (
     _MONEDA_POR_TIPO,
     _PARAMS_DECLARADOS,
+    _grupo_bolivares,
     _matchear_metodo,
+    _pide_bolivares,
     _tipo_canonico,
 )
 
@@ -105,20 +107,31 @@ def test_dolares_pregunta_afinando_entre_las_tres_vias():
     assert set(candidatos) == {"Zelle", "Binance", "Efectivo"}
 
 
-def test_bolivares_pregunta_afinando_entre_los_metodos_en_bs():
-    """'voy a pagar en bolívares' con Pago Móvil Y transferencia activas: candidatos SOLO los
-    de esa moneda, para afinar la pregunta."""
-    metodos = [*_METODOS, _metodo(5, "banco", "Transferencia Banesco")]
-    m, candidatos = _matchear_metodo("bolivares", metodos)
-    assert m is None
-    assert set(candidatos) == {"Pago Móvil", "Transferencia Banesco"}
+def test_bolivares_es_eleccion_de_GRUPO_no_pregunta():
+    """(Maired, 1-sep, con su panel delante:) 'pago móvil o transferencia SON LO MISMO — van a
+    pagar en bolívares'. Decir la moneda YA es la elección: el grupo completo de Bs se entrega
+    JUNTO, sin repreguntar cuál vía. `_pide_bolivares` reconoce la frase y `_grupo_bolivares`
+    arma el grupo — con los tipos TAL CUAL los escribe el panel real."""
+    for frase in ("bolivares", "Bolívares", "en bolívares", "bs", "BOLIVAR"):
+        assert _pide_bolivares(frase), frase
+    for frase in ("zelle", "dolares", "divisas", "efectivo", ""):
+        assert not _pide_bolivares(frase), frase
+
+    metodos = [
+        _metodo(1, "Pago Móvil", "Pago Móvil"),        # tipos como los guarda el panel
+        _metodo(2, "Transferencia", "Banesco."),        # la fila real del pantallazo de Maired
+        _metodo(3, "Zelle", "Zelle"),
+        _metodo(4, "Binance", "Binance Whuil"),
+    ]
+    grupo = _grupo_bolivares(metodos)
+    assert [m.titulo for m in grupo] == ["Pago Móvil", "Banesco."]
 
 
-def test_bolivares_con_un_solo_metodo_en_bs_calza_directo():
-    """Si el negocio solo cobra Bs por Pago Móvil, 'en bolívares' YA es la elección: se guarda
-    sin repreguntar (no hay nada que afinar)."""
+def test_el_matcher_ya_no_resuelve_bolivares():
+    """La palabra de moneda NO pasa por el matcher de vías (iría a candidatos-pregunta): la
+    intercepta `generar_datos_pago` como elección de grupo ANTES de matchear."""
     m, candidatos = _matchear_metodo("bolivares", _METODOS)
-    assert m is _METODOS[0]
+    assert m is None
     assert candidatos == []
 
 
@@ -140,6 +153,10 @@ def test_la_moneda_de_cada_tipo():
 
     assert moneda("pago_movil") == "bs"
     assert moneda("banco") == "bs"
+    # 🔴 'Transferencia' es el tipo REAL que guarda el panel (TIPOS_METODO del dashboard) —
+    # la cuenta Banesco del pantallazo de Maired. Sin esta entrada, esa fila quedaba SIN
+    # moneda y el bot le re-pitcheaba las dos monedas a quien ya eligió.
+    assert moneda("Transferencia") == "bs"
     assert moneda("zelle") == "usd"
     assert moneda("binance") == "usd"
     assert moneda("efectivo") == "usd"
@@ -250,6 +267,19 @@ async def test_eligio_pago_movil_y_los_bolivares_se_quedan(monkeypatch):
     assert "YA ESTÁ COTIZADO" in texto
 
 
+async def test_eligio_bolivares_el_grupo_y_la_cifra_bs_se_queda(monkeypatch):
+    """La elección de MONEDA ('voy a pagar en bolívares', pseudo-tipo 'bolivares'): el estado
+    la enseña como HECHO y la cifra en Bs sigue delante — es SU moneda, lista para copiar."""
+    _con_pedidos(
+        monkeypatch,
+        [_pedido(metodo_elegido="Bolívares", metodo_elegido_tipo="bolivares")],
+    )
+    texto = await sp._estado_cliente_texto("584140000000")
+    assert "Ya ELIGIÓ cómo pagar: Bolívares" in texto
+    assert "7.846,63 Bs" in texto
+    assert "metodo='Bolívares'" in texto
+
+
 async def test_sin_eleccion_no_hay_linea_nueva(monkeypatch):
     """Sin casilla llena, el bloque queda EXACTAMENTE como antes de la rama B (los tres tests
     de test_estado_cliente_cotizado fijan el resto)."""
@@ -265,8 +295,8 @@ async def test_sin_eleccion_no_hay_linea_nueva(monkeypatch):
 
 def test_la_eleccion_se_persiste_en_el_pedido():
     fuente = inspect.getsource(tools.generar_datos_pago)
-    assert "pedido.metodo_elegido = elegido.titulo" in fuente
-    assert "pedido.metodo_elegido_tipo = elegido.tipo" in fuente
+    assert "pedido.metodo_elegido = eleccion_titulo" in fuente
+    assert "pedido.metodo_elegido_tipo = eleccion_tipo" in fuente
 
 
 def test_el_paso_sin_eleccion_entrega_nombres_no_datos():

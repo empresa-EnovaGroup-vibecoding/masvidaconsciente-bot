@@ -2646,29 +2646,55 @@ def _tipo_canonico(tipo) -> str:
     return " ".join(t.split())
 
 
-# La MONEDA de cada tipo de método (los tipos son el vocabulario del panel, migración 009:
-# pago_movil | banco | binance | zelle | efectivo | otro — aquí CLAVEADOS por su forma
-# canónica, ver _tipo_canonico). Decide qué mitad del cobro se le enseña al modelo cuando el
+# La MONEDA de cada tipo de método, CLAVEADA por su forma canónica (ver _tipo_canonico).
+# 🔴 Los tipos REALES los escribe el PANEL como etiqueta legible — TIPOS_METODO en
+# configuracion/page.tsx: 'Pago Móvil' | 'Transferencia' | 'Zelle' | 'Binance' | 'Efectivo' |
+# 'Otro' — no los valores de la migración 009 (pago_movil | banco | …), que se conservan aquí
+# por las filas sembradas viejas. Decide qué mitad del cobro se le enseña al modelo cuando el
 # cliente YA eligió: Bs = precio completo; USD = 20% + flete gratis (la regla de Maired del
 # 24-ago: el descuento se ata a la MONEDA, no a la vía). El tipo 'otro' no está a propósito:
 # moneda desconocida ⇒ se le sigue enseñando el cobro completo, sin adivinar.
+# 'bolivares' es el PSEUDO-TIPO de la elección de GRUPO (ver _pide_bolivares): la casilla del
+# pedido lo guarda cuando el cliente eligió la MONEDA y no una vía concreta.
 _MONEDA_POR_TIPO = {
     "pago movil": "bs",
+    "transferencia": "bs",
     "banco": "bs",
+    "bolivares": "bs",
     "zelle": "usd",
     "binance": "usd",
     "efectivo": "usd",
 }
 
+# Decir "en bolívares" YA ES LA ELECCIÓN (Maired, 1-sep, con el pantallazo de su panel
+# delante): en Venezuela el pago móvil y la transferencia son LA MISMA PLATA — cuentas
+# venezolanas, la moneda oficial — y una vendedora de verdad no pregunta "¿cuál de las dos?":
+# manda los dos juegos de datos juntos y el cliente paga por donde le quede más cómodo.
+# (En dólares NO pasa lo mismo: efectivo, Zelle y Binance son vías realmente distintas, así
+# que ahí se pregunta afinando — eso lo hace _matchear_metodo con sus sinónimos.)
+_ELECCION_BOLIVARES = {"bolivares", "en bolivares", "bolivar", "bs", "en bs"}
+
+
+def _pide_bolivares(texto) -> bool:
+    """¿El `metodo` que mandó el modelo es la MONEDA bolívares (no una vía concreta)?"""
+    return " ".join(_sin_acentos(texto or "").split()) in _ELECCION_BOLIVARES
+
+
+def _grupo_bolivares(metodos):
+    """Los métodos ACTIVOS que cobran en bolívares (pago móvil, transferencia)."""
+    return [m for m in metodos if _MONEDA_POR_TIPO.get(_tipo_canonico(m.tipo)) == "bs"]
+
+
 # Sinónimos FIJOS por TIPO de método, para matchear lo que el modelo escribe ("transferencia",
-# "en bolívares") contra la fila real. Son mapeos al vocabulario cerrado del panel, NO un NLU.
-# Las palabras de MONEDA ("bolívares", "dólares", "divisas") están EN VARIOS tipos a propósito
-# (lo pidió Maired el 31-ago: "voy a pagar en bolívares" también es información): si el negocio
-# tiene UN solo método de esa moneda, calza directo; si tiene varios, salen como CANDIDATOS y
-# el bot pregunta AFINANDO ("¿efectivo, Zelle o Binance?") — se pregunta, jamás se adivina.
+# "usdt") contra la fila real. Son mapeos al vocabulario cerrado del panel, NO un NLU. Las
+# palabras del DÓLAR ("dólares", "divisas") están EN LOS TRES tipos a propósito: si el negocio
+# tiene UNA sola vía en dólares, calza directo; con varias salen como CANDIDATOS y el bot
+# pregunta AFINANDO ("¿efectivo, Zelle o Binance?") — se pregunta, jamás se adivina. Los
+# bolívares NO van por aquí: son elección de GRUPO (ver _pide_bolivares, arriba).
 _SINONIMOS_TIPO_METODO = {
-    "pago movil": ("pago movil", "pagomovil", "bolivares", "bs"),
-    "banco": ("transferencia", "cuenta bancaria", "bolivares", "bs"),
+    "pago movil": ("pago movil", "pagomovil"),
+    "transferencia": ("transferencia", "cuenta bancaria"),
+    "banco": ("transferencia", "cuenta bancaria"),
     "zelle": ("dolares", "divisas"),
     "binance": ("usdt", "dolares", "divisas"),
     "efectivo": ("cash", "dolares fisicos", "dolares en efectivo", "dolares", "divisas"),
@@ -2814,42 +2840,64 @@ async def generar_datos_pago(session, telefono, pedido_id=None, metodo=None):
         )
     ).scalars().all()
 
-    elegido = None  # la fila de `metodos_pago` que el cliente eligió, si se sabe
+    # `elegidos` = las filas de `metodos_pago` por las que va a pagar. Normalmente UNA; decir
+    # "en bolívares" elige el GRUPO completo de esa moneda (los dos juegos de datos juntos).
+    # `eleccion_titulo/tipo` = lo que se congela en la casilla si la elección es de ESTE turno.
+    elegidos = []
+    eleccion_titulo = None
+    eleccion_tipo = None
     if metodos:
+        grupo_bs = _grupo_bolivares(metodos)
         if metodo:
-            elegido, candidatos = _matchear_metodo(metodo, metodos)
-            if elegido is None:
-                # Vocabulario CERRADO: lo que no calza no se adivina. Con calce AMBIGUO (dijo
-                # "en bolívares" y hay Pago Móvil Y transferencia) se devuelven SOLO los
-                # candidatos, para que el bot pregunte AFINANDO en vez de recitar la lista
-                # entera; sin calce ninguno, la lista real completa. La BD no se tocó.
-                nombres = candidatos or [m.titulo for m in metodos]
-                if candidatos:
-                    nota = (
-                        f"'{metodo}' calza con VARIOS métodos del negocio: "
-                        + " · ".join(nombres)
-                        + ". Pregúntale al cliente CUÁL de ESOS prefiere (solo esos, no la "
-                        "lista entera) y vuelve a llamarme con ese nombre TAL CUAL en "
-                        "`metodo`."
-                    )
+            if _pide_bolivares(metodo) and grupo_bs:
+                # "Voy a pagar en bolívares" YA es la elección (Maired, 1-sep): se le dan
+                # TODOS los métodos de esa moneda juntos — pago móvil y transferencia son la
+                # misma plata — y paga por el que le quede más cómodo. Nada que repreguntar.
+                elegidos = grupo_bs
+                if len(grupo_bs) == 1:
+                    eleccion_titulo, eleccion_tipo = grupo_bs[0].titulo, grupo_bs[0].tipo
                 else:
-                    nota = (
-                        f"'{metodo}' no calza con ningún método de pago del negocio. Los "
-                        "métodos REALES son EXACTAMENTE estos: "
-                        + " · ".join(nombres)
-                        + ". Si el cliente ya eligió uno de esos, vuelve a llamarme con ese "
-                        "nombre TAL CUAL en `metodo`; si no, pregúntale cuál prefiere "
-                        "nombrándoselos — sin inventar métodos que no están en la lista."
-                    )
-                return {"ok": False, "metodos_disponibles": nombres, "nota": nota}
+                    # Con varias vías, lo elegido fue la MONEDA: pseudo-tipo 'bolivares'.
+                    eleccion_titulo, eleccion_tipo = "Bolívares", "bolivares"
+            else:
+                unico, candidatos = _matchear_metodo(metodo, metodos)
+                if unico is None:
+                    # Vocabulario CERRADO: lo que no calza no se adivina. Con calce AMBIGUO
+                    # (dijo "dólares" y hay efectivo, Zelle Y Binance) se devuelven SOLO los
+                    # candidatos, para que el bot pregunte AFINANDO en vez de recitar la
+                    # lista entera; sin calce ninguno, la lista real completa. La BD no se tocó.
+                    nombres = candidatos or [m.titulo for m in metodos]
+                    if candidatos:
+                        nota = (
+                            f"'{metodo}' calza con VARIOS métodos del negocio: "
+                            + " · ".join(nombres)
+                            + ". Pregúntale al cliente CUÁL de ESOS prefiere (solo esos, no "
+                            "la lista entera) y vuelve a llamarme con ese nombre TAL CUAL "
+                            "en `metodo`."
+                        )
+                    else:
+                        nota = (
+                            f"'{metodo}' no calza con ningún método de pago del negocio. Los "
+                            "métodos REALES son EXACTAMENTE estos: "
+                            + " · ".join(nombres)
+                            + ". Si el cliente ya eligió uno de esos, vuelve a llamarme con "
+                            "ese nombre TAL CUAL en `metodo`; si no, pregúntale cuál "
+                            "prefiere nombrándoselos — sin inventar métodos que no están en "
+                            "la lista."
+                        )
+                    return {"ok": False, "metodos_disponibles": nombres, "nota": nota}
+                elegidos = [unico]
+                eleccion_titulo, eleccion_tipo = unico.titulo, unico.tipo
         elif getattr(pedido, "metodo_elegido", None):
             # EL ESTADO LE GANA AL DATO FRESCO: si el cliente YA eligió (quedó en la casilla)
             # y el modelo re-llama sin `metodo` (el "dame los datos otra vez" típico), la
-            # herramienta responde por el método elegido en vez de volcar todos y reabrir la
+            # herramienta responde por lo elegido en vez de volcar todos y reabrir la
             # elección — que era exactamente el bug que Maired confirmó en vivo (31-ago).
-            elegido = next(
-                (m for m in metodos if m.titulo == pedido.metodo_elegido), None
-            )
+            if _tipo_canonico(getattr(pedido, "metodo_elegido_tipo", None)) == "bolivares":
+                elegidos = grupo_bs  # eligió la MONEDA: el grupo VIVO de hoy
+            else:
+                m = next((m for m in metodos if m.titulo == pedido.metodo_elegido), None)
+                elegidos = [m] if m is not None else []
             # Si la dueña borró o desactivó ese método después, la casilla se ignora y se
             # vuelve al paso de preguntar (peor sería dictar datos de una cuenta retirada).
 
@@ -2931,14 +2979,15 @@ async def generar_datos_pago(session, telefono, pedido_id=None, metodo=None):
     pedido.cotizado_at = now_utc()
     # LA ELECCIÓN A SU CASILLA (rama B): solo cuando el modelo la trae en `metodo` — que es
     # cuando el CLIENTE acaba de decirla (o de cambiarla: vale lo nuevo). Congelados título y
-    # tipo del método de ESE momento, patrón `zona_nombre`/`cotizado_*`. Cuando `elegido` vino
-    # de la propia casilla (re-llamada sin `metodo`), no hay nada nuevo que guardar.
+    # tipo de ESE momento, patrón `zona_nombre`/`cotizado_*`; la elección de MONEDA se guarda
+    # como 'Bolívares'/pseudo-tipo 'bolivares'. Cuando `elegidos` vino de la propia casilla
+    # (re-llamada sin `metodo`), no hay nada nuevo que guardar.
     #
     # ⚠️ La cotización de arriba se guarda COMPLETA (las tres monedas + la tasa) elija lo que
     # elija: el validador del comprobante compara por MONTO contra esas casillas y NO se toca.
-    if metodo and elegido is not None:
-        pedido.metodo_elegido = elegido.titulo
-        pedido.metodo_elegido_tipo = elegido.tipo
+    if metodo and elegidos:
+        pedido.metodo_elegido = eleccion_titulo
+        pedido.metodo_elegido_tipo = eleccion_tipo
     await session.commit()
     try:
         await set_cache(
@@ -2995,13 +3044,16 @@ async def generar_datos_pago(session, telefono, pedido_id=None, metodo=None):
     desglose_efectivo.append(f"Total en dólares: {_fmt_usd(monto_usd_divisas)}")
 
     # ── EL RESULTADO, EN DOS PASOS (rama B) ─────────────────────────────────────────────
-    if elegido is not None:
+    if elegidos:
         # CON la elección hecha (recién dicha, o leída de la casilla del pedido): SOLO los
-        # datos de ESE método y el resumen en SU moneda. Los demás métodos van como NOMBRES
-        # dentro de la nota (por si el cliente CAMBIA), nunca como datos.
-        moneda = _MONEDA_POR_TIPO.get(_tipo_canonico(elegido.tipo))
-        titulo = elegido.titulo or elegido.tipo
-        otros = [m.titulo for m in metodos if m.id != elegido.id]
+        # datos de lo elegido y el resumen en SU moneda. Un método concreto viaja solo; la
+        # elección "en bolívares" viaja con TODOS los de esa moneda JUNTOS (pago móvil y
+        # transferencia son la misma plata: el cliente paga por el que le quede más cómodo).
+        # Los demás métodos van como NOMBRES dentro de la nota (por si CAMBIA), nunca como datos.
+        es_grupo = len(elegidos) > 1
+        moneda = "bs" if es_grupo else _MONEDA_POR_TIPO.get(_tipo_canonico(elegidos[0].tipo))
+        titulo = " o ".join(m.titulo or m.tipo for m in elegidos)
+        otros = [m.titulo for m in metodos if all(m.id != e.id for e in elegidos)]
         if moneda == "bs":
             resumen_cobro = f"Por {titulo} son {_fmt_bs(monto_bs)} Bs (precio completo)"
         elif moneda == "usd":
@@ -3010,12 +3062,24 @@ async def generar_datos_pago(session, telefono, pedido_id=None, metodo=None):
                 f"ya con el 20% de descuento{_flete_gratis}"
             )
         # (tipo 'otro': moneda desconocida ⇒ se queda el resumen completo de las dos monedas)
+        if es_grupo:
+            cabecera_nota = (
+                "El cliente va a pagar EN BOLÍVARES y quedó GUARDADO: TODOS los métodos de "
+                "`metodos_de_pago` le sirven igual (son la misma moneda) — dale los datos "
+                "JUNTOS y que pague por el que le quede más cómodo. NO le ofrezcas los "
+                "métodos en dólares. "
+            )
+        else:
+            cabecera_nota = (
+                f"El cliente ELIGIÓ pagar por {titulo} y quedó GUARDADO en el pedido: NO le "
+                "vuelvas a ofrecer los demás métodos ni la otra moneda. "
+            )
         resultado = {
             "ok": True,
             "pedido_id": pedido.id,
             "tasa_bcv": float(tasa),
             "resumen_cobro": resumen_cobro,
-            "metodos_de_pago": [_datos_de_metodo(elegido)],
+            "metodos_de_pago": [_datos_de_metodo(m) for m in elegidos],
             # 🔴 NOMBRA EL MÉTODO Y ETIQUETA CADA DATO (del análisis de las conversaciones
             # reales de Whuilianny, 2026-08-21). Ella los manda "secos" —"Datos. [cédula]
             # [teléfono] Banesco"— porque al otro lado hay una persona que ya sabe qué es cada
@@ -3024,10 +3088,9 @@ async def generar_datos_pago(session, telefono, pedido_id=None, metodo=None):
             # (o no pague). El dato sigue saliendo TAL CUAL de la herramienta: esto es solo
             # ponerle su nombre delante.
             "nota": (
-                f"El cliente ELIGIÓ pagar por {titulo} y quedó GUARDADO en el pedido: NO le "
-                "vuelvas a ofrecer los demás métodos ni la otra moneda. Presenta el cobro "
-                "copiando EXACTO `resumen_cobro` (NO recalcules) y dale los datos de "
-                "`metodos_de_pago` copiados TAL CUAL. Al entregarlos, "
+                cabecera_nota
+                + "Presenta el cobro copiando EXACTO `resumen_cobro` (NO recalcules) y dale "
+                "los datos de `metodos_de_pago` copiados TAL CUAL. Al entregarlos, "
                 "DI QUÉ MÉTODO ES por su nombre (el campo `metodo`: 'Pago Móvil', 'Zelle'…) "
                 "y pon cada dato con su etiqueta en su propia línea (cédula, teléfono, "
                 "banco…), no tres números pegados. Pide la captura del comprobante."
@@ -3055,7 +3118,7 @@ async def generar_datos_pago(session, telefono, pedido_id=None, metodo=None):
             resultado["monto_usd_divisas"] = float(monto_usd_divisas)
             resultado["monto_bs"] = float(monto_bs)
             resultado["desglose_efectivo"] = desglose_efectivo
-        if pm is not None and elegido.id == pm.id:
+        if pm is not None and any(e.id == pm.id for e in elegidos):
             # Las llaves sueltas de compatibilidad (solo tienen sentido con el Pago Móvil).
             resultado["banco"] = pm.banco or config.get("pago_movil_banco")
             resultado["cedula"] = pm.cedula or config.get("pago_movil_cedula")

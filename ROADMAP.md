@@ -49,10 +49,12 @@ estado y (rama D) su vigilante.
 > ⚠️ **El flujo del taller quedó ROJO al fusionar el #10** — un solo check del banco, y era el
 > check el estricto, no el código (en la tabla real el tipo dice `'Zelle'` con mayúscula; el
 > flujo entero de dos pasos PASÓ en el VPS). El **PR #11** (`metodo-de-pago-afinado`) lo arregla
-> de raíz (`_tipo_canonico`) y añade lo que pidió Maired en la revisión: **"en bolívares" /
-> "en dólares" también cuentan como elección** (con un método de esa moneda calza directo; con
-> varios, el bot pregunta afinando). Detalle: SESIONES 2026-09-01 (1). **Fusionar el #11 debe
-> devolver el flujo a VERDE.**
+> de raíz (`_tipo_canonico`, y el mapa de monedas entiende los tipos REALES del panel, incluida
+> `'Transferencia'`) y añade lo que pidió Maired en la revisión: **"voy a pagar en bolívares"
+> ES la elección** — se entregan JUNTOS los datos de pago móvil y transferencia (son la misma
+> plata; guion de ella, 1-sep) — y **"en dólares" pregunta afinando** ("¿efectivo, Zelle o
+> Binance?": tres vías realmente distintas). Detalle: SESIONES 2026-09-01 (1). **Fusionar el
+> #11 debe devolver el flujo a VERDE.**
 
 🔴 **El peor hueco que quedaba, CONFIRMADO EN VIVO por Maired:** *"vuelve a preguntar los métodos
 de pago cuando ya mandó los datos"*. La causa era estructural, no del modelo: la elección no se
@@ -72,8 +74,9 @@ las DOS monedas con la nota ordenando copiarlo EXACTO — reapertura *mandada po
 **Lo que falta para cerrarla:** Maired fusiona el **PR #11** (el remate) → el taller se
 despliega solo y el flujo debe volver a VERDE → **su prueba en vivo**: cotizar → "te pago por
 Zelle" → pedir los datos DOS veces (no debe re-ofrecer ni re-pitchear Bs) → "mejor Pago Móvil"
-(cambio limpio) → y de paso "voy a pagar en bolívares" (debe ir DIRECTO al Pago Móvil, sin
-repreguntar) → verificar `pedidos.metodo_elegido` en la BD.
+(cambio limpio) → y de paso "voy a pagar en bolívares" (debe dar JUNTOS los datos del Pago
+Móvil y la transferencia Banesco, sin repreguntar cuál) → verificar `pedidos.metodo_elegido`
+en la BD.
 
 ### 🟡 RAMA C — EL HILO, EXTENDIDO A TAMAÑOS Y SABORES *(bloqueada por una tarea de panel)*
 

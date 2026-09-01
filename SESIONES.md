@@ -29,18 +29,21 @@
 **Maired fusionó el PR #10 apenas lo revisó** — y su revisión trajo DOS mejoras reales que van
 en el PR #11 (rama `metodo-de-pago-afinado`):
 
-**1. Las palabras de MONEDA también son información (lo dijo ella con sus palabras):** *"cuando
-la persona aquí en Venezuela dice 'voy a pagar en bolívares', quiere decir pago móvil o
-transferencia — es lo mismo"*. Entraron al diccionario FIJO del matcher, por GRUPO de moneda:
-`bolivares`/`bs` → los métodos en Bs · `dolares`/`divisas` → las tres vías del dólar ·
-`dolares fisicos` → efectivo (el sinónimo EXACTO gana antes que la contención, para que no se
-desparrame a Zelle/Binance por contener "dolares"). Con UN solo método de esa moneda ⇒ calza
-DIRECTO y se guarda sin repreguntar (el caso real del negocio: "en bolívares" → Pago Móvil de
-una). Con varios ⇒ el bot pregunta AFINANDO ("¿Pago Móvil o transferencia?") — la nota del
-resultado ahora distingue "calza con varios" (pregunta entre ESOS) de "no calza" (lista
-completa). **Se pregunta, jamás se adivina; sigue siendo vocabulario cerrado.** Su pregunta de
-si necesita "un diccionario aparte": NO — vive en el código (`_SINONIMOS_TIPO_METODO`); si las
-clientas usan más palabras, se añaden ahí en minutos.
+**1. "En bolívares" ES la elección — de GRUPO (lo dijo ella con sus palabras y su pantallazo):**
+*"cuando la persona aquí en Venezuela dice 'voy a pagar en bolívares', quiere decir pago móvil
+o transferencia — SON LO MISMO: cuentas venezolanas, la moneda oficial"*. Y su tabla real tiene
+DOS métodos en Bs (Pago Móvil + la cuenta Banesco). Entonces:
+- **"bolívares"/"bs" ⇒ elección de GRUPO** (`_pide_bolivares` + `_grupo_bolivares`): la tool
+  entrega los datos de TODOS los métodos en Bs JUNTOS —como haría una vendedora de verdad— y
+  guarda la casilla como `'Bolívares'` con el PSEUDO-TIPO `'bolivares'` (con una sola vía en
+  Bs, guarda esa vía directa). Nada que repreguntar.
+- **"dólares"/"divisas" ⇒ pregunta AFINANDO** ("¿efectivo, Zelle o Binance?") — a ella le
+  gustó así, y con razón: las tres vías del dólar SÍ son mundos distintos (efectivo en mano,
+  correo de Zelle, wallet de Binance). `dolares fisicos` → efectivo directo (el sinónimo
+  EXACTO gana antes que la contención). `usdt` → Binance.
+Su pregunta de si necesita "un diccionario aparte": NO — vive en el código
+(`_ELECCION_BOLIVARES` + `_SINONIMOS_TIPO_METODO`); si las clientas usan más palabras
+("chapas"?), se añaden ahí en minutos.
 
 **2. 🔴 El banco del VPS salió ROJO tras fusionar el #10 — y el rojo enseñó algo que valía la
 pena.** ÚNICO check caído: `metodo_elegido_tipo == "zelle"`… porque **en la tabla real del
@@ -52,8 +55,13 @@ dos monedas a quien ya eligió — exactamente el bug de la rama B, de vuelta po
 **El arreglo:** `_tipo_canonico()` (sin acentos, minúsculas, `_`/`-` como espacio) en TODOS los
 consumidores del tipo (el mapa de moneda de la tool, `_estado_cliente_texto`, los sinónimos del
 matcher y el check del banco). La casilla sigue congelando el tipo TAL CUAL está en la tabla.
+**Y la fuente de la verdad encontrada:** el panel guarda el tipo como su ETIQUETA legible —
+`TIPOS_METODO` en `configuracion/page.tsx` del dashboard: `'Pago Móvil' | 'Transferencia' |
+'Zelle' | 'Binance' | 'Efectivo' | 'Otro'` — no los valores de la migración 009. Por eso el
+mapa de monedas ahora entiende `'Transferencia'` (la cuenta Banesco del pantallazo): sin esa
+entrada, la fila quedaba SIN moneda.
 
-**746 tests (26 de la rama B) · ruff · compileall — verdes.** Al fusionar el #11 el flujo del
+**747 tests (27 de la rama B) · ruff · compileall — verdes.** Al fusionar el #11 el flujo del
 taller debe volver a VERDE; ahí sí: la prueba en vivo de Maired (guion en el ROADMAP, rama B).
 
 ## 2026-08-31 (6) — 💳 LA RAMA B: EL MÉTODO DE PAGO TIENE SU CASILLA (PR #10, esperando a Maired)

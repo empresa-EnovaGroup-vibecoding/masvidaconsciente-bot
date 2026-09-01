@@ -39,7 +39,7 @@ from app.agent.agent import (
     _datos_sensibles,
     _datos_sensibles_inventados,
 )
-from app.agent.tools import _tipo_canonico, generar_datos_pago
+from app.agent.tools import _grupo_bolivares, _tipo_canonico, generar_datos_pago
 from app.models import Cliente, MetodoPago, Pedido, ZonaEntrega, hoy_venezuela
 from app.services.db import get_session_factory
 
@@ -220,6 +220,9 @@ async def main() -> None:
     check("🔴 ZELLE existe en la tabla (antes NO, y la visión rechazaba pagos Zelle legítimos)",
           any("zelle" in f"{m.tipo} {m.titulo}".lower() for m in activos),
           f"métodos: {[(m.tipo, m.titulo) for m in activos]}")
+    # Los métodos en BOLÍVARES de la tabla real (pago móvil, transferencia) — los usa el
+    # escenario "en bolívares" de abajo. Se calculan AQUÍ, de la misma consulta.
+    metodos_activos_bs = _grupo_bolivares(activos)
 
     await _limpiar()
     try:
@@ -302,6 +305,31 @@ async def main() -> None:
               len(m5) == 1 and m5[0].get("telefono") and m5[0].get("cedula"), str(m5))
         check("   ...las llaves viejas siguen (compatibilidad)",
               bool(r5.get("telefono_pago") and r5.get("cedula")), str(r5)[:250])
+
+        # "VOY A PAGAR EN BOLÍVARES" = elección de GRUPO (Maired, 1-sep): pago móvil y
+        # transferencia son la misma plata — se dan JUNTOS, sin repreguntar cuál vía, y sin
+        # una sola cuenta en dólares en el resultado.
+        async with f() as s:
+            r6 = await generar_datos_pago(s, TEL, metodo="en bolívares")
+        m6 = r6.get("metodos_de_pago") or []
+        en_bs = metodos_activos_bs
+        check("🔴 'en bolívares' entrega TODOS los métodos en Bs JUNTOS (sin repreguntar)",
+              r6.get("ok") and len(m6) == len(en_bs) >= 1, f"{len(m6)} vs {len(en_bs)} · {str(m6)[:200]}")
+        check("   ...y NINGUNO es de dólares (ni Zelle ni Binance ni efectivo)",
+              not any("zelle" in str(m.get("metodo", "")).lower()
+                      or "binance" in str(m.get("metodo", "")).lower() for m in m6), str(m6)[:200])
+        check("   ...el resumen es SOLO bolívares (sin $ ni descuento)",
+              "$" not in (r6.get("resumen_cobro") or "") and r6.get("monto_usd_divisas") is None,
+              str(r6.get("resumen_cobro")))
+        async with f() as s:
+            ped = (await s.execute(
+                select(Pedido).where(Pedido.cliente_telefono == TEL)
+            )).scalars().first()
+            esperado = ("bolivares" if len(en_bs) > 1
+                        else _tipo_canonico(en_bs[0].tipo))
+            check("   ...y la casilla guarda la elección (la moneda, si hay varias vías)",
+                  _tipo_canonico(ped.metodo_elegido_tipo) == esperado,
+                  f"metodo_elegido={ped.metodo_elegido!r} tipo={ped.metodo_elegido_tipo!r}")
     finally:
         await _limpiar()
 
