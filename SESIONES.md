@@ -24,6 +24,44 @@
 
 ---
 
+## 2026-08-31 (6) — 💳 LA RAMA B: EL MÉTODO DE PAGO TIENE SU CASILLA (PR #10, esperando a Maired)
+
+**El peor hueco de la clase "la ventana sin estado", cerrado con su casilla.** El bug que ella
+confirmó en vivo —*"vuelve a preguntar los métodos de pago cuando ya mandó los datos"*— tenía
+causa estructural: la elección no se guardaba en NINGUNA parte y `generar_datos_pago` devolvía
+SIEMPRE los datos de TODOS los métodos + el `resumen_cobro` de las DOS monedas con la nota
+ordenando copiarlo EXACTO. La herramienta MANDABA la reapertura. Rama `metodo-de-pago-con-casilla`,
+**PR #10** (https://github.com/empresa-EnovaGroup-vibecoding/masvidaconsciente-bot/pull/10):
+
+- **Migración 035 (aditiva):** `pedidos.metodo_elegido` + `metodo_elegido_tipo`, congelados de
+  `metodos_pago` al elegir (patrón `zona_nombre`/`cotizado_*`). Del `tipo` sale la MONEDA
+  (`_MONEDA_POR_TIPO`: pago_movil/banco=Bs · zelle/binance/efectivo=USD · 'otro' fuera a
+  propósito: moneda desconocida ⇒ cobro completo, sin adivinar).
+- **`generar_datos_pago` en DOS pasos.** Sin `metodo`: cobro completo (el pitch de las dos
+  monedas es legítimo la PRIMERA vez) + SOLO los NOMBRES (`metodos_disponibles`) — los datos de
+  todas las cuentas YA NO viajan en ese paso. Con `metodo`: matcheo de **vocabulario CERRADO**
+  contra los métodos ACTIVOS (`_matchear_metodo`: exacto → contención → sinónimos FIJOS del tipo
+  como "transferencia"→banco; ambiguo real ⇒ candidatos para PREGUNTAR; sin calce ⇒ la lista
+  real SIN tocar la BD — "dólares" no es sinónimo de nada porque calza con tres) ⇒ SOLO los
+  datos de ESE método, resumen de UNA moneda, y la elección PERSISTIDA.
+- **La casilla le gana al dato fresco:** la re-llamada sin `metodo` (el "dame los datos otra
+  vez") responde por el elegido en vez de volcar todo y reabrir. Si el cliente CAMBIA, vale lo
+  nuevo (se sobreescribe).
+- **`_estado_cliente_texto`:** "Ya ELIGIÓ cómo pagar: Zelle" como HECHO cada turno; y si eligió
+  dólares, la línea del cotizado en Bs SE CALLA (recitarla era el mismo re-pitch — el monto USD
+  no puede viajar ahí por la red del TOTAL, así que la orden es llamar la tool con su `metodo`).
+- **Lo que NO se tocó, a propósito:** el validador del comprobante (valida por MONTO) y la
+  cotización `cotizado_*`, que se sigue guardando COMPLETA elija lo que elija — test que lo fija.
+  La hoja del modo DOS aprendió a renderizar los nombres del paso 1.
+
+**742 tests (20 nuevos) · ruff · compileall — verdes en local.** El banco
+`probar_datos_bancarios.py` §5 quedó reescrito al contrato de dos pasos (correrá solo tras el
+deploy del taller). ⚠️ Toca DINERO: **falta la prueba en vivo de Maired** tras fusionar — guion:
+cotizar → "te pago por Zelle" → pedir los datos DOS veces más (no debe re-ofrecer métodos ni
+re-pitchear Bs) → "mejor Pago Móvil" (cambio limpio). 🔬 Nota de entorno: en esta máquina
+(Windows) los tests que leen archivos con `read_text()` necesitan `PYTHONUTF8=1`; dos tests
+viejos fallan sin eso DESDE ANTES de esta rama (en la CI de Linux pasan — no se tocaron).
+
 ## 2026-08-31 (5) — ✅ CIERRE DE SESIÓN: los 4 PRs fusionados + el plan escrito en ROADMAP
 
 **Maired fusionó los CUATRO** (#5 fotos con memoria · #6 el hilo de la venta · #7 pie de foto

@@ -44,26 +44,27 @@ estado y (rama D) su vigilante.
   `_estado_cliente_texto`, SIN cifras de dinero a propósito — la red del dinero lee ese texto;
   más 8 guardias de hilo en las notas de las herramientas que "tentaban").
 
-### 🟢 RAMA B — EL MÉTODO DE PAGO NECESITA SU CASILLA *(la siguiente; esfuerzo medio, toca DINERO)*
+### 🟡 RAMA B — EL MÉTODO DE PAGO NECESITA SU CASILLA *(CONSTRUIDA el 31-ago: **PR #10 abierto**, esperando revisión de Maired + prueba en vivo)*
 
-🔴 **El peor hueco que queda, CONFIRMADO EN VIVO por Maired:** *"vuelve a preguntar los métodos
-de pago cuando ya mandó los datos"*. La causa es estructural, no del modelo:
-- La elección del cliente ("te pago por Zelle") **NO SE GUARDA EN NINGUNA PARTE**: `Pedido` no
-  tiene columna de método, y `Pago.metodo` nace recién cuando llega el comprobante.
-- `generar_datos_pago` (schema: solo `pedido_id`) **no puede saber** qué eligió, así que devuelve
-  SIEMPRE `metodos_de_pago` con TODOS los métodos activos, y su `resumen_cobro` re-pitchea las
-  DOS monedas ("...o transferencia son X Bs / si pagas en dólares son Y con el 20%") — con la
-  nota ORDENANDO copiarlo EXACTO. Es reapertura *mandada por la herramienta*.
+🔴 **El peor hueco que quedaba, CONFIRMADO EN VIVO por Maired:** *"vuelve a preguntar los métodos
+de pago cuando ya mandó los datos"*. La causa era estructural, no del modelo: la elección no se
+guardaba en NINGUNA parte y `generar_datos_pago` devolvía SIEMPRE todos los métodos re-pitcheando
+las DOS monedas con la nota ordenando copiarlo EXACTO — reapertura *mandada por la herramienta*.
 
-**El arreglo (es el pendiente viejo "partir `generar_datos_pago` en 2 pasos", ahora con motivo):**
-1. La tool acepta `metodo` (opcional), matcheado contra los **títulos de la tabla `metodos_pago`**
-   = vocabulario CERRADO de la BD (seguro por doctrina; NO regex sobre lenguaje libre).
-2. Sin `metodo` → cotiza y devuelve solo los NOMBRES de los métodos. Con `metodo` → devuelve SOLO
-   los datos de ESE y un `resumen_cobro` de UNA sola moneda.
-3. **Persistir la elección en el pedido** (patrón `cotizado_*` de la migración 027: migración
-   nueva, aditiva) y **imprimirla en `_estado_cliente_texto`** ("Ya eligió pagar por: Zelle").
-⚠️ Toca el camino del dinero: el validador del comprobante valida por MONTO y **no se toca**;
-tests duros + prueba en vivo de Maired antes de fusionar.
+**Lo construido (detalle en SESIONES 31-ago (6); el diseño era el de este bloque y se cumplió):**
+1. ✅ Migración **035**: `pedidos.metodo_elegido` + `metodo_elegido_tipo` congelados (patrón 027/023).
+2. ✅ `generar_datos_pago` acepta `metodo`, matcheado contra los métodos ACTIVOS de la tabla =
+   vocabulario CERRADO (`_matchear_metodo`: ambiguo ⇒ candidatos; sin calce ⇒ lista real sin tocar
+   la BD). Sin `metodo` → cobro completo + solo NOMBRES (los datos ya no viajan). Con `metodo` →
+   SOLO ese método y `resumen_cobro` de UNA moneda. **La casilla gana**: re-llamada sin `metodo`
+   responde por el elegido.
+3. ✅ `_estado_cliente_texto` dice "Ya ELIGIÓ cómo pagar: X" y, si eligió dólares, calla la cifra Bs.
+4. ✅ El validador del comprobante NO se tocó (valida por MONTO; `cotizado_*` se guarda completa).
+
+**Lo que falta para cerrarla:** Maired fusiona el PR #10 → el taller se despliega solo → los
+bancos corren (probar_datos_bancarios §5 ya exige el contrato de dos pasos) → **su prueba en
+vivo**: cotizar → "te pago por Zelle" → pedir los datos DOS veces (no debe re-ofrecer ni
+re-pitchear Bs) → "mejor Pago Móvil" (cambio limpio) → verificar `pedidos.metodo_elegido` en la BD.
 
 ### 🟡 RAMA C — EL HILO, EXTENDIDO A TAMAÑOS Y SABORES *(bloqueada por una tarea de panel)*
 
