@@ -246,6 +246,15 @@ def _renderizar(nombre: str, r: dict) -> str:
                 "Datos de pago que SÍ le puedes dar (cópialos TAL CUAL, y SOLO los del método "
                 f"que él elija): {metodos}"
             )
+        elif r.get("metodos_disponibles"):
+            # El paso SIN elección (rama B): hay nombres pero todavía NINGÚN dato de cuentas.
+            # Sin esta rama, la Voz tendría que preguntar "¿cómo prefieres pagar?" a ciegas,
+            # sin poder nombrar las opciones.
+            partes.append(
+                "Formas de pago que puede elegir (NÓMBRALAS y pregúntale cuál prefiere; los "
+                "datos de la cuenta todavía no los tienes, así que no des ninguno): "
+                + " · ".join(str(m) for m in r["metodos_disponibles"])
+            )
         return "\n  ".join(partes)
 
     if nombre == "registrar_comprobante":

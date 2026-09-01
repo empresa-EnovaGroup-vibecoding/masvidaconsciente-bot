@@ -17,9 +17,13 @@ Lo que se prueba:
      escala a la dueña. Con la herramienta llamada, los datos REALES sí salen.
   4. 💰 La puerta en el carril del dinero (`redactar_mensaje`): ahí NUNCA hay datos
      bancarios legítimos que dar — se frenan siempre.
-  5. 🏦 `generar_datos_pago` devuelve los datos de TODOS los métodos desde la tabla
-     `metodos_pago` (la MISMA que valida los comprobantes) — incluido ZELLE, que no
-     existía en la tabla y por eso la visión rechazaba pagos Zelle legítimos.
+  5. 🏦 `generar_datos_pago` en DOS PASOS (rama B, 31-ago — el bug que Maired confirmó en
+     vivo: "vuelve a preguntar los métodos de pago cuando ya mandó los datos"): sin `metodo`
+     entrega SOLO los NOMBRES (nada de datos); con `metodo` entrega SOLO los datos de ESE
+     (de la tabla `metodos_pago`, la MISMA que valida los comprobantes) y la elección queda
+     GUARDADA en el pedido — la re-llamada sin `metodo` responde por el elegido en vez de
+     reabrir, un método inventado se rechaza con la lista real, y la cotización se sigue
+     guardando COMPLETA (el validador del comprobante valida por MONTO y no se tocó).
 
 No se manda un solo WhatsApp: el modelo se sustituye por un doble.
 """
@@ -206,7 +210,7 @@ async def main() -> None:
     check("🔴 una CUENTA en el aviso de pago ⇒ el mensaje se descarta", r == "", f"salió: {r!r}")
     ag._pedir_redaccion = guardado
 
-    print("\n5) 🏦 `generar_datos_pago` — los datos salen de la TABLA (una sola verdad)")
+    print("\n5) 🏦 `generar_datos_pago` EN DOS PASOS — la elección tiene su casilla (rama B)")
     f = get_session_factory()
     async with f() as s:
         activos = (await s.execute(
@@ -231,18 +235,69 @@ async def main() -> None:
                 zona_id=zona.id, zona_nombre=zona.nombre, costo_envio=0,
             ))
             await s.commit()
+
+        # PASO 1 — sin `metodo`: nombres SÍ, datos NO.
         async with f() as s:
             r = await generar_datos_pago(s, TEL)
         check("genera el cobro", bool(r.get("ok")), str(r))
-        metodos = r.get("metodos_de_pago") or []
-        check("devuelve `metodos_de_pago` con datos", bool(metodos), str(r)[:200])
-        check("   ...incluye el Zelle (con su correo)",
-              any("zelle" in str(m.get("metodo", "")).lower() and m.get("correo") for m in metodos),
-              str(metodos))
-        check("   ...incluye el Pago Móvil (teléfono y cédula)",
-              any(m.get("telefono") and m.get("cedula") for m in metodos), str(metodos))
+        check("🔴 SIN elegir método NO viajan datos de cuentas",
+              not r.get("metodos_de_pago") and not r.get("telefono_pago")
+              and not r.get("cedula") and not r.get("banco"), str(r)[:250])
+        nombres = r.get("metodos_disponibles") or []
+        check("   ...pero SÍ los NOMBRES para preguntar (`metodos_disponibles`)",
+              bool(nombres), str(r)[:250])
+        check("   ...y el cobro completo de las dos monedas (aún no eligió)",
+              r.get("monto_bs") is not None and r.get("monto_usd_divisas") is not None,
+              str(r)[:200])
+
+        # PASO 2 — el cliente elige Zelle: SOLO sus datos, UNA sola moneda, y queda GUARDADO.
+        async with f() as s:
+            r2 = await generar_datos_pago(s, TEL, metodo="Zelle")
+        check("con metodo='Zelle' genera el cobro", bool(r2.get("ok")), str(r2)[:250])
+        metodos = r2.get("metodos_de_pago") or []
+        check("🔴 devuelve UN solo método y es el Zelle (con su correo)",
+              len(metodos) == 1 and "zelle" in str(metodos[0].get("metodo", "")).lower()
+              and metodos[0].get("correo"), str(metodos))
+        check("   ...y el resumen es de UNA sola moneda (sin bolívares)",
+              "bs" not in (r2.get("resumen_cobro") or "").lower()
+              and r2.get("monto_bs") is None, str(r2.get("resumen_cobro")))
+        async with f() as s:
+            ped = (await s.execute(
+                select(Pedido).where(Pedido.cliente_telefono == TEL)
+            )).scalars().first()
+            check("🔴 la elección quedó en su CASILLA (pedidos.metodo_elegido)",
+                  ped.metodo_elegido and "zelle" in ped.metodo_elegido.lower()
+                  and ped.metodo_elegido_tipo == "zelle",
+                  f"metodo_elegido={ped.metodo_elegido!r} tipo={ped.metodo_elegido_tipo!r}")
+            check("   ...y la cotización se guardó COMPLETA igual (el validador no cambió)",
+                  ped.cotizado_bs is not None and ped.cotizado_usd is not None
+                  and ped.cotizado_usd_divisas is not None and ped.tasa_cotizada is not None,
+                  f"cotizado_bs={ped.cotizado_bs} usd={ped.cotizado_usd}")
+
+        # LA CASILLA GANA: la re-llamada SIN `metodo` (el "dame los datos otra vez" típico)
+        # responde por el método elegido en vez de volcar todos y reabrir la elección.
+        async with f() as s:
+            r3 = await generar_datos_pago(s, TEL)
+        m3 = r3.get("metodos_de_pago") or []
+        check("🔴 re-llamada SIN metodo ⇒ responde por el ELEGIDO (no reabre)",
+              r3.get("ok") and len(m3) == 1
+              and "zelle" in str(m3[0].get("metodo", "")).lower(), str(r3)[:250])
+
+        # Un método INVENTADO se rechaza con la lista real y sin tocar la BD.
+        async with f() as s:
+            r4 = await generar_datos_pago(s, TEL, metodo="cheque")
+        check("🚫 un método inventado ('cheque') ⇒ rechazado con la lista real",
+              r4.get("ok") is False and bool(r4.get("metodos_disponibles"))
+              and not r4.get("metodos_de_pago"), str(r4)[:250])
+
+        # Y el Pago Móvil elegido trae teléfono, cédula y las llaves viejas (compatibilidad).
+        async with f() as s:
+            r5 = await generar_datos_pago(s, TEL, metodo="Pago Móvil")
+        m5 = r5.get("metodos_de_pago") or []
+        check("con metodo='Pago Móvil': teléfono y cédula del método",
+              len(m5) == 1 and m5[0].get("telefono") and m5[0].get("cedula"), str(m5))
         check("   ...las llaves viejas siguen (compatibilidad)",
-              bool(r.get("telefono_pago") and r.get("cedula")), str(r)[:200])
+              bool(r5.get("telefono_pago") and r5.get("cedula")), str(r5)[:250])
     finally:
         await _limpiar()
 

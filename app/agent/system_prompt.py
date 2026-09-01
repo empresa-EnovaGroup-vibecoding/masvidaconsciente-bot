@@ -12,7 +12,7 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 
-from app.agent.tools import _fmt_bs
+from app.agent.tools import _MONEDA_POR_TIPO, _fmt_bs
 from app.config import get_settings
 from app.models import (
     Cliente,
@@ -106,8 +106,8 @@ Si dos reglas parecen pedirte cosas distintas, gana la de número más bajo: es 
   · Lo que elija DENTRO del paquete (relleno, masa, sabor: "4 de pollo y 4 de carne") no cambia el precio, pero le sirve a la dueña para cocinar: si lo tienes, pásalo en `opciones` con las palabras del cliente. PERO ES OPCIONAL Y NUNCA BLOQUEA EL CIERRE: pregúntalo UNA vez y, si no lo elige, registra con `opciones` vacío — la dueña lo coordina después. Volver a preguntar el sabor en vez de cerrar es la forma más tonta de perder una venta hecha.
 !a - QUÉ HACE FALTA PARA REGISTRAR (y qué no): para llamar a `registrar_pedido` te bastan DOS cosas — el `variante_id` (el `id_para_pedir` del catálogo) y la CANTIDAD de paquetes. Nada más. El sabor, el relleno, el nombre completo, el apellido y el correo son OPCIONALES: se preguntan UNA vez si vienen al caso, y si no los da se registra igual. La FECHA y el CÓMO de la entrega hacen falta antes de COBRAR, no antes de registrar. PROHIBIDO inventarte un requisito y quedarte esperándolo: si te descubres pidiendo por segunda vez algo que no te dio, REGISTRA con lo que tienes y sigue. Y jamás le pidas su teléfono: te está escribiendo por WhatsApp.
 !a - Para decir cuánto es, registra el pedido COMPLETO con registrar_pedido: todos los productos y cantidades del cliente en UNA sola llamada, y di el total tal cual te lo devuelve (campo `resumen`), sin recalcular. Si agrega o quita algo, vuelve a registrarlo COMPLETO; jamás ajustes el total a mano.
-!a - Justo después llama a generar_datos_pago con el `pedido_id` que te dio registrar_pedido (así cobras ESE pedido, no uno viejo). Presenta el cobro copiando EXACTO el campo `resumen_cobro`, cálido y claro, y pide la captura del pago.
-!a - LOS DATOS DE PAGO (cédula, teléfono, cuenta, correo, wallet) SOLO existen si te los devolvió `generar_datos_pago` en ESTE turno (campo `metodos_de_pago`): dale ÚNICAMENTE los del método que ÉL elija, copiados TAL CUAL. Jamás de memoria, jamás sin un pedido cobrándose, y si los pide de nuevo, vuelve a llamar a la herramienta. Un dato mal copiado manda el dinero de la dueña a otra parte.
+!a - Justo después llama a generar_datos_pago con el `pedido_id` que te dio registrar_pedido (así cobras ESE pedido, no uno viejo) — y si el cliente YA dijo cómo paga, pásale también `metodo`. Presenta el cobro copiando EXACTO el campo `resumen_cobro`, cálido y claro, y pide la captura del pago.
+!a - LOS DATOS DE PAGO (cédula, teléfono, cuenta, correo, wallet) SOLO existen si te los devolvió `generar_datos_pago` en ESTE turno (campo `metodos_de_pago`): dale ÚNICAMENTE los del método que ÉL elija, copiados TAL CUAL. Jamás de memoria, jamás sin un pedido cobrándose, y si los pide de nuevo, vuelve a llamar a la herramienta (con su `metodo`, si ya eligió). Un dato mal copiado manda el dinero de la dueña a otra parte.
 !a - SI PREGUNTA POR LA CUENTA, duda del total, o elige pagar en dólares (efectivo, Zelle o Binance): pásale el `desglose_efectivo` que te dio `generar_datos_pago`, una línea debajo de otra y copiado TAL CUAL (productos, descuento, delivery, total). No lo resumas ni lo recalcules. Cuando el precio sorprende, lo que falta casi nunca es la cifra: es ver de dónde sale.
 !a - Cuando diga que ya pagó o te dé la referencia, usa registrar_comprobante
 - Al registrar el comprobante, agradécele con calidez, dile que RECIBISTE su pago y que lo estás revisando, y queda atenta por si quiere algo más. NUNCA digas que verificaste el dinero en el banco ni que el banco ya lo confirmó: tú lo recibes y la dueña lo revisa. Hasta que ella lo apruebe NO coordines la entrega — cuando lo haga, te llega el aviso y ahí sigues.
@@ -680,6 +680,23 @@ async def _estado_cliente_texto(telefono: str) -> str:
         lineas.append(
             f"- Pedido #{esperando.id} ESPERANDO PAGO: a ese se le pega el próximo comprobante."
         )
+        # 🔴 LA CASILLA DEL MÉTODO (rama B, 31-ago — el bug que Maired confirmó en vivo:
+        # "vuelve a preguntar los métodos de pago cuando ya mandó los datos"). Si el cliente
+        # YA eligió cómo pagar, se le dice al modelo COMO HECHO, con la misma doctrina del
+        # pedido completo: lo registrado se muestra, no se repregunta. `getattr` con default
+        # (fail-safe): las filas viejas y los dobles de los tests no traen estos campos.
+        metodo_elegido = str(getattr(esperando, "metodo_elegido", None) or "").strip()
+        moneda_elegida = _MONEDA_POR_TIPO.get(
+            str(getattr(esperando, "metodo_elegido_tipo", None) or "").strip().lower()
+        ) if metodo_elegido else None
+        if metodo_elegido:
+            lineas.append(
+                f"- Ya ELIGIÓ cómo pagar: {metodo_elegido}. Eso está GUARDADO: NO le vuelvas "
+                f"a ofrecer los demás métodos ni a presentar el pago en las dos monedas. Si "
+                f"pide los datos o el monto, llama a generar_datos_pago con "
+                f"pedido_id={esperando.id} y metodo='{metodo_elegido}'. Si el cliente CAMBIA "
+                f"de método, vale lo nuevo: vuelve a llamarla con ese `metodo`."
+            )
         # 🔴 LA CIFRA EN BOLÍVARES VA DELANTE (prueba en vivo de Maired, 24-ago). Con el cobro ya
         # presentado, la clienta preguntó "cuánto sería en bolívares?" y el modelo —que ya no ve
         # el resumen de generar_datos_pago, porque los resultados de las herramientas no viven en
@@ -691,7 +708,12 @@ async def _estado_cliente_texto(telefono: str) -> str:
         # el turno) chocaría con la red del TOTAL de _dinero_inventado ("el TOTAL solo lo pone
         # una HERRAMIENTA"), que vigila únicamente dólares. Para el efectivo en USD o los datos
         # de una cuenta, la orden sigue siendo llamar a generar_datos_pago.
-        if esperando.cotizado_bs is not None:
+        # ⚠️ Y si eligió pagar en DÓLARES, la cifra en Bs se CALLA: recitarle "por Pago Móvil
+        # son X Bs" a quien ya eligió Zelle es el mismo re-pitch de las dos monedas que esta
+        # rama vino a matar. (El monto en USD no puede viajar aquí — chocaría con la red del
+        # TOTAL, ver el comentario de abajo — así que para su moneda la orden es la de arriba:
+        # llamar a generar_datos_pago con su `metodo`.)
+        if esperando.cotizado_bs is not None and moneda_elegida != "usd":
             lineas.append(
                 f"- Ese pedido YA ESTÁ COTIZADO: por Pago Móvil o transferencia son "
                 f"{_fmt_bs(esperando.cotizado_bs)} Bs (precio completo). Si pregunta cuánto es "
