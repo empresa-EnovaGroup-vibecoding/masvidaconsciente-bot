@@ -43,6 +43,30 @@ taller primero:
   6.12.94). Tumba todo 1-3 min; contenedores con `unless-stopped`/`always` verificado (vuelven
   solos); bot cerrado a clientas ⇒ impacto cero. **Decisión de Maired el momento.**
 
+## 2026-09-01 (13) — 🧳 RESCATE FINAL DEL TALLER + el plan del "entorno de práctica" de Maired
+
+**El porqué de fondo, dicho por Maired:** *"no quiero mostrarle a Whuilianny fallas... por eso
+yo estaba utilizando todo allá [el taller], en mi número"*. Su necesidad real: un espacio de
+práctica por WhatsApp REAL, invisible para la clienta. El taller era eso.
+
+**Rescatado del taller a `respaldos-masvida/` ANTES del apagón (además del dump de la BD):**
+- `taller-env-FINAL/`: los env COMPLETOS de bot/worker/panel — incluidas las 4 credenciales de
+  Meta del **número de la agencia** (+57 313 293 3806): phone_number_id, token, app secret,
+  WABA. Sin esto, reconectar ese número habría requerido re-hacer el onboarding.
+- `taller-root-FINAL/`: `banco_local.sh` (¡vivía SOLO en /root del taller, contra la regla
+  "todo en GitHub"! — **añadido al repo**, adaptado: siembra desde el dump rescatado o desde
+  producción, y tolera venv de Windows) · `auditar_coolify.sh` · las 6 personalidades
+  históricas + `masvida_antes_variantes.sql.gz` en un tgz.
+
+**El plan propuesto para su espacio de práctica (pendiente de su OK y del DNS):** un segundo
+stack (bot+worker+postgres+redis propios) EN EL MISMO VPS de netcup — costo $0/mes — conectado
+al número de la agencia, con la BD restaurada del dump del taller (nace idéntico a lo que ella
+conocía). Whuilianny no ve nada (número y BD separados). Necesita: re-apuntar el DNS de
+`api-masvida.enovagroup.tech` (Namecheap) de Hostinger → netcup, crear las apps en Coolify con
+los env rescatados, y restaurar el dump. Cabe en recursos (~500MB; hay ~2GB libres con los
+límites puestos). ⚠️ NO mezclar con el sistema de la clienta: ni el botón de alternar números
+ni dos números en un bot — la BD compartida mezclaría pruebas con ventas reales.
+
 ## 2026-09-01 (12) — 🪦 EL TALLER SE JUBILA: respaldo final, verificación "¿todo está en producción?", y el pipeline a un solo servidor
 
 **Maired canceló el VPS del taller (Hostinger) — se apaga HOY.** Su lógica: un cliente por
