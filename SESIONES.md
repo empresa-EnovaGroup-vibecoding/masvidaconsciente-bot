@@ -24,6 +24,40 @@
 
 ---
 
+## 2026-09-01 (6) — 🚨 INCIDENTE DE SEGURIDAD EN PRODUCCIÓN: minero xmrig en el panel viejo de netcup
+
+**Maired estaba haciendo LA PROMOCIÓN A PRODUCCIÓN con ChatGPT** (otro asistente, con acceso al
+servidor) y en medio del proceso ChatGPT encontró **un minero de criptomonedas (`xmrig`,
+procesos disfrazados como `system-check`) DENTRO del contenedor del panel VIEJO de netcup** —
+consumiendo más de la mitad de la RAM y CPU. ChatGPT lo detuvo junto con el panel comprometido
+y desplegó bot+worker nuevos. **Verificado por Claude con SSH en solo-lectura (sin tocar nada,
+para no pisar a ChatGPT que seguía trabajando):**
+
+- ✅ Minero MUERTO: cero procesos de minería, carga 7.5→0.95, RAM 166MB→2.4GB disponibles.
+- ✅ El contenedor comprometido (panel de JULIO, `o1jo590e…` imagen `a8b52f07`) está `Exited`.
+- ✅ Bot+worker de producción arriba con `f4e200c` (el último master, el merge del PR #14).
+- ✅ Postgres/Redis de másvida sanos · `masvida-backup` lleva 7 semanas corriendo (respaldo
+  diario cifrado) · cron limpio (sin persistencia visible) · sin conexiones a pools de minería.
+- ✅ Los procesos PHP/Horizon/Soketi que parecían sospechosos son **Coolify mismo** (es Laravel).
+- ✅ **EL TALLER ESTÁ SANO** (revisado igual: carga 0.19, cero mineros).
+
+**🔴 LO QUE EL "compromiso aislado del panel" de ChatGPT DEJA ABIERTO (la lectura de Claude):**
+1. **¿CÓMO entró?** Sin la vía de entrada, puede volver. Hipótesis más probable: el panel de
+   producción llevaba SIN ACTUALIZAR desde julio (Next.js viejo con CVEs públicos), expuesto a
+   internet por Traefik. El panel nuevo probablemente cierra esa puerta — pero es hipótesis.
+2. **ROTAR LAS LLAVES (la deuda D5, ahora URGENTE):** quien ejecuta código en un contenedor lee
+   sus variables de entorno. El panel habla con la API (no con la BD directa), así que el radio
+   parece corto — pero la regla de un compromiso es asumir lo peor hasta saber la vía. Prioridad:
+   **META_ACCESS_TOKEN/APP_SECRET** (la cuenta Tech Provider es el activo más valioso),
+   OPENROUTER_API_KEY, JWT_SECRET, ADMIN_PASSWORD, llaves R2. Coordinar con Erwin.
+3. **Verificaciones post-promoción** (cuando ChatGPT termine su plan): `/salud` · 35 migraciones
+   aplicadas · conteos de datos intactos (productos/variantes/pedidos/personalidad) · 🔴 **LISTA
+   BLANCA ACTIVA y `bot_activo`** — si el deploy la pisó, el bot nuevo le contestaría a clientas
+   REALES sin que nadie lo decidiera · los bancos en producción.
+
+**Regla operativa acordada: DOS asistentes no escriben a la vez en el mismo servidor.** Claude
+en solo-lectura mientras ChatGPT ejecuta su plan; verificación cruzada al terminar.
+
 ## 2026-09-01 (5) — 🔬 AUTOPSIA: "borré el chat pero el bot recuerda la entrega" — NO es bug, es diseño
 
 **Maired borró el chat de Enova desde el panel y al reescribir el bot dijo "ya tienes la entrega
