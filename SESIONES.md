@@ -24,6 +24,37 @@
 
 ---
 
+## 2026-09-01 (7) — ✅ VERIFICACIÓN CRUZADA DEL RELEVO DE ChatGPT: la promoción es REAL — 26/27 bancos
+
+**ChatGPT terminó su plan y dejó relevo escrito; Claude lo verificó punto por punto en el
+servidor (la regla acordada: verificación cruzada).** Resultado:
+
+- ✅ **Endurecimiento REAL**: `passwordauthentication no` · root solo por llave · fail2ban
+  activo (ya baneó 2) · firewall nftables activo (6001/6002/8000/8080 bloqueados en input y
+  forward) · cero mineros · panel nuevo `608f61c` arriba (Next 15.5.24, audit 0).
+- ✅ **La promoción es real**: bot+worker de producción en `f4e200c` (el master de hoy con el
+  plan A→D completo) · 36 migraciones aplicadas · `/salud` TODO ok · **saldo IA $4.11**
+  (recargado; era $1.70) · Meta GREEN · datos 32/37/277/13.890 · personalidad 7.331 car.
+- ✅ **El bot sigue CERRADO a clientas**: `NUMEROS_PERMITIDOS=573005690062` (solo 1), extra
+  None. ⚠️ `bot_activo` no existe en la config de producción y el default del código es
+  ENCENDIDO (tasks.py:451): la protección real es la lista blanca.
+- ✅ El cambio de ChatGPT al workflow (`0216874`) revisado: el deploy de producción ya no manda
+  el token de Coolify por HTTP público — entra por SSH con host key fijada y pega a
+  `127.0.0.1`. Bien hecho.
+- 🟡 **LOS BANCOS EN PRODUCCIÓN (nadie los había corrido): 26/27.** El rojo es
+  `probar_datos_bancarios` §5 y NO es bug de código: **la tabla `metodos_pago` de PRODUCCIÓN no
+  tiene Zelle** (ni el resto de métodos nuevos) — el arreglo del 14-jul se hizo en la BD del
+  taller y las bases son independientes. El banco avisó a la dueña por WhatsApp (ese aviso le
+  llegó a Maired). Arreglo: cargar los métodos REALES en el panel de producción (datos de
+  Whuilianny, no se inventan).
+- ⚠️ **`pedidos = 0` en producción** — plausible (el bot nunca vendió en producción; Maired hizo
+  eliminaciones manuales) pero queda como pregunta abierta para ella. Hay respaldo pre-migración.
+
+**Los huecos del relevo de ChatGPT (lo que su lista de 12 pendientes NO cubre):** rotar
+`META_ACCESS_TOKEN`/`APP_SECRET` (prioridad #1: la cuenta Tech Provider), `OPENROUTER_API_KEY`
+y llaves R2 (la deuda D5) · cargar métodos de pago en producción · pruebas de humo con número
+real. Quedaron escritos en ESTADO.md.
+
 ## 2026-09-01 (6) — 🚨 INCIDENTE DE SEGURIDAD EN PRODUCCIÓN: minero xmrig en el panel viejo de netcup
 
 **Maired estaba haciendo LA PROMOCIÓN A PRODUCCIÓN con ChatGPT** (otro asistente, con acceso al

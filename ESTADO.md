@@ -22,18 +22,37 @@ y salud, memoria que no se olvida a las 24h, y 8 migraciones nuevas (hasta la 03
 
 ---
 
-## Última verificación: **2026-08-24 (01:15, madrugada)**
+## Última verificación: **2026-09-01 (~02:30 ET) — LA PROMOCIÓN A PRODUCCIÓN SE HIZO (y hubo incidente de seguridad, contenido)**
+
+> 🚨 **El 1-sep, en medio de la promoción (la hizo ChatGPT con Maired), apareció un MINERO
+> (`xmrig`) dentro del panel VIEJO de producción** (Next.js 15.1.3 con RCE público, sin
+> actualizar desde julio). Se contuvo: panel comprometido detenido, panel nuevo parchado
+> (Next 15.5.24, `npm audit` 0), servidor ENDURECIDO (SSH solo llave, fail2ban, firewall
+> nftables, deploy por SSH cifrado). **Verificación CRUZADA por Claude, punto por punto: todo
+> real.** Detalle y lo que queda: SESIONES 2026-09-01 (6) y (7) + el relevo de ChatGPT.
 
 | | 🏪 PRODUCCIÓN | 🧪 TALLER |
 |---|---|---|
-| **Servidor** | netcup `152.53.89.118` | Hostinger `2.25.139.106` |
+| **Servidor** | netcup `152.53.89.118` (endurecido 1-sep) | Hostinger `2.25.139.106` |
 | **Quién le escribe** | las clientas reales | número de la agencia: **+57 313 293 3806** |
-| **Bot: versión** | `7e80b8a` (14-jul) — **muy atrasada** | ✅ **`8fdb099`** (24-ago), al día con `master`, desplegado solo por el push. **SHA de la imagen verificado en bot Y worker** — no el color del run (L59) |
-| **Panel: versión** | (sin tocar desde julio) | ✅ **`b9a97c8`** — al día con `master` (sin commits nuevos desde el 22-ago). **Estaba 6 commits atrasado** (corría `d34ccd9`, de 13 días) y nadie lo había notado porque este archivo no listaba el panel |
-| **Modelo IA activo** | (el de julio) | ✅ **`anthropic/claude-haiku-4.5`** (devuelto el 21-ago por decisión de Erwin; estuvo en `gpt-4o-mini` del 18 al 21-ago) |
-| **Modo del agente** | UN agente | los 3 bloqueadores del modo DOS ya están cerrados (06-ago) |
-| **Lista blanca** | ✅ activa | ✅ activa — **4 números** (verificado 23-ago): 2 en `NUMEROS_PERMITIDOS` (env: `584264399792` Maired · `573005690062` `dueno_telefono`) + 2 en `numeros_permitidos_extra` (BD) |
-| **Bot en el mercado** | ❌ NO — apagado para clientas reales hasta la entrega | pruebas |
+| **Bot: versión** | ✅ **`f4e200c`** (1-sep) — AL DÍA: trae todo agosto + el plan A→D completo. 36 migraciones aplicadas, sin drift | ✅ **`f4e200c`** (mismo master) |
+| **Panel: versión** | ✅ **`608f61c`** parchado (Next 15.5.24 / React 19.0.8, audit 0 vulns) | `b9a97c8` + el parche va llegando por master |
+| **Modelo IA activo** | ✅ `anthropic/claude-haiku-4.5` · **saldo IA $4.11** (recargado) | `anthropic/claude-sonnet-4.6` (Maired probando) |
+| **Modo del agente** | UN agente | UN agente |
+| **Lista blanca** | ✅ **ACTIVA: 1 solo número** (`NUMEROS_PERMITIDOS=573005690062`, extra=None). ⚠️ `bot_activo` no existe en la config ⇒ el código lo trata como ENCENDIDO: **lo que protege a las clientas es la lista blanca** | ✅ activa |
+| **Bot en el mercado** | ❌ NO — cerrado a clientas reales (regla absoluta del relevo: no abrir sin autorización expresa de Maired) | pruebas |
+| **Bancos** | 🟡 **26/27** (1-sep): el rojo es `probar_datos_bancarios` por **DATO faltante: la tabla `metodos_pago` de producción NO tiene Zelle** (el arreglo del 14-jul fue solo en el taller; las bases son independientes). Cargar los métodos reales en el panel de PRODUCCIÓN | ✅ 27/27 |
+| **Datos** | 32 productos / 37 variantes / 277 clientes / 13.890 mensajes / **0 pedidos** (⚠️ confirmar con Maired que el 0 es esperado — hizo eliminaciones manuales; hay respaldo pre-migración en `/root/masvida-migration-backups/20260901_040209`) / personalidad 7.331 car | 32/37 + datos de prueba |
+| **Respaldos** | diario cifrado (7 semanas corriendo) + pre-migración + pre-endurecimiento (con SHA-256) + copia local `C:\Developer\AI\Proyectos\respaldos-masvida` | D4 sigue abierta |
+
+🔴 **LO QUE QUEDA DEL INCIDENTE (además de los 12 pendientes del relevo de ChatGPT):**
+1. **ROTAR las llaves que el relevo NO lista (la deuda D5):** `META_ACCESS_TOKEN`/`APP_SECRET`
+   (**prioridad #1**: la cuenta Tech Provider), `OPENROUTER_API_KEY`, llaves R2. El relevo solo
+   cubre token Coolify, JWT, contraseña del panel y Postgres/Redis (su punto 12).
+2. **Cargar los métodos de pago en producción** (el banco rojo): Zelle/Binance/transferencia no
+   existen en su tabla — son datos REALES de Whuilianny; los carga Maired en el panel de
+   producción (o se copian del taller con su OK).
+3. **Pruebas de humo con el número real** (checklist de la meta, punto 5).
 
 ### 🔬 2026-08-24 (2) — LA PRUEBA EN VIVO DE MAIRED: 3 bugs de código y EL TECHO DEL MODELO
 
