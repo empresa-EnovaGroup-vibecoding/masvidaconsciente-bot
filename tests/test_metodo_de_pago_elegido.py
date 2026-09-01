@@ -32,6 +32,7 @@ from app.agent.tools import (
     _MONEDA_POR_TIPO,
     _PARAMS_DECLARADOS,
     _matchear_metodo,
+    _tipo_canonico,
 )
 
 
@@ -91,11 +92,48 @@ def test_lo_que_no_calza_no_se_inventa():
     assert candidatos == []
 
 
-def test_dolares_NO_es_sinonimo_de_nada():
-    """'dólares' calza con Zelle, Binance Y Efectivo a la vez: si el matcher lo resolviera
-    solo, estaría adivinando la vía. Tiene que salir ambiguo (o vacío), nunca un match único."""
-    m, _ = _matchear_metodo("dolares", _METODOS)
+def test_dolares_pregunta_afinando_entre_las_tres_vias():
+    """(Lo pidió Maired, 31-ago: 'voy a pagar en dólares' también es información.) 'dólares'
+    calza con Zelle, Binance Y Efectivo a la vez: si el matcher lo resolviera solo estaría
+    adivinando la vía, así que salen los TRES como candidatos — el bot pregunta '¿efectivo,
+    Zelle o Binance?' en vez de recitar la lista entera. Jamás un match único."""
+    m, candidatos = _matchear_metodo("dolares", _METODOS)
     assert m is None
+    assert set(candidatos) == {"Zelle", "Binance", "Efectivo"}
+    m, candidatos = _matchear_metodo("divisas", _METODOS)
+    assert m is None
+    assert set(candidatos) == {"Zelle", "Binance", "Efectivo"}
+
+
+def test_bolivares_pregunta_afinando_entre_las_vias_en_bs():
+    """(Decisión de Maired, 1-sep, preguntada con las opciones delante:) decir la MONEDA no
+    elige la vía — 'en bolívares' con pago móvil Y transferencia activas saca a LAS DOS como
+    candidatas, el bot pregunta '¿pago móvil o transferencia?' y manda SOLO los datos de la
+    elegida. Con los tipos TAL CUAL los escribe el panel real (su pantallazo)."""
+    metodos = [
+        _metodo(1, "Pago Móvil", "Pago Móvil"),        # tipos como los guarda el panel
+        _metodo(2, "Transferencia", "Banesco."),        # la fila real del pantallazo de Maired
+        _metodo(3, "Zelle", "Zelle"),
+        _metodo(4, "Binance", "Binance Whuil"),
+    ]
+    m, candidatos = _matchear_metodo("en bolívares", metodos)
+    assert m is None
+    assert set(candidatos) == {"Pago Móvil", "Banesco."}
+
+
+def test_bolivares_con_una_sola_via_en_bs_calza_directo():
+    """Con UNA sola vía en bolívares no hay nada que preguntar: 'en bolívares' la elige."""
+    m, candidatos = _matchear_metodo("bolivares", _METODOS)
+    assert m is _METODOS[0]  # el único método en Bs de la lista de prueba
+    assert candidatos == []
+
+
+def test_dolares_fisicos_es_el_efectivo():
+    """El sinónimo COMPLETO ('dólares físicos', como lo dice Maired) gana en Efectivo y no se
+    desparrama a Zelle/Binance por contener la palabra 'dólares'."""
+    m, candidatos = _matchear_metodo("dolares fisicos", _METODOS)
+    assert m is _METODOS[3]
+    assert candidatos == []
 
 
 # ══════════════════════════════════════════════════════════════════════════════════
@@ -103,13 +141,39 @@ def test_dolares_NO_es_sinonimo_de_nada():
 # ══════════════════════════════════════════════════════════════════════════════════
 
 def test_la_moneda_de_cada_tipo():
-    assert _MONEDA_POR_TIPO["pago_movil"] == "bs"
-    assert _MONEDA_POR_TIPO["banco"] == "bs"
-    assert _MONEDA_POR_TIPO["zelle"] == "usd"
-    assert _MONEDA_POR_TIPO["binance"] == "usd"
-    assert _MONEDA_POR_TIPO["efectivo"] == "usd"
+    def moneda(tipo):
+        return _MONEDA_POR_TIPO.get(_tipo_canonico(tipo))
+
+    assert moneda("pago_movil") == "bs"
+    assert moneda("banco") == "bs"
+    # 🔴 'Transferencia' es el tipo REAL que guarda el panel (TIPOS_METODO del dashboard) —
+    # la cuenta Banesco del pantallazo de Maired. Sin esta entrada, esa fila quedaba SIN
+    # moneda y el bot le re-pitcheaba las dos monedas a quien ya eligió.
+    assert moneda("Transferencia") == "bs"
+    assert moneda("zelle") == "usd"
+    assert moneda("binance") == "usd"
+    assert moneda("efectivo") == "usd"
     # 'otro' NO está a propósito: moneda desconocida ⇒ cobro completo, sin adivinar.
-    assert "otro" not in _MONEDA_POR_TIPO
+    assert moneda("otro") is None
+
+
+def test_el_tipo_se_entiende_como_lo_escriba_la_tabla_real():
+    """🔴 La lección de la primera corrida del banco en el VPS (31-ago): en el taller el tipo
+    está cargado 'Zelle' (mayúscula), no 'zelle' como dice la migración 009. La moneda tiene
+    que salir igual, se escriba como se escriba — si no, el bot re-pitchearía las dos monedas
+    exactamente a quien ya eligió."""
+    for crudo, canonico in [
+        ("Zelle", "zelle"),            # así está en el taller, verificado por el banco
+        ("zelle", "zelle"),
+        ("pago_movil", "pago movil"),  # el canónico de la migración 009
+        ("Pago Móvil", "pago movil"),  # por si el panel lo cargó como título
+        ("PAGO-MOVIL", "pago movil"),
+        ("  Efectivo ", "efectivo"),
+        (None, ""),
+    ]:
+        assert _tipo_canonico(crudo) == canonico
+    assert _MONEDA_POR_TIPO.get(_tipo_canonico("Zelle")) == "usd"
+    assert _MONEDA_POR_TIPO.get(_tipo_canonico("Pago Móvil")) == "bs"
 
 
 # ══════════════════════════════════════════════════════════════════════════════════
@@ -172,8 +236,9 @@ def _pedido(**kw):
 async def test_eligio_zelle_y_el_estado_lo_dice_sin_recitar_los_bolivares(monkeypatch):
     """Eligió dólares: la línea 'Ya ELIGIÓ' sale con la orden de llamar con SU metodo, y la
     cifra en Bs SE CALLA — recitarle 'por Pago Móvil son X Bs' a quien eligió Zelle es el
-    re-pitch de las dos monedas que la rama B vino a matar."""
-    _con_pedidos(monkeypatch, [_pedido(metodo_elegido="Zelle", metodo_elegido_tipo="zelle")])
+    re-pitch de las dos monedas que la rama B vino a matar. El tipo congelado va 'Zelle' con
+    mayúscula A PROPÓSITO: es como está cargado en la tabla real del taller."""
+    _con_pedidos(monkeypatch, [_pedido(metodo_elegido="Zelle", metodo_elegido_tipo="Zelle")])
     texto = await sp._estado_cliente_texto("584140000000")
     assert "Ya ELIGIÓ cómo pagar: Zelle" in texto
     assert "metodo='Zelle'" in texto
@@ -193,6 +258,19 @@ async def test_eligio_pago_movil_y_los_bolivares_se_quedan(monkeypatch):
     assert "Ya ELIGIÓ cómo pagar: Pago Móvil" in texto
     assert "7.846,63 Bs" in texto
     assert "YA ESTÁ COTIZADO" in texto
+
+
+async def test_eligio_transferencia_con_el_tipo_real_del_panel(monkeypatch):
+    """La vía de la cuenta Banesco (tipo 'Transferencia', TAL CUAL lo guarda el panel): moneda
+    Bs, así que la cifra cotizada sigue delante y la elección se enseña como HECHO."""
+    _con_pedidos(
+        monkeypatch,
+        [_pedido(metodo_elegido="Banesco.", metodo_elegido_tipo="Transferencia")],
+    )
+    texto = await sp._estado_cliente_texto("584140000000")
+    assert "Ya ELIGIÓ cómo pagar: Banesco." in texto
+    assert "7.846,63 Bs" in texto
+    assert "metodo='Banesco.'" in texto
 
 
 async def test_sin_eleccion_no_hay_linea_nueva(monkeypatch):

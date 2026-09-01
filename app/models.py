@@ -281,7 +281,9 @@ class Pedido(Base):
     # casilla (`Pago.metodo` nace recién con el comprobante) y `generar_datos_pago` re-ofrecía
     # TODOS los métodos y las DOS monedas en cada llamada — la reapertura que Maired confirmó
     # en vivo. Congelados del `metodos_pago` del momento: el título ("Zelle") para enseñarlo en
-    # el prompt, y el `tipo` para saber la MONEDA sin parsear texto.
+    # el prompt, y el `tipo` para saber la MONEDA sin parsear texto. Siempre UNA vía concreta:
+    # decir solo la moneda ("en bolívares") no llena la casilla — el bot pregunta cuál vía
+    # (decisión de Maired, 1-sep: quien dice pago móvil no recibe la cuenta del banco).
     metodo_elegido: Mapped[str | None] = mapped_column(Text, nullable=True)
     metodo_elegido_tipo: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)

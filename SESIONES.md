@@ -24,6 +24,51 @@
 
 ---
 
+## 2026-09-01 (1) — 💬 "EN BOLÍVARES TAMBIÉN CUENTA" + el tipo real de la tabla (PR #11, el remate de la rama B)
+
+**Maired fusionó el PR #10 apenas lo revisó** — y su revisión trajo DOS mejoras reales que van
+en el PR #11 (rama `metodo-de-pago-afinado`):
+
+**1. Las palabras de MONEDA afinan la pregunta — decisión de Maired, PREGUNTADA con las
+opciones delante (1-sep).** El camino tuvo dos vueltas y vale la pena dejarlas escritas:
+primero se implementó "bolívares → candidatos"; su pantallazo (DOS métodos en Bs: Pago Móvil +
+cuenta Banesco tipo `'Transferencia'`) se leyó como "dáselos JUNTOS" y se cambió a entrega de
+grupo; **ella corrigió y pidió que se le preguntara** — se le pusieron las 3 conductas con
+diálogos de ejemplo y eligió: **preguntar cuál de las vías y mandar SOLO la elegida** (*"si te
+dice pago móvil, no tiene que mandarle al Banesco"*). Lo que quedó:
+- **"bolívares"/"bs"** son sinónimos de TODOS los tipos en Bs ⇒ con varias vías salen como
+  CANDIDATOS y el bot pregunta "¿pago móvil o transferencia?" (solo esas); con UNA sola vía,
+  calza directo. La casilla siempre guarda UNA vía concreta.
+- **"dólares"/"divisas"** igual, entre las tres vías del dólar ("¿efectivo, Zelle o
+  Binance?"). `dolares fisicos` → efectivo directo (el sinónimo EXACTO gana antes que la
+  contención). `usdt` → Binance.
+Su pregunta de si necesita "un diccionario aparte": NO — vive en el código
+(`_SINONIMOS_TIPO_METODO`); si las clientas usan más palabras, se añaden ahí en minutos.
+🪦 **Lección de método (me la ganó ella):** entendí su corrección de negocio como un cambio de
+conducta y lo construí SIN confirmarle — hubo que revertirlo. Con una instrucción de producto
+ambigua, primero la pregunta con opciones, después el código.
+📌 **Idea suya anotada para DESPUÉS (no construir ahora):** algo aparte que frene las
+conversaciones que no tienen nada que ver con el negocio (quedó en el ROADMAP, Control del Bot).
+
+**2. 🔴 El banco del VPS salió ROJO tras fusionar el #10 — y el rojo enseñó algo que valía la
+pena.** ÚNICO check caído: `metodo_elegido_tipo == "zelle"`… porque **en la tabla real del
+taller el tipo está cargado `'Zelle'` (mayúscula), no `'zelle'`** como dice la migración 009.
+Todo el flujo de dos pasos PASÓ en el servidor (nombres sin datos, Zelle solo, una moneda,
+casilla escrita); el estricto era el CHECK. Pero destapó el riesgo real: un tipo cargado
+"Pago Móvil" (espacio y acento) habría dejado a esa fila SIN moneda y el bot re-pitcheando las
+dos monedas a quien ya eligió — exactamente el bug de la rama B, de vuelta por una mayúscula.
+**El arreglo:** `_tipo_canonico()` (sin acentos, minúsculas, `_`/`-` como espacio) en TODOS los
+consumidores del tipo (el mapa de moneda de la tool, `_estado_cliente_texto`, los sinónimos del
+matcher y el check del banco). La casilla sigue congelando el tipo TAL CUAL está en la tabla.
+**Y la fuente de la verdad encontrada:** el panel guarda el tipo como su ETIQUETA legible —
+`TIPOS_METODO` en `configuracion/page.tsx` del dashboard: `'Pago Móvil' | 'Transferencia' |
+'Zelle' | 'Binance' | 'Efectivo' | 'Otro'` — no los valores de la migración 009. Por eso el
+mapa de monedas ahora entiende `'Transferencia'` (la cuenta Banesco del pantallazo): sin esa
+entrada, la fila quedaba SIN moneda.
+
+**747 tests (27 de la rama B) · ruff · compileall — verdes.** Al fusionar el #11 el flujo del
+taller debe volver a VERDE; ahí sí: la prueba en vivo de Maired (guion en el ROADMAP, rama B).
+
 ## 2026-08-31 (6) — 💳 LA RAMA B: EL MÉTODO DE PAGO TIENE SU CASILLA (PR #10, esperando a Maired)
 
 **El peor hueco de la clase "la ventana sin estado", cerrado con su casilla.** El bug que ella

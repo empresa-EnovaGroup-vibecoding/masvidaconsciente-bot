@@ -39,7 +39,7 @@ from app.agent.agent import (
     _datos_sensibles,
     _datos_sensibles_inventados,
 )
-from app.agent.tools import generar_datos_pago
+from app.agent.tools import _MONEDA_POR_TIPO, _tipo_canonico, generar_datos_pago
 from app.models import Cliente, MetodoPago, Pedido, ZonaEntrega, hoy_venezuela
 from app.services.db import get_session_factory
 
@@ -220,6 +220,11 @@ async def main() -> None:
     check("🔴 ZELLE existe en la tabla (antes NO, y la visión rechazaba pagos Zelle legítimos)",
           any("zelle" in f"{m.tipo} {m.titulo}".lower() for m in activos),
           f"métodos: {[(m.tipo, m.titulo) for m in activos]}")
+    # Los métodos en BOLÍVARES de la tabla real (pago móvil, transferencia) — los usa el
+    # escenario "en bolívares" de abajo. Se calculan AQUÍ, de la misma consulta.
+    metodos_activos_bs = [
+        m for m in activos if _MONEDA_POR_TIPO.get(_tipo_canonico(m.tipo)) == "bs"
+    ]
 
     await _limpiar()
     try:
@@ -265,9 +270,13 @@ async def main() -> None:
             ped = (await s.execute(
                 select(Pedido).where(Pedido.cliente_telefono == TEL)
             )).scalars().first()
+            # ⚠️ El tipo se compara NORMALIZADO (_tipo_canonico): la casilla congela el tipo
+            # TAL CUAL está en la tabla real, y en el taller está cargado 'Zelle' (mayúscula).
+            # La primera corrida de este banco (31-ago) salió roja por comparar contra 'zelle'
+            # literal — el flujo entero estaba bien; el estricto era el check.
             check("🔴 la elección quedó en su CASILLA (pedidos.metodo_elegido)",
                   ped.metodo_elegido and "zelle" in ped.metodo_elegido.lower()
-                  and ped.metodo_elegido_tipo == "zelle",
+                  and _tipo_canonico(ped.metodo_elegido_tipo) == "zelle",
                   f"metodo_elegido={ped.metodo_elegido!r} tipo={ped.metodo_elegido_tipo!r}")
             check("   ...y la cotización se guardó COMPLETA igual (el validador no cambió)",
                   ped.cotizado_bs is not None and ped.cotizado_usd is not None
@@ -298,6 +307,34 @@ async def main() -> None:
               len(m5) == 1 and m5[0].get("telefono") and m5[0].get("cedula"), str(m5))
         check("   ...las llaves viejas siguen (compatibilidad)",
               bool(r5.get("telefono_pago") and r5.get("cedula")), str(r5)[:250])
+
+        # "VOY A PAGAR EN BOLÍVARES" (decisión de Maired, 1-sep): la moneda NO elige la vía.
+        # Con varias vías en Bs, el bot pregunta AFINANDO solo entre ESAS (pago móvil o
+        # transferencia) — quien dice pago móvil no recibe la cuenta del banco; con una sola,
+        # calza directo. Ni un dato ni un método en dólares en la respuesta.
+        async with f() as s:
+            r6 = await generar_datos_pago(s, TEL, metodo="en bolívares")
+        en_bs = metodos_activos_bs
+        if len(en_bs) > 1:
+            nombres6 = r6.get("metodos_disponibles") or []
+            check("🔴 'en bolívares' con varias vías ⇒ pregunta AFINANDO entre ESAS (no da datos)",
+                  r6.get("ok") is False and not r6.get("metodos_de_pago")
+                  and set(nombres6) == {m.titulo for m in en_bs},
+                  f"candidatos={nombres6} vs en_bs={[m.titulo for m in en_bs]}")
+            check("   ...sin nombrar las vías en dólares como opción",
+                  not any("zelle" in str(n).lower() or "binance" in str(n).lower()
+                          for n in nombres6), str(nombres6))
+            async with f() as s:
+                ped = (await s.execute(
+                    select(Pedido).where(Pedido.cliente_telefono == TEL)
+                )).scalars().first()
+                check("   ...y la casilla NO se pisó (sigue la elección anterior)",
+                      _tipo_canonico(ped.metodo_elegido_tipo) == "pago movil",
+                      f"tipo={ped.metodo_elegido_tipo!r}")
+        else:
+            m6 = r6.get("metodos_de_pago") or []
+            check("🔴 'en bolívares' con UNA sola vía ⇒ calza directo con esa",
+                  r6.get("ok") and len(m6) == 1, str(r6)[:200])
     finally:
         await _limpiar()
 
