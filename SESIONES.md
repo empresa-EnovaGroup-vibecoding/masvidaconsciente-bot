@@ -24,6 +24,20 @@
 
 ---
 
+## 2026-09-01 (8) — 💳 EL ZELLE DE PRODUCCIÓN CARGADO — 27/27 bancos (autorizado por Maired)
+
+**El único banco rojo (§7) era dato, no código: `metodos_pago` de PRODUCCIÓN no tenía la fila
+Zelle** — Pago Móvil, Transferencia (Banesco) y Binance YA estaban ahí, idénticos al taller (el
+14-jul se arregló en las dos bases; el Zelle se quedó atrás, o llegó después solo al taller).
+
+**Maired autorizó copiar las filas exactas del taller** (en vez de tipearlas ella). Procedimiento
+con el cuidado de datos bancarios reales: 1) se leyó la fila completa de Zelle en el taller
+(tipo/titular/correo/orden) 2) se leyó ANTES la tabla de producción para no duplicar ni pisar
+nada — confirmado: faltaba SOLO esa fila, las otras tres coincidían byte a byte 3) un INSERT
+único con esos datos exactos (id=4, autogenerado) 4) verificado leyendo de vuelta 5) corrido el
+banco específico (`probar_datos_bancarios.py`, todas sus 18 comprobaciones OK) 6) corrido el
+paquete completo: **27/27**. Ni una fila tocada de las que ya existían.
+
 ## 2026-09-01 (7) — ✅ VERIFICACIÓN CRUZADA DEL RELEVO DE ChatGPT: la promoción es REAL — 26/27 bancos
 
 **ChatGPT terminó su plan y dejó relevo escrito; Claude lo verificó punto por punto en el

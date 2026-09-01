@@ -41,18 +41,20 @@ y salud, memoria que no se olvida a las 24h, y 8 migraciones nuevas (hasta la 03
 | **Modo del agente** | UN agente | UN agente |
 | **Lista blanca** | ✅ **ACTIVA: 1 solo número** (`NUMEROS_PERMITIDOS=573005690062`, extra=None). ⚠️ `bot_activo` no existe en la config ⇒ el código lo trata como ENCENDIDO: **lo que protege a las clientas es la lista blanca** | ✅ activa |
 | **Bot en el mercado** | ❌ NO — cerrado a clientas reales (regla absoluta del relevo: no abrir sin autorización expresa de Maired) | pruebas |
-| **Bancos** | 🟡 **26/27** (1-sep): el rojo es `probar_datos_bancarios` por **DATO faltante: la tabla `metodos_pago` de producción NO tiene Zelle** (el arreglo del 14-jul fue solo en el taller; las bases son independientes). Cargar los métodos reales en el panel de PRODUCCIÓN | ✅ 27/27 |
+| **Bancos** | ✅ **27/27** (1-sep, tras cargar el Zelle que faltaba — ver abajo) | ✅ 27/27 |
 | **Datos** | 32 productos / 37 variantes / 277 clientes / 13.890 mensajes / **0 pedidos** (⚠️ confirmar con Maired que el 0 es esperado — hizo eliminaciones manuales; hay respaldo pre-migración en `/root/masvida-migration-backups/20260901_040209`) / personalidad 7.331 car | 32/37 + datos de prueba |
 | **Respaldos** | diario cifrado (7 semanas corriendo) + pre-migración + pre-endurecimiento (con SHA-256) + copia local `C:\Developer\AI\Proyectos\respaldos-masvida` | D4 sigue abierta |
+
+✅ **CERRADO el 1-sep: el Zelle de producción.** Producción YA tenía Pago Móvil, Transferencia
+(Banesco) y Binance idénticos al taller — solo faltaba la fila Zelle (titular Luis Guevara,
+correo familiapenazabala@gmail.com). Copiada con los datos EXACTOS del taller (leídos primero,
+sin inventar nada), verificada con el banco específico y con el paquete completo: **27/27**.
 
 🔴 **LO QUE QUEDA DEL INCIDENTE (además de los 12 pendientes del relevo de ChatGPT):**
 1. **ROTAR las llaves que el relevo NO lista (la deuda D5):** `META_ACCESS_TOKEN`/`APP_SECRET`
    (**prioridad #1**: la cuenta Tech Provider), `OPENROUTER_API_KEY`, llaves R2. El relevo solo
    cubre token Coolify, JWT, contraseña del panel y Postgres/Redis (su punto 12).
-2. **Cargar los métodos de pago en producción** (el banco rojo): Zelle/Binance/transferencia no
-   existen en su tabla — son datos REALES de Whuilianny; los carga Maired en el panel de
-   producción (o se copian del taller con su OK).
-3. **Pruebas de humo con el número real** (checklist de la meta, punto 5).
+2. **Pruebas de humo con el número real** (checklist de la meta, punto 5).
 
 ### 🔬 2026-08-24 (2) — LA PRUEBA EN VIVO DE MAIRED: 3 bugs de código y EL TECHO DEL MODELO
 
