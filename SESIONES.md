@@ -24,6 +24,32 @@
 
 ---
 
+## 2026-09-01 (5) — 🔬 AUTOPSIA: "borré el chat pero el bot recuerda la entrega" — NO es bug, es diseño
+
+**Maired borró el chat de Enova desde el panel y al reescribir el bot dijo "ya tienes la entrega
+acordada para el jueves 3... pago por Binance".** Autopsia con 3 agentes (código + BD + Redis/logs
+por SSH, solo lectura). Veredicto: **las casillas de las ramas B/C/D funcionan — demasiado bien.**
+
+- El botón **"Borrar" (chat)** → `DELETE /api/conversaciones/{tel}` (router.py:2025-2039): borra
+  `Mensaje` + `Intervencion` + la memoria de Redis (`borrar_memoria`: hist/buffer/cobro/…). **NO
+  toca `pedidos`, `pagos` ni `clientes`** — a propósito, y el propio diálogo del panel lo avisa:
+  *"Sus pedidos y pagos NO se borran"*. En Redis: confirmado limpio (hist solo la charla nueva).
+- Quedaba vivo el pedido **#2351** (`esperando_pago`, empanadas $14, entrega 2026-09-03,
+  `metodo_elegido='Binance Whuillianny'`), creado ANTES del borrado. `_estado_cliente_texto`
+  consulta los pedidos SIN filtro de fecha y reinyecta cada turno "Entrega YA ACORDADA" + "Ya
+  ELIGIÓ cómo pagar" — exactamente lo que salió. La memoria no vino del chat (ese sí se borró):
+  vino de Postgres, por diseño.
+- 🟢 **En PRODUCCIÓN esto es CORRECTO** (perder el pedido de una clienta que ya encargó/pagó
+  porque se limpió el chat sería el bug). 🟡 En el TALLER molesta para "probar como nueva". Ya
+  existe el botón que SÍ pone en cero — **"Borrar cliente"** (clientes → `DELETE /api/clientes`,
+  borra pagos→pedidos→mensajes→cliente) — pero el panel lo deshabilita si hay pago confirmado.
+- **Decisión de Maired: NO cambiar nada.** Ella misma borró los pedidos de Enova. Verificado
+  después: **0 pedidos, 0 pagos**, cliente vivo (nombre Enova), 15 mensajes + 8 renglones Redis
+  de la charla nueva. El pedido fantasma ya no puede reaparecer en ese chat.
+- 🔎 **Anotado para revisar aparte (NO tocado):** los 2 pagos confirmados viejos de Enova
+  compartían la MISMA referencia `410919226588905472` en fechas distintas — o dato de prueba
+  repetido, o la validación del comprobante no exige referencia única. Vale mirarlo algún día.
+
 ## 2026-09-01 (4) — 🛡️ RAMA D: EL VIGILANTE PREGUNTA-vs-ESTADO — cierra el plan A→D (PR #14)
 
 **La última pieza del plan "que no repregunte".** Las ramas #6 y C INYECTAN lo ya elegido como

@@ -36,10 +36,13 @@ estado y (rama D) su vigilante.
 
 **El test que decide todo:** *¿ese dato tiene casilla?* Si no la tiene, es repreguntable.
 
-> 🎯 **ESTADO AL 1-SEP: EL PLAN A→D ESTÁ COMPLETO** (construido; falta fusionar los últimos PRs
-> y la prueba en vivo de Maired). B método de pago (#10 fusionado + #11) · C hilo a tamaño/sabor
-> (#13) · D el vigilante (#14) · más la rama de GUARDIAS (#12) que destapó la prueba de Maired
-> ("los guardias miran al cliente"). El detalle de cada una, abajo y en SESIONES 1-sep (1)-(4).
+> 🎯 **ESTADO AL 1-SEP: EL PLAN A→D ESTÁ COMPLETO, FUSIONADO Y DESPLEGADO AL TALLER.** Los PRs
+> #10, #11 (B método de pago) · #12 (guardias) · #13 (C hilo a tamaño/sabor) · #14 (D el
+> vigilante) están TODOS en `master`. Maired probó en vivo B y C y le gustaron. Detalle de cada
+> una en SESIONES 1-sep (1)-(4). 🔬 Y la autopsia del "borré el chat y el bot recuerda la
+> entrega": NO era bug — el pedido abierto sobrevive al borrado del chat por diseño (correcto en
+> producción); Maired borró los pedidos de prueba y quedó en cero. Ver SESIONES 1-sep (5).
+> **El trabajo de "que no repregunte" está CERRADO.** Lo siguiente es la meta grande: la entrega.
 
 **HECHO y fusionado el 31-ago** (PRs #5→#8, todos desplegados al taller):
 - **#5 fotos con memoria** · **#6 EL HILO DE LA VENTA** (`hilo_de_la_venta` en tools.py: destila
