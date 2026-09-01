@@ -24,6 +24,40 @@
 
 ---
 
+## 2026-09-01 (4) — 🛡️ RAMA D: EL VIGILANTE PREGUNTA-vs-ESTADO — cierra el plan A→D (PR #14)
+
+**La última pieza del plan "que no repregunte".** Las ramas #6 y C INYECTAN lo ya elegido como
+estado, pero eso es prompt y el prompt SUGIERE. Este vigilante lo IMPIDE: antes de que el
+mensaje salga, compara el BORRADOR contra las elecciones vigentes (`elecciones_hilo` +
+`elecciones_var`) y, si reabre algo ya elegido, regaño `[SISTEMA]` + `continue` — el modelo
+redacta de nuevo. Rama `vigilante-pregunta-vs-estado`, **PR #14**.
+
+- **`_reabre_eleccion_ya_hecha` (pura):** detecta reapertura en las tres dimensiones —
+  **sabor/relleno** (reusa `_dato_opcional_pedido`), **versión/masa** (reusa
+  `_versiones_tocadas`: ofrecer la otra o nombrar las dos), **tamaño** (pregunta genérica,
+  `_PREGUNTA_TAMANO`). Mencionar SOLO lo elegido es confirmación, no dispara.
+- **Precedente `_correccion_fantasma`:** la sentencia la dicta el ESTADO, no una lista de
+  palabras. El código NO reescribe el texto (la frontera del 24-ago intacta): solo devuelve la
+  decisión al modelo.
+- **Nace con la regla de los guardias (1-sep (2)):** usa `pregunta_cliente` — si el cliente
+  PIDIÓ ese dato o lo CAMBIÓ en su último mensaje, el bot RESPONDE y el vigilante NO dispara.
+- **NO mata el texto:** una pasada; si el modelo insiste, el mensaje SALE igual (insistir no es
+  mentir — patrón de la red del cierre). Va justo después de ella (prima: aquella cuida lo NO
+  elegido, esta lo YA elegido).
+- 🕳️ **Hueco conocido, sin cambio:** el hilo y el vigilante se calculan en el camino del modo
+  'uno'; si algún día se enciende `agente_modo='dos'` no aplican ahí. Bandera hoy en 'uno'.
+
+**Validación:** 13 tests nuevos (`test_vigilante_pregunta_estado.py`: pieza pura por dimensión +
+carril de punta a punta con el caso real de la masa) · **2 reversiones → rojas en su test
+exacto** (quitar la absolución del cliente → dispara respondiendo lo que pidió; quitar la
+bandera de una pasada → nunca deja salir) · suite **784** · ruff · compileall — verdes.
+
+🎯 **PLAN A→D COMPLETO.** B (método de pago en 2 pasos) · C (hilo a tamaño/sabor) · D (el
+vigilante) fusionados o en PR, más la rama de los guardias que destapó la prueba de Maired. Con
+esto las repreguntas de datos del negocio quedan entre "casi nunca" (registrar temprano +
+estado) y "frenadas antes de salir" (el vigilante). El "nunca jamás con cualquier palabra" NO
+existe (dicho a Maired el 31-ago) — las frases 100% libres no se vuelven dato sin adivinar.
+
 ## 2026-09-01 (3) — 🧵 RAMA C: EL HILO EXTENDIDO A TAMAÑO Y SABOR (PR #13)
 
 **El #6 seguía la versión que vive en el NOMBRE (masa yuca/plátano); esta rama lo extiende a las
