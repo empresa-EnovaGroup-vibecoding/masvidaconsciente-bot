@@ -39,7 +39,7 @@ from app.agent.agent import (
     _datos_sensibles,
     _datos_sensibles_inventados,
 )
-from app.agent.tools import generar_datos_pago
+from app.agent.tools import _tipo_canonico, generar_datos_pago
 from app.models import Cliente, MetodoPago, Pedido, ZonaEntrega, hoy_venezuela
 from app.services.db import get_session_factory
 
@@ -265,9 +265,13 @@ async def main() -> None:
             ped = (await s.execute(
                 select(Pedido).where(Pedido.cliente_telefono == TEL)
             )).scalars().first()
+            # ⚠️ El tipo se compara NORMALIZADO (_tipo_canonico): la casilla congela el tipo
+            # TAL CUAL está en la tabla real, y en el taller está cargado 'Zelle' (mayúscula).
+            # La primera corrida de este banco (31-ago) salió roja por comparar contra 'zelle'
+            # literal — el flujo entero estaba bien; el estricto era el check.
             check("🔴 la elección quedó en su CASILLA (pedidos.metodo_elegido)",
                   ped.metodo_elegido and "zelle" in ped.metodo_elegido.lower()
-                  and ped.metodo_elegido_tipo == "zelle",
+                  and _tipo_canonico(ped.metodo_elegido_tipo) == "zelle",
                   f"metodo_elegido={ped.metodo_elegido!r} tipo={ped.metodo_elegido_tipo!r}")
             check("   ...y la cotización se guardó COMPLETA igual (el validador no cambió)",
                   ped.cotizado_bs is not None and ped.cotizado_usd is not None

@@ -12,7 +12,7 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 
-from app.agent.tools import _MONEDA_POR_TIPO, _fmt_bs
+from app.agent.tools import _MONEDA_POR_TIPO, _fmt_bs, _tipo_canonico
 from app.config import get_settings
 from app.models import (
     Cliente,
@@ -686,8 +686,10 @@ async def _estado_cliente_texto(telefono: str) -> str:
         # pedido completo: lo registrado se muestra, no se repregunta. `getattr` con default
         # (fail-safe): las filas viejas y los dobles de los tests no traen estos campos.
         metodo_elegido = str(getattr(esperando, "metodo_elegido", None) or "").strip()
+        # `_tipo_canonico` a propósito: el tipo va CONGELADO tal cual estaba en la tabla real
+        # (en el taller: 'Zelle', con mayúscula), y la moneda tiene que salir igual.
         moneda_elegida = _MONEDA_POR_TIPO.get(
-            str(getattr(esperando, "metodo_elegido_tipo", None) or "").strip().lower()
+            _tipo_canonico(getattr(esperando, "metodo_elegido_tipo", None))
         ) if metodo_elegido else None
         if metodo_elegido:
             lineas.append(

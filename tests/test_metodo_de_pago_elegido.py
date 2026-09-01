@@ -32,6 +32,7 @@ from app.agent.tools import (
     _MONEDA_POR_TIPO,
     _PARAMS_DECLARADOS,
     _matchear_metodo,
+    _tipo_canonico,
 )
 
 
@@ -134,13 +135,35 @@ def test_dolares_fisicos_es_el_efectivo():
 # ══════════════════════════════════════════════════════════════════════════════════
 
 def test_la_moneda_de_cada_tipo():
-    assert _MONEDA_POR_TIPO["pago_movil"] == "bs"
-    assert _MONEDA_POR_TIPO["banco"] == "bs"
-    assert _MONEDA_POR_TIPO["zelle"] == "usd"
-    assert _MONEDA_POR_TIPO["binance"] == "usd"
-    assert _MONEDA_POR_TIPO["efectivo"] == "usd"
+    def moneda(tipo):
+        return _MONEDA_POR_TIPO.get(_tipo_canonico(tipo))
+
+    assert moneda("pago_movil") == "bs"
+    assert moneda("banco") == "bs"
+    assert moneda("zelle") == "usd"
+    assert moneda("binance") == "usd"
+    assert moneda("efectivo") == "usd"
     # 'otro' NO está a propósito: moneda desconocida ⇒ cobro completo, sin adivinar.
-    assert "otro" not in _MONEDA_POR_TIPO
+    assert moneda("otro") is None
+
+
+def test_el_tipo_se_entiende_como_lo_escriba_la_tabla_real():
+    """🔴 La lección de la primera corrida del banco en el VPS (31-ago): en el taller el tipo
+    está cargado 'Zelle' (mayúscula), no 'zelle' como dice la migración 009. La moneda tiene
+    que salir igual, se escriba como se escriba — si no, el bot re-pitchearía las dos monedas
+    exactamente a quien ya eligió."""
+    for crudo, canonico in [
+        ("Zelle", "zelle"),            # así está en el taller, verificado por el banco
+        ("zelle", "zelle"),
+        ("pago_movil", "pago movil"),  # el canónico de la migración 009
+        ("Pago Móvil", "pago movil"),  # por si el panel lo cargó como título
+        ("PAGO-MOVIL", "pago movil"),
+        ("  Efectivo ", "efectivo"),
+        (None, ""),
+    ]:
+        assert _tipo_canonico(crudo) == canonico
+    assert _MONEDA_POR_TIPO.get(_tipo_canonico("Zelle")) == "usd"
+    assert _MONEDA_POR_TIPO.get(_tipo_canonico("Pago Móvil")) == "bs"
 
 
 # ══════════════════════════════════════════════════════════════════════════════════
@@ -203,8 +226,9 @@ def _pedido(**kw):
 async def test_eligio_zelle_y_el_estado_lo_dice_sin_recitar_los_bolivares(monkeypatch):
     """Eligió dólares: la línea 'Ya ELIGIÓ' sale con la orden de llamar con SU metodo, y la
     cifra en Bs SE CALLA — recitarle 'por Pago Móvil son X Bs' a quien eligió Zelle es el
-    re-pitch de las dos monedas que la rama B vino a matar."""
-    _con_pedidos(monkeypatch, [_pedido(metodo_elegido="Zelle", metodo_elegido_tipo="zelle")])
+    re-pitch de las dos monedas que la rama B vino a matar. El tipo congelado va 'Zelle' con
+    mayúscula A PROPÓSITO: es como está cargado en la tabla real del taller."""
+    _con_pedidos(monkeypatch, [_pedido(metodo_elegido="Zelle", metodo_elegido_tipo="Zelle")])
     texto = await sp._estado_cliente_texto("584140000000")
     assert "Ya ELIGIÓ cómo pagar: Zelle" in texto
     assert "metodo='Zelle'" in texto

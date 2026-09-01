@@ -2636,13 +2636,24 @@ async def get_pedido_esperando_pago(session, telefono):
     ).scalars().first()
 
 
+def _tipo_canonico(tipo) -> str:
+    """El `tipo` de un método de pago, como lo escriba la tabla REAL, llevado a su forma
+    canónica: sin acentos, minúsculas, guiones y guiones bajos como espacio. 🔴 No es teoría:
+    el banco del 31-ago descubrió que en el taller el tipo está cargado como 'Zelle' (no
+    'zelle'), y un mapa que solo entienda los valores de la migración 009 dejaría a la fila
+    real sin moneda — con el bot re-pitcheando las dos monedas a quien ya eligió."""
+    t = _sin_acentos(str(tipo or "")).replace("_", " ").replace("-", " ")
+    return " ".join(t.split())
+
+
 # La MONEDA de cada tipo de método (los tipos son el vocabulario del panel, migración 009:
-# pago_movil | banco | binance | zelle | efectivo | otro). Decide qué mitad del cobro se le
-# enseña al modelo cuando el cliente YA eligió: Bs = precio completo; USD = 20% + flete gratis
-# (la regla de Maired del 24-ago: el descuento se ata a la MONEDA, no a la vía). El tipo 'otro'
-# no está a propósito: moneda desconocida ⇒ se le sigue enseñando el cobro completo, sin adivinar.
+# pago_movil | banco | binance | zelle | efectivo | otro — aquí CLAVEADOS por su forma
+# canónica, ver _tipo_canonico). Decide qué mitad del cobro se le enseña al modelo cuando el
+# cliente YA eligió: Bs = precio completo; USD = 20% + flete gratis (la regla de Maired del
+# 24-ago: el descuento se ata a la MONEDA, no a la vía). El tipo 'otro' no está a propósito:
+# moneda desconocida ⇒ se le sigue enseñando el cobro completo, sin adivinar.
 _MONEDA_POR_TIPO = {
-    "pago_movil": "bs",
+    "pago movil": "bs",
     "banco": "bs",
     "zelle": "usd",
     "binance": "usd",
@@ -2656,7 +2667,7 @@ _MONEDA_POR_TIPO = {
 # tiene UN solo método de esa moneda, calza directo; si tiene varios, salen como CANDIDATOS y
 # el bot pregunta AFINANDO ("¿efectivo, Zelle o Binance?") — se pregunta, jamás se adivina.
 _SINONIMOS_TIPO_METODO = {
-    "pago_movil": ("pago movil", "pagomovil", "bolivares", "bs"),
+    "pago movil": ("pago movil", "pagomovil", "bolivares", "bs"),
     "banco": ("transferencia", "cuenta bancaria", "bolivares", "bs"),
     "zelle": ("dolares", "divisas"),
     "binance": ("usdt", "dolares", "divisas"),
@@ -2682,7 +2693,7 @@ def _matchear_metodo(texto, metodos):
         return None, [m.titulo for m in exactos]
 
     def _alias(m):
-        return [_sin_acentos(a) for a in _SINONIMOS_TIPO_METODO.get((m.tipo or "").strip().lower(), ())]
+        return [_sin_acentos(a) for a in _SINONIMOS_TIPO_METODO.get(_tipo_canonico(m.tipo), ())]
 
     # Sinónimo EXACTO antes que contención: así "dólares físicos" gana en efectivo (su alias
     # completo) en vez de desparramarse a Zelle/Binance porque contiene la palabra "dolares".
@@ -2988,7 +2999,7 @@ async def generar_datos_pago(session, telefono, pedido_id=None, metodo=None):
         # CON la elección hecha (recién dicha, o leída de la casilla del pedido): SOLO los
         # datos de ESE método y el resumen en SU moneda. Los demás métodos van como NOMBRES
         # dentro de la nota (por si el cliente CAMBIA), nunca como datos.
-        moneda = _MONEDA_POR_TIPO.get((elegido.tipo or "").strip().lower())
+        moneda = _MONEDA_POR_TIPO.get(_tipo_canonico(elegido.tipo))
         titulo = elegido.titulo or elegido.tipo
         otros = [m.titulo for m in metodos if m.id != elegido.id]
         if moneda == "bs":

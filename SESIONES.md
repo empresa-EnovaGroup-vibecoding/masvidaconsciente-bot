@@ -24,6 +24,38 @@
 
 ---
 
+## 2026-09-01 (1) — 💬 "EN BOLÍVARES TAMBIÉN CUENTA" + el tipo real de la tabla (PR #11, el remate de la rama B)
+
+**Maired fusionó el PR #10 apenas lo revisó** — y su revisión trajo DOS mejoras reales que van
+en el PR #11 (rama `metodo-de-pago-afinado`):
+
+**1. Las palabras de MONEDA también son información (lo dijo ella con sus palabras):** *"cuando
+la persona aquí en Venezuela dice 'voy a pagar en bolívares', quiere decir pago móvil o
+transferencia — es lo mismo"*. Entraron al diccionario FIJO del matcher, por GRUPO de moneda:
+`bolivares`/`bs` → los métodos en Bs · `dolares`/`divisas` → las tres vías del dólar ·
+`dolares fisicos` → efectivo (el sinónimo EXACTO gana antes que la contención, para que no se
+desparrame a Zelle/Binance por contener "dolares"). Con UN solo método de esa moneda ⇒ calza
+DIRECTO y se guarda sin repreguntar (el caso real del negocio: "en bolívares" → Pago Móvil de
+una). Con varios ⇒ el bot pregunta AFINANDO ("¿Pago Móvil o transferencia?") — la nota del
+resultado ahora distingue "calza con varios" (pregunta entre ESOS) de "no calza" (lista
+completa). **Se pregunta, jamás se adivina; sigue siendo vocabulario cerrado.** Su pregunta de
+si necesita "un diccionario aparte": NO — vive en el código (`_SINONIMOS_TIPO_METODO`); si las
+clientas usan más palabras, se añaden ahí en minutos.
+
+**2. 🔴 El banco del VPS salió ROJO tras fusionar el #10 — y el rojo enseñó algo que valía la
+pena.** ÚNICO check caído: `metodo_elegido_tipo == "zelle"`… porque **en la tabla real del
+taller el tipo está cargado `'Zelle'` (mayúscula), no `'zelle'`** como dice la migración 009.
+Todo el flujo de dos pasos PASÓ en el servidor (nombres sin datos, Zelle solo, una moneda,
+casilla escrita); el estricto era el CHECK. Pero destapó el riesgo real: un tipo cargado
+"Pago Móvil" (espacio y acento) habría dejado a esa fila SIN moneda y el bot re-pitcheando las
+dos monedas a quien ya eligió — exactamente el bug de la rama B, de vuelta por una mayúscula.
+**El arreglo:** `_tipo_canonico()` (sin acentos, minúsculas, `_`/`-` como espacio) en TODOS los
+consumidores del tipo (el mapa de moneda de la tool, `_estado_cliente_texto`, los sinónimos del
+matcher y el check del banco). La casilla sigue congelando el tipo TAL CUAL está en la tabla.
+
+**746 tests (26 de la rama B) · ruff · compileall — verdes.** Al fusionar el #11 el flujo del
+taller debe volver a VERDE; ahí sí: la prueba en vivo de Maired (guion en el ROADMAP, rama B).
+
 ## 2026-08-31 (6) — 💳 LA RAMA B: EL MÉTODO DE PAGO TIENE SU CASILLA (PR #10, esperando a Maired)
 
 **El peor hueco de la clase "la ventana sin estado", cerrado con su casilla.** El bug que ella
