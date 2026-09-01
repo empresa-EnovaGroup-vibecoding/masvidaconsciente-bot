@@ -116,4 +116,5 @@ pre-construida (`image: ...`) y quitar el `build:` inline, para que el bot nunca
 
 ## Para la fábrica (clientes futuros)
 Este mismo servicio se copia tal cual en cada cliente nuevo: solo cambian el bucket y la clave de
-cifrado (cada cliente, su propio respaldo separado). Es parte del `ENOVA_BLUEPRINT`.
+cifrado (cada cliente, su propio respaldo separado). Forma parte del modelo de negocio de Enova
+(ver la skill `/meta-tech-provider` → `negocio/blueprint-modelo-negocio.md`).
