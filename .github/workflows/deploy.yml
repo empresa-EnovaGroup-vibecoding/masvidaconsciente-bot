@@ -178,9 +178,16 @@ jobs:
       - name: PRODUCCIÓN (bot + worker, netcup, CLIENTES REALES)
         if: ${{ env.DESTINO == 'produccion' }}
         run: |
-          curl -fsS --connect-timeout 20 --max-time 120 --retry 3 --retry-all-errors --retry-delay 5 \
-            -H "Authorization: Bearer ${{ secrets.COOLIFY_NEW_TOKEN }}" \
-            "http://152.53.89.118:8000/api/v1/deploy?uuid=y20mosanb19cw8ukso56hv7e,hrkrh8f9buora7aqxt8rsbna"
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.PROD_SSH_KEY }}" > ~/.ssh/id_ed25519
+          printf '%s\n' "${{ secrets.PROD_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/id_ed25519 ~/.ssh/known_hosts
+          {
+            printf 'header = "Authorization: Bearer %s"\n' "${{ secrets.COOLIFY_NEW_TOKEN }}"
+            printf 'url = "http://127.0.0.1:8000/api/v1/deploy?uuid=y20mosanb19cw8ukso56hv7e,hrkrh8f9buora7aqxt8rsbna"\n'
+            printf 'fail\nsilent\nshow-error\nconnect-timeout = 20\nmax-time = 120\nretry = 3\nretry-all-errors\nretry-delay = 5\n'
+          } | ssh -o BatchMode=yes -o ConnectTimeout=20 -i ~/.ssh/id_ed25519 root@152.53.89.118 \
+            'curl --config -'
 
       # 🛡️ EL VIGILANTE DE PRODUCCIÓN (auditoría 2026-08-02, DAT-7 — el hallazgo que explica
       # todo el reporte de la clienta SIN necesidad de ningún bug).
