@@ -279,14 +279,18 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "generar_datos_pago",
-            "description": "Genera el cobro: calcula el total en bolivares (tasa BCV del dia), devuelve un `resumen_cobro` listo para copiar y los datos de TODOS los metodos de pago (`metodos_de_pago`). Usala JUSTO despues de registrar_pedido, pasando el `pedido_id` que esa te devolvio (para cobrar ESE pedido, no uno viejo). Es la UNICA fuente de los datos de pago (cedula, telefono, cuenta, correo): dale al cliente SOLO los del metodo que el elija, copiados tal cual — JAMAS los escribas de memoria. Si el cliente pide los datos otra vez, vuelve a llamarla.",
+            "description": "Genera el cobro: calcula el total en bolivares (tasa BCV del dia) y devuelve un `resumen_cobro` listo para copiar. Usala JUSTO despues de registrar_pedido, pasando el `pedido_id` que esa te devolvio (para cobrar ESE pedido, no uno viejo). Es la UNICA fuente de los datos de pago (cedula, telefono, cuenta, correo) — JAMAS los escribas de memoria. Va en DOS pasos: sin `metodo` te da el cobro y los NOMBRES de los metodos (`metodos_disponibles`) para que le preguntes al cliente como prefiere pagar; cuando el cliente ELIJA, vuelve a llamarla pasando `metodo` y te da SOLO los datos de ESE metodo (`metodos_de_pago`), que copias tal cual. Si el cliente pide los datos otra vez, vuelve a llamarla.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "pedido_id": {
                         "type": "integer",
                         "description": "ID del pedido a cobrar. Omitelo para usar el ultimo pedido del cliente.",
-                    }
+                    },
+                    "metodo": {
+                        "type": "string",
+                        "description": "COMO va a pagar el cliente, SOLO si el ya lo dijo. Escribelo TAL CUAL uno de los nombres de `metodos_disponibles` (ej. 'Zelle', 'Pago Movil'). Con esto la herramienta devuelve UNICAMENTE los datos de ese metodo y el monto en SU moneda, y la eleccion queda guardada en el pedido. Omitelo si el cliente aun no ha elegido.",
+                    },
                 },
             },
         },
@@ -2632,9 +2636,66 @@ async def get_pedido_esperando_pago(session, telefono):
     ).scalars().first()
 
 
-async def generar_datos_pago(session, telefono, pedido_id=None):
+# La MONEDA de cada tipo de método (los tipos son el vocabulario del panel, migración 009:
+# pago_movil | banco | binance | zelle | efectivo | otro). Decide qué mitad del cobro se le
+# enseña al modelo cuando el cliente YA eligió: Bs = precio completo; USD = 20% + flete gratis
+# (la regla de Maired del 24-ago: el descuento se ata a la MONEDA, no a la vía). El tipo 'otro'
+# no está a propósito: moneda desconocida ⇒ se le sigue enseñando el cobro completo, sin adivinar.
+_MONEDA_POR_TIPO = {
+    "pago_movil": "bs",
+    "banco": "bs",
+    "zelle": "usd",
+    "binance": "usd",
+    "efectivo": "usd",
+}
+
+# Sinónimos FIJOS y unívocos por TIPO de método, para matchear lo que el modelo escribe
+# ("transferencia") contra la fila real (tipo 'banco'). Son mapeos 1:1 al vocabulario cerrado
+# del panel, NO un NLU: "dólares" o "divisas" NO están a propósito — calzan con tres métodos
+# distintos, y ambiguo real se pregunta, jamás se adivina.
+_SINONIMOS_TIPO_METODO = {
+    "pago_movil": ("pago movil", "pagomovil"),
+    "banco": ("transferencia", "cuenta bancaria"),
+    "binance": ("usdt",),
+    "efectivo": ("cash",),
+}
+
+
+def _matchear_metodo(texto, metodos):
+    """El `metodo` que mandó el modelo, contra los métodos ACTIVOS de la tabla `metodos_pago`
+    (vocabulario CERRADO: se ELIGE una fila de la BD, jamás se escribe un dato). Mismo espíritu
+    que `_buscar_producto`: exacto primero; luego contención; ambiguo real ⇒ se devuelven los
+    candidatos para PREGUNTAR; sin calce ⇒ (None, []) y quien llama enseña la lista completa.
+
+    Devuelve (metodo, candidatos): con match único, (fila, []); si no, (None, [títulos])."""
+    t = " ".join(_sin_acentos(texto or "").split())
+    if not t:
+        return None, []
+    exactos = [m for m in metodos if " ".join(_sin_acentos(m.titulo or "").split()) == t]
+    if len(exactos) == 1:
+        return exactos[0], []
+    if exactos:
+        return None, [m.titulo for m in exactos]
+    candidatos = []
+    for m in metodos:
+        tipo = (m.tipo or "").strip().lower()
+        textos = [
+            _sin_acentos(f"{m.tipo or ''} {m.titulo or ''}"),
+            *[_sin_acentos(a) for a in _SINONIMOS_TIPO_METODO.get(tipo, ())],
+        ]
+        if any(t in x or x in t for x in textos if x.strip()):
+            candidatos.append(m)
+    if len(candidatos) == 1:
+        return candidatos[0], []
+    return None, [m.titulo for m in candidatos]
+
+
+async def generar_datos_pago(session, telefono, pedido_id=None, metodo=None):
     """Calcula el monto en Bs (tasa del dia), deja el pedido en 'esperando_pago'
-    y devuelve los datos de Pago Movil para que el bot los presente."""
+    y devuelve el cobro. En DOS pasos (rama B, 31-ago): sin `metodo`, el cobro completo y los
+    NOMBRES de los metodos; con `metodo` (o con la eleccion ya guardada en el pedido), SOLO los
+    datos de ESE metodo y el resumen en SU moneda — la eleccion se persiste en `pedidos` y la
+    herramienta deja de re-ofrecer lo que el cliente ya decidio."""
     # Un pedido CERRADO no se vuelve a cobrar. Antes, si el cliente pedía "los datos otra
     # vez" y el modelo omitía el pedido_id, el código agarraba el ÚLTIMO pedido de CUALQUIER
     # estado —incluso uno ya PAGADO— y lo devolvía a 'esperando_pago' (línea de abajo), con
@@ -2718,6 +2779,51 @@ async def generar_datos_pago(session, telefono, pedido_id=None):
             "zonas": zonas,
         }
 
+    # ── LA CASILLA DEL MÉTODO (rama B, migración 035) ──────────────────────────────────
+    # Los métodos se leen AQUÍ (antes de tocar estado o tasa) para que un `metodo` que no
+    # calce se rechace SIN haber escrito nada en la BD. La lectura es la misma de siempre:
+    # la tabla `metodos_pago`, la única fuente (ver el bloque rojo de más abajo).
+    metodos = (
+        await session.execute(
+            select(MetodoPago)
+            .where(MetodoPago.activo.is_(True))
+            .order_by(MetodoPago.orden, MetodoPago.id)
+        )
+    ).scalars().all()
+
+    elegido = None  # la fila de `metodos_pago` que el cliente eligió, si se sabe
+    if metodos:
+        if metodo:
+            elegido, candidatos = _matchear_metodo(metodo, metodos)
+            if elegido is None:
+                # Vocabulario CERRADO: lo que no calza no se adivina. Se devuelven los nombres
+                # reales (los candidatos si el calce fue ambiguo; todos si no calzó ninguno)
+                # y el modelo corrige o le pregunta al cliente. La BD no se tocó.
+                nombres = candidatos or [m.titulo for m in metodos]
+                return {
+                    "ok": False,
+                    "metodos_disponibles": nombres,
+                    "nota": (
+                        f"'{metodo}' no calza con un método de pago del negocio"
+                        + (" (calza con varios)" if candidatos else "")
+                        + ". Los métodos REALES son EXACTAMENTE estos: "
+                        + " · ".join(nombres)
+                        + ". Si el cliente ya eligió uno de esos, vuelve a llamarme con ese "
+                        "nombre TAL CUAL en `metodo`; si no, pregúntale cuál prefiere "
+                        "nombrándoselos — sin inventar métodos que no están en la lista."
+                    ),
+                }
+        elif getattr(pedido, "metodo_elegido", None):
+            # EL ESTADO LE GANA AL DATO FRESCO: si el cliente YA eligió (quedó en la casilla)
+            # y el modelo re-llama sin `metodo` (el "dame los datos otra vez" típico), la
+            # herramienta responde por el método elegido en vez de volcar todos y reabrir la
+            # elección — que era exactamente el bug que Maired confirmó en vivo (31-ago).
+            elegido = next(
+                (m for m in metodos if m.titulo == pedido.metodo_elegido), None
+            )
+            # Si la dueña borró o desactivó ese método después, la casilla se ignora y se
+            # vuelve al paso de preguntar (peor sería dictar datos de una cuenta retirada).
+
     try:
         tasa = await obtener_tasa_bcv()
     except Exception:  # noqa: BLE001
@@ -2756,28 +2862,24 @@ async def generar_datos_pago(session, telefono, pedido_id=None):
         for f in (await session.execute(select(Configuracion))).scalars().all()
     }
 
-    # 🔴 LOS DATOS DE PAGO SALEN DE AQUÍ (la tabla `metodos_pago`, la que edita el panel y la
-    # MISMA contra la que la visión valida el beneficiario del comprobante) — NO del texto de
-    # la personalidad. Antes vivían escritos en ese texto y el modelo los pegaba SIN que
-    # hubiera pedido (le pasó a una clienta real el 2026-07-13); y peor: eran una SEGUNDA
-    # copia de la verdad (si la dueña cambiaba la cuenta en el panel, el bot dictaba la
-    # vieja). Una sola fuente. La red de datos bancarios (agent.py) frena cualquier dato
-    # que no haya salido de una herramienta en ese turno.
-    metodos = (
-        await session.execute(
-            select(MetodoPago)
-            .where(MetodoPago.activo.is_(True))
-            .order_by(MetodoPago.orden, MetodoPago.id)
-        )
-    ).scalars().all()
-    metodos_datos = []
-    for m in metodos:
+    # 🔴 LOS DATOS DE PAGO SALEN DE AQUÍ (la tabla `metodos_pago`, leída más arriba: la que
+    # edita el panel y la MISMA contra la que la visión valida el beneficiario del
+    # comprobante) — NO del texto de la personalidad. Antes vivían escritos en ese texto y el
+    # modelo los pegaba SIN que hubiera pedido (le pasó a una clienta real el 2026-07-13); y
+    # peor: eran una SEGUNDA copia de la verdad (si la dueña cambiaba la cuenta en el panel,
+    # el bot dictaba la vieja). Una sola fuente. La red de datos bancarios (agent.py) frena
+    # cualquier dato que no haya salido de una herramienta en ese turno.
+    #
+    # Y DESDE LA RAMA B (31-ago) los datos completos viajan SOLO cuando se sabe el método
+    # elegido: sin elección, al modelo le llegan los NOMBRES y nada más. Menos datos delante,
+    # menos tentación de volcarlos — el prompt lo sugería; ahora el código lo impide.
+    def _datos_de_metodo(m):
         d = {"metodo": m.titulo or m.tipo}
         for campo in ("titular", "banco", "telefono", "cedula", "cuenta", "correo", "wallet", "instrucciones"):
             v = getattr(m, campo, None)
             if v:
                 d[campo] = v
-        metodos_datos.append(d)
+        return d
 
     # Compatibilidad: las llaves sueltas de Pago Móvil que ya usaba el bot. Se toman del
     # MISMO método de la tabla (una sola verdad); las claves de configuracion quedan solo
@@ -2798,6 +2900,16 @@ async def generar_datos_pago(session, telefono, pedido_id=None):
     pedido.cotizado_usd_divisas = monto_usd_divisas
     pedido.tasa_cotizada = tasa
     pedido.cotizado_at = now_utc()
+    # LA ELECCIÓN A SU CASILLA (rama B): solo cuando el modelo la trae en `metodo` — que es
+    # cuando el CLIENTE acaba de decirla (o de cambiarla: vale lo nuevo). Congelados título y
+    # tipo del método de ESE momento, patrón `zona_nombre`/`cotizado_*`. Cuando `elegido` vino
+    # de la propia casilla (re-llamada sin `metodo`), no hay nada nuevo que guardar.
+    #
+    # ⚠️ La cotización de arriba se guarda COMPLETA (las tres monedas + la tasa) elija lo que
+    # elija: el validador del comprobante compara por MONTO contra esas casillas y NO se toca.
+    if metodo and elegido is not None:
+        pedido.metodo_elegido = elegido.titulo
+        pedido.metodo_elegido_tipo = elegido.tipo
     await session.commit()
     try:
         await set_cache(
@@ -2828,6 +2940,9 @@ async def generar_datos_pago(session, telefono, pedido_id=None):
     # El "delivery por nuestra cuenta" solo se nombra si de verdad hay flete que perdonar: en un
     # retiro no hay envío, y presumir de regalar algo que no existe suena a vendedor de feria.
     _flete_gratis = " y el delivery corre por nuestra cuenta" if envio > 0 else ""
+    # El resumen de las DOS monedas es para cuando el cliente AÚN NO ha elegido (es el pitch
+    # legítimo de la primera vez). Con la elección hecha, más abajo se reemplaza por el de UNA
+    # sola moneda: re-pitchear la otra era la reapertura que ordenaba la propia herramienta.
     resumen_cobro = (
         f"Por Pago Móvil o transferencia son {_fmt_bs(monto_bs)} Bs (precio completo). "
         f"Si pagas en dólares (efectivo, Zelle o Binance) son {_fmt_usd(monto_usd_divisas)}, "
@@ -2850,7 +2965,79 @@ async def generar_datos_pago(session, telefono, pedido_id=None):
         desglose_efectivo.append(f"Delivery: $0 (normalmente {_fmt_usd(envio)}, va por nuestra cuenta)")
     desglose_efectivo.append(f"Total en dólares: {_fmt_usd(monto_usd_divisas)}")
 
-    return {
+    # ── EL RESULTADO, EN DOS PASOS (rama B) ─────────────────────────────────────────────
+    if elegido is not None:
+        # CON la elección hecha (recién dicha, o leída de la casilla del pedido): SOLO los
+        # datos de ESE método y el resumen en SU moneda. Los demás métodos van como NOMBRES
+        # dentro de la nota (por si el cliente CAMBIA), nunca como datos.
+        moneda = _MONEDA_POR_TIPO.get((elegido.tipo or "").strip().lower())
+        titulo = elegido.titulo or elegido.tipo
+        otros = [m.titulo for m in metodos if m.id != elegido.id]
+        if moneda == "bs":
+            resumen_cobro = f"Por {titulo} son {_fmt_bs(monto_bs)} Bs (precio completo)"
+        elif moneda == "usd":
+            resumen_cobro = (
+                f"Pagando por {titulo} son {_fmt_usd(monto_usd_divisas)}, "
+                f"ya con el 20% de descuento{_flete_gratis}"
+            )
+        # (tipo 'otro': moneda desconocida ⇒ se queda el resumen completo de las dos monedas)
+        resultado = {
+            "ok": True,
+            "pedido_id": pedido.id,
+            "tasa_bcv": float(tasa),
+            "resumen_cobro": resumen_cobro,
+            "metodos_de_pago": [_datos_de_metodo(elegido)],
+            # 🔴 NOMBRA EL MÉTODO Y ETIQUETA CADA DATO (del análisis de las conversaciones
+            # reales de Whuilianny, 2026-08-21). Ella los manda "secos" —"Datos. [cédula]
+            # [teléfono] Banesco"— porque al otro lado hay una persona que ya sabe qué es cada
+            # número. El bot le escribe a gente que NO lo sabe: tres números sin etiqueta y sin
+            # decir que eso es un Pago Móvil es la forma más fácil de que el cliente pague mal
+            # (o no pague). El dato sigue saliendo TAL CUAL de la herramienta: esto es solo
+            # ponerle su nombre delante.
+            "nota": (
+                f"El cliente ELIGIÓ pagar por {titulo} y quedó GUARDADO en el pedido: NO le "
+                "vuelvas a ofrecer los demás métodos ni la otra moneda. Presenta el cobro "
+                "copiando EXACTO `resumen_cobro` (NO recalcules) y dale los datos de "
+                "`metodos_de_pago` copiados TAL CUAL. Al entregarlos, "
+                "DI QUÉ MÉTODO ES por su nombre (el campo `metodo`: 'Pago Móvil', 'Zelle'…) "
+                "y pon cada dato con su etiqueta en su propia línea (cédula, teléfono, "
+                "banco…), no tres números pegados. Pide la captura del comprobante."
+                + (
+                    " Si pregunta de dónde sale el monto, pásale `desglose_efectivo` una "
+                    "línea debajo de otra, copiado TAL CUAL."
+                    if moneda == "usd"
+                    else ""
+                )
+                + (
+                    " Solo si el cliente CAMBIA de método, vuelve a llamarme con el nuevo "
+                    "`metodo` (los otros son: " + " · ".join(otros) + ")."
+                    if otros
+                    else ""
+                )
+            ),
+        }
+        if moneda == "usd":
+            resultado["monto_usd_divisas"] = float(monto_usd_divisas)
+            resultado["desglose_efectivo"] = desglose_efectivo
+        elif moneda == "bs":
+            resultado["monto_bs"] = float(monto_bs)
+        else:
+            resultado["monto_usd"] = float(monto_usd)
+            resultado["monto_usd_divisas"] = float(monto_usd_divisas)
+            resultado["monto_bs"] = float(monto_bs)
+            resultado["desglose_efectivo"] = desglose_efectivo
+        if pm is not None and elegido.id == pm.id:
+            # Las llaves sueltas de compatibilidad (solo tienen sentido con el Pago Móvil).
+            resultado["banco"] = pm.banco or config.get("pago_movil_banco")
+            resultado["cedula"] = pm.cedula or config.get("pago_movil_cedula")
+            resultado["telefono_pago"] = pm.telefono or config.get("pago_movil_telefono")
+            resultado["titular"] = pm.titular or config.get("pago_movil_titular")
+        return resultado
+
+    # SIN elección todavía: el cobro completo (las dos monedas — el cliente aún decide) y SOLO
+    # los NOMBRES de los métodos. Los datos de las cuentas ya NO viajan en este paso: darlos
+    # todos era lo que tentaba al modelo a volcarlos y a re-ofrecerlos después.
+    resultado = {
         "ok": True,
         "pedido_id": pedido.id,
         "monto_usd": float(monto_usd),
@@ -2862,28 +3049,30 @@ async def generar_datos_pago(session, telefono, pedido_id=None):
         # pregunta por la cuenta o elige pagar en dólares (efectivo, Zelle o Binance).
         # Nunca lo recalcula.
         "desglose_efectivo": desglose_efectivo,
-        "banco": (pm.banco if pm else None) or config.get("pago_movil_banco"),
-        "cedula": (pm.cedula if pm else None) or config.get("pago_movil_cedula"),
-        "telefono_pago": (pm.telefono if pm else None) or config.get("pago_movil_telefono"),
-        "titular": (pm.titular if pm else None) or config.get("pago_movil_titular"),
-        "metodos_de_pago": metodos_datos,
-        "nota": (
-            "presenta el cobro copiando EXACTO `resumen_cobro` (NO recalcules). Los datos "
-            "de las cuentas están en `metodos_de_pago`: dale al cliente SOLO los del método "
-            "que ÉL elija, copiados TAL CUAL (si aún no eligió, pregúntale cómo prefiere "
-            "pagar nombrándole los métodos, sin soltar todos los datos). "
-            # 🔴 NOMBRA EL MÉTODO Y ETIQUETA CADA DATO (del análisis de las conversaciones
-            # reales de Whuilianny, 2026-08-21). Ella los manda "secos" —"Datos. [cédula]
-            # [teléfono] Banesco"— porque al otro lado hay una persona que ya sabe qué es cada
-            # número. El bot le escribe a gente que NO lo sabe: tres números sin etiqueta y sin
-            # decir que eso es un Pago Móvil es la forma más fácil de que el cliente pague mal
-            # (o no pague). El dato sigue saliendo TAL CUAL de la herramienta: esto es solo
-            # ponerle su nombre delante.
-            "Al entregarlos, DI QUÉ MÉTODO ES por su nombre (el campo `metodo`: 'Pago Móvil', "
-            "'Zelle'…) y pon cada dato con su etiqueta en su propia línea (cédula, teléfono, "
-            "banco…), no tres números pegados. Pide la captura del comprobante."
-        ),
     }
+    if metodos:
+        resultado["metodos_disponibles"] = [m.titulo for m in metodos]
+        resultado["nota"] = (
+            "presenta el cobro copiando EXACTO `resumen_cobro` (NO recalcules) y pregúntale "
+            "CÓMO prefiere pagar nombrándole los métodos de `metodos_disponibles` TAL CUAL. "
+            "En este paso NO tienes los datos de ninguna cuenta: no des ninguno. Cuando el "
+            "cliente elija, VUELVE a llamarme pasando `metodo` con ese nombre y te doy SOLO "
+            "los datos de ese método."
+        )
+    else:
+        # La tabla `metodos_pago` está vacía: el respaldo de siempre (las claves de
+        # `configuracion`), para que el negocio no se quede sin poder cobrar.
+        resultado["banco"] = config.get("pago_movil_banco")
+        resultado["cedula"] = config.get("pago_movil_cedula")
+        resultado["telefono_pago"] = config.get("pago_movil_telefono")
+        resultado["titular"] = config.get("pago_movil_titular")
+        resultado["metodos_de_pago"] = []
+        resultado["nota"] = (
+            "presenta el cobro copiando EXACTO `resumen_cobro` (NO recalcules) y dale los "
+            "datos de Pago Móvil de este resultado, "
+            "cada dato con su etiqueta en su propia línea. Pide la captura del comprobante."
+        )
+    return resultado
 
 
 _MOTIVO_TITULO = {

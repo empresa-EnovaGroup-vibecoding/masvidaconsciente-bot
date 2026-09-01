@@ -277,6 +277,13 @@ class Pedido(Base):
     cotizado_usd_divisas: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
     tasa_cotizada: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)
     cotizado_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # CÓMO ELIGIÓ PAGAR el cliente (migración 035). Antes esa elección no vivía en NINGUNA
+    # casilla (`Pago.metodo` nace recién con el comprobante) y `generar_datos_pago` re-ofrecía
+    # TODOS los métodos y las DOS monedas en cada llamada — la reapertura que Maired confirmó
+    # en vivo. Congelados del `metodos_pago` del momento: el título ("Zelle") para enseñarlo en
+    # el prompt, y el `tipo` para saber la MONEDA sin parsear texto.
+    metodo_elegido: Mapped[str | None] = mapped_column(Text, nullable=True)
+    metodo_elegido_tipo: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 
