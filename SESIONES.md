@@ -43,6 +43,33 @@ taller primero:
   6.12.94). Tumba todo 1-3 min; contenedores con `unless-stopped`/`always` verificado (vuelven
   solos); bot cerrado a clientas ⇒ impacto cero. **Decisión de Maired el momento.**
 
+## 2026-09-01 (11) — ⏸️ CIERRE DE TANDA (token casi agotado): 2 cosas abiertas para mañana
+
+**Estado sano y sin nada roto.** Producción y taller siguen con los contenedores corriendo,
+`/salud` ok, bot cerrado a clientas, límites de recursos EN CALIENTE vivos en ambos. Dos cosas
+quedan abiertas, ninguna urgente:
+
+1. 🔁 **REINICIO de producción pendiente** (kernel/paquetes nuevos instalados esperando reboot).
+   NO se hizo hoy: quedaba muy poco token y el reinicio necesita VERIFICACIÓN completa después
+   (no dejar producción a medias sin poder reaccionar). **Mañana, con sesión llena: Maired dice
+   "dale al reinicio" y Claude lo hace en ~5 min + verifica** (contenedores vuelven solos con
+   `unless-stopped`/`always`, verificado; el bot está cerrado; hay respaldos). ⚠️ El reinicio es
+   un REBOOT, NO un deploy: los contenedores vuelven con su imagen ACTUAL (f4e200c, sana) — el
+   problema de deploy del taller de abajo NO lo afecta.
+
+2. 🔴 **El deploy del TALLER falla en `rolling_update` (2 veces hoy) — SIN diagnosticar del
+   todo.** El 1º fue por mi `custom_docker_run_options` (revertido a NULL). El 2º, tras
+   revertir, TAMBIÉN falló — causa no confirmada (el esquema de la BD de Coolify no cooperó para
+   el diagnóstico rápido y no valía quemar el token que quedaba). **El taller NO se cayó** (un
+   deploy fallido no recrea: los contenedores viejos + límites en caliente siguen, `/salud` ok).
+   Mañana: diagnosticar por qué el `rolling_update` del taller falla (¿residuo de mi cambio?
+   ¿health check? ¿preexistente?) ANTES de confiar en un deploy del taller. Mirar el log del
+   deployment en Coolify (la tabla `application_deployment_queues` usa `application_id` que NO
+   es el UUID ni el id numérico directo — resolver el esquema primero, o leer el log por la UI).
+
+**Este registro se dejó en un commit LOCAL sin subir a propósito** — un push dispararía otro
+deploy del taller que volvería a fallar. Se sube mañana junto con el arreglo del deploy.
+
 ## 2026-09-01 (10) — 🛡️ HARDENING post-incidente: LÍMITES DE RECURSOS (punto 6 del relevo, el de mayor impacto)
 
 **Maired pidió atacar los 12 pendientes de seguridad de ChatGPT; autorizó que Claude los haga
