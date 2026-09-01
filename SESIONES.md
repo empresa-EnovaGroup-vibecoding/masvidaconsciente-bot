@@ -24,6 +24,25 @@
 
 ---
 
+## 2026-09-01 (11) — 🛡️ HARDENING punto 1: el SO al día + parches de seguridad AUTOMÁTICOS
+
+**La causa raíz del incidente era software sin actualizar; esto lo cierra.** Con OK de Maired,
+taller primero:
+- **TALLER (Debian 11):** 7 paquetes (toda la suite Docker → 29.7.2). Sin reinicio requerido.
+  Los contenedores rebotaron por el restart del daemon y volvieron solos; `/salud` ok.
+- **PRODUCCIÓN (Debian 13):** los 45 paquetes aplicados (Docker 29.7.2, libssl de seguridad,
+  systemd, libc…). 🎯 **Cazado un retenido:** `apt-get upgrade` clásico NO instala paquetes
+  nuevos, y el KERNEL de seguridad (6.12.107) quedó "kept back" — se instaló explícito
+  (`apt-get install linux-image-amd64`); está en `/boot` y GRUB listo. Contenedores volvieron
+  solos, `/salud` ok, firewall+fail2ban activos, **los límites en caliente SOBREVIVIERON** al
+  restart del daemon (docker update persiste; solo un re-CREATE los borra).
+- **`unattended-upgrades` instalado y activo EN AMBOS**: solo orígenes Debian-Security,
+  `Automatic-Reboot "false"` explícito (jamás se reinicia solo). Los 45 pendientes no se
+  acumulan más.
+- ⏳ **PENDIENTE: el REINICIO de producción** para ACTIVAR el kernel 6.12.107 (hoy corre
+  6.12.94). Tumba todo 1-3 min; contenedores con `unless-stopped`/`always` verificado (vuelven
+  solos); bot cerrado a clientas ⇒ impacto cero. **Decisión de Maired el momento.**
+
 ## 2026-09-01 (10) — 🛡️ HARDENING post-incidente: LÍMITES DE RECURSOS (punto 6 del relevo, el de mayor impacto)
 
 **Maired pidió atacar los 12 pendientes de seguridad de ChatGPT; autorizó que Claude los haga
