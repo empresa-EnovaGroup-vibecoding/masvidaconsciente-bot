@@ -108,6 +108,16 @@ KISS · YAGNI · DRY · una responsabilidad por pieza · nombres claros · archi
 > imposible, frase del banco, etc.): esas protegen contra cualquier modelo. **Antes de reintroducir
 > una red de estilo: medir antes y después, y leer las lápidas 🪦 en `agent.py`.**
 
+> ## 🛡️ LA REGLA DE LOS GUARDIAS (2026-09-01): miran también al CLIENTE
+> Un guardia que juzga un BORRADOR tiene que mirar además **lo que el cliente acaba de pedir**
+> (`pregunta_cliente`): **responder no es insistir; negar no es prometer.** Nació de un caso
+> real: la red del cierre censuró la lista de sabores que la clienta acababa de PEDIR (el bot
+> la sabía perfecta), y la del día imposible obligaba a reescribir "los domingos no entregamos".
+> Las redes de MENTIRA y DINERO no llevan esta absolución a propósito: lo prohibido sigue
+> prohibido aunque el cliente lo pida. Auditoría completa de los 13 guardias y el detalle:
+> `SESIONES.md` 2026-09-01 (2). **Todo guardia NUEVO (p. ej. el vigilante de la rama D) nace
+> con esta regla puesta.**
+
 **Ya vive en el código (no ponerlo en el prompt):**
 - **Formato al escribir:** corto, varios mensajitos, sin viñetas ni negritas, espejear al cliente. → `_REGLAS` (BREVEDAD, "Planos sin formato", ESPEJEA).
 - **Saludo:** saludar según la hora de Venezuela y responder "muy bien, gracias a Dios" al "¿cómo estás?". → `_REGLAS` + `_saludo_hora_texto` (inyecta la hora) + red `_asegurar_saludo` (agent.py, lo garantiza aunque el modelo falle).

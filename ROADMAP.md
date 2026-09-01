@@ -79,15 +79,26 @@ Zelle" → pedir los datos DOS veces (no debe re-ofrecer ni re-pitchear Bs) → 
 transferencia?" y mandar SOLO los datos de la que elija) → verificar `pedidos.metodo_elegido`
 en la BD.
 
-### 🟡 RAMA C — EL HILO, EXTENDIDO A TAMAÑOS Y SABORES *(bloqueada por una tarea de panel)*
+### 🛡️ LA RAMA DE LOS GUARDIAS — "los guardias miran al cliente" *(construida el 1-sep: **PR #12**; NO estaba en el plan A→D, la destapó la prueba de Maired)*
+
+El bot "no sabía" los sabores que SÍ sabía: la **red del cierre censuró** la lista que la
+clienta acababa de PEDIR (autopsia con logs+Redis en SESIONES 1-sep (2)). **Regla de diseño
+nueva (CLAUDE.md §8):** un guardia que juzga un borrador mira también lo que el CLIENTE pidió —
+responder no es insistir, negar no es prometer. Auditados los 13 guardias: 2 tenían el punto
+ciego (cierre y día imposible, arreglados con reversión-roja), 11 verificados sanos. **La rama
+D hereda esta regla de nacimiento.**
+
+### 🟡 RAMA C — EL HILO, EXTENDIDO A TAMAÑOS Y SABORES *(sigue siendo la próxima; la tarea de datos AVANZÓ)*
 
 Generalizar lo del #6 a las otras elecciones **pre-registro** (hoy solo cubre la versión que vive
 en el NOMBRE del producto):
 - **Tamaños:** fuente cerrada perfecta y ya lista (`ProductoVariante.presentacion` + `id_para_pedir`).
-- **Sabores/rellenos:** el caso de Maired ("carne mechada"). 🔴 **PRERREQUISITO DE DATOS, es de
-  ELLA:** los rellenos de las Empanadas viven en PROSA dentro de `productos.descripcion`; tienen
-  que estar en la casilla **"Sabores de ESTE tamaño"** (`variantes.sabores`) — es la deuda D3
-  ("el mismo dato en dos sitios"). **NO parsear la prosa**: eso es el regex poroso prohibido.
+- **Sabores/rellenos:** el caso de Maired ("carne mechada"). 🟡 **PRERREQUISITO DE DATOS, es de
+  ELLA — AVANZÓ el 31-ago/1-sep** (verificado en la BD del taller): ya tienen su casilla
+  `variantes.sabores` las Empanadas de masa yuca/plátano, las 2 Kombuchas y las 2 tortas (baja
+  en carbohidratos y keto). 🔴 **Faltan: Empanadas Keto y Empanadas Horneadas** — sus rellenos
+  siguen SOLO en la prosa de `productos.descripcion` (la deuda D3, "el mismo dato en dos
+  sitios"). **NO parsear la prosa**: eso es el regex poroso prohibido.
 - Reusar la regla de atribución de `hilo_de_la_venta_en` (un token solo cuenta si ese mensaje
   nombra el producto, o si ningún otro compuesto lo reclama) — sin ella vuelve el bug del Kéfir
   de cabra vs "queso de cabra".
