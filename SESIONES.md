@@ -24,6 +24,37 @@
 
 ---
 
+## 2026-09-01 (10) — 🛡️ HARDENING post-incidente: LÍMITES DE RECURSOS (punto 6 del relevo, el de mayor impacto)
+
+**Maired pidió atacar los 12 pendientes de seguridad de ChatGPT; autorizó que Claude los haga
+"con cuidado, taller primero".** Se empezó por el punto 6 (límites de memoria/CPU/procesos) — el
+que directamente cierra lo que el minero explotó: verificado que los contenedores tenían **CERO
+límites y corrían como root** (`docker inspect`: mem=0, sin pids, sin security-opt).
+
+Uso real medido primero (para no ahogar al bot): bot ~119MB, worker ~172MB, panel ~47MB.
+Límites fijados con holgura 3-4x:
+- bot: 640MB (swap 768) · worker: 768MB (swap 1024) · panel: 512MB (swap 640) · 1 CPU y
+  pids-limit 200-300 cada uno. Techo total ~1.9GB de los 3.9GB de netcup.
+
+**Aplicado EN CALIENTE (`docker update`, reversible, sin recrear el contenedor) en LOS DOS
+servidores** — taller y producción. Verificado: los 3 `running`, `/salud` OK en ambos, host de
+producción con 2.1GB libres. Un runaway (minero, fuga) ya no puede tragarse el VPS: Docker lo
+mata a él, no al servidor.
+
+**Persistencia:** puesta en la BD de Coolify del TALLER (`custom_docker_run_options` con los
+flags + `--security-opt=no-new-privileges`). ⏳ **Se valida con el próximo deploy del taller**
+(el push de este registro lo dispara): si los contenedores del taller nacen con los límites, el
+formato es correcto y SE REPLICA en producción; si no, se queda solo el en-caliente y la
+persistencia se configura por la UI de Coolify. **A producción NO se le puso el
+`custom_docker_run_options` sin validar** — su protección hoy es el en-caliente (dura hasta el
+próximo deploy manual, que no es inminente). El token de `~/.ssh/coolify_token.txt` es de
+producción (401 contra el taller), por eso no se forzó un redeploy manual del taller.
+
+**Pendientes del hardening (los siguientes, en orden de impacto):** punto 1 actualizar el SO
+(45 paquetes, necesita ventana/posible reinicio) · punto 5+7 no-root en los Dockerfiles +
+cap-drop (código, se prueba en taller) · punto 4 contraseña+JWT (con Maired presente) · resto
+(dominio Coolify, token nuevo, monitoreo) necesitan accesos externos o son de Erwin.
+
 ## 2026-09-01 (9) — ⏸️ LAS PRUEBAS DE HUMO EN PRODUCCIÓN, PAUSADAS: el número real despierta a Whuilianny
 
 **Al arrancar el paso 1 (saludo) de las pruebas de humo, Maired preguntó si eso le llegaría a la
