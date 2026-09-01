@@ -24,6 +24,22 @@
 
 ---
 
+## 2026-09-01 (9) — ⏸️ LAS PRUEBAS DE HUMO EN PRODUCCIÓN, PAUSADAS: el número real despierta a Whuilianny
+
+**Al arrancar el paso 1 (saludo) de las pruebas de humo, Maired preguntó si eso le llegaría a la
+clienta AHORA MISMO** (de madrugada). La respuesta era SÍ, y no debió preguntarse: `SESIONES.md`
+de junio (línea ~5120) ya lo decía — *"la dueña responde en el WhatsApp del negocio, ya ve el
+chat por coexistencia"*. Estaba enterrado porque `CLAUDE.md` §0 manda leer SOLO la última
+entrada de este archivo. **Se subió a regla dura** (`CLAUDE.md` §3) y a hecho operativo
+(`ESTADO.md`, fila "Número real"): el `+58 424-7047595` es por coexistencia, cualquier mensaje
+ahí —de prueba o real— le suena el teléfono a Whuilianny, sin importar la lista blanca.
+
+**Decisión de Maired: pausar hasta que ella despierte, mañana.** El plan de smoke test (6 pasos:
+saludo · catálogo · fotos · pedido+delivery · cobro+método · comprobante) queda listo para
+retomar. El teléfono autorizado para probar es `573005690062` (verificado limpio: 0 mensajes,
+0 pedidos, `bot_activo=true`) — pero el destino correcto por defecto es el número del TALLER
+(agencia, sin este riesgo), y usar el de producción solo con su OK expreso de horario.
+
 ## 2026-09-01 (8) — 💳 EL ZELLE DE PRODUCCIÓN CARGADO — 27/27 bancos (autorizado por Maired)
 
 **El único banco rojo (§7) era dato, no código: `metodos_pago` de PRODUCCIÓN no tenía la fila

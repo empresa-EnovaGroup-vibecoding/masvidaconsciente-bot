@@ -41,6 +41,7 @@ y salud, memoria que no se olvida a las 24h, y 8 migraciones nuevas (hasta la 03
 | **Modo del agente** | UN agente | UN agente |
 | **Lista blanca** | ✅ **ACTIVA: 1 solo número** (`NUMEROS_PERMITIDOS=573005690062`, extra=None). ⚠️ `bot_activo` no existe en la config ⇒ el código lo trata como ENCENDIDO: **lo que protege a las clientas es la lista blanca** | ✅ activa |
 | **Bot en el mercado** | ❌ NO — cerrado a clientas reales (regla absoluta del relevo: no abrir sin autorización expresa de Maired) | pruebas |
+| **Número real** | `+58 424-7047595` — 🔴 **COEXISTENCIA: Whuilianny lo ve en VIVO en su celular.** Cualquier mensaje ahí (aunque sea de prueba, aunque el remitente esté en la lista blanca) le suena el teléfono a ELLA. NUNCA probar aquí sin su OK de horario — ver CLAUDE.md §3 | `+57 313 293 3806` (agencia) — sin este riesgo |
 | **Bancos** | ✅ **27/27** (1-sep, tras cargar el Zelle que faltaba — ver abajo) | ✅ 27/27 |
 | **Datos** | 32 productos / 37 variantes / 277 clientes / 13.890 mensajes / **0 pedidos** (⚠️ confirmar con Maired que el 0 es esperado — hizo eliminaciones manuales; hay respaldo pre-migración en `/root/masvida-migration-backups/20260901_040209`) / personalidad 7.331 car | 32/37 + datos de prueba |
 | **Respaldos** | diario cifrado (7 semanas corriendo) + pre-migración + pre-endurecimiento (con SHA-256) + copia local `C:\Developer\AI\Proyectos\respaldos-masvida` | D4 sigue abierta |
