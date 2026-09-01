@@ -43,6 +43,36 @@ taller primero:
   6.12.94). Tumba todo 1-3 min; contenedores con `unless-stopped`/`always` verificado (vuelven
   solos); bot cerrado a clientas ⇒ impacto cero. **Decisión de Maired el momento.**
 
+## 2026-09-01 (12) — 🪦 EL TALLER SE JUBILA: respaldo final, verificación "¿todo está en producción?", y el pipeline a un solo servidor
+
+**Maired canceló el VPS del taller (Hostinger) — se apaga HOY.** Su lógica: un cliente por
+entregar no justifica dos servidores, y gastar en diagnosticar el deploy roto del taller era
+tirar esfuerzo. Correcto. Lo que se hizo ANTES de que se apague, en orden:
+
+1. **RESPALDO FINAL a la máquina de Maired** (el seguro de vida, primero que todo):
+   `respaldos-masvida/taller_FINAL_antes_de_apagar_20260901.dump` (3MB, pg_dump -Fc completo)
+   + `personalidad_taller_FINAL_20260901.txt` (7.473 car).
+2. **Su pregunta "¿todo lo del taller está en producción?" — verificada dato a dato, NO de
+   memoria:** reporte de 125 líneas por lado (config por hash, variantes con sabores,
+   conocimiento, zonas, anticipación, fotos con etiqueta) y `diff`. **IDÉNTICOS en todo lo del
+   negocio** — personalidad con el MISMO hash, los sabores de Maired, las 10 de conocimiento,
+   zonas $2/$5/$0, anticipación 16/12/4. Diferencias solo operativas (timestamp del barredor,
+   claves vacías del modo dos, `numeros_permitidos_extra` del taller) **menos UNA de fondo:
+   `modelo_ia` — el taller (donde Maired probó hoy y le gustó) corre `claude-sonnet-4.6`;
+   producción tiene `claude-haiku-4.5`. Si se entrega hoy, la clienta viviría el bot de Haiku,
+   NO el que Maired aprobó. Decisión de Maired pendiente** (Sonnet = calidad probada, más
+   gasto de saldo; el saldo es de Erwin, hoy $3.2).
+3. **El pipeline quedó a UN servidor** (`deploy.yml` reescrito): push a master = SOLO la CI
+   (ruff/compileall/pytest); desplegar producción = `workflow_dispatch` manual + elegir
+   "produccion" en el menú (default "no" — un click accidental no despliega). Se retiraron el
+   deploy automático del taller, su espera de Coolify y sus bancos post-deploy. El deploy
+   fallido del taller (pendiente de la entrada 11) **muere con el taller: ya no hay nada que
+   diagnosticar.** Qué reemplaza la red del taller: CI + tests/bancos en local + producción
+   CERRADA con lista blanca como campo de pruebas + los 27 bancos a mano (27/27 el 1-sep).
+4. El número de pruebas de la agencia (+57 313 293 3806) queda LIBRE para el futuro
+   (staging/cliente #2). NO se mete al sistema de la clienta (mezclaría datos de prueba con el
+   negocio real — la lección del pedido fantasma #2351, pero con ventas de verdad).
+
 ## 2026-09-01 (11) — ⏸️ CIERRE DE TANDA (token casi agotado): 2 cosas abiertas para mañana
 
 **Estado sano y sin nada roto.** Producción y taller siguen con los contenedores corriendo,

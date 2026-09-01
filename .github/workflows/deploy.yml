@@ -1,61 +1,42 @@
-name: Bot — verificar y desplegar al TALLER en cada push · producción SOLO a mano
+name: Bot — verificar en cada push · desplegar PRODUCCIÓN solo a mano
 
-# 🟢 UN PUSH A `master` DESPLIEGA EL TALLER SOLO — pero únicamente si la CI está VERDE.
-# Decisión de Erwin del 2026-08-22, que reemplaza la del 2026-08-02 ("ningún push despliega").
-#
-# POR QUÉ SE PUDO REVERTIR: la decisión del 2-ago nació de dos costos reales, y los dos están
-# hoy cubiertos por el propio flujo:
-#   1. **"Se perdía la certeza de qué corre."** El 23-jul un despliegue recreó los contenedores
-#      del taller, los nombres cambiaron y nadie supo qué versión estaba viva. Ya no puede
-#      pasar: el paso de los bancos ESPERA al contenedor que corre exactamente `$GITHUB_SHA` y
-#      **falla si nunca aparece** — el nombre miente, el SHA no.
-#   2. **"Publicar y desplegar eran el mismo acto."** Eso era un problema cuando el trabajo se
-#      desplegaba a mano por `docker cp` y un deploy automático lo borraba. Desde el 22-ago
-#      nada se edita dentro del VPS (`CLAUDE.md` §3) y Coolify construye desde GitHub: publicar
-#      y desplegar el TALLER pasa a ser deseable, no peligroso.
+# 🪦 EL TALLER MURIÓ EL 2026-09-01 (decisión de Maired: canceló el VPS de Hostinger — un solo
+# cliente por entregar no justifica pagar dos servidores). Este flujo desplegaba el taller en
+# cada push y le corría los bancos; todo eso se retiró. Lo que reemplaza al taller:
+#   · la CI de abajo (ruff · compileall · pytest) en CADA push — la puerta sigue siendo la misma;
+#   · los bancos corren en LOCAL antes de subir, y en producción A MANO cuando haga falta
+#     (son seguros por diseño: limpian sus datos de prueba — se corrieron 27/27 allá el 1-sep);
+#   · producción con la LISTA BLANCA puesta es el campo de pruebas seguro mientras no se abra.
 #
 # LO QUE SIGUE BLINDADO (no se toca):
-#   • 🔒 **La CI es la puerta.** `desplegar` lleva `needs: verificar`: si `ruff`, `compileall` o
-#     `pytest` salen rojos, el `curl` a Coolify NO llega a existir. Esto es la lección L41 (en
-#     agosto la CI estuvo 3 commits en rojo y los tests no corrieron ni una vez): un push que
-#     rompa algo NO llega al taller.
-#   • 🔒 **PRODUCCIÓN SIGUE SIENDO SOLO A MANO.** En un `push` el destino se FUERZA a `taller`;
-#     `produccion` solo existe por `workflow_dispatch`. Un push no puede tocar a las clientas
-#     reales ni por accidente.
-#   • Los dos destinos se comprueban DESPUÉS de desplegar: el taller con los bancos, y
-#     producción con los dos detectores de esquema (solo lectura) — ver el último paso (DAT-7).
+#   • 🔒 La CI es la puerta: `desplegar` lleva `needs: verificar` — con ruff/compileall/pytest
+#     en rojo, el deploy no llega a existir (lección L41).
+#   • 🔒 PRODUCCIÓN ES SOLO A MANO: un push JAMÁS despliega nada. Desplegar exige un
+#     `workflow_dispatch` lanzado por un humano que además elija "produccion" en el menú
+#     (default "no": un click accidental no despliega).
+#   • El deploy viaja CIFRADO (post-incidente 1-sep): la llave SSH entra al servidor y llama a
+#     la API de Coolify por 127.0.0.1 — el token nunca viaja por HTTP público.
+#   • Tras desplegar corren los DOS DETECTORES de esquema (solo lectura) dentro del contenedor
+#     nuevo (DAT-7): si el esquema no está como el código cree, el flujo queda ROJO.
 #
-# ⚠️ Por qué por GitHub Actions y NO por el webhook de auto-deploy de Coolify: el webhook
-# dispara al recibir el push, **sin esperar a la CI**, así que desplegaría también con los tests
-# en rojo. `is_auto_deploy_enabled` se queda en `false` en las 3 apps a propósito: si se
-# encendiera, habría DOS despliegues compitiendo por el mismo push y uno de ellos sin puerta.
-#
-# Los tokens viven en los "Secrets" del repositorio (Settings -> Secrets and variables -> Actions).
+# Los tokens viven en los "Secrets" del repositorio (Settings → Secrets and variables → Actions).
 
 on:
   push:
-    branches: [master]      # ← dispara `verificar` y, si sale verde, `desplegar` al TALLER
+    branches: [master]      # ← solo corre la CI (verificar). NO despliega nada.
   workflow_dispatch:
     inputs:
       destino:
-        description: '¿Dónde desplegar? "taller" = pruebas (y corre los 18 bancos). "produccion" = CLIENTES REALES.'
+        description: 'Desplegar a PRODUCCIÓN (CLIENTES REALES). Elige "produccion" para confirmar.'
         type: choice
         options:
-          - taller
+          - "no"
           - produccion
-        default: taller
+        default: "no"
 
 jobs:
-  # ✅ EL PORTERO (fase 0). ANTES este flujo no hacía ni `checkout`: mandaba el `curl` a Coolify
-  # y probaba DESPUÉS, dentro del contenedor ya desplegado. O sea: el código roto SÍ llegaba al
-  # taller, y el único freno era acordarse de no promoverlo.
-  #
-  # Ahora hay una puerta ANTES del despliegue. Si esto sale rojo, el `curl` no llega a correr.
-  # Corre en segundos y no toca ni la BD, ni Redis, ni OpenRouter, ni WhatsApp.
-  #
-  # Lo que NO hace: los 10 BANCOS que tocan la base siguen corriendo DESPUÉS del despliegue
-  # (paso "LOS BANCOS"), porque necesitan un Postgres vivo. Esta puerta y aquel vigilante son
-  # complementarios: esta caza lo que se ve leyendo el código; aquel, lo que solo se ve corriéndolo.
+  # ✅ EL PORTERO (fase 0): si esto sale rojo, no se despliega nada. Corre en segundos y no
+  # toca ni la BD, ni Redis, ni OpenRouter, ni WhatsApp.
   verificar:
     name: Verificar (ruff · compileall · pytest)
     runs-on: ubuntu-latest
@@ -79,104 +60,17 @@ jobs:
         run: python -m compileall -q app
 
       - name: pytest — LAS REDES DE SEGURIDAD, caso por caso
-        # Cada red nació de un incidente real con un cliente. Hasta hoy solo se comprobaban
-        # DESPUÉS de desplegar. Ahora un cambio que rompa una red no llega ni al taller.
+        # Cada red nació de un incidente real con un cliente. Un cambio que rompa una red
+        # no llega ni a poder desplegarse.
         run: pytest
 
   desplegar:
     needs: verificar   # 🔒 sin la puerta en verde, no se despliega nada
+    # 🔒 Solo un humano, a mano, y confirmando "produccion" en el menú.
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.destino == 'produccion' }}
     runs-on: ubuntu-latest
-    env:
-      # 🔒 EL CANDADO DE PRODUCCIÓN. En un `push` el destino se fuerza a `taller`: `produccion`
-      # solo puede salir de un `workflow_dispatch` que un humano lanzó a mano y eligió. Todos
-      # los pasos de abajo miran `env.DESTINO`, nunca `inputs.destino` (que en un push va vacío).
-      DESTINO: ${{ github.event_name == 'push' && 'taller' || inputs.destino }}
     steps:
-      - name: TALLER (bot + worker, Hostinger viejo, tu número de pruebas)
-        id: taller
-        if: ${{ env.DESTINO == 'taller' }}
-        run: |
-          RESP=$(curl -fsS --connect-timeout 20 --max-time 120 --retry 3 --retry-all-errors --retry-delay 5 \
-            -H "Authorization: Bearer ${{ secrets.COOLIFY_OLD_TOKEN }}" \
-            "http://2.25.139.106:8000/api/v1/deploy?uuid=qlfrx5yviileijm6lmovy67i,erzq5ycbrs323vwkcbam54a9")
-          echo "$RESP"
-          # Los uuid de ESTOS despliegues, para poder esperarlos en el paso siguiente.
-          echo "uuids=$(printf '%s' "$RESP" | python3 -c \
-            'import sys,json; print(" ".join(d["deployment_uuid"] for d in json.load(sys.stdin)["deployments"]))')" >> "$GITHUB_OUTPUT"
-
-      # 🔴 ESTE PASO EXISTE POR UN FALSO ROJO REAL (2026-08-22). Sin él, "LOS BANCOS" buscaba un
-      # contenedor cuya imagen tuviera el SHA del commit — y al RE-desplegar el MISMO commit ya
-      # hay uno viejo con ese SHA. Lo agarraba, empezaba los bancos dentro, y Coolify lo
-      # reemplazaba a los segundos: `docker exec` moría con el contenedor (**exit 137**) y el
-      # flujo quedaba ROJO sin que nada del código estuviera mal.
-      #
-      # Por eso no se espera al SHA (que es ambiguo entre el viejo y el nuevo) sino a que
-      # COOLIFY DIGA QUE TERMINÓ, que es un hecho y no una inferencia. Un vigilante que da
-      # falsos rojos se acaba ignorando (L29), y entonces deja de vigilar.
-      - name: Esperar a que Coolify TERMINE (si no, los bancos corren en un contenedor que muere)
-        if: ${{ env.DESTINO == 'taller' }}
-        run: |
-          for du in ${{ steps.taller.outputs.uuids }}; do
-            echo "── esperando el despliegue $du"
-            for i in $(seq 1 90); do
-              S=$(curl -fsS --connect-timeout 20 --max-time 30 \
-                    -H "Authorization: Bearer ${{ secrets.COOLIFY_OLD_TOKEN }}" \
-                    "http://2.25.139.106:8000/api/v1/deployments/$du" \
-                  | python3 -c 'import sys,json; print(json.load(sys.stdin).get("status","?"))') || S="?"
-              case "$S" in
-                finished) echo "   ✅ finished"; break ;;
-                failed|cancelled) echo "   🔴 el despliegue quedó en '$S'"; exit 1 ;;
-                *) sleep 10 ;;
-              esac
-            done
-            if [ "$S" != "finished" ]; then
-              echo "🔴 el despliegue $du no terminó en 15 min (quedó en '$S')"; exit 1
-            fi
-          done
-
-      # 🛡️ EL VIGILANTE (deuda D2, cerrada 2026-07-14): después de CADA despliegue del taller,
-      # los bancos corren SOLOS dentro del contenedor nuevo. Si alguno sale ROJO:
-      # (1) este flujo queda ROJO aquí en GitHub, y (2) a la dueña le llega un WhatsApp
-      # (scripts/correr_bancos.py). La regla "si sale rojo, no se despliega a producción" ya
-      # no depende de que un humano se acuerde de correrlos por SSH.
-      - name: LOS BANCOS (el taller se prueba SOLO — si algo se rompió, esto queda ROJO)
-        if: ${{ env.DESTINO == 'taller' }}
-        run: |
-          mkdir -p ~/.ssh
-          printf '%s\n' "${{ secrets.TALLER_SSH_KEY }}" > ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
-          ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20 root@2.25.139.106 \
-            'bash -s' -- "$GITHUB_SHA" <<'SCRIPT'
-          set -e
-          SHA="$1"
-          # Coolify ya dijo "finished" en el paso anterior, así que estos contenedores son los
-          # definitivos. Se sigue comprobando el SHA: si no calza, el build subió otra cosa.
-          BOT=$(docker ps --format '{{.Names}} {{.Image}}' | grep '^qlfrx' | grep "$SHA" | head -1 | cut -d' ' -f1 || true)
-          WORKER=$(docker ps --format '{{.Names}} {{.Image}}' | grep '^erzq' | grep "$SHA" | head -1 | cut -d' ' -f1 || true)
-          if [ -z "$BOT" ] || [ -z "$WORKER" ]; then
-            echo "🔴 Coolify terminó pero no hay contenedores con el commit $SHA:"
-            docker ps --format '{{.Names}} {{.Image}}'
-            exit 1
-          fi
-          echo "Contenedores: bot=$BOT worker=$WORKER — corriendo los bancos…"
-          # Si el exec muere con 137 (contenedor reemplazado bajo los pies), NO es un banco en
-          # rojo: se reintenta una vez contra el contenedor que esté vivo en ese momento.
-          set +e
-          docker exec -w /app -e PYTHONPATH=/app "$BOT" python scripts/correr_bancos.py
-          RC=$?
-          set -e
-          if [ "$RC" -eq 137 ]; then
-            echo "⚠️ el contenedor murió durante los bancos (137). Reintento una vez…"
-            sleep 20
-            BOT=$(docker ps --format '{{.Names}} {{.Image}}' | grep '^qlfrx' | grep "$SHA" | head -1 | cut -d' ' -f1)
-            docker exec -w /app -e PYTHONPATH=/app "$BOT" python scripts/correr_bancos.py
-          else
-            exit $RC
-          fi
-          SCRIPT
-
       - name: PRODUCCIÓN (bot + worker, netcup, CLIENTES REALES)
-        if: ${{ env.DESTINO == 'produccion' }}
         run: |
           mkdir -p ~/.ssh
           printf '%s\n' "${{ secrets.PROD_SSH_KEY }}" > ~/.ssh/id_ed25519
@@ -189,40 +83,29 @@ jobs:
           } | ssh -o BatchMode=yes -o ConnectTimeout=20 -i ~/.ssh/id_ed25519 root@152.53.89.118 \
             'curl --config -'
 
-      # 🛡️ EL VIGILANTE DE PRODUCCIÓN (auditoría 2026-08-02, DAT-7 — el hallazgo que explica
-      # todo el reporte de la clienta SIN necesidad de ningún bug).
+      # 🛡️ EL VIGILANTE DE PRODUCCIÓN (auditoría 2026-08-02, DAT-7).
       #
-      # Hasta hoy el destino `produccion` era UN `curl` Y NADA MÁS. Se disparaba el despliegue
-      # y NADIE comprobaba que hubiera llegado. Los dos detectores de esquema existían desde la
-      # fase 0, pero corrían SOLO contra el taller — que sí estaba al día. Resultado: producción
-      # pudo pasar semanas con migraciones sin aplicar y ningún rojo se encendió en ninguna
-      # parte. No era un bug: era un despliegue que nunca se disparó y un vigilante que solo
-      # miraba al otro lado.
-      #
-      # ⚠️ Aquí NO se corre `correr_bancos.py`, y es a propósito: los bancos ESCRIBEN en la
-      # base (pedidos, pagos y clientes de prueba) y esta base es la de los CLIENTES REALES.
-      # Solo estos dos, que son de SOLO LECTURA:
+      # ⚠️ Aquí NO se corre `correr_bancos.py` automáticamente, y es a propósito: los bancos
+      # ESCRIBEN en la base (pedidos, pagos y clientes de prueba) y esta base es la de los
+      # CLIENTES REALES. Solo estos dos, que son de SOLO LECTURA:
       #   · `probar_migraciones` → la lista de columnas/índices que cada migración debía dejar.
       #   · `probar_drift`       → `models.py` ENTERO contra el esquema real de Postgres.
-      # Si alguno sale rojo, este flujo queda ROJO: producción NO está como el código cree, y
-      # promover contenido encima sería promoverlo a un esquema viejo.
-      #
-      # 🔑 Necesita el secreto `PROD_SSH_KEY` (llave privada con acceso root a netcup), el
-      # gemelo del `TALLER_SSH_KEY` que ya usa el paso de los bancos.
+      # Si alguno sale rojo, este flujo queda ROJO: producción NO está como el código cree.
+      # (Los 27 bancos completos se corren A MANO tras un deploy grande — el 1-sep salieron
+      # 27/27 allá; limpian sus datos de prueba.)
       - name: PRODUCCIÓN — los dos detectores de esquema, DENTRO del contenedor nuevo
-        if: ${{ env.DESTINO == 'produccion' }}
         run: |
           mkdir -p ~/.ssh
           printf '%s\n' "${{ secrets.PROD_SSH_KEY }}" > ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
-          ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20 root@152.53.89.118 \
+          printf '%s\n' "${{ secrets.PROD_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/id_ed25519 ~/.ssh/known_hosts
+          ssh -o BatchMode=yes -o ConnectTimeout=20 -i ~/.ssh/id_ed25519 root@152.53.89.118 \
             'bash -s' -- "$GITHUB_SHA" <<'SCRIPT'
           set -e
           SHA="$1"
           echo "Esperando a que los contenedores NUEVOS (commit $SHA) estén corriendo…"
-          # Se busca por el SHA de la imagen, NO por el prefijo del nombre: los nombres que
-          # pone Coolify cambian cuando recrea los contenedores (pasó el 23-jul en el taller y
-          # nadie supo durante semanas qué versión estaba viva). El SHA no miente.
+          # Se busca por el SHA de la imagen, NO por el nombre: los nombres que pone Coolify
+          # cambian al recrear (pasó el 23-jul y nadie supo qué versión estaba viva). El SHA no miente.
           CONT=""
           for i in $(seq 1 60); do
             CONT=$(docker ps --format '{{.Names}} {{.Image}}' | grep "$SHA" | head -1 | cut -d' ' -f1 || true)
@@ -232,7 +115,7 @@ jobs:
           done
           if [ -z "$CONT" ]; then
             echo "🔴 Ningún contenedor de producción corre el commit $SHA."
-            echo "   ¿Falló el build en Coolify, o el despliegue de producción está desconectado?"
+            echo "   ¿Falló el build en Coolify?"
             docker ps --format '{{.Names}} {{.Image}}'
             exit 1
           fi

@@ -22,6 +22,26 @@ y salud, memoria que no se olvida a las 24h, y 8 migraciones nuevas (hasta la 03
 
 ---
 
+## 🪦 EL TALLER MURIÓ EL 2026-09-01 — Maired canceló el VPS de Hostinger
+
+> **Decisión de negocio de Maired:** un solo cliente por entregar no justifica dos servidores.
+> Antes de apagarse se hizo TODO esto (SESIONES 1-sep (12)):
+> - **Respaldo final COMPLETO** de su BD bajado a la máquina de Maired:
+>   `C:\Developer\AI\Proyectos\respaldos-masvida\taller_FINAL_antes_de_apagar_20260901.dump`
+>   (3MB) + la personalidad en texto suelto al lado.
+> - **Comparación dato a dato taller↔producción: IDÉNTICOS** en catálogo (32/37 con sabores),
+>   personalidad (mismo hash), conocimiento, zonas, anticipación, fotos y métodos de pago. La
+>   ÚNICA diferencia de fondo: `modelo_ia` (taller probaba con Sonnet 4.6; producción tiene
+>   Haiku 4.5) — decisión pendiente de Maired.
+> - **El pipeline quedó sin taller**: un push a master solo corre la CI; desplegar producción
+>   exige `workflow_dispatch` + elegir "produccion" (default "no").
+>
+> **Qué reemplaza al taller:** la CI en cada push · los 784 tests y bancos en LOCAL ·
+> producción con LISTA BLANCA como campo de pruebas seguro (nadie más recibe nada) · los 27
+> bancos a mano en producción tras deploys grandes (limpian sus datos; 27/27 el 1-sep).
+> El número de pruebas de la agencia (+57 313 293 3806) quedó LIBRE — reservarlo para el
+> futuro staging o el cliente #2, NO meterlo al sistema de la clienta.
+
 ## Última verificación: **2026-09-01 (~02:30 ET) — LA PROMOCIÓN A PRODUCCIÓN SE HIZO (y hubo incidente de seguridad, contenido)**
 
 > 🚨 **El 1-sep, en medio de la promoción (la hizo ChatGPT con Maired), apareció un MINERO
