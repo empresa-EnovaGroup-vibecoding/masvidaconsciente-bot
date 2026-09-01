@@ -41,14 +41,23 @@ servidores** — taller y producción. Verificado: los 3 `running`, `/salud` OK 
 producción con 2.1GB libres. Un runaway (minero, fuga) ya no puede tragarse el VPS: Docker lo
 mata a él, no al servidor.
 
-**Persistencia:** puesta en la BD de Coolify del TALLER (`custom_docker_run_options` con los
-flags + `--security-opt=no-new-privileges`). ⏳ **Se valida con el próximo deploy del taller**
-(el push de este registro lo dispara): si los contenedores del taller nacen con los límites, el
-formato es correcto y SE REPLICA en producción; si no, se queda solo el en-caliente y la
-persistencia se configura por la UI de Coolify. **A producción NO se le puso el
-`custom_docker_run_options` sin validar** — su protección hoy es el en-caliente (dura hasta el
-próximo deploy manual, que no es inminente). El token de `~/.ssh/coolify_token.txt` es de
-producción (401 contra el taller), por eso no se forzó un redeploy manual del taller.
+**Persistencia — INTENTO FALLIDO Y REVERTIDO (la lección de esta tanda):** se puso
+`custom_docker_run_options` en la BD de Coolify del taller y el push de validación **rompió el
+deploy del taller** — Coolify falló en `rolling_update` (`ApplicationDeploymentJob.php:3878`) al
+arrancar el contenedor con esos flags: **espera un formato distinto al que le di**. El taller NO
+se cayó (el deploy fallido no recrea: los contenedores viejos + los límites en caliente
+siguieron, `/salud` ok). Se **revirtió** `custom_docker_run_options` a NULL en las 3 apps del
+taller. 🪦 **Lección: no pelear con el mecanismo de deploy de Coolify por SQL a ciegas** — la
+persistencia va por la UI de Coolify (formato guiado/validado) o por los campos DEDICADOS
+`limits_memory`/`limits_cpus` (no por `custom_docker_run_options`). A producción NUNCA se le
+puso el campo roto — se salvó por hacer taller primero.
+
+**ESTADO REAL tras la tanda:** la PROTECCIÓN (límites en caliente) está VIVA en producción y
+taller — es lo que importa y funciona. La PERSISTENCIA quedó PENDIENTE (configurar por la UI de
+Coolify, con Maired/Erwin, o investigando el formato exacto con calma). El en-caliente de
+producción dura hasta el próximo deploy MANUAL (no inminente); el del taller se pierde en su
+próximo deploy por push (no crítico, sin clientas). El token de `~/.ssh/coolify_token.txt` es de
+producción (401 contra el taller).
 
 **Pendientes del hardening (los siguientes, en orden de impacto):** punto 1 actualizar el SO
 (45 paquetes, necesita ventana/posible reinicio) · punto 5+7 no-root en los Dockerfiles +
