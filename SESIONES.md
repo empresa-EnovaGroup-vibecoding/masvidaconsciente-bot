@@ -24,6 +24,58 @@
 
 ---
 
+## 2026-09-01 (2) — 🛡️ LOS GUARDIAS MIRAN AL CLIENTE: la autopsia del sabor censurado + auditoría de las 13 redes (PR #12)
+
+**El caso que lo destapó (Maired probando en el taller, 21:08).** La clienta preguntó *"De que
+sabor tienes?"* y el bot contestó *"¿Para cuándo la necesitas…?"* — como si no supiera. La
+autopsia (SSH solo lectura: logs del worker + `LRANGE hist:` en Redis) demostró **lo contrario
+de lo que parecía**: el modelo escribió la respuesta PERFECTA — *"Los sabores disponibles son:
+limón, zanahoria, naranja, piña, vainilla, marmoleada, manzana canela y cambur. Cuál te
+provoca?"* (los sabores que Maired acababa de cargar en `variantes.sabores`) — y **la RED DEL
+CIERRE la censuró**: vio "pregunta el sabor" + "ya lo preguntó antes" + "sin registrar" y la
+trató como el bucle que existe para cortar. El regaño empujó al modelo a saltarse el tema.
+NO fue falta de datos (la carga de Maired estaba bien y era el prerrequisito de la rama C) y
+NO se montó con la rama B (otro código). Fue un guardia con un punto ciego.
+
+**La clase de bug, nombrada, y la REGLA DE DISEÑO nueva (a pedido de Maired: "arreglen la raíz,
+no caso por caso"):** *un guardia que juzga un BORRADOR tiene que mirar también lo que el
+CLIENTE acaba de pedir. Responder no es insistir; negar no es prometer.* Quedó escrita en
+CLAUDE.md §8.
+
+**La auditoría de los 13 guardias con ese lente (uno por uno, contra el código):**
+- 🔴 **RED DEL CIERRE — TENÍA el punto ciego. ARREGLADA:** cuarta condición
+  `not _cliente_pidio_ese_dato(pregunta_cliente)` (pregunta con o sin signo, o "dime…" +
+  el dato). Absuelve SOLO la petición: si el cliente ya DIO el sabor o habla de otra cosa,
+  el bucle real se sigue cortando (test de contraste). Se mira `pregunta_cliente` (no
+  `mensaje_usuario`): en el RETOMAR el mensaje es una orden interna.
+- 🔴 **RED DEL DÍA IMPOSIBLE — variante del mismo punto ciego. ARREGLADA:** disparaba al
+  NOMBRAR un día no entregable aunque el bot lo estuviera NEGANDO ("Los domingos no
+  entregamos" — la respuesta correcta a "¿entregas el domingo?"). La lección ya existía para
+  'hoy'; se extendió a los días con nombre y mañana/pasado mañana, **por CLÁUSULA** (en "el
+  domingo no entregamos, pero el sábado sí te lo dejo", el sábado PROMETIDO sigue contando).
+  `_NIEGA_LA_ENTREGA` = lista corta y estable de negaciones, la filosofía del patrón del hoy.
+  El mecanismo de 'hoy' NO se tocó (estaba probado).
+- ✅ **Sin el punto ciego, verificado:** DINERO, DATOS BANCARIOS, HONESTIDAD, SALUD, PEDIDO
+  FANTASMA, ENVÍO FANTASMA (redes de VERDAD/DINERO: lo prohibido sigue prohibido aunque el
+  cliente lo pida — y la de fotos ya recibe `pidio_fotos`/`pidio_media`); ASESORÍA y TAMAÑO
+  ADIVINADO (ya nacen mirando al cliente); CATÁLOGO y FOTO aseguradoras (de acción, ya miran
+  `pregunta_cliente`); VOZ (estilo, 1 pasada, sale si insiste); RELEVO y BUCLE genérico (no
+  cortan el texto: solo avisan a la dueña); SALUDO (añade, no corta).
+
+**Validación:** 8 tests nuevos (`test_guardias_miran_al_cliente.py`, con el borrador censurado
+LITERAL del log como caso) · **las 2 reversiones → rojas en su test exacto** (la primera
+reprodujo en el log el error de la noche, palabra por palabra) · suite **755** · ruff ·
+compileall — verdes. Los tests viejos de las dos redes (`test_red_del_cierre`,
+`test_dia_imposible`) pasaron sin tocarlos: el bucle real y la promesa de día imposible se
+siguen cortando igual.
+
+**Para el plan:** la rama D (el vigilante) HEREDA esta regla de nacimiento — su diseño del
+ROADMAP ya lo decía ("mencionar la elegida es confirmación legítima, no dispara") y ahora tiene
+el precedente construido. Pendiente de datos de Maired para la rama C: los rellenos de
+**Empanadas Keto** y **Empanadas Horneadas** siguen SOLO en la prosa de la descripción
+(verificado en la BD del taller; las de masa de yuca/plátano, las kombuchas y las 2 tortas ya
+tienen su casilla llena).
+
 ## 2026-09-01 (1) — 💬 "EN BOLÍVARES TAMBIÉN CUENTA" + el tipo real de la tabla (PR #11, el remate de la rama B)
 
 **Maired fusionó el PR #10 apenas lo revisó** — y su revisión trajo DOS mejoras reales que van

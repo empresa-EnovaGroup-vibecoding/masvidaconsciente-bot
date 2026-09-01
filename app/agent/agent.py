@@ -530,24 +530,47 @@ _DIAS_ES = {
 # "mañana"/"pasado mañana"/"hoy" son fechas RELATIVAS: se resuelven contra el día de Venezuela.
 _RELATIVOS = {"pasado manana": 2, "pasado mañana": 2, "manana": 1, "mañana": 1, "hoy": 0}
 
+# La NEGACIÓN de entrega/atención en una cláusula ("los domingos no entregamos", "el lunes no
+# se puede", "ya cerraron las entregas"). Es la misma filosofía del patrón del 'hoy' de más
+# abajo: las formas de PROMETER son infinitas, pero las negaciones son una lista corta y
+# estable. Opera sobre texto ya pasado por `_sin_acentos_min` (minúsculas, sin acentos).
+_NIEGA_LA_ENTREGA = re.compile(
+    r"\b(ya\s+no|no\s+(sal\w*|hay|se\s+puede|pued\w*|alcanz\w*|lleg\w*|entreg\w*"
+    r"|trabaj\w*|atend\w*|abr\w*|hace\w*|hago|habr\w*)"
+    r"|ya\s+(cerr\w*|pas\w*)|cerrar?on|cerrad[oa]s?|descansa\w*|fuera\s+de\s+hora\w*)\b"
+)
+
 
 def _dias_nombrados(texto: str) -> set[str]:
-    """Los días que el bot NOMBRA en su mensaje (nombre propio o relativo).
+    """Los días que el bot PROMETE en su mensaje (nombre propio o relativo).
 
     Solo mira palabras completas: 'domingo' sí, pero 'mañana' dentro de 'mañana temprano' también
     cuenta —es una promesa de fecha igual— y en cambio NO se confunde con 'de la mañana', que es
     una hora. Por eso 'mañana' precedido de 'la/las/de la' se descarta.
+
+    🔴 NEGAR NO ES PROMETER (1-sep, los guardias miran al cliente). "¿Entregas los domingos?" →
+    "Los domingos no entregamos" es la respuesta CORRECTA, y esta red obligaba a reescribirla
+    porque contaba el día NOMBRADO sin mirar si se estaba negando. La lección ya existía para
+    'hoy' ("Para hoy ya cerraron las entregas" pasa); se extiende a los días con nombre y a
+    mañana/pasado mañana — por CLÁUSULA, no por frase entera: en "el domingo no entregamos,
+    pero el sábado sí te lo dejo" la negación absuelve al domingo y el sábado PROMETIDO sigue
+    contando. El mecanismo de 'hoy' no se toca: estaba probado y funcionando.
     """
     t = " " + _sin_acentos_min(texto) + " "
     encontrados = set()
-    for d in ("lunes", "martes", "miercoles", "jueves", "viernes", "sabado", "domingo"):
-        if re.search(rf"\b{d}\b", t):
-            encontrados.add(d)
-    if re.search(r"\bpasado\s+manana\b", t):
-        encontrados.add("pasado manana")
-    # "mañana" como DÍA, no como parte del día ("9 de la mañana", "mañana temprano" sí es día)
-    elif re.search(r"(?<!de la )(?<!la )(?<!las )\bmanana\b", t):
-        encontrados.add("manana")
+    for frase in re.split(r"(?<=[.!?\n])\s+", texto or ""):
+        for clausula in re.split(r",|;|\bpero\b|\baunque\b|\bsino\b", _sin_acentos_min(frase)):
+            c = " " + clausula + " "
+            if _NIEGA_LA_ENTREGA.search(c):
+                continue  # esa cláusula NIEGA/explica: no hay promesa que validar
+            for d in ("lunes", "martes", "miercoles", "jueves", "viernes", "sabado", "domingo"):
+                if re.search(rf"\b{d}\b", c):
+                    encontrados.add(d)
+            if re.search(r"\bpasado\s+manana\b", c):
+                encontrados.add("pasado manana")
+            # "mañana" como DÍA, no como parte del día ("9 de la mañana"; "mañana temprano" sí)
+            elif re.search(r"(?<!de la )(?<!la )(?<!las )\bmanana\b", c):
+                encontrados.add("manana")
     # 🔴 "HOY" SE DETECTA SIEMPRE Y SE EXCLUYE POR NEGACIÓN — no al revés.
     #
     # La primera versión buscaba PATRONES DE PROMESA (`para hoy`, `hoy te lo…`) y se le escapaban
@@ -1293,6 +1316,46 @@ def _ya_pidio_opcion_antes(historial: list | None) -> bool:
         if h.get("role") != "assistant":
             continue
         if _pide_opcion_del_paquete(h.get("content") or ""):
+            return True
+    return False
+
+
+# Una pregunta del CLIENTE no siempre lleva signo ("que sabores tienes"): por WhatsApp se
+# escribe suelto. Basta que la frase ARRANQUE con la palabra interrogativa. Sobre texto ya
+# aplanado por `_sin_acentos_min`, así que sin acentos.
+_PREGUNTA_SIN_SIGNO = re.compile(
+    r"^\s*¿?\s*(y\s+)?(de\s+|en\s+|a\s+)?(que|cual(es)?|cuant[oa]s?|como)\b", re.I
+)
+
+
+def _cliente_pidio_ese_dato(mensaje: str) -> bool:
+    """¿El CLIENTE está PIDIENDO un dato opcional (la lista de sabores/rellenos…)?
+
+    🔴 ES LA ABSOLUCIÓN DE LA RED DEL CIERRE (caso real del taller, 31-ago 21:08, verificado en
+    los logs): la clienta preguntó *"De que sabor tienes?"*, el modelo escribió la lista
+    perfecta con los 8 sabores recién cargados, y la red —que solo miraba el borrador y el
+    historial del BOT— la censuró como si fuera el bucle. Responder lo que el cliente acaba de
+    preguntar no es insistir: es contestar.
+
+    Absuelve SOLO la PETICIÓN del dato (pregunta con o sin signo, o un "dime…"). Si el cliente
+    ya lo DIO ("quiero el sabor limón") o habla de otra cosa, devuelve False y la red sigue
+    vigilando — re-preguntar lo dado es exactamente el bucle que existe para cortar. Los bordes
+    caen a propósito del lado de DEJAR RESPONDER: esta red no vigila mentiras ni dinero (esas
+    redes van aparte y no miran esto), así que absolver de más cuesta un mensaje redundante;
+    censurar de más cuesta un bot que "no sabe" lo que sí sabe.
+    """
+    for frase in re.split(r"(?<=[.!?\n])\s+", mensaje or ""):
+        limpia = frase.strip()
+        if not limpia or limpia.startswith("[SISTEMA]"):
+            continue  # una orden interna (el RETOMAR) jamás es el cliente pidiendo algo
+        if not _DATO_OPCIONAL.search(limpia):
+            continue
+        es_pregunta = (
+            limpia.endswith("?")
+            or limpia.startswith("¿")
+            or bool(_PREGUNTA_SIN_SIGNO.match(_sin_acentos_min(limpia)))
+        )
+        if es_pregunta or _PIDE_QUE_LE_DIGA.search(limpia):
             return True
     return False
 
@@ -2513,9 +2576,18 @@ async def responder(
             # 🔴 RED DEL CIERRE: se traba pidiendo el SABOR, que es OPCIONAL (ver el bloque de
             # `_pide_opcion_del_paquete`). Medido: 5/5 turnos pidiéndolo y 0 pedidos en la base.
             #
-            # Dispara solo si se juntan las TRES: pregunta el sabor AHORA, ya lo había preguntado
-            # ANTES (o sea, el cliente no lo contestó y está insistiendo) y NO hay pedido
-            # registrado en este turno. Preguntarlo UNA vez es correcto y no se toca.
+            # Dispara solo si se juntan las CUATRO: pregunta el sabor AHORA, ya lo había
+            # preguntado ANTES (o sea, el cliente no lo contestó y está insistiendo), NO hay
+            # pedido registrado en este turno, y el CLIENTE no acaba de pedir ese dato.
+            # Preguntarlo UNA vez es correcto y no se toca.
+            #
+            # 🔴 LA CUARTA CONDICIÓN ES DEL 1-SEP (los guardias miran al cliente): la clienta
+            # preguntó "De que sabor tienes?", el modelo escribió la lista perfecta y esta red
+            # la censuró como bucle — al cliente le llegó "¿para cuándo la necesitas?" como si
+            # el bot no supiera los sabores que SÍ sabía (verificado en logs y Redis).
+            # Responder lo que el cliente acaba de pedir no es insistir. Se mira
+            # `pregunta_cliente` y no `mensaje_usuario`: en el RETOMAR el mensaje es una orden
+            # interna, y lo que importa es lo que el CLIENTE tenía pendiente.
             #
             # No escala ni mata el texto: el mensaje no es una MENTIRA, solo es un callejón sin
             # salida. Se le quita el falso bloqueo una vez y se le devuelve la decisión.
@@ -2524,6 +2596,7 @@ async def responder(
                 not registro_ok
                 and dato_opcional
                 and _ya_pidio_opcion_antes(historial)
+                and not _cliente_pidio_ese_dato(pregunta_cliente)
             ):
                 logger.error(
                     "BUCLE DEL CIERRE con %s: vuelve a pedir %s (opcional) sin registrar "
