@@ -22,7 +22,11 @@ from app.agent.system_prompt import (
 )
 from app.agent.tools import (
     TOOL_SCHEMAS,
+    _frase_comparable,
+    _palabras_busqueda,
+    _productos_nombrados_en,
     avisar_relevo_caido,
+    catalogo_variantes_para_hilo,
     ejecutar_tool,
     etiqueta_del_cliente,
     etiqueta_recordada,
@@ -34,7 +38,7 @@ from app.agent.tools import (
     tamanos_hermanos,
 )
 from app.config import get_settings
-from app.models import Pedido
+from app.models import Pedido, Producto
 from app.services.db import get_session_factory
 
 # La telemetría del modelo (migración 032). `app.services.*` ya se importa aquí arriba
@@ -1490,6 +1494,139 @@ async def _tamano_sin_elegir(
     return None
 
 
+# ══════════════════════════════════════════════════════════════════════════════════════
+#  EL HILO, EXTENDIDO A TAMAÑO Y SABOR (rama C): lo ya elegido no se repregunta
+# ══════════════════════════════════════════════════════════════════════════════════════
+#
+# 🔴 LA MISMA CLASE QUE EL #6, en las otras dos elecciones pre-registro. El #6
+# (`hilo_de_la_venta`, tools.py) sigue la VERSIÓN que vive en el NOMBRE del producto (masa de
+# yuca vs plátano). Aquí se extiende a las que viven en las CASILLAS de la BD: el TAMAÑO
+# (`presentacion`) y el SABOR (`variantes.sabores`). El hueco es idéntico: entre que el cliente
+# dice "de 250, de limón" y que la tool registra el pedido, esa elección vive SOLO como chat
+# crudo, y una ficha fresca (info_producto trae los 3 tamaños y los 8 sabores) la REABRE y el
+# modelo repregunta. Se destila del chat y se inyecta como ESTADO — el prompt SUGIERE, el estado
+# GANA.
+#
+# 🔒 EL TAMAÑO NO ES UNA PALANCA DE DINERO AQUÍ, y esto importa: la línea inyectada solo EVITA la
+# repregunta, no registra ni cobra nada. El precio sigue naciendo del `variante_id` al registrar,
+# y la RED DEL TAMAÑO ADIVINADO sigue impidiendo que se registre un tamaño que el cliente no
+# dijo. Un falso positivo del destilado, a lo sumo, hace que el bot no repregunte de más — y por
+# eso el reconocimiento es de vocabulario CERRADO y con la MISMA atribución por producto del #6.
+
+
+# Cuántos turnos del cliente hacia atrás mira el hilo extendido. El MISMO que el #6
+# (`_TURNOS_HILO_VENTA` en tools.py): una elección de tamaño/sabor se esfuma igual de rápido, y
+# cubrir una venta entera es justo el punto. Se define aquí para no importar un privado de tools
+# que puede moverse — si cambia allá, este comentario recuerda mantenerlos a la par.
+_TURNOS_HILO_VARIANTE = 10
+
+
+def _sabores_tocados(sabores: list[str], mensaje: str) -> list[str]:
+    """Qué SABORES de un producto toca un mensaje (por sus tokens distintivos). Vocabulario
+    CERRADO: los sabores vienen de `variantes.sabores`. Una entrada por sabor mencionado; DOS
+    o más ⇒ el cliente nombró varios y no hay elección que leer (misma regla que las versiones).
+
+    Distintivo = los tokens que NO comparten todos los sabores del producto ('queso de cabra' y
+    'queso crema' comparten 'queso'; lo que elige es 'cabra' o 'crema'). Un sabor se toca si el
+    mensaje trae al menos uno de SUS distintivos. La atribución por producto (arriba, en el
+    destilado) es la que evita el cruce del Kéfir de cabra con el sabor 'queso de cabra'.
+    """
+    tokens = [(s, set(_palabras_busqueda(_frase_comparable(s)))) for s in (sabores or [])]
+    tokens = [(s, t) for s, t in tokens if t]
+    if len(tokens) < 2:
+        # Con un solo sabor real no hay nada que ELEGIR (ni, por tanto, que repreguntar).
+        return []
+    comunes = set.intersection(*(t for _, t in tokens))
+    pedido = set(_palabras_busqueda(_frase_comparable(mensaje or "")))
+    if not pedido:
+        return []
+    tocados = []
+    for s, t in tokens:
+        distintivos = t - comunes
+        if distintivos and (pedido & distintivos):
+            tocados.append(s)
+    return tocados
+
+
+def elecciones_de_variante_en(
+    catalogo: list[dict], mensaje_usuario: str, historial: list | None,
+    nombres_catalogo: list[str],
+) -> list[tuple[str, str, str]]:
+    """Las elecciones de TAMAÑO y SABOR vigentes en la conversación: [(producto, dimensión,
+    valor)], p. ej. [("Torta baja en carbohidratos", "tamaño", "250g"),
+    ("Empanadas…", "sabor", "carne mechada")]. Función PURA (el catálogo entra por parámetro).
+
+    Mismo esqueleto y mismas reglas que `hilo_de_la_venta_en` (tools.py), aplicadas por
+    dimensión: la más reciente gana; un mensaje que toca DOS valores de una dimensión la deja
+    SIN elección (una duda no se resuelve por mayoría) y bloquea las anteriores; y la elección
+    se ATRIBUYE a un producto solo si el mensaje lo nombra, o si es el único con algo tocado y
+    ningún otro producto se nombra en ese mensaje — la guarda que evita el bug del Kéfir de
+    cabra vs el sabor 'queso de cabra' (ROADMAP rama C).
+    """
+    if not catalogo:
+        return []
+    turnos = [
+        str(h.get("content") or "")
+        for h in (historial or [])
+        if isinstance(h, dict) and h.get("role") == "user"
+    ]
+    turnos.append(mensaje_usuario or "")
+    decididos: dict[tuple[str, str], str | None] = {}
+    for contenido in reversed(turnos[-_TURNOS_HILO_VARIANTE:]):
+        tocados: dict[str, dict[str, list[str]]] = {}
+        for prod in catalogo:
+            n = prod["nombre"]
+            tam = [t for t in prod.get("tamanos", []) if _menciona_tamano(contenido, t)]
+            sab = _sabores_tocados(prod.get("sabores", []), contenido)
+            dims = {}
+            if tam:
+                dims["tamaño"] = tam
+            if sab:
+                dims["sabor"] = sab
+            if dims:
+                tocados[n] = dims
+        if not tocados:
+            continue
+        nombrados = set(_productos_nombrados_en(contenido, nombres_catalogo))
+        for n, dims in tocados.items():
+            # La elección es de ESTE producto si el mensaje lo nombra, o si nadie más la reclama
+            # (un solo producto tocado y ningún OTRO producto nombrado en el mensaje).
+            es_suya = n in nombrados or (len(tocados) == 1 and not (nombrados - {n}))
+            if not es_suya:
+                continue
+            for dim, vals in dims.items():
+                clave = (n, dim)
+                if clave in decididos:
+                    continue  # la más reciente ya decidió esta (producto, dimensión)
+                decididos[clave] = vals[0] if len(vals) == 1 else None
+    return [(n, dim, v) for (n, dim), v in decididos.items() if v]
+
+
+async def elecciones_de_variante(
+    mensaje_usuario: str, historial: list | None
+) -> list[tuple[str, str, str]]:
+    """`elecciones_de_variante_en` con el catálogo puesto. La usa `responder()` para inyectar la
+    elección de tamaño/sabor como ESTADO, junto al hilo de las versiones. Ante cualquier fallo
+    devuelve [] — sin esto el bot queda exactamente como hoy; jamás tumba un turno."""
+    if not (mensaje_usuario or "").strip() and not historial:
+        return []
+    try:
+        catalogo = await catalogo_variantes_para_hilo()
+        if not catalogo:
+            return []
+        factory = get_session_factory()
+        async with factory() as session:
+            nombres = (
+                await session.execute(
+                    select(Producto.nombre).where(Producto.disponible.is_(True))
+                )
+            ).scalars().all()
+        return elecciones_de_variante_en(catalogo, mensaje_usuario, historial, list(nombres))
+    except Exception:  # noqa: BLE001 — sin hilo se sigue como hoy
+        logger.exception("elecciones_de_variante: fallo al leer el catálogo; va sin la línea")
+        return []
+
+
 async def _ejecutar_con_guardas(
     ejecutar, nombre_tool: str, args: dict, telefono: str,
     mensaje_usuario: str, historial: list | None,
@@ -2195,18 +2332,26 @@ async def responder(
     # (la estable va cacheada y no se toca). Sin cifras a propósito: este texto lo lee la red
     # del dinero (`autorizados_por_moneda`, más abajo) y una cifra aquí sería autorizarla.
     elecciones_hilo = await hilo_de_la_venta(mensaje_usuario, historial)
-    if elecciones_hilo:
+    # 🧵 RAMA C (1-sep): el hilo se extiende a TAMAÑO y SABOR — las otras dos elecciones que
+    # viven en las casillas de la BD (`presentacion`, `variantes.sabores`), no en el nombre.
+    # Misma inyección, la misma línea de estado, para que la ficha fresca no las reabra.
+    elecciones_var = await elecciones_de_variante(mensaje_usuario, historial)
+    if elecciones_hilo or elecciones_var:
+        _lineas = [
+            f"- De '{_p}' el cliente YA eligió: {_e.upper()}."
+            for _p, _e in elecciones_hilo[:2]
+        ] + [
+            f"- De '{_p}' el cliente YA eligió el {_dim}: {_v.upper()}."
+            for _p, _dim, _v in elecciones_var[:4]
+        ]
         dinamico += (
             "\n\nEL HILO DE LA VENTA (lo dedujo el código de los mensajes del cliente — es un "
             "HECHO del sistema, no una opinión):\n"
-            + "\n".join(
-                f"- De '{_p}' el cliente YA eligió: {_e.upper()}."
-                for _p, _e in elecciones_hilo[:2]
-            )
-            + "\nNO le vuelvas a preguntar esa elección ni le reofrezcas la otra versión; "
-            "confírmala con naturalidad si hace falta y avanza SOLO con lo que aún falte "
-            "(relleno, cantidad, fecha, cobro). Si el cliente la cambia en su último mensaje, "
-            "vale lo nuevo que diga."
+            + "\n".join(_lineas)
+            + "\nNO le vuelvas a preguntar esas elecciones ni le reofrezcas las otras opciones; "
+            "confírmalas con naturalidad si hace falta y avanza SOLO con lo que aún falte "
+            "(relleno, tamaño, cantidad, fecha, cobro). Si el cliente cambia alguna en su "
+            "último mensaje, vale lo nuevo que diga."
         )
     messages: list = [
         {

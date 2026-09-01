@@ -24,6 +24,39 @@
 
 ---
 
+## 2026-09-01 (3) — 🧵 RAMA C: EL HILO EXTENDIDO A TAMAÑO Y SABOR (PR #13)
+
+**El #6 seguía la versión que vive en el NOMBRE (masa yuca/plátano); esta rama lo extiende a las
+otras dos elecciones pre-registro, las que viven en las CASILLAS de la BD:** el TAMAÑO
+(`presentacion`) y el SABOR (`variantes.sabores`). El hueco es idéntico —"la ventana sin
+estado"—: entre que el cliente dice "de 250, de limón" y que la tool registra, esa elección vive
+solo como chat crudo y una ficha fresca (info_producto trae los 3 tamaños y los 8 sabores) la
+reabre. Se destila del chat y se inyecta en la MISMA línea EL HILO DE LA VENTA. Rama
+`hilo-tamanos-y-sabores`, **PR #13**.
+
+- **Prerrequisito de datos de Maired: CUMPLIDO** (verificado por SSH al taller): las Empanadas
+  Keto y Horneadas ya tienen sus rellenos en `variantes.sabores` — las 11 variantes con opciones
+  reales están cargadas (2 kombuchas, 3 empanadas, 3 torta baja, 3 tortas keto).
+- **`catalogo_variantes_para_hilo` (tools.py):** solo lectura, vocabulario CERRADO —tamaños de
+  `presentacion`, sabores de la casilla, NUNCA de la prosa (la deuda D3, el regex prohibido)—.
+  Solo entra el producto con >1 opción real que elegir.
+- **`elecciones_de_variante_en` (agent.py, pura):** mismo esqueleto y reglas del #6 por
+  dimensión — la más reciente gana; nombrar DOS valores deja SIN elección; y la **atribución por
+  producto** (reusada) evita el bug del **Kéfir de cabra vs el sabor 'queso de cabra'**. El
+  reconocedor de tamaños es el YA probado `_menciona_tamano` (así "quiero 1" sigue siendo
+  cantidad, no 1kg); el de sabores es nuevo (`_sabores_tocados`, por tokens distintivos).
+- 🔒 **El tamaño NO es palanca de dinero aquí:** la línea solo evita la repregunta; el precio
+  sigue naciendo del `variante_id` al registrar y la RED DEL TAMAÑO ADIVINADO sigue vigilando.
+
+**Validación:** 16 tests nuevos (el caso de Maired "carne mechada", el bug del Kéfir, la trampa
+del "1", ambigüedad, más-reciente-gana, y el carril de punta a punta) · **2 reversiones → rojas
+en su test exacto** (quitar la atribución → se cuela el Kéfir; ignorar la ambigüedad → elige con
+dos nombrados) · suite **771** · ruff · compileall — verdes. El #6 (versiones-en-el-nombre) NO
+se tocó: sigue en tools.py, y su inyección ahora comparte línea con la de tamaño/sabor.
+
+**Queda la rama D** (el vigilante pregunta-vs-estado, la única pieza que IMPIDE antes de que el
+mensaje salga) — y nace con la regla de los guardias del 1-sep (2) ya puesta.
+
 ## 2026-09-01 (2) — 🛡️ LOS GUARDIAS MIRAN AL CLIENTE: la autopsia del sabor censurado + auditoría de las 13 redes (PR #12)
 
 **El caso que lo destapó (Maired probando en el taller, 21:08).** La clienta preguntó *"De que
