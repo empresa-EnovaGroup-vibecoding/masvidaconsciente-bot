@@ -1615,6 +1615,47 @@ async def hilo_de_la_venta(
         return []
 
 
+async def catalogo_variantes_para_hilo() -> list[dict]:
+    """(SOLO LECTURA) Por producto disponible: su nombre, sus TAMAÑOS (presentaciones) y sus
+    SABORES. Lo usa el hilo de la venta extendido (rama C) para seguir la elección de tamaño y
+    de sabor igual que el #6 sigue la versión-en-el-nombre.
+
+    Vocabulario CERRADO por diseño: los tamaños salen de `presentacion` y los sabores de
+    `variantes.sabores` (la casilla que llena la dueña) — NUNCA de parsear la prosa de la
+    descripción (el regex poroso prohibido, deuda D3). Un producto sin tamaños reales
+    ('única') ni sabores no aporta nada y se omite: no hay elección que seguir.
+    """
+    factory = get_session_factory()
+    async with factory() as session:
+        productos = (
+            await session.execute(
+                select(Producto.id, Producto.nombre).where(Producto.disponible.is_(True))
+            )
+        ).all()
+        por_id = {pid: nombre for pid, nombre in productos}
+        variantes = await _tamanos_de(session, list(por_id))
+    out = []
+    for pid, nombre in por_id.items():
+        vs = variantes.get(pid) or []
+        tamanos = [
+            v.presentacion for v in vs
+            if v.disponible and (v.presentacion or "").strip() and v.presentacion != "única"
+        ]
+        sabores: list[str] = []
+        for v in vs:
+            if not v.disponible:
+                continue
+            for s in (v.sabores or "").split(","):
+                s = s.strip()
+                if s and s not in sabores:
+                    sabores.append(s)
+        # Solo entra si hay MÁS DE UNA opción real que elegir en alguna dimensión: con un solo
+        # tamaño no hay tamaño que preguntar, con un solo sabor tampoco.
+        if len(tamanos) > 1 or len(sabores) > 1:
+            out.append({"nombre": nombre, "tamanos": tamanos, "sabores": sabores})
+    return out
+
+
 async def tamanos_hermanos(variante_id) -> dict | None:
     """(SOLO LECTURA) El tamaño que el modelo eligió y los HERMANOS que competían con él.
 
