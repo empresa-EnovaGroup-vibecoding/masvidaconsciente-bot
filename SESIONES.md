@@ -24,6 +24,56 @@
 
 ---
 
+## 2026-09-01 (14) — 🏭 NACE EL ENTORNO DE PRUEBAS DE ENOVA: el taller resucita en el VPS del socio — y RESPONDE
+
+**El plan de la entrada (13) cambió sobre la marcha, por decisión de Maired:** el espacio de
+práctica NO va en netcup — va en el **VPS del socio de Enova** (Coolify propio,
+`coolify.enovagroup.tech`), porque es infraestructura de la AGENCIA (sirve para practicar hoy y
+para demos/clientes mañana) y deja netcup SOLO para la clienta. Aislamiento total: servidor, BD,
+número y WABA propios.
+
+**Qué quedó corriendo** (proyecto `masvida-pruebas`): bot + worker + panel + PostgreSQL 16 +
+Redis 7, construidos desde GitHub `master` (el merge del PR #15), mismos Dockerfiles que
+producción. **Auto-deploy OFF en las 3 apps** (la regla de siempre: deploy solo manual). BD =
+el **dump FINAL del taller restaurado** (36 migraciones, 6 clientes, 32 productos, 10 de
+conocimiento). Modelo: `claude-sonnet-4.6` — el que Maired probó y aprobó en el taller.
+
+**🎓 La lección GRANDE de Meta (costó una hora de vueltas, que nadie la repita):** hay DOS
+niveles de webhook, y confundirlos es peligroso:
+- **Nivel App** ("Enova API", en Meta Developers): la central del Tech Provider
+  (`sistema-recepcion-digital`). **NO SE TOCA JAMÁS** — por ahí entran TODOS los clientes de
+  Enova; re-apuntarla mezclaría los mensajes de todos.
+- **Nivel WABA** (por cliente): el del bot. La WABA del número de la agencia ("Enova Soporte",
+  +57 313 2933806) es **SEPARADA** de la de la clienta — verificado EN VIVO leyendo los env de
+  los DOS servidores (phone_number_id y WABA distintos, y el token de pruebas ni siquiera puede
+  LEER la WABA de producción). Cambiar la de prueba no roza producción.
+
+**El webhook se re-apuntó SIN interfaz** (la vista de socios de WhatsApp Manager negaba el
+acceso): por la **Graph API** — `GET/POST /{waba_id}/subscribed_apps` con
+`override_callback_uri` (el POST solo da `success` si Meta verifica el handshake contra el bot
+en ese momento). Antes apuntaba al taller muerto (`api-masvida.enovagroup.tech`). ⚠️ El endpoint
+del bot es **`/webhook/whatsapp`**, no `/webhook`.
+
+**Tropiezos del montaje, documentados para la próxima vez:** Coolify auto-detecta la rama
+`main` (estos repos usan `master`) · el dominio en Coolify debe declararse `https://` o Traefik
+no crea la ruta TLS (da 503 — y Meta EXIGE https) · el bot heredó el verify token VIEJO del env
+`erzq` (el canónico es el del taller final, `env_qlfrx` en `respaldos-masvida/`) — alineado ·
+el panel necesita `NEXT_PUBLIC_API_URL` como build-arg o nace ciego.
+
+**🔥 PRUEBA DE FUEGO SUPERADA (~10pm):** Maired escribió "Hola" desde su número → respuesta en
+**5,8 segundos**. En los logs, el circuito entero: webhook 200 → worker → **memoria del taller
+rescatada de Postgres (13 mensajes de ella)** → sonnet-4.6 con 13/13 tools → 2 mensajes de
+vuelta por Graph API. No es un bot nuevo: **es el taller con su memoria intacta, en casa de
+Enova.** Producción ni se enteró (cero logs).
+
+**🔴 Pendientes que deja esta sesión:** (1) **rotar las credenciales que se pegaron en un chat
+durante el montaje** (Coolify de Enova + panel del proveedor del VPS) — sin urgencia de
+incidente, pero pronto; (2) decidir el `modelo_ia` de producción (Sonnet aprobado vs Haiku
+actual — viene de la (12)); (3) el panel de pruebas se construyó apuntando al bot por `http` —
+funciona, pero conviene rebuild con la URL `https`; (4) decidir el DNS muerto
+`api-masvida.enovagroup.tech` en Namecheap (apunta al Hostinger cancelado): re-apuntarlo al VPS
+de Enova o retirarlo.
+
 ## 2026-09-01 (11) — 🛡️ HARDENING punto 1: el SO al día + parches de seguridad AUTOMÁTICOS
 
 **La causa raíz del incidente era software sin actualizar; esto lo cierra.** Con OK de Maired,

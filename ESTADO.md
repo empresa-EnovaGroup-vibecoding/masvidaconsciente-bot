@@ -39,8 +39,27 @@ y salud, memoria que no se olvida a las 24h, y 8 migraciones nuevas (hasta la 03
 > **Qué reemplaza al taller:** la CI en cada push · los 784 tests y bancos en LOCAL ·
 > producción con LISTA BLANCA como campo de pruebas seguro (nadie más recibe nada) · los 27
 > bancos a mano en producción tras deploys grandes (limpian sus datos; 27/27 el 1-sep).
-> El número de pruebas de la agencia (+57 313 293 3806) quedó LIBRE — reservarlo para el
-> futuro staging o el cliente #2, NO meterlo al sistema de la clienta.
+> ~~El número de pruebas de la agencia (+57 313 293 3806) quedó LIBRE~~ → **actualizado esa
+> misma noche: ya NO está libre — quedó conectado al nuevo ENTORNO DE PRUEBAS de Enova**
+> (bloque siguiente). Sigue FUERA del sistema de la clienta, como manda la regla.
+
+## 🏭 EL ENTORNO DE PRUEBAS DE ENOVA — nació el 2026-09-01 (noche) y RESPONDE
+
+> **El reemplazo real del taller** (SESIONES 1-sep (14)): mismo código, misma BD rescatada,
+> mismo número de la agencia — pero en infraestructura PROPIA de Enova, aislado de netcup.
+> Whuilianny no ve nada: servidor, BD, número y WABA separados de producción (verificado).
+
+| | 🏭 PRUEBAS (Enova) |
+|---|---|
+| **Servidor** | VPS del socio de Enova `152.53.194.89` · Coolify propio `coolify.enovagroup.tech` (proyecto `masvida-pruebas`) |
+| **Qué corre** | bot + worker + panel + PostgreSQL 16 + Redis 7 · `master 05d81ff` (merge del PR #15) · **auto-deploy OFF** en las 3 apps — deploy SOLO manual |
+| **Número** | **+57 313 2933806** (WABA "Enova Soporte", SEPARADA de la de la clienta) |
+| **Webhook** | re-apuntado por Graph API (`/{waba}/subscribed_apps` + `override_callback_uri`) → `https://jthc51nxqitd9opc8ywioocr.152.53.194.89.sslip.io/webhook/whatsapp` |
+| **BD** | dump FINAL del taller restaurado: 36 migraciones · 6 clientes · 32 productos · 10 conocimiento |
+| **Modelo IA** | `anthropic/claude-sonnet-4.6` (el aprobado por Maired en el taller) |
+| **Salud** | `https://jthc51nxqitd9opc8ywioocr.152.53.194.89.sslip.io/salud` — al nacer: `ok`, Meta GREEN, saldo $3.20 |
+| **Prueba de fuego** | ✅ "Hola" de Maired → respuesta en 5,8s **con la memoria del taller** (13 mensajes rescatados de Postgres) |
+| **Panel** | `http://h14aei2420zcy50u4g9bs7hu.152.53.194.89.sslip.io` (pendiente: rebuild apuntando al bot por https) |
 
 ## Última verificación: **2026-09-01 (~02:30 ET) — LA PROMOCIÓN A PRODUCCIÓN SE HIZO (y hubo incidente de seguridad, contenido)**
 
@@ -50,6 +69,9 @@ y salud, memoria que no se olvida a las 24h, y 8 migraciones nuevas (hasta la 03
 > (Next 15.5.24, `npm audit` 0), servidor ENDURECIDO (SSH solo llave, fail2ban, firewall
 > nftables, deploy por SSH cifrado). **Verificación CRUZADA por Claude, punto por punto: todo
 > real.** Detalle y lo que queda: SESIONES 2026-09-01 (6) y (7) + el relevo de ChatGPT.
+
+> ⚠️ **La columna TALLER de esta tabla es HISTÓRICA** (el taller murió el 1-sep). El entorno
+> de pruebas VIVO es el de Enova, en el bloque de arriba.
 
 | | 🏪 PRODUCCIÓN | 🧪 TALLER |
 |---|---|---|
@@ -297,7 +319,7 @@ siguiente despliegue. **Nada se edita en el servidor** (regla dura de CLAUDE.md 
 
 | Síntoma | Revisa, en orden |
 |---|---|
-| **El bot no contesta** | 1. Abre `api-masvida.enovagroup.tech/salud` → ¿todo `ok`? ¿`saldo_usd` > 0? · 2. Panel → ¿`bot_activo` encendido? · 3. ¿Ese número está en la lista blanca (son 3)? · 4. ¿Ese chat está pausado (bandeja / "atiendo yo")? |
+| **El bot no contesta** | 1. Abre el `/salud` del entorno (pruebas: la URL del bloque 🏭 de arriba; producción: `api.masvidaconsciente.store/salud`) → ¿todo `ok`? ¿`saldo_usd` > 0? · 2. Panel → ¿`bot_activo` encendido? · 3. ¿Ese número está en la lista blanca? · 4. ¿Ese chat está pausado (bandeja / "atiendo yo")? *(La URL vieja `api-masvida.enovagroup.tech` murió con el taller.)* |
 | **Se acabó el saldo de IA** | `/salud` → `saldo_ia`. Recargar en OpenRouter. Sin saldo el bot NO responde. |
 | **Contesta raro o inventa** | 1. Panel → Configuración → ¿qué MODELO está activo? (hoy `anthropic/claude-haiku-4.5`) · 2. ¿Alguien editó la Personalidad? (vive en la BD) · 3. NO culpar al modelo primero: sospecha del código/datos. |
 | **Cobro o precio mal** | Verificar **en la BD**, no en el chat: `SELECT items, total FROM pedidos`. |
