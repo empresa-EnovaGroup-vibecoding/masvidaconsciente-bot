@@ -22,6 +22,10 @@ Las **FASES 0 a 3 ya están hechas y desplegadas**:
 ## 🔨 EN QUÉ ESTAMOS AHORA (lo siguiente, en orden)
 
 > 📍 **Pestaña NUEVA de Claude: empieza leyendo este bloque + la última entrada de SESIONES.** Ahí está el estado REAL (no asumir de memoria vieja).
+>
+> 🏭 **Desde el 1-sep (noche) existe el ENTORNO DE PRUEBAS de Enova** (VPS propio del socio,
+> número de la agencia +57 313 2933806): el reemplazo del taller para probar por WhatsApp REAL
+> sin tocar a la clienta. URLs y estado: `ESTADO.md` bloque 🏭 · historia: SESIONES 1-sep (14).
 
 ### 🧵 EL TRABAJO EN CURSO: "que no repregunte lo que la clienta YA dijo" (abierto el 2026-08-31)
 
