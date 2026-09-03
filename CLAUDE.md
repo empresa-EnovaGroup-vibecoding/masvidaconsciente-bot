@@ -17,7 +17,7 @@ Sistema de **ventas y cobro por WhatsApp** para *masvidaconsciente* (comida salu
 ## 2. Stack REAL
 - **Bot:** Python · FastAPI · Celery + Redis · PostgreSQL · SQLAlchemy · OpenRouter (Gemini 2.5 Flash, fallback GPT-4.1).
 - **Dashboard:** Next.js 15 + React 19 + TypeScript + Tailwind.
-- **Infra:** Coolify + Docker en dos servidores: **producción** en netcup (`api.masvidaconsciente.store`) y **pruebas** en el VPS de Enova (desde el 1-sep; URLs y detalle en `ESTADO.md`). *(Hostinger y `api-masvida.enovagroup.tech` murieron con el taller el 1-sep.)*
+- **Infra:** Coolify + Docker en dos servidores: **producción** en netcup (`api.masvidaconsciente.store`) y **pruebas** en el VPS de Enova (desde el 1-sep; URLs y detalle en `ESTADO.md`; panel de pruebas: `panel-masvida.enovagroup.tech`). *(Hostinger murió con el taller el 1-sep. ⚠️ `api-masvida.enovagroup.tech` NO murió del todo: sigue hardcodeado como default en `config.py:110` y es la causa del bug del catálogo PDF — ver ESTADO.md.)*
 - La BD es **PostgreSQL propio en el VPS** (NO Supabase) → la regla "RLS en Supabase" **no aplica**; la seguridad es la **auth del endpoint** (`usuario_actual`). Supabase solo se usa en la app de onboarding, aparte.
 
 ## 3. Reglas duras (no negociables)

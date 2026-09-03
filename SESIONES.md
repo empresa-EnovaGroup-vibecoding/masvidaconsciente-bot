@@ -24,6 +24,113 @@
 
 ---
 
+## 2026-09-02 (15) — 🌐 El panel recupera su dirección bonita + 🔬 LA AUTOPSIA DEL CATÁLOGO: por fin se sabe POR QUÉ el PDF no llega
+
+**Primera sesión completa sobre el entorno de pruebas de Enova. Dos frentes: uno cerrado, uno
+diagnosticado listo para cerrar.**
+
+### 🌐 Frente 1 (CERRADO): `panel-masvida.enovagroup.tech` vive de nuevo
+
+Maired intentó entrar al panel por su marcador de siempre y estaba muerto (ese dominio apuntaba
+al Hostinger cancelado). Lo que se hizo, en orden:
+1. **Maired creó en Namecheap** (`enovagroup.tech` → Advanced DNS) dos registros A →
+   `152.53.194.89`: `panel-masvida` y `api-masvida`. *(El registro `coolify` ya existía — es del
+   socio, no se toca. Ojo: hay un comodín `*` → la IP vieja de Hostinger que confunde los
+   `nslookup` con caché; verificar propagación por DNS-over-HTTPS `dns.google/resolve`.)*
+2. **Claude configuró Coolify por la API** (que estaba APAGADA a nivel de instancia: se activó
+   por la BD, token Sanctum temporal por `artisan tinker` con `team_id=0`, y al terminar se
+   **restauró todo** — API apagada de nuevo, token borrado): dominio dual en el panel
+   (`https://panel-masvida.enovagroup.tech` + el sslip de respaldo) y redeploy.
+3. **Verificado de punta a punta:** cert Let's Encrypt válido, `/login` 200, el bundle del panel
+   llama al bot por `https` y el login responde 200. *(El tropiezo del login de Maired era una
+   minúscula en la clave — el endpoint `/api/login` sirvió de oráculo para confirmar la variante
+   correcta sin tocar nada.)*
+4. **Decisión de Maired (con razones):** el BOT se queda en su sslip — NO se le da el dominio
+   bonito por ahora. El beneficio era higiene/futuro, y aunque el cambio de webhook por-WABA es
+   seguro (lección del 1-sep), su instinto de no tocar Meta sin necesidad es sano. **Y la
+   autopsia de abajo le dio la razón sin saberlo:** ver la trampa del final.
+
+### 🔬 Frente 2 (DIAGNOSTICADO): el catálogo en PDF — "el bot dice que lo mandó y no llega"
+
+Maired lo dijo de frente: *"el catálogo no sé qué pasa… por qué seguimos con ese MISMO error"*.
+Esta vez el error dejó huellas frescas (ella probó la noche del 2-sep) y la autopsia lo cerró
+**con evidencia de la BD, no de memoria** (regla de oro §8):
+
+**La conversación de las 22:29 en `mensajes` (BD de pruebas):**
+| id | qué fue | estado |
+|---|---|---|
+| 9479 | Ella: "Me envías el catálogo por favor" | — |
+| 9480 | Bot (texto): "Ahí te dejo el catálogo…" | ✅ entregado |
+| 9481 | Bot (document): el PDF | 🔴 **`fallido` — `131053: Media upload error`** |
+| 9482 | Ella: "No me has enviado" | — |
+
+**La causa raíz, en una línea de código:** `config.py:110` →
+`public_base_url: str = "https://api-masvida.enovagroup.tech"` **hardcodeado como default**. El
+link del PDF se arma con eso (`tools.py` → `{public_base_url}/api/catalogo/archivo`), Meta
+intenta DESCARGARLO de un dominio que murió con el taller, no puede, y el documento jamás sale
+de Meta. El texto sí llega — por eso el bot "jura" que lo mandó. Ni el bot ni el worker de
+pruebas definen `PUBLIC_BASE_URL` (verificado en los env de los contenedores).
+
+**🔴 Y PRODUCCIÓN TIENE LA MISMA MINA** (verificado en el contenedor VIVO de netcup: misma línea,
+misma variable sin definir). Hoy la tapa la lista blanca; la pisará la casilla 5 de "TERMINADO"
+(pruebas de humo con catálogo) o la primera clienta real que pida el PDF.
+
+**Por qué es "el MISMO error" para Maired y NO es el mismo error por dentro:** en junio el bot
+DECÍA que mandaba el catálogo sin llamar la herramienta — eso lo tapó la red `_asegurar_catalogo`
+y quedó cerrado. Ahora el bot SÍ llama la herramienta y SÍ manda: es **Meta quien no puede
+descargar el archivo**. Mismo síntoma en el chat, raíz nueva. Lección: una red que garantiza el
+ENVÍO no garantiza la ENTREGA — `estado='fallido'` en `mensajes` es la columna que dice la verdad.
+
+**Bonus de la misma autopsia:** los errores SSL del panel ("No se pudo traer el archivo remoto
+del mensaje 9478") son la MISMA raíz — 2 mensajes viejos con `media_url` del taller muerto, que
+hoy resuelve al VPS de Enova sin router → Traefik responde con su cert self-signed. Cosmético.
+
+**El plan de arreglo (3 pasos, en ROADMAP → "LA SIGUIENTE TAREA") espera el OK de Maired:**
+pruebas por env (2 min, sin Meta) → producción por env (2 min, sin Meta, con su OK) → PR que
+mata el default hardcodeado (fail-fast como `JWT_SECRET`). ⚠️ **La trampa documentada:** darle
+`api-masvida.enovagroup.tech` al bot de pruebas ANTES de arreglar producción serviría el catálogo
+de pruebas a los clientes de producción — el "dominio bonito para el bot" quedó correctamente
+pospuesto.
+
+### 🩻 Y LA RADIOGRAFÍA COMPLETA: "el catálogo" no es UN error — son 5 familias
+
+La misma sesión corrió una radiografía del subsistema (4 investigadores en paralelo — historia
+del diario, código, datos, historial git — + síntesis; hallazgos clave verificados a mano
+después). **Lo que Maired ve como "ese mismo error" son 5 síntomas distintos que se han arreglado
+en oleadas** (el ROADMAP declaró "catálogo RESUELTO" el 21-jun, commit `102fadf`, y hubo 15+
+arreglos después — "resuelto" siempre fue "resuelta UNA causa"):
+1. **Ofrece/cobra el producto EQUIVOCADO** — 6 oleadas jun→ago, cada una con raíz distinta.
+   Vivo hoy: "hamburguesa" calza por prefijo con "Pan de Hamburguesa" y lo presenta con certeza.
+2. **Repregunta lo ya elegido** — el plan A→D lo cerró (1-sep) con 3 fronteras admitidas:
+   sabores que viven SOLO en la prosa (invisibles al hilo), modo `dos`, vigilante de una pasada.
+3. **El catálogo fantasma** — la familia de ESTA autopsia. Dos huecos vivos verificados:
+   el default muerto de `config.py:110` (la causa de anoche) **y** que `enviar_catalogo` devuelve
+   `ok=True` al ENCOLAR, no al entregar (`cola_media.py:136-137` traga el fallo y solo loguea) —
+   la red `_asegurar_catalogo` de junio es ciega a esta vía; `mensajes.estado='fallido'` es el
+   único testigo.
+4. **Niega lo que el negocio SÍ ofrece** — hueco de DATOS, no de código (hogaza, rústicos,
+   hamburguesas, veganas no están en la BD; 9 productos sin foto). Ningún PR lo arregla: o se
+   cargan los productos o se sacan de la oferta. Es de Whuilianny/Maired.
+5. **El PDF es una TERCERA copia de la verdad sin vigilante** — la dueña lo subió una vez
+   (`catalogo_pdf` en BD, bytes estáticos); si después cambió precios/agotados en el panel, el
+   PDF viejo se sigue mandando tal cual y nadie avisa (ni fecha de subida guarda).
+
+**Hallazgo colateral del panel (verificado a mano en `router.py:752-754`):** editar un producto
+de tamaño único PISA `variantes[0].presentacion` y `.disponible` con lo del formulario — corregir
+un typo en la descripción puede **resucitar un tamaño agotado** en silencio. Candidato fuerte si
+lo que Maired ve es "el catálogo del panel se porta raro". Anotado para verificar el circuito
+completo (formulario → API) la próxima sesión.
+
+**Para arrancar la próxima sesión — las preguntas que clasifican SU síntoma (1 captura basta):**
+¿el bot nombró un producto DISTINTO al pedido? → familia 1 · ¿repreguntó algo ya dicho? →
+familia 2 (¿dónde y cuándo probó? ¿el sabor vive en la casilla o en la prosa?) · ¿dijo "te lo
+mando" y no llegó? → familia 3 (la de anoche, arreglo ya diseñado) · ¿negó algo que sí venden? →
+familia 4 (datos) · ¿el PDF muestra precios viejos? → familia 5.
+
+**Además esta sesión:** PR #16 fusionado por Maired (2:28am) · sigue pendiente rotar las
+credenciales expuestas del 1-sep (Coolify de Enova + proveedor del VPS) y decidir el `modelo_ia`
+de producción (Sonnet aprobado vs Haiku actual).
+
 ## 2026-09-01 (14) — 🏭 NACE EL ENTORNO DE PRUEBAS DE ENOVA: el taller resucita en el VPS del socio — y RESPONDE
 
 **El plan de la entrada (13) cambió sobre la marcha, por decisión de Maired:** el espacio de

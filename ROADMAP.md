@@ -26,6 +26,45 @@ Las **FASES 0 a 3 ya están hechas y desplegadas**:
 > 🏭 **Desde el 1-sep (noche) existe el ENTORNO DE PRUEBAS de Enova** (VPS propio del socio,
 > número de la agencia +57 313 2933806): el reemplazo del taller para probar por WhatsApp REAL
 > sin tocar a la clienta. URLs y estado: `ESTADO.md` bloque 🏭 · historia: SESIONES 1-sep (14).
+> El panel de pruebas ya tiene su dominio propio: `panel-masvida.enovagroup.tech` (2-sep).
+
+### 🐛 LA SIGUIENTE TAREA: EL CATÁLOGO EN PDF NO LLEGA *(diagnosticada el 2-sep — falta solo ARREGLAR)*
+
+**El síntoma que Maired lleva viendo:** pide el catálogo → el bot dice "ahí te lo dejo" → el PDF
+**nunca llega** → "no me has enviado". **La autopsia del 2-sep lo cerró con evidencia** (SESIONES
+(15)): el TEXTO se entrega, el DOCUMENTO muere con error de Meta **131053 Media upload error**,
+porque el link del PDF se arma con `config.py:110` → `public_base_url` hardcodeado al taller
+MUERTO (`api-masvida.enovagroup.tech`) y ningún entorno define `PUBLIC_BASE_URL`. No es "el mismo
+error" de junio (el bot mentía sin llamar la herramienta; eso lo tapó `_asegurar_catalogo`): ahora
+el bot SÍ manda, y es Meta quien no puede DESCARGAR el PDF. Mismo dolor, raíz nueva.
+
+**El arreglo, en orden (esperando el OK de Maired):**
+1. **Pruebas (2 min, sin tocar Meta):** definir `PUBLIC_BASE_URL=https://jthc51…sslip.io` en bot
+   y worker (Coolify de Enova) y reiniciar → probar pidiendo el catálogo por WhatsApp.
+2. **Producción (2 min, sin tocar Meta — con su OK explícito):** definir
+   `PUBLIC_BASE_URL=https://api.masvidaconsciente.store` en bot y worker de netcup y reiniciar.
+   Hoy la lista blanca tapa la mina, pero la casilla 5 de "TERMINADO" (pruebas de humo con
+   catálogo) la va a pisar sí o sí.
+3. **El código (PR, mata la causa):** quitar el default hardcodeado de `config.py:110` — exigir
+   `PUBLIC_BASE_URL` al arranque (fail-fast como JWT_SECRET) o derivarlo de `COOLIFY_URL`. Un
+   default con la URL de UN entorno es la enfermedad D3 en versión config: funcionó de casualidad
+   mientras el taller vivía y se rompió en TODOS los entornos cuando murió. **Y en el mismo PR,
+   considerar el segundo hueco verificado:** `enviar_catalogo` devuelve ok al ENCOLAR, no al
+   entregar (`cola_media.py:136-137` traga el fallo) — el bot "jura que lo mandó" porque su
+   herramienta se lo dijo. Mínimo: que el fallo del PDF avise (a la dueña o al log en ERROR con
+   el motivo de Meta), para que la próxima vez no haga falta una autopsia.
+⚠️ **Trampa a no pisar:** NO darle el dominio `api-masvida.enovagroup.tech` al bot de pruebas
+antes del paso 2 — el catálogo de PRUEBAS se serviría a los clientes de PRODUCCIÓN (el default
+apunta ahí) y el bug quedaría enmascarado.
+
+> 🩻 **La radiografía del 2-sep** (SESIONES (15)): "el catálogo" son 5 FAMILIAS de síntomas, no
+> un error — (1) producto equivocado · (2) repregunta · (3) fantasma/PDF (la de arriba) ·
+> (4) niega lo que sí venden (DATOS: hogaza/rústicos/hamburguesas/veganas no cargados) ·
+> (5) PDF desactualizado sin vigilante. Antes de tocar código por un reporte nuevo de Maired:
+> **pedirle la captura y clasificarla contra las 5** — cada familia tiene arreglo distinto y
+> tres ya tienen dueño (la 3 este plan, la 4 es de datos, la 2 quedó con fronteras conocidas).
+> Colateral a verificar: editar producto de tamaño único pisa `disponible` de su variante
+> (`router.py:752-754`) — puede resucitar agotados desde el panel.
 
 ### 🧵 EL TRABAJO EN CURSO: "que no repregunte lo que la clienta YA dijo" (abierto el 2026-08-31)
 
