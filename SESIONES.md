@@ -24,6 +24,200 @@
 
 ---
 
+## 2026-09-03 (16) — 🛡️ LAS MINAS "YA" QUEDAN DESACTIVADAS (con OK general de Maired: "si hay que hacerlo, hay que hacer todo esto")
+
+**Ejecutado y VERIFICADO el mismo día de la cacería (las minas: entrada (15) y checklist en ROADMAP):**
+1. ✅ **Secreto de sesiones del panel SEPARADO en pruebas** — generado EN el servidor (nunca
+   impreso), aplicado a bot y worker vía la API de Coolify de Enova (activada→usada→apagada,
+   token temporal borrado) + deploy real. Verificado dentro de los contenedores: huella nueva,
+   idéntica bot=worker, distinta de la compartida. Login de Maired intacto (solo se cerró la
+   sesión abierta). *(El de PRODUCCIÓN se rota con el resto de D5 — sigue pendiente.)*
+2. ✅ **`DUENO_TELEFONO` definido en los 4 contenedores** (bot/worker × pruebas/producción) —
+   el aviso "el panel está perdiendo mensajes" por fin tiene a quién llegar. Producción se
+   re-desplegó (lista blanca verificada intacta; `/salud` ok, Meta GREEN, 36 migraciones).
+3. ✅ **EL VIGÍA de producción** — nació la vigilancia externa que `salud.py:49` prometía contra
+   el dominio muerto: cron cada 2 min EN EL VPS DE ENOVA (cruzado: un servidor vigila al otro)
+   → `GET /salud` de producción con la regla DOBLE (200 **y** `"estado":"ok"`) → al 2º fallo
+   seguido, **WhatsApp a la dueña** desde el bot de pruebas (credenciales leídas del contenedor
+   al momento, nada en disco), repetición máx. cada 30 min + mensaje de "volvió". Probado en
+   vivo con fallo simulado: la alerta y la recuperación llegaron al teléfono de Maired.
+   Vive en `/root/vigia-masvida/vigia.sh` (VPS de Enova). *(Mejora futura: UptimeRobot además,
+   por si se cae el propio VPS de Enova.)*
+4. ✅ De paso verificado: **el respaldo de producción VIVO** (snapshot del mismo día, 54 en
+   total) · el saldo IA bajó $4.11→$2.90 en dos días — la evidencia viva de la llave de
+   OpenRouter compartida (su separación quedó "antes de la entrega": la llave nueva la crea
+   Maired en OpenRouter, 3 min guiados).
+5. 🔵 **Fotos (bucket compartido): Maired decidió ESPERAR.** Aclarado que NO es "reinstalar
+   Coolify": es crear un balde nuevo + copiar ~35 archivos + 5 variables (~30-45 min). Las
+   llaves R2 actuales están limitadas al balde (verificado: ListBuckets denegado), así que hará
+   falta que ella cree el balde y su token en Cloudflare (~2 min) el día que se haga. **Mientras
+   tanto rige la regla: NO borrar fotos desde el panel de pruebas** (subir sí es seguro).
+
+## 2026-09-02 (15) — 🌐 El panel recupera su dirección bonita + 🔬 LA AUTOPSIA DEL CATÁLOGO: por fin se sabe POR QUÉ el PDF no llega
+
+**Primera sesión completa sobre el entorno de pruebas de Enova. Dos frentes: uno cerrado, uno
+diagnosticado listo para cerrar.**
+
+### 🌐 Frente 1 (CERRADO): `panel-masvida.enovagroup.tech` vive de nuevo
+
+Maired intentó entrar al panel por su marcador de siempre y estaba muerto (ese dominio apuntaba
+al Hostinger cancelado). Lo que se hizo, en orden:
+1. **Maired creó en Namecheap** (`enovagroup.tech` → Advanced DNS) dos registros A →
+   `152.53.194.89`: `panel-masvida` y `api-masvida`. *(El registro `coolify` ya existía — es del
+   socio, no se toca. Ojo: hay un comodín `*` → la IP vieja de Hostinger que confunde los
+   `nslookup` con caché; verificar propagación por DNS-over-HTTPS `dns.google/resolve`.)*
+2. **Claude configuró Coolify por la API** (que estaba APAGADA a nivel de instancia: se activó
+   por la BD, token Sanctum temporal por `artisan tinker` con `team_id=0`, y al terminar se
+   **restauró todo** — API apagada de nuevo, token borrado): dominio dual en el panel
+   (`https://panel-masvida.enovagroup.tech` + el sslip de respaldo) y redeploy.
+3. **Verificado de punta a punta:** cert Let's Encrypt válido, `/login` 200, el bundle del panel
+   llama al bot por `https` y el login responde 200. *(El tropiezo del login de Maired era una
+   minúscula en la clave — el endpoint `/api/login` sirvió de oráculo para confirmar la variante
+   correcta sin tocar nada.)*
+4. **Decisión de Maired (con razones):** el BOT se queda en su sslip — NO se le da el dominio
+   bonito por ahora. El beneficio era higiene/futuro, y aunque el cambio de webhook por-WABA es
+   seguro (lección del 1-sep), su instinto de no tocar Meta sin necesidad es sano. **Y la
+   autopsia de abajo le dio la razón sin saberlo:** ver la trampa del final.
+
+### 🔬 Frente 2 (DIAGNOSTICADO): el catálogo en PDF — "el bot dice que lo mandó y no llega"
+
+Maired lo dijo de frente: *"el catálogo no sé qué pasa… por qué seguimos con ese MISMO error"*.
+Esta vez el error dejó huellas frescas (ella probó la noche del 2-sep) y la autopsia lo cerró
+**con evidencia de la BD, no de memoria** (regla de oro §8):
+
+**La conversación de las 22:29 en `mensajes` (BD de pruebas):**
+| id | qué fue | estado |
+|---|---|---|
+| 9479 | Ella: "Me envías el catálogo por favor" | — |
+| 9480 | Bot (texto): "Ahí te dejo el catálogo…" | ✅ entregado |
+| 9481 | Bot (document): el PDF | 🔴 **`fallido` — `131053: Media upload error`** |
+| 9482 | Ella: "No me has enviado" | — |
+
+**La causa raíz, en una línea de código:** `config.py:110` →
+`public_base_url: str = "https://api-masvida.enovagroup.tech"` **hardcodeado como default**. El
+link del PDF se arma con eso (`tools.py` → `{public_base_url}/api/catalogo/archivo`), Meta
+intenta DESCARGARLO de un dominio que murió con el taller, no puede, y el documento jamás sale
+de Meta. El texto sí llega — por eso el bot "jura" que lo mandó. Ni el bot ni el worker de
+pruebas definen `PUBLIC_BASE_URL` (verificado en los env de los contenedores).
+
+**🔴 Y PRODUCCIÓN TIENE LA MISMA MINA** (verificado en el contenedor VIVO de netcup: misma línea,
+misma variable sin definir). Hoy la tapa la lista blanca; la pisará la casilla 5 de "TERMINADO"
+(pruebas de humo con catálogo) o la primera clienta real que pida el PDF.
+
+**Por qué es "el MISMO error" para Maired y NO es el mismo error por dentro:** en junio el bot
+DECÍA que mandaba el catálogo sin llamar la herramienta — eso lo tapó la red `_asegurar_catalogo`
+y quedó cerrado. Ahora el bot SÍ llama la herramienta y SÍ manda: es **Meta quien no puede
+descargar el archivo**. Mismo síntoma en el chat, raíz nueva. Lección: una red que garantiza el
+ENVÍO no garantiza la ENTREGA — `estado='fallido'` en `mensajes` es la columna que dice la verdad.
+
+**Bonus de la misma autopsia:** los errores SSL del panel ("No se pudo traer el archivo remoto
+del mensaje 9478") son la MISMA raíz — 2 mensajes viejos con `media_url` del taller muerto, que
+hoy resuelve al VPS de Enova sin router → Traefik responde con su cert self-signed. Cosmético.
+
+**El plan de arreglo (3 pasos, en ROADMAP → "LA SIGUIENTE TAREA") espera el OK de Maired:**
+pruebas por env (2 min, sin Meta) → producción por env (2 min, sin Meta, con su OK) → PR que
+mata el default hardcodeado (fail-fast como `JWT_SECRET`). ⚠️ **La trampa documentada:** darle
+`api-masvida.enovagroup.tech` al bot de pruebas ANTES de arreglar producción serviría el catálogo
+de pruebas a los clientes de producción — el "dominio bonito para el bot" quedó correctamente
+pospuesto.
+
+### 🩻 Y LA RADIOGRAFÍA COMPLETA: "el catálogo" no es UN error — son 5 familias
+
+La misma sesión corrió una radiografía del subsistema (4 investigadores en paralelo — historia
+del diario, código, datos, historial git — + síntesis; hallazgos clave verificados a mano
+después). **Lo que Maired ve como "ese mismo error" son 5 síntomas distintos que se han arreglado
+en oleadas** (el ROADMAP declaró "catálogo RESUELTO" el 21-jun, commit `102fadf`, y hubo 15+
+arreglos después — "resuelto" siempre fue "resuelta UNA causa"):
+1. **Ofrece/cobra el producto EQUIVOCADO** — 6 oleadas jun→ago, cada una con raíz distinta.
+   Vivo hoy: "hamburguesa" calza por prefijo con "Pan de Hamburguesa" y lo presenta con certeza.
+2. **Repregunta lo ya elegido** — el plan A→D lo cerró (1-sep) con 3 fronteras admitidas:
+   sabores que viven SOLO en la prosa (invisibles al hilo), modo `dos`, vigilante de una pasada.
+3. **El catálogo fantasma** — la familia de ESTA autopsia. Dos huecos vivos verificados:
+   el default muerto de `config.py:110` (la causa de anoche) **y** que `enviar_catalogo` devuelve
+   `ok=True` al ENCOLAR, no al entregar (`cola_media.py:136-137` traga el fallo y solo loguea) —
+   la red `_asegurar_catalogo` de junio es ciega a esta vía; `mensajes.estado='fallido'` es el
+   único testigo.
+4. **Niega lo que el negocio SÍ ofrece** — hueco de DATOS, no de código (hogaza, rústicos,
+   hamburguesas, veganas no están en la BD; 9 productos sin foto). Ningún PR lo arregla: o se
+   cargan los productos o se sacan de la oferta. Es de Whuilianny/Maired.
+5. **El PDF es una TERCERA copia de la verdad sin vigilante** — la dueña lo subió una vez
+   (`catalogo_pdf` en BD, bytes estáticos); si después cambió precios/agotados en el panel, el
+   PDF viejo se sigue mandando tal cual y nadie avisa (ni fecha de subida guarda).
+
+**Hallazgo colateral del panel (verificado a mano en `router.py:752-754`):** editar un producto
+de tamaño único PISA `variantes[0].presentacion` y `.disponible` con lo del formulario — corregir
+un typo en la descripción puede **resucitar un tamaño agotado** en silencio. Candidato fuerte si
+lo que Maired ve es "el catálogo del panel se porta raro". Anotado para verificar el circuito
+completo (formulario → API) la próxima sesión.
+
+**Para arrancar la próxima sesión — las preguntas que clasifican SU síntoma (1 captura basta):**
+¿el bot nombró un producto DISTINTO al pedido? → familia 1 · ¿repreguntó algo ya dicho? →
+familia 2 (¿dónde y cuándo probó? ¿el sabor vive en la casilla o en la prosa?) · ¿dijo "te lo
+mando" y no llegó? → familia 3 (la de anoche, arreglo ya diseñado) · ¿negó algo que sí venden? →
+familia 4 (datos) · ¿el PDF muestra precios viejos? → familia 5.
+
+### 🧨 Y LA SEGUNDA PREGUNTA DE MAIRED: "¿tenemos riesgo de que otra cosa así pase, con la estructura que tenemos?"
+
+Pregunta correcta — el catálogo pertenece a una CLASE ("algo apunta a infraestructura muerta o
+de OTRO entorno, funcionaba de casualidad, y falla o contamina en silencio"), así que se corrió
+una **cacería de esa clase completa**: 4 lentes en paralelo (defaults hardcodeados · fallos
+silenciosos · infra muerta ejecutable · acoplamientos entre entornos) + síntesis, alimentadas
+con datos EN VIVO de los dos servidores (envs comparadas por huella sha256, sin exponer valores)
+y las minas graves re-verificadas a mano.
+
+**Lo SANO primero (que también es respuesta):** BDs, Redis y WABAs bien separadas entre pruebas
+y producción · el pipeline de deploy limpio (push a master = SOLO la CI; producción exige un
+humano eligiendo `produccion=true`) · ningún script Python con hosts muertos en el camino que
+corre · **el respaldo de producción está VIVO** (verificado ese día: `[backup] OK` a las 11:11,
+54 copias, la última del mismo día).
+
+**Las minas, rankeadas (el detalle operativo quedó con Maired; aquí las acciones):**
+1. 🔴 **Pruebas y producción COMPARTEN 3 cosas que no deben** (herencia de clonar el env del
+   taller): el **secreto de sesiones del panel** (separarlo por entorno: 1 variable + redeploy,
+   ya en la lista de rotación D5) · el **balde de fotos R2** (`masvida-media` único: borrar o
+   "mantener" fotos desde pruebas toca los archivos que producción sirve — separar
+   bucket/prefijo; MIENTRAS TANTO: no borrar fotos en el panel de pruebas, y
+   `recomprimir_fotos.py`/`convertir_media_vieja.py` SOLO en producción) · la **llave de
+   OpenRouter** (las pruebas gastan el saldo de producción y comparten sus límites — llave
+   propia con tope para pruebas; hoy el freno anti-abuso cuenta mensajes en el Redis LOCAL de
+   cada entorno, no dólares de la cuenta común).
+2. 🔴 **Nadie vigila producción desde fuera:** `salud.py:49` afirma que un monitor externo vigila
+   `/salud`… en la URL del taller MUERTO, y no hay rastro de monitor contra la URL viva. El
+   incidente de julio (bot mudo por saldo, todo en verde) puede repetirse idéntico. 15 min.
+3. 🔴 **El aviso "el panel está perdiendo mensajes" no tiene a quién llegar:** lee
+   `DUENO_TELEFONO` del ENV a propósito (se dispara cuando la BD — donde vive el teléfono
+   editable — acaba de fallar), pero la variable no está definida en NINGÚN contenedor y el
+   default es `""` → ese aviso jamás sale (`tasks.py:134` + `config.py:96`). Definirla en los 4.
+4. 🟠 **El respaldo de producción no tiene testigo** (si un día muere — p. ej. al rotar las
+   llaves R2 de D5 — nadie grita) y su manual de emergencia apunta a una ruta que NO existe en
+   la máquina de Maired y a un servicio del compose que nunca se desplegó. Corregir RESPALDO.md
+   + sonda de edad del último snapshot (o ping a Healthchecks).
+5. 🟠 **D2 se REABRIÓ en silencio:** "los bancos corren solos tras cada deploy" murió con el
+   taller (el deploy de producción los corre A MANO); el ROADMAP aún la da por cerrada. La CI
+   podría recuperar 24/27 con un Postgres desechable (la receta ya existe: `banco_local.sh`).
+   Y **D4 cambió de casa:** pruebas-Enova tiene CERO respaldo (verificado: ni contenedor, ni
+   cron, ni programado en Coolify) — el piso es el dump local del 1-sep.
+6. 🟡 Menores: `promover_a_produccion.sh` apunta por default al Hostinger muerto y su
+   `TRUNCATE+COPY` de `producto_media` re-ataría los buckets en la próxima promoción (decidir
+   las fotos ANTES de promover) · `correr_bancos.py` aún avisa por WhatsApp hablando "del
+   taller" · la palabra "taller" quedó como guarda vacía en scripts que escriben BD
+   (`--confirmar-taller`) · el compose de la fábrica re-sembraría el default muerto en un
+   cliente nuevo.
+
+**Falsas alarmas (no re-investigar):** `HISTORIAL_RESPALDO_DIAS` solo-en-pruebas (default
+idéntico, mecanismo 100% local) · `META_APP_SECRET` compartido (CORRECTO: ambas WABAs viven
+bajo la misma app de Meta) · subir fotos nuevas en pruebas (cada archivo nace con uuid propio,
+no pisa nada).
+
+**El patrón de fondo (doctrina):** pruebas nació CLONANDO el env del taller, y el taller
+compartía con producción cosas que un entorno de la agencia no debe compartir. La regla que mata
+la clase entera: **cada entorno con SUS llaves y SUS baldes; lo único compartido es el código.**
+Al montar el próximo entorno (demo/cliente de Enova), esa es la lista de chequeo.
+
+**Además esta sesión:** PR #16 fusionado por Maired (2:28am) · sigue pendiente rotar las
+credenciales expuestas del 1-sep (Coolify de Enova + proveedor del VPS) y decidir el `modelo_ia`
+de producción (Sonnet aprobado vs Haiku actual).
+
 ## 2026-09-01 (14) — 🏭 NACE EL ENTORNO DE PRUEBAS DE ENOVA: el taller resucita en el VPS del socio — y RESPONDE
 
 **El plan de la entrada (13) cambió sobre la marcha, por decisión de Maired:** el espacio de

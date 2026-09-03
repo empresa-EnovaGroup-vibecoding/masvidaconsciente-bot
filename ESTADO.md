@@ -59,7 +59,18 @@ y salud, memoria que no se olvida a las 24h, y 8 migraciones nuevas (hasta la 03
 | **Modelo IA** | `anthropic/claude-sonnet-4.6` (el aprobado por Maired en el taller) |
 | **Salud** | `https://jthc51nxqitd9opc8ywioocr.152.53.194.89.sslip.io/salud` — al nacer: `ok`, Meta GREEN, saldo $3.20 |
 | **Prueba de fuego** | ✅ "Hola" de Maired → respuesta en 5,8s **con la memoria del taller** (13 mensajes rescatados de Postgres) |
-| **Panel** | `http://h14aei2420zcy50u4g9bs7hu.152.53.194.89.sslip.io` (pendiente: rebuild apuntando al bot por https) |
+| **Panel** | ✅ **`https://panel-masvida.enovagroup.tech/login`** (dominio propio + HTTPS Let's Encrypt, desde el 2-sep; el sslip `http://h14aei…sslip.io` sigue vivo de respaldo). Rebuild con el bot por https: hecho. Login: `admin@masvidaconsciente.com` + la clave de siempre del taller. |
+| **DNS (Namecheap)** | `panel-masvida` y `api-masvida` .enovagroup.tech → `152.53.194.89` (los creó Maired el 2-sep). ⚠️ `api-masvida` apunta al VPS pero **ningún servicio lo atiende todavía** — ver el bug del catálogo abajo. |
+
+> 🐛 **BUG VIVO — EL CATÁLOGO EN PDF NO LLEGA (diagnosticado el 2-sep con evidencia; SESIONES (15)):**
+> el bot dice "ahí te dejo el catálogo", el TEXTO llega, y el PDF muere con **error de Meta
+> `131053 Media upload error`** (`estado='fallido'` en `mensajes`). Causa: `config.py:110` trae
+> **hardcodeado** `public_base_url = "https://api-masvida.enovagroup.tech"` (el taller muerto) como
+> default, y NI pruebas NI producción definen `PUBLIC_BASE_URL` → Meta no puede descargar el PDF.
+> 🔴 **Producción tiene la misma mina** (verificado en el contenedor vivo de netcup): la lista
+> blanca la ha tapado. El plan de arreglo (3 pasos) está en SESIONES 2-sep (15). **NO asignar
+> `api-masvida` al bot de pruebas antes de arreglar producción** — serviría el catálogo de
+> pruebas a los clientes de producción y taparía el bug.
 
 ## Última verificación: **2026-09-01 (~02:30 ET) — LA PROMOCIÓN A PRODUCCIÓN SE HIZO (y hubo incidente de seguridad, contenido)**
 

@@ -26,6 +26,84 @@ Las **FASES 0 a 3 ya están hechas y desplegadas**:
 > 🏭 **Desde el 1-sep (noche) existe el ENTORNO DE PRUEBAS de Enova** (VPS propio del socio,
 > número de la agencia +57 313 2933806): el reemplazo del taller para probar por WhatsApp REAL
 > sin tocar a la clienta. URLs y estado: `ESTADO.md` bloque 🏭 · historia: SESIONES 1-sep (14).
+> El panel de pruebas ya tiene su dominio propio: `panel-masvida.enovagroup.tech` (2-sep).
+
+### 🐛 LA SIGUIENTE TAREA: EL CATÁLOGO EN PDF NO LLEGA *(diagnosticada el 2-sep — falta solo ARREGLAR)*
+
+**El síntoma que Maired lleva viendo:** pide el catálogo → el bot dice "ahí te lo dejo" → el PDF
+**nunca llega** → "no me has enviado". **La autopsia del 2-sep lo cerró con evidencia** (SESIONES
+(15)): el TEXTO se entrega, el DOCUMENTO muere con error de Meta **131053 Media upload error**,
+porque el link del PDF se arma con `config.py:110` → `public_base_url` hardcodeado al taller
+MUERTO (`api-masvida.enovagroup.tech`) y ningún entorno define `PUBLIC_BASE_URL`. No es "el mismo
+error" de junio (el bot mentía sin llamar la herramienta; eso lo tapó `_asegurar_catalogo`): ahora
+el bot SÍ manda, y es Meta quien no puede DESCARGAR el PDF. Mismo dolor, raíz nueva.
+
+**El arreglo, en orden (esperando el OK de Maired):**
+1. **Pruebas (2 min, sin tocar Meta):** definir `PUBLIC_BASE_URL=https://jthc51…sslip.io` en bot
+   y worker (Coolify de Enova) y reiniciar → probar pidiendo el catálogo por WhatsApp.
+2. **Producción (2 min, sin tocar Meta — con su OK explícito):** definir
+   `PUBLIC_BASE_URL=https://api.masvidaconsciente.store` en bot y worker de netcup y reiniciar.
+   Hoy la lista blanca tapa la mina, pero la casilla 5 de "TERMINADO" (pruebas de humo con
+   catálogo) la va a pisar sí o sí.
+3. **El código (PR, mata la causa):** quitar el default hardcodeado de `config.py:110` — exigir
+   `PUBLIC_BASE_URL` al arranque (fail-fast como JWT_SECRET) o derivarlo de `COOLIFY_URL`. Un
+   default con la URL de UN entorno es la enfermedad D3 en versión config: funcionó de casualidad
+   mientras el taller vivía y se rompió en TODOS los entornos cuando murió. **Y en el mismo PR,
+   considerar el segundo hueco verificado:** `enviar_catalogo` devuelve ok al ENCOLAR, no al
+   entregar (`cola_media.py:136-137` traga el fallo) — el bot "jura que lo mandó" porque su
+   herramienta se lo dijo. Mínimo: que el fallo del PDF avise (a la dueña o al log en ERROR con
+   el motivo de Meta), para que la próxima vez no haga falta una autopsia.
+⚠️ **Trampa a no pisar:** NO darle el dominio `api-masvida.enovagroup.tech` al bot de pruebas
+antes del paso 2 — el catálogo de PRUEBAS se serviría a los clientes de PRODUCCIÓN (el default
+apunta ahí) y el bug quedaría enmascarado.
+
+> 🩻 **La radiografía del 2-sep** (SESIONES (15)): "el catálogo" son 5 FAMILIAS de síntomas, no
+> un error — (1) producto equivocado · (2) repregunta · (3) fantasma/PDF (la de arriba) ·
+> (4) niega lo que sí venden (DATOS: hogaza/rústicos/hamburguesas/veganas no cargados) ·
+> (5) PDF desactualizado sin vigilante. Antes de tocar código por un reporte nuevo de Maired:
+> **pedirle la captura y clasificarla contra las 5** — cada familia tiene arreglo distinto y
+> tres ya tienen dueño (la 3 este plan, la 4 es de datos, la 2 quedó con fronteras conocidas).
+> Colateral a verificar: editar producto de tamaño único pisa `disponible` de su variante
+> (`router.py:752-754`) — puede resucitar agotados desde el panel.
+
+### 🧨 LAS MINAS DE LA MISMA CLASE *(cacería del 2-sep, a pregunta de Maired — detalle y evidencia en SESIONES (15))*
+
+**⚡ YA (baratas — EJECUTADAS el 3-sep con OK de Maired; detalle en SESIONES (16)):**
+- [x] **Secreto de sesiones del panel separado en pruebas** — hecho y verificado (huella nueva
+  bot=worker). El de producción se rota con el resto de D5.
+- [ ] **Fotos:** separar el bucket R2 por entorno — **Maired decidió ESPERAR** (no es urgente si
+  se respeta la regla). **Regla dura VIGENTE: NO borrar fotos desde el panel de pruebas** y los
+  scripts de mantenimiento de fotos SOLO en producción (el balde es compartido). Cuando se haga:
+  ella crea balde+token en Cloudflare (~2 min; las llaves actuales no pueden — ListBuckets
+  denegado, verificado) y el resto es copiar ~35 archivos + 5 variables.
+- [x] **El VIGÍA** — cron cada 2 min en el VPS de Enova → `/salud` de producción (regla doble) →
+  WhatsApp a la dueña al 2º fallo, máx cada 30 min + aviso de recuperación. Probado en vivo
+  (alerta y recuperación llegaron al teléfono). `/root/vigia-masvida/vigia.sh`. Falta corregir
+  el docstring `salud.py:49` (va con el PR del catálogo). Mejora futura: UptimeRobot además.
+- [x] **`DUENO_TELEFONO` definido en los 4 contenedores** — producción re-desplegada, lista
+  blanca intacta, `/salud` ok.
+- [x] ~~Verificar que el respaldo de producción corre~~ — **verificado 2-sep: VIVO** (54
+  snapshots, el último de ese mismo día).
+
+**🚚 ANTES DE LA ENTREGA:**
+- [ ] Llave de **OpenRouter propia para pruebas** con tope bajo (hoy las pruebas gastan el
+  saldo de producción y comparten sus rate limits).
+- [ ] **Testigo del respaldo** (sonda de edad del snapshot en `/salud` o ping a Healthchecks) +
+  corregir RESPALDO.md (la ruta real de la clave de cifrado en la máquina de Maired; la
+  verificación es por `docker logs masvida-backup`, no por Coolify).
+- [ ] **D2 quedó REABIERTA de facto:** el vigilante de bancos post-deploy murió con el taller
+  (producción los corre a mano). Recuperar 24/27 en la CI con Postgres desechable
+  (`banco_local.sh` es la receta).
+- [ ] Decidir la **próxima promoción** pruebas→producción ANTES de necesitarla:
+  `promover_a_produccion.sh` apunta al Hostinger muerto, y su copia de `producto_media` debe
+  decidir qué pasa con las fotos si los buckets ya están separados.
+
+**⚪ Algún día:** respaldo automático para pruebas-Enova (la D4 de hoy — el piso es el dump
+local del 1-sep) · limpiar el lenguaje "taller" de scripts y avisos (`--confirmar-taller`,
+`correr_bancos.py`) · el compose de la fábrica no debe heredar defaults de UN entorno.
+
+**Doctrina que mata la clase:** cada entorno con SUS llaves y SUS baldes; lo único compartido
+es el código. Es la lista de chequeo para montar cualquier entorno nuevo de Enova.
 
 ### 🧵 EL TRABAJO EN CURSO: "que no repregunte lo que la clienta YA dijo" (abierto el 2026-08-31)
 
