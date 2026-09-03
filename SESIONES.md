@@ -32,7 +32,7 @@ de fotos leyó también ``CHOCOLATE`` como un tercer producto (existe con ese t�
 y su tope anti-spam apagó las dos fotos. La misma familia aparecía en ``kéfir``: el filtro por
 prefijo también alcanzaba ``kéfirado`` y mezclaba Kéfir de Leche con Yogurt Kéfirado.
 
-**Arreglo en la rama `resolver-catalogo-contextual` (sin desplegar):**
+**Arreglo en la rama `resolver-catalogo-contextual`, PR #20 (sin desplegar):**
 - Un mismo resolvedor de títulos gobierna asesoría, fotos y cobro: título completo primero;
   después prefijos naturales del título solo si conservan la identidad. ``kéfir`` resuelve al
   Kéfir de Leche porque es una palabra completa de SU título; ``kéfirado`` sigue siendo otra.
@@ -51,7 +51,7 @@ categorías y carril estricto; **815 tests en verde** + ruff ✅. El banco `prob
 corrió de solo lectura contra los **31 productos vivos de pruebas**: todo verde, incluidas las dos
 tortas y la red de fotos. No se modificó la BD, no se envió WhatsApp y no se tocó producción.
 
-**Pendiente:** revisar/fusionar la rama, desplegar bot + worker en pruebas y hacer una conversación
+**Pendiente:** revisar/fusionar el PR #20, desplegar bot + worker en pruebas y hacer una conversación
 manual con el número de Enova antes de considerar producción.
 
 ---
