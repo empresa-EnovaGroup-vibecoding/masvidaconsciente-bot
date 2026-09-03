@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFil
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, StringConstraints
 from sqlalchemy import delete, func, select
+from sqlalchemy.exc import IntegrityError
 
 from app.api.security import (
     crear_token,
@@ -1091,7 +1092,14 @@ async def marcar_media_principal(media_id: int, _: str = Depends(usuario_actual)
         )
         m.es_principal = True
         # Sin `updated_at`: ProductoMedia no la tiene (models.py) — misma nota que arriba.
-        await session.commit()
+        try:
+            await session.commit()
+        except IntegrityError as exc:
+            await session.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail="Otra foto acaba de quedar como principal; recarga e inténtalo de nuevo.",
+            ) from exc
     return {"ok": True}
 
 

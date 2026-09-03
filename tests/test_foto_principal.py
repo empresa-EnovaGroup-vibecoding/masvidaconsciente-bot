@@ -11,8 +11,8 @@ Las piezas y dónde se prueban:
   · la GUARDA del modelo (`_ejecutar_con_guardas`) rellena maximo=1 cuando nadie pidió ver → aquí;
   · el ENDPOINT del panel que marca la principal (PATCH /media/{id}/principal) → aquí;
   · la columna y el índice de la 036 quedan REGISTRADOS en los bancos de drift → aquí;
-  · que la principal ENCABECE los ORDER BY reales lo prueba el banco contra Postgres
-    (scripts/probar_media.py corre post-deploy; aquí no hay BD).
+  · que la principal ENCABECE el ORDER BY se prueba aquí en el SQL real y también contra
+    Postgres en scripts/probar_media.py (con ROLLBACK).
 """
 import pytest
 
@@ -53,8 +53,34 @@ async def test_si_el_cliente_PIDE_ver_quedan_los_3_de_siempre():
     """Quien pide ver quiere ver bien: sin maximo inyectado (la tool usa su default de 3),
     y con `reenviar` encendido (la válvula de siempre, rama fotos-con-memoria)."""
     args = await _guardas("mándame las fotos del quesillo porfa")
-    assert "maximo" not in args, "pidió ver: el código no recorta a 1"
+    assert args.get("maximo") == 3, "pidió ver: la política autoriza hasta 3"
     assert args.get("reenviar") is True
+
+
+@pytest.mark.parametrize(
+    "mensaje",
+    [
+        "muéstramela otra vez",
+        "¿cómo se ve?",
+        "quiero verlas",
+        "puedo ver el quesillo?",
+        "enséñame el quesillo",
+    ],
+)
+async def test_formas_naturales_de_pedir_ver_usan_la_misma_politica(mensaje):
+    """La regla de negocio entiende cómo habla una persona, no solo la palabra `foto`."""
+    args = await _guardas(mensaje)
+    assert args.get("reenviar") is True
+    assert args.get("maximo") == 3
+
+
+async def test_reenviar_explicito_del_modelo_tambien_autoriza_hasta_3():
+    """Si el modelo ya entendió el reenvío, el detector de texto no puede recortarlo a una."""
+    args = await _guardas(
+        "otra vez por favor", args={"nombre": "Quesillo", "reenviar": True}
+    )
+    assert args.get("reenviar") is True
+    assert args.get("maximo") == 3
 
 
 async def test_el_maximo_explicito_del_modelo_se_respeta():
@@ -82,21 +108,29 @@ async def test_la_guarda_no_toca_otras_tools():
 # ══════════════════════════════════════════════════════════════════════════════
 
 class _Media:
-    def __init__(self, id_, producto_id=7, tipo="imagen", es_principal=False):
+    def __init__(
+        self, id_, producto_id=7, tipo="imagen", es_principal=False,
+        *, clave="productos/foto.jpg", etiqueta=None,
+    ):
         self.id = id_
         self.producto_id = producto_id
         self.tipo = tipo
         self.es_principal = es_principal
+        self.clave = clave
+        self.etiqueta = etiqueta
 
 
 class _Sesion:
     """Doble mínimo: `get` devuelve la fila preparada; `execute` (el UPDATE que apaga la
     principal anterior) y `commit` quedan registrados para las aserciones."""
 
-    def __init__(self, fila):
+    def __init__(self, fila, *, filas=None, error_commit=None):
         self._fila = fila
-        self.updates = 0
+        self._filas = list(filas or [])
+        self.statements = []
         self.commits = 0
+        self.rollbacks = 0
+        self.error_commit = error_commit
 
     async def __aenter__(self):
         return self
@@ -107,11 +141,28 @@ class _Sesion:
     async def get(self, modelo, pk):
         return self._fila
 
-    async def execute(self, _q):
-        self.updates += 1
+    async def execute(self, q):
+        self.statements.append(q)
+
+        class _Resultado:
+            def __init__(self, filas):
+                self.filas = filas
+
+            def scalars(self):
+                return self
+
+            def all(self):
+                return list(self.filas)
+
+        return _Resultado(self._filas)
 
     async def commit(self):
         self.commits += 1
+        if self.error_commit is not None:
+            raise self.error_commit
+
+    async def rollback(self):
+        self.rollbacks += 1
 
 
 def _con_sesion(monkeypatch, fila):
@@ -126,8 +177,26 @@ async def test_marcar_principal_enciende_esta_y_apaga_la_anterior(monkeypatch):
     r = await api.marcar_media_principal(31, _="prueba@masvida.local")
     assert r == {"ok": True}
     assert foto.es_principal is True
-    assert ses.updates == 1, "tiene que apagar la principal ANTERIOR del mismo producto"
+    assert len(ses.statements) == 1
+    sql = str(ses.statements[0])
+    params = ses.statements[0].compile().params
+    assert "producto_media.producto_id" in sql and "producto_media.es_principal" in sql
+    assert 7 in params.values(), "solo puede apagar la principal de ESTE producto"
+    assert False in params.values(), "la principal anterior tiene que quedar apagada"
     assert ses.commits == 1, "una sola transacción: apagar y encender juntos"
+
+
+async def test_una_carrera_al_marcar_principal_devuelve_409_y_rollback(monkeypatch):
+    from fastapi import HTTPException
+    from sqlalchemy.exc import IntegrityError
+
+    error = IntegrityError("UPDATE producto_media", {}, RuntimeError("indice unico"))
+    ses = _Sesion(_Media(31), error_commit=error)
+    monkeypatch.setattr(api, "get_session_factory", lambda: (lambda: ses))
+    with pytest.raises(HTTPException) as exc:
+        await api.marcar_media_principal(31, _="prueba@masvida.local")
+    assert exc.value.status_code == 409
+    assert ses.rollbacks == 1
 
 
 async def test_un_video_no_puede_ser_la_principal(monkeypatch):
@@ -174,13 +243,26 @@ def test_la_036_quedo_registrada_en_el_banco_de_migraciones():
     assert "ux_media_principal_por_producto" in fuente, "el índice de la 036 no está en INDICES_VIVOS"
 
 
-def test_listar_media_expone_es_principal():
-    """El panel pinta la ★ con este campo: si el contrato lo pierde, la UI queda ciega.
-    Se comprueba el CONTRATO en la fuente (el patrón de R50): la respuesta lo incluye."""
-    import inspect
+async def test_listar_media_expone_es_principal_y_ordena_por_ella(monkeypatch):
+    """Ejecuta el endpoint: prueba el contrato consumido por el panel y el ORDER BY real."""
+    foto = _Media(31, es_principal=True, clave="productos/principal.jpg", etiqueta="frente")
+    ses = _Sesion(None, filas=[foto])
+    monkeypatch.setattr(api, "get_session_factory", lambda: (lambda: ses))
+    monkeypatch.setattr(
+        "app.services.r2.url_publica", lambda clave: f"https://r2.local/{clave}"
+    )
 
-    fuente = inspect.getsource(api.listar_media)
-    assert "es_principal" in fuente
+    respuesta = await api.listar_media(7, _="prueba@masvida.local")
+    assert respuesta == [{
+        "id": 31,
+        "tipo": "imagen",
+        "url": "https://r2.local/productos/principal.jpg",
+        "etiqueta": "frente",
+        "es_principal": True,
+    }]
+    sql = str(ses.statements[0])
+    assert "producto_media.es_principal DESC" in sql
+    assert "producto_media.orden" in sql and "producto_media.id" in sql
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -228,6 +310,35 @@ def test_una_version_pedida_jamas_pierde_su_puesto(_url_es_la_clave):
     platano, neutra = _Foto("platano.jpg"), _Foto("neutra.jpg")
     orden = _para_reenvio_primero_las_no_vistas([platano, neutra], {"platano.jpg"}, "platano")
     assert [m.clave for m in orden] == ["platano.jpg", "neutra.jpg"]
+
+
+def test_un_tamano_pedido_por_variante_id_jamas_pierde_su_puesto(_url_es_la_clave):
+    """La variante es tan específica como la etiqueta: variedad no puede desplazarla."""
+    from app.agent.tools import _para_reenvio_primero_las_no_vistas
+
+    tamano, neutra = _Foto("700ml.jpg"), _Foto("neutra.jpg")
+    orden = _para_reenvio_primero_las_no_vistas(
+        [tamano, neutra], {"700ml.jpg"}, None, variante_id=44
+    )
+    assert [m.clave for m in orden] == ["700ml.jpg", "neutra.jpg"]
+
+
+async def test_fallo_de_memoria_fina_hace_rollback_y_no_envenena_la_tool():
+    from app.agent.tools import _urls_de_media_ya_enviadas
+
+    class _SesionRota:
+        def __init__(self):
+            self.rollbacks = 0
+
+        async def execute(self, _q):
+            raise RuntimeError("postgres abortó la sentencia")
+
+        async def rollback(self):
+            self.rollbacks += 1
+
+    ses = _SesionRota()
+    assert await _urls_de_media_ya_enviadas(ses, TEL) == set()
+    assert ses.rollbacks == 1
 
 
 def test_sin_memoria_el_orden_de_siempre(_url_es_la_clave):

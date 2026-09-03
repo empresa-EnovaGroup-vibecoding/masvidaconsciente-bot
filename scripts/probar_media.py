@@ -26,7 +26,7 @@ import asyncio
 import sys
 from types import SimpleNamespace
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 
 from app.agent import tools
 from app.models import Mensaje, Producto, ProductoMedia
@@ -288,6 +288,50 @@ async def main() -> None:
             check("con reenviar=True (el cliente la pidió) manda lo MISMO que antes de la 029",
                   r_retro.get("enviadas") == enviadas and r_retro.get("etiqueta_enviada") is None,
                   f"antes {enviadas}, ahora {r_retro.get('enviadas')}")
+
+        print("\n6) LA FOTO PRINCIPAL ENCABEZA EL ORDER BY REAL (036, CON ROLLBACK)")
+        # La ★ solo sirve si Postgres la pone de primera. Este ensayo cambia una fila dentro de
+        # una transacción que NUNCA se confirma y hace ROLLBACK incluso si la comprobación falla.
+        async with factory() as s7:
+            imagenes = (
+                await s7.execute(
+                    select(ProductoMedia)
+                    .where(ProductoMedia.tipo == "imagen")
+                    .order_by(ProductoMedia.producto_id, ProductoMedia.orden, ProductoMedia.id)
+                )
+            ).scalars().all()
+            por_producto: dict[int, list] = {}
+            for imagen in imagenes:
+                por_producto.setdefault(imagen.producto_id, []).append(imagen)
+            grupo = next((g for g in por_producto.values() if len(g) >= 2), None)
+            if grupo is None:
+                check("hay un producto con al menos dos fotos para probar la ★", False)
+            else:
+                elegida = grupo[-1]  # deliberadamente no es la primera por orden de subida
+                await s7.execute(
+                    update(ProductoMedia)
+                    .where(ProductoMedia.producto_id == elegida.producto_id)
+                    .values(es_principal=False)
+                )
+                elegida.es_principal = True
+                await s7.flush()
+                ordenadas = (
+                    await s7.execute(
+                        select(ProductoMedia)
+                        .where(ProductoMedia.producto_id == elegida.producto_id)
+                        .order_by(
+                            ProductoMedia.es_principal.desc(),
+                            ProductoMedia.orden,
+                            ProductoMedia.id,
+                        )
+                    )
+                ).scalars().all()
+                check(
+                    "la foto marcada queda primera aunque antes estuviera al final",
+                    bool(ordenadas) and ordenadas[0].id == elegida.id,
+                    f"esperada {elegida.id}; primera {ordenadas[0].id if ordenadas else None}",
+                )
+            await s7.rollback()
 
         # Limpieza: este banco escribe de verdad, así que se lleva lo suyo.
         async with factory() as s5:

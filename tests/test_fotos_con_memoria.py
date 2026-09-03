@@ -206,6 +206,15 @@ async def test_el_simulador_queda_exento(monkeypatch):
     assert "(SIMULADOR)" in r["nota"]
 
 
+async def test_el_simulador_reporta_la_misma_cantidad_que_guarda(monkeypatch):
+    """Proactivo=maximo 1: una burbuja guardada y `enviadas=1`, no una narración de tres."""
+    r = await _correr_tool(
+        monkeypatch, ya_mostrada=False, telefono="__simulador__ana", maximo=1
+    )
+    assert r.get("enviadas") == 1
+    assert "1 foto(s)" in r["nota"]
+
+
 async def test_ante_fallo_de_bd_la_herramienta_ENVIA(monkeypatch):
     """El lado seguro cambia según quién llama: la red que EMPUJA se calla (True), pero la
     herramienta en plena venta envía (False). Un hipo de Postgres no deja al bot sin fotos."""

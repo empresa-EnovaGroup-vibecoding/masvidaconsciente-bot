@@ -405,6 +405,17 @@ async def test_el_mismo_producto_no_se_muestra_dos_veces(monkeypatch):
     assert llamadas == []
 
 
+async def test_si_cliente_pidio_ver_la_red_rescata_hasta_3_aunque_ya_se_mostro(monkeypatch):
+    """Si el modelo omitió la tool, la red mira al cliente: pedir ver autoriza el reenvío."""
+    llamadas, _ = await _correr_red(
+        monkeypatch, mensaje="muéstramela otra vez", ya_mostrada=True
+    )
+    assert llamadas == [(
+        "enviar_fotos_producto",
+        {"nombre": "Quesillo", "maximo": 3, "reenviar": True},
+    )]
+
+
 async def test_ambiguo_o_sin_producto_no_dispara(monkeypatch):
     """El texto no nombra UN único producto resoluble: sin certeza, ninguna foto."""
     llamadas, _ = await _correr_red(

@@ -4024,23 +4024,32 @@ async def _urls_de_media_ya_enviadas(session, telefono: str) -> set[str]:
         return set(filas.scalars().all())
     except Exception:  # noqa: BLE001 — sin memoria fina, el orden de siempre
         logger.exception("_urls_de_media_ya_enviadas: no se pudo leer mensajes para %s", telefono)
+        # Esta helper comparte la sesión de la tool. En Postgres, una sentencia fallida deja la
+        # transacción abortada hasta hacer rollback; sin limpiarla, la siguiente consulta podía
+        # interpretar falsamente que la dueña tomó el chat y bloquear TODO el envío.
+        try:
+            await session.rollback()
+        except Exception:  # noqa: BLE001 — el fallo original sigue degradando solo la variedad
+            logger.exception("_urls_de_media_ya_enviadas: también falló el rollback")
         return set()
 
 
-def _para_reenvio_primero_las_no_vistas(medios, vistas: set[str], etiqueta_pedida) -> list:
+def _para_reenvio_primero_las_no_vistas(
+    medios, vistas: set[str], etiqueta_pedida, variante_id=None
+) -> list:
     """En el "muéstramelas OTRA VEZ", la variedad vende: las fotos que el cliente NO ha visto
     van PRIMERO (lo pidió Maired el 2026-09-03 — con 5 fotos cargadas, repetirle la misma de
     entrada aburre; enseñarle otro ángulo ayuda a comparar y cerrar).
 
     Dos reglas que la mantienen sana:
-    - Si el cliente pidió una VERSIÓN concreta ("la de plátano otra vez"), NO se reordena nada:
+    - Si el cliente pidió una VERSIÓN concreta por etiqueta o tamaño/variante, NO se reordena:
       lo pedido manda sobre la variedad — `_elegir_medios` ya puso esa versión primero y aquí
       no se le quita el puesto.
     - El orden es un sort ESTABLE por "ya vista": dentro de las no vistas (y de las vistas) se
       conserva el orden de `_elegir_medios` — la principal primero, después las demás. Con todo
       ya visto, queda idéntico a hoy: pidió repetir y se le repite.
     """
-    if (etiqueta_pedida or "").strip() or not vistas:
+    if (etiqueta_pedida or "").strip() or variante_id is not None or not vistas:
         return list(medios)
     from app.services import r2
 
@@ -4278,7 +4287,7 @@ async def enviar_fotos_producto(
     # una versión pedida jamás pierde su puesto; todo-visto = idéntico a hoy).
     if reenviar and medios:
         medios = _para_reenvio_primero_las_no_vistas(
-            medios, await _urls_de_media_ya_enviadas(session, telefono), etiqueta
+            medios, await _urls_de_media_ya_enviadas(session, telefono), etiqueta, _vid
         )
     # Lo que el cliente pidió, ya limpio: es lo que se le repite al modelo en los avisos.
     _pedido = (etiqueta or "").strip()
@@ -4339,7 +4348,7 @@ async def enviar_fotos_producto(
                     ),
                     url=url, respuesta=None,
                 )
-        n = min(len(medios), 3)
+        n = min(len(medios), maximo)
         return {
             "enviadas": n, "producto": prod.nombre,
             "etiqueta_enviada": et_enviada,
