@@ -61,8 +61,9 @@ ROLLBACK y no envenena la sesión; y una carrera al mover la ★ devuelve 409 li
 
 **Pruebas fortalecidas:** el endpoint se ejecuta de verdad (contrato `es_principal` + SQL con
 `ORDER BY es_principal DESC`), el UPDATE comprueba producto/valor, y `probar_media.py` ensaya la
-★ contra PostgreSQL dentro de una transacción con ROLLBACK. **840 tests verdes con UTF-8 · ruff
-verde · compileall verde · dashboard tsc+build verdes.** El banco PostgreSQL no pudo correrse en
+★ contra PostgreSQL dentro de una transacción con ROLLBACK. Tras integrar el `master` que ya
+incluye el PR #21: **850 tests verdes con UTF-8 · ruff verde · compileall verde · dashboard
+tsc+build verdes.** El banco PostgreSQL no pudo correrse en
 esta instalación local: su `.venv` no contiene `asyncpg` y no hay PostgreSQL escuchando en
 `localhost:5432`; queda como puerta obligatoria post-deploy en pruebas, donde vive el runtime
 completo. Producción no se tocó.
