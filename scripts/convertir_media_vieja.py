@@ -2,10 +2,23 @@
 
 La puerta nueva (subir_media) convierte todo AL SUBIR — pero lo que se subió ANTES quedó
 tal cual (caso real: el video .quicktime de la Torta keto, que WhatsApp rechaza siempre).
-Este script repasa `producto_media`, y lo que no sea MP4 (videos) o JPEG/PNG (imágenes)
-lo baja de R2, lo convierte, sube el archivo nuevo, actualiza la clave en la BD y borra
-el viejo — EN ESE ORDEN (primero el nuevo vive, después muere el viejo: si algo falla a
-mitad, no se pierde nada).
+Este script repasa `producto_media`, baja de R2 lo sospechoso, lo convierte, sube el
+archivo nuevo, actualiza la clave en la BD y borra el viejo — EN ESE ORDEN (primero el
+nuevo vive, después muere el viejo: si algo falla a mitad, no se pierde nada). Si la
+clave no cambia (ya era .mp4), se SOBREESCRIBE el mismo objeto y no se borra nada.
+
+🔴 LA LECCIÓN DEL 2026-09-03: la corrida del 14-jul fue un NO-OP para los videos. Este
+script confiaba en la EXTENSIÓN (`.endswith(".mp4")`) y `_video_ya_sirve` confiaba en la
+subcadena "mp4" del format_name de ffprobe — y un QuickTime de iPhone pasa LAS DOS
+pruebas mintiendo. Resultado: los 5 .mov quedaron renombrados a .mp4, byte a byte
+idénticos, y el primer envío real de un video murió con Meta 131053. Por eso ahora los
+VIDEOS se sondean SIEMPRE (se baja el archivo y ffprobe mira el contenedor real: el
+`major_brand`); la extensión no vuelve a decidir. Las imágenes conservan su salto por
+extensión: las 29 del catálogo se verificaron sanas en la autopsia y su pipeline (Pillow)
+sí valida contenido real al subir.
+
+⚠️ El bucket R2 es COMPARTIDO entre pruebas y producción: correr esto REESCRIBE objetos
+que producción sirve en vivo. Solo con OK expreso de Maired y en hora valle.
 
 Correr DENTRO del contenedor del bot (tiene ffmpeg):
   docker exec -w /app -e PYTHONPATH=/app <bot> python scripts/convertir_media_vieja.py
@@ -19,8 +32,20 @@ from app.models import ProductoMedia
 from app.services import media_convert, r2
 from app.services.db import get_session_factory
 
-_EXT_VIDEO_OK = (".mp4",)
 _EXT_IMAGEN_OK = (".jpeg", ".jpg", ".png")
+
+
+def _se_salta_sin_sondear(tipo: str, clave: str) -> bool:
+    """True si la fila se puede saltar SIN bajar el archivo.
+
+    Los VIDEOS jamás se saltan: la extensión .mp4 es exactamente la mentira que dejó la
+    corrida del 14-jul (QuickTime renombrado). El único juez del contenedor es ffprobe,
+    y para eso hay que bajar el archivo. Las imágenes sí se saltan por extensión (ver
+    docstring del módulo: verificadas sanas, y su puerta valida contenido real).
+    """
+    if (tipo or "") == "video":
+        return False
+    return (clave or "").lower().endswith(_EXT_IMAGEN_OK)
 
 
 async def main() -> None:
@@ -36,10 +61,7 @@ async def main() -> None:
         convertidos = 0
         fallidos: list[str] = []
         for m in medios:
-            clave = (m.clave or "").lower()
-            if m.tipo == "video" and clave.endswith(_EXT_VIDEO_OK):
-                continue
-            if m.tipo != "video" and clave.endswith(_EXT_IMAGEN_OK):
+            if _se_salta_sin_sondear(m.tipo, m.clave):
                 continue
 
             print(f"→ media {m.id} ({m.tipo}): {m.clave}")
@@ -54,6 +76,11 @@ async def main() -> None:
                     nuevo, ct, ext = await media_convert.normalizar_imagen(crudo, "")
             except media_convert.MediaInvalida as e:
                 fallidos.append(f"media {m.id}: {e}")
+                continue
+
+            if m.tipo == "video" and nuevo == crudo:
+                # ffprobe dice que YA es un MP4 ISO sano: nada que subir ni contar.
+                print("   ✓ ya era un MP4 de verdad — sin tocar")
                 continue
 
             base = m.clave.rsplit(".", 1)[0]
