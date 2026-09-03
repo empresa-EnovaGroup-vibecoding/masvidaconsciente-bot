@@ -45,11 +45,13 @@ COLUMNAS = [
     ("pedidos", "entrega_fecha", "016 · sin fecha no se cobra"),
     ("producto_media", "etiqueta", "029 · cada foto dice qué es"),
     ("conocimiento", "activo", "030 · retirar sin borrar"),
+    ("producto_media", "es_principal", "036 · la foto principal del producto"),
 ]
 
 # Índices que TIENEN que estar… y el que NO puede estar.
 INDICES_VIVOS = [
     ("ux_precio_dia_variante_fecha", "022 · un precio por TAMAÑO y día"),
+    ("ux_media_principal_por_producto", "036 · UNA principal por producto (lo impide Postgres)"),
 ]
 INDICES_MUERTOS = [
     # 🔴 EL DELATOR. Si este vuelve a aparecer, es que la 022 NO corrió: alguna migración anterior

@@ -121,6 +121,12 @@ class ProductoMedia(Base):
     # `productos.descripcion` y en `producto_variantes.sabores`. Un dato, un solo sitio.
     etiqueta: Mapped[str | None] = mapped_column(Text, nullable=True)
     orden: Mapped[int] = mapped_column(default=0)
+    # LA CARA DEL PRODUCTO (migración 036): la foto que la dueña marcó como principal — la que
+    # el bot manda en el envío PROACTIVO (una sola), la primera del panel y la miniatura del
+    # catálogo. FALSE = sin marcar; sin principal marcada, manda la primera por (orden, id),
+    # exactamente lo de siempre. UNA por producto: lo garantiza Postgres con el índice parcial
+    # ux_media_principal_por_producto (la comprobación y la escritura son un mismo acto).
+    es_principal: Mapped[bool] = mapped_column(default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 
 

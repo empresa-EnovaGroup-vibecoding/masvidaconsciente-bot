@@ -161,6 +161,13 @@ _OFRECE_OPCIONES = re.compile(r"\bcual(es)?\b")
 # porque ahí sí es spam y quema la calidad del número con Meta, que es una regla dura.
 _MAX_FOTOS_POR_TURNO = 2
 
+# La cantidad no la decide el modelo: es una política de negocio única para TODOS los caminos
+# que pueden acabar enviando media (llamada del modelo y red de rescate). Proactivo = enseñar la
+# cara del producto; pedido explícito = dejarlo ver bien. Mantener estas dos cifras juntas evita
+# que una puerta mande 1 y otra 3 ante el mismo mensaje.
+_MAX_MEDIA_PROACTIVA_POR_PRODUCTO = 1
+_MAX_MEDIA_PEDIDA_POR_PRODUCTO = 3
+
 
 async def _asegurar_foto(
     texto: str, telefono: str, mensaje_cliente: str, ejecutar,
@@ -216,22 +223,24 @@ async def _asegurar_foto(
         # de test mal escrito). La red que evita el spam no puede ser la que lo provoque.
         if isinstance(nombres, str):
             nombres = [nombres]
-        # Las que ya se le mostraron se caen aquí: repetirlas es spam, pero no impiden mandar
-        # la otra (antes un `return` seco mataba las dos).
-        pendientes = [n for n in nombres if not await media_ya_mostrada(telefono, n)]
+        maximo, reenviar = _politica_fotos_cliente(mensaje_cliente)
+        # Si el cliente pidió ver, la red tiene que poder rescatar también el caso en que el
+        # modelo omitió la tool: saltar la memoria es legítimo y coincide con la misma válvula
+        # de `_ejecutar_con_guardas`. Si nadie pidió media, repetirla sí sería spam.
+        pendientes = (
+            list(nombres)
+            if reenviar
+            else [n for n in nombres if not await media_ya_mostrada(telefono, n)]
+        )
         if not pendientes:
             logger.info(
                 "RED DE LA FOTO: %s ya se le mostró a %s — no se repite", nombres, telefono
             )
             return
-        # 🔴 CUÁNTOS ARCHIVOS por producto. Con DOS productos se manda UNO de cada uno: la tool
-        # manda hasta 3 por defecto, y 2 × 3 = **6 archivos seguidos** — 5 salieron en la primera
-        # prueba real, y eso es el bombardeo que la regla quería evitar (y que arriesga la calidad
-        # del número con Meta). Con un solo producto se mantienen los 3 de siempre: ahí es
-        # enseñarlo desde varios ángulos, no spam.
-        por_producto = 1 if len(pendientes) > 1 else 3
         for nombre in pendientes:
-            args: dict = {"nombre": nombre, "maximo": por_producto}
+            args: dict = {"nombre": nombre, "maximo": maximo}
+            if reenviar:
+                args["reenviar"] = True
             # Si el producto es COMPUESTO ("… de masa de yuca o de masa de plátano") y el cliente
             # dijo cuál versión quiere ("de platano"), la etiqueta va en la llamada: la herramienta
             # manda la foto que la dueña nombró así y JAMÁS la de la otra masa (hueco encontrado
@@ -1731,15 +1740,30 @@ async def _ejecutar_con_guardas(
                 telefono, str(args)[:200],
             )
             return rechazo
-    if nombre_tool == "enviar_fotos_producto" and _pide_fotos(mensaje_usuario):
-        # 🔒 LA VÁLVULA EN CÓDIGO (rama fotos-con-memoria): la herramienta ahora tiene memoria y
-        # no repite un producto ya mostrado — pero si el CLIENTE está pidiendo ver ("mándame la
-        # foto", "muéstramela otra vez", "no me llegó el video"), reenviar es lo correcto y no
-        # puede depender de que el modelo se acuerde de pasar `reenviar`: lo enciende el código
-        # leyendo las palabras del cliente. Un cliente pidiendo VER nunca es spam. Las llamadas
-        # de la RED DE LA FOTO no pasan por esta puerta (van por `ejecutar` directo): su empuje
-        # proactivo sigue frenado por su propio filtro de `media_ya_mostrada`.
-        args = {**args, "reenviar": True}
+    if nombre_tool == "enviar_fotos_producto":
+        maximo, reenviar = _politica_fotos_cliente(
+            mensaje_usuario, reenviar_solicitado=args.get("reenviar") is True
+        )
+        if reenviar:
+            # 🔒 LA VÁLVULA EN CÓDIGO (rama fotos-con-memoria): la herramienta ahora tiene
+            # memoria y no repite un producto ya mostrado — pero si el CLIENTE está pidiendo ver
+            # ("mándame la foto", "muéstramela otra vez", "no me llegó el video"), reenviar es lo
+            # correcto y no puede depender de que el modelo se acuerde de pasar `reenviar`: lo
+            # enciende el código leyendo las palabras del cliente. Un cliente pidiendo VER nunca
+            # es spam. Y como PIDIÓ ver, se mantienen los hasta 3 archivos de siempre (el default
+            # de la tool): quien pide ver quiere ver bien. Las llamadas de la RED DE LA FOTO no
+            # pasan por esta puerta (van por `ejecutar` directo): su empuje proactivo sigue
+            # frenado por su propio filtro de `media_ya_mostrada`.
+            args = {**args, "reenviar": True}
+            args.setdefault("maximo", maximo)
+        elif "maximo" not in args:
+            # 📷 EL PROACTIVO MANDA UNA — LA PRINCIPAL (decisión de producto 2026-09-03, ver la
+            # red de la foto). Si el cliente NO pidió ver y el modelo no decidió un `maximo` a
+            # propósito, la política la pone el código: una foto (la principal de la 036, o la
+            # primera del producto), no una galería. Si el modelo SÍ pasó `maximo`, se respeta
+            # (recortado a 1..3 dentro de la tool): el prompt sugiere, y aquí el código solo
+            # rellena lo que el modelo dejó en blanco — no le tuerce la mano.
+            args = {**args, "maximo": maximo}
     return await ejecutar(nombre_tool, args, telefono)
 
 
@@ -1936,7 +1960,13 @@ def _suena_a_sistema(texto: str) -> bool:
 # cuando la frase lo NOMBRA, o cuando el PDF salió de verdad en este turno y el cliente nunca
 # pidió una foto con todas sus letras. Si el cliente escribió "foto"/"video"/"imagen", la red
 # se queda tan dura como estaba: ese es el caso REAL del 2026-07-14 y no se toca.
-_PIDE_FOTOS_RE = re.compile(r"\b(foto|fotos|video|videos|imagen|imagenes|verlo|verla|muestrame|mostrar)\b")
+_PIDE_FOTOS_RE = re.compile(
+    r"\b(fotos?|videos?|imagen|imagenes|ver|verlo|verla|verlos|verlas"
+    r"|muestra(?:me)?(?:lo|la|los|las)?"
+    r"|mostrar(?:me)?(?:lo|la|los|las)?"
+    r"|ensena(?:me)?(?:lo|la|los|las)?)\b"
+    r"|\bcomo\s+se\s+ve\b"
+)
 _FOTO_PALABRA_RE = re.compile(r"\b(foto|fotos|video|videos|imagen|imagenes)\b")
 _CATALOGO_PALABRA_RE = re.compile(r"\b(catalogo|menu|carta|folleto)\b")
 _AFIRMA_ENVIO_RE = re.compile(
@@ -1958,6 +1988,21 @@ _AFIRMA_ENVIO_RE = re.compile(
 def _pide_fotos(texto_cliente: str) -> bool:
     """True si el CLIENTE está pidiendo ver fotos/videos (o 'verlo')."""
     return bool(_PIDE_FOTOS_RE.search(_sin_acentos(texto_cliente or "")))
+
+
+def _politica_fotos_cliente(
+    texto_cliente: str, *, reenviar_solicitado: bool = False
+) -> tuple[int, bool]:
+    """Decide la política de media una sola vez para el modelo y la red de rescate.
+
+    Devuelve ``(maximo, reenviar)``. Un pedido explícito —o un ``reenviar=True`` que ya trajo
+    la llamada— autoriza hasta tres y salta la memoria; cualquier envío proactivo queda en una.
+    La herramienta conserva el techo duro de tres como última defensa anti-spam.
+    """
+    pidio_ver = reenviar_solicitado or _pide_fotos(texto_cliente)
+    if pidio_ver:
+        return _MAX_MEDIA_PEDIDA_POR_PRODUCTO, True
+    return _MAX_MEDIA_PROACTIVA_POR_PRODUCTO, False
 
 
 def _pide_media_explicita(texto_cliente: str) -> bool:

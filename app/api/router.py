@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFil
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, StringConstraints
 from sqlalchemy import delete, func, select
+from sqlalchemy.exc import IntegrityError
 
 from app.api.security import (
     crear_token,
@@ -609,11 +610,15 @@ async def listar_productos(_: str = Depends(usuario_actual)):
                 await session.execute(
                     select(ProductoMedia)
                     .where(ProductoMedia.producto_id.in_(ids), ProductoMedia.tipo == "imagen")
-                    .order_by(ProductoMedia.producto_id, ProductoMedia.orden, ProductoMedia.id)
+                    # La PRINCIPAL manda como miniatura (036); sin marcar, la primera de siempre.
+                    .order_by(
+                        ProductoMedia.producto_id, ProductoMedia.es_principal.desc(),
+                        ProductoMedia.orden, ProductoMedia.id,
+                    )
                 )
             ).scalars().all()
             for m in filas:
-                primera_img.setdefault(m.producto_id, m.clave)  # la primera por orden
+                primera_img.setdefault(m.producto_id, m.clave)  # la principal, o la primera
 
         # LOS TAMAÑOS. El precio vive AQUÍ desde la migración 022 (la Kombucha de 350ml cuesta
         # $4 y la de 700ml $7). El campo `precio` del producto se sigue devolviendo para no
@@ -915,14 +920,19 @@ async def listar_media(producto_id: int, _: str = Depends(usuario_actual)):
             await session.execute(
                 select(ProductoMedia)
                 .where(ProductoMedia.producto_id == producto_id)
-                .order_by(ProductoMedia.orden, ProductoMedia.id)
+                # La PRINCIPAL primero (036); sin marcar, el orden de siempre (subida).
+                .order_by(ProductoMedia.es_principal.desc(), ProductoMedia.orden, ProductoMedia.id)
             )
         ).scalars().all()
     # `etiqueta` = QUÉ SE VE en esa foto ("base de plátano"), lo único que distingue dos fotos
-    # del mismo producto al mismo precio. (`variante_id` NO se manda: nadie lo consume, y un
-    # dato muerto en un contrato es lo que hace que el siguiente construya sobre una mentira.)
+    # del mismo producto al mismo precio. `es_principal` SÍ se manda: el panel pinta la ★ y
+    # llama al PATCH de abajo. (`variante_id` NO se manda: nadie lo consume, y un dato muerto
+    # en un contrato es lo que hace que el siguiente construya sobre una mentira.)
     return [
-        {"id": m.id, "tipo": m.tipo, "url": r2.url_publica(m.clave), "etiqueta": m.etiqueta}
+        {
+            "id": m.id, "tipo": m.tipo, "url": r2.url_publica(m.clave),
+            "etiqueta": m.etiqueta, "es_principal": m.es_principal,
+        }
         for m in filas
     ]
 
@@ -1046,6 +1056,51 @@ async def etiquetar_media(media_id: int, datos: MediaIn, _: str = Depends(usuari
         m.etiqueta = et
         await session.commit()
     return {"ok": True, "etiqueta": et}
+
+
+@router.patch("/media/{media_id}/principal")
+async def marcar_media_principal(media_id: int, _: str = Depends(usuario_actual)):
+    """Marca ESTA foto como la principal del producto — la cara que el bot manda en el envío
+    proactivo, la primera del panel y la miniatura del catálogo (migración 036).
+
+    Endpoint PROPIO a propósito (el patrón de `marcar_agotado`): aquí solo se toca lo que se
+    pidió. Sin body: marcar es un acto de UNA dirección — la estrella se MUEVE marcando otra
+    foto, no se apaga (sin principal marcada, el código usa la primera por orden de subida,
+    que es el comportamiento de siempre). Solo IMÁGENES: la principal es la cara visual del
+    producto (miniatura incluida) y un video no puede serlo.
+
+    UNA principal por producto lo garantiza Postgres (ux_media_principal_por_producto): aquí
+    se apaga la anterior y se enciende esta EN LA MISMA transacción — si algo se colara en
+    paralelo, el índice parcial lo frena en la base, no en una comprobación de código.
+    """
+    from sqlalchemy import update as _update
+
+    factory = get_session_factory()
+    async with factory() as session:
+        m = await session.get(ProductoMedia, media_id)
+        if m is None:
+            raise HTTPException(status_code=404, detail="Esa foto no existe")
+        if m.tipo != "imagen":
+            raise HTTPException(
+                status_code=400,
+                detail="La foto principal debe ser una imagen, no un video.",
+            )
+        await session.execute(
+            _update(ProductoMedia)
+            .where(ProductoMedia.producto_id == m.producto_id, ProductoMedia.es_principal)
+            .values(es_principal=False)
+        )
+        m.es_principal = True
+        # Sin `updated_at`: ProductoMedia no la tiene (models.py) — misma nota que arriba.
+        try:
+            await session.commit()
+        except IntegrityError as exc:
+            await session.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail="Otra foto acaba de quedar como principal; recarga e inténtalo de nuevo.",
+            ) from exc
+    return {"ok": True}
 
 
 @router.delete("/media/{media_id}")

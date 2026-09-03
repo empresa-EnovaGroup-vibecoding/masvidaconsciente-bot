@@ -24,6 +24,50 @@
 
 ---
 
+## 2026-09-03 (20) — 🎬 EL VIDEO QUE NUNCA LLEGÓ + 📸 LA FOTO PRINCIPAL (PRs #21, #22 y panel #1)
+
+**Además esta sesión: el resolvedor (#20) quedó DESPLEGADO en pruebas** (deploy manual por la API
+de Coolify, contenedores en `b6c4be9`, `/salud` ok) y el banco `probar_buscador` corrió VERDE
+dentro del contenedor vivo contra los 31 productos. La prueba de Maired de las 15:25 confirmó el
+resolvedor en vivo ("La Torta keto tiene sabor a chocolate" — nombró la correcta 2 veces).
+
+**1) 🎬 AUTOPSIA + ARREGLO DEL VIDEO 131053 (PR #21).** El video de Tortas keto (msj 9499) NO
+murió por peso (0.45 MB) ni URL (HTTP 200): **los 5 videos del catálogo son QuickTime de iPhone
+renombrados a .mp4**. Raíz: `_video_ya_sirve` hacía `"mp4" in format_name` y ffprobe reporta
+`"mov,mp4,m4a,3gp,3g2,mj2"` para CUALQUIER .mov → el barrido del 14-jul fue un NO-OP (re-subió
+bytes idénticos; los 5 Last-Modified en 5 segundos lo prueban). Cura: lista blanca de
+`major_brand` ISO + `-map 0:v:0 -map 0:a:0?` (mata los streams `data`) + los videos ya no se
+saltan por extensión en `convertir_media_vieja.py`. Reversión verificada (viejo=True/nuevo=False
+con el caso qt). **Ops pendiente tras fusionar** (OK de Maired, hora valle): correr el script
+corregido — sobreescribe los mismos objetos del bucket compartido, sin borrar — y pedirle a la
+dueña un video real de Tortas keto (el actual es 1 frame + audio).
+
+**2) 📸 LA FOTO PRINCIPAL (PR #22 bot + PR #1 dashboard).** Decisión de producto de Maired: el
+proactivo muestra LA CARA del producto (1 foto, la ★ de la migración 036; sin marcar = la
+primera de siempre), "pidió ver" mantiene hasta 3, y **variedad en el "otra vez"**: las no
+vistas primero (jamás desplazan una versión pedida). Endpoint `PATCH /media/{id}/principal`
+(molde marcar_agotado; índice parcial único = UNA por producto, doctrina 026). 13 contratos del
+proactivo actualizados CON la conducta a propósito; 16 tests nuevos; suite+ruff verdes. El panel
+pinta la ★ (2 archivos, molde etiquetarMedia; tsc+build verdes).
+
+**3) 🛡️ REVISIÓN DEL PR #22 CERRADA DESPUÉS DEL LÍMITE DE CLAUDE.** Los 12 reportes crudos se
+redujeron a 7 fallos distintos y se corrigieron en la misma rama. La política de fotos quedó en
+UNA sola función compartida por la llamada del modelo y la red de rescate: proactivo = 1;
+cliente pidió ver/repetir = hasta 3 + `reenviar`. Ahora reconoce frases naturales como
+"muéstramela", "quiero verlas", "cómo se ve" y "enséñame"; un `reenviar=True` que ya entendió
+el modelo tampoco se recorta. La variedad ya no desplaza ni una etiqueta ni un `variante_id`
+pedido; el simulador reporta exactamente lo que guardó; un fallo al leer la memoria fina hace
+ROLLBACK y no envenena la sesión; y una carrera al mover la ★ devuelve 409 limpio.
+
+**Pruebas fortalecidas:** el endpoint se ejecuta de verdad (contrato `es_principal` + SQL con
+`ORDER BY es_principal DESC`), el UPDATE comprueba producto/valor, y `probar_media.py` ensaya la
+★ contra PostgreSQL dentro de una transacción con ROLLBACK. Tras integrar el `master` que ya
+incluye el PR #21: **850 tests verdes con UTF-8 · ruff verde · compileall verde · dashboard
+tsc+build verdes.** El banco PostgreSQL no pudo correrse en
+esta instalación local: su `.venv` no contiene `asyncpg` y no hay PostgreSQL escuchando en
+`localhost:5432`; queda como puerta obligatoria post-deploy en pruebas, donde vive el runtime
+completo. Producción no se tocó.
+
 ## 2026-09-03 (19) — 🧠 PRODUCTO, SABOR Y FAMILIA YA NO COMPITEN POR LA MISMA PALABRA
 
 **Caso real que lo destapó:** la clienta pidió ver las tortas. El bot nombró las dos tortas y,
