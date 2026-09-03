@@ -2406,6 +2406,79 @@ def _respuesta_registro(
     }
 
 
+# ─── EL CANDADO DEL PEDIDO DUPLICADO (2026-09-03) ─────────────────────────────────────
+#
+# 🔴 EL CASO REAL, verificado en la BD de pruebas ese mismo día: Maired pagó el pedido #2602
+# ($24, Binance), la dueña aprobó el pago (clic en «Pago aprobado»), el bot coordinó la
+# entrega… y al responderle "6pm" el modelo REGISTRÓ EL PEDIDO #2603 — idéntico, 22 minutos
+# después — y le generó el cobro: le volvió a mandar los datos de Binance a una clienta que
+# ACABABA de pagar. TODOS los candados del cobro funcionaron (generar_datos_pago rechaza
+# pedidos pagados; la red de datos bancarios solo deja pasar lo que una herramienta dio en el
+# turno): el hueco era que NADA impedía fabricar un pedido nuevo idéntico — y un pedido nuevo
+# es legítimamente cobrable. Es la familia del pedido duplicado #2074 (25-ago), ahora
+# disparada por el propio modelo después del pago. El prompt sugiere; esto es lo que impide.
+
+_VENTANA_DUPLICADO_MIN = 90  # un "otra tanda igual" real, minutos después, es rarísimo — y tiene salida (ver nota)
+
+
+def _firma_de_items(items) -> tuple:
+    """La identidad COMPARABLE de un pedido: qué variantes, cuántas y con qué opciones.
+
+    Sirve igual para los `items` que manda el modelo y para el JSON guardado en
+    `pedidos.items` (ambos traen variante_id/cantidad/opciones). El orden no importa;
+    las opciones se normalizan a minúsculas. La `presentacion` y el `precio_unitario`
+    NO entran: son derivados del variante_id, no identidad."""
+    firma = []
+    for it in items or []:
+        try:
+            vid = int(it.get("variante_id"))
+        except (TypeError, ValueError):
+            vid = 0
+        try:
+            cant = int(it.get("cantidad", 1))
+        except (TypeError, ValueError):
+            cant = 0
+        firma.append((vid, cant, (it.get("opciones") or "").strip().lower()))
+    return tuple(sorted(firma))
+
+
+async def _pedido_igual_reciente(session, telefono, items):
+    """El pedido VIVO de este cliente con EXACTAMENTE estos items, creado hace poco — o None.
+
+    'Vivo' = ni cancelado ni entregado: un pedido cancelado se puede volver a hacer, y uno ya
+    entregado se puede repetir mañana. Todo lo demás (pendiente, esperando_pago, pagado,
+    confirmado, preparando) bloquea el duplicado: o la venta sigue abierta o ACABA de cerrarse.
+    Si la lectura falla, None: este candado protege contra un duplicado, jamás puede frenar
+    una venta legítima por un hipo de la BD (el lado del error es vender, no bloquear)."""
+    from datetime import timedelta
+
+    from app.models import now_utc
+
+    firma = _firma_de_items(items)
+    if not firma or all(vid == 0 for vid, _, _ in firma):
+        return None  # items ilegibles: de eso se encargan las validaciones de abajo
+    try:
+        desde = now_utc() - timedelta(minutes=_VENTANA_DUPLICADO_MIN)
+        candidatos = (
+            await session.execute(
+                select(Pedido)
+                .where(
+                    Pedido.cliente_telefono == telefono,
+                    Pedido.created_at >= desde,
+                    Pedido.estado.notin_(("cancelado", "entregado")),
+                )
+                .order_by(Pedido.created_at.desc())
+            )
+        ).scalars().all()
+        for p in candidatos:
+            if _firma_de_items(p.items or []) == firma:
+                return p
+    except Exception:  # noqa: BLE001 — sin lectura no hay candado, pero la venta sigue
+        logger.exception("_pedido_igual_reciente: no se pudo comparar; se deja registrar")
+        return None
+    return None
+
+
 async def registrar_pedido(
     session, telefono, items, notas=None, entrega=None, entrega_fecha=None, zona_id=None
 ):
@@ -2423,6 +2496,23 @@ async def registrar_pedido(
     ).scalar_one_or_none()
     if cliente is None:
         session.add(Cliente(telefono=telefono))
+
+    # ── EL CANDADO DEL DUPLICADO: un pedido idéntico y VIVO no se registra dos veces ──
+    repetido = await _pedido_igual_reciente(session, telefono, items)
+    if repetido is not None:
+        return {
+            "ok": False,
+            "nota": (
+                f"⛔ DUPLICADO: este cliente YA tiene el pedido #{repetido.id} con EXACTAMENTE "
+                f"estos items (está '{repetido.estado}'). NO registres otro. Si solo estás "
+                "confirmando la hora, la fecha o la entrega de ese pedido, no hay nada que "
+                "registrar: confírmaselo y sigue. Si su pago ya fue confirmado, TAMPOCO lo "
+                "cobres de nuevo ni le pidas otra captura. Solo si el cliente PIDIÓ con todas "
+                "sus letras comprar OTRA tanda igual, regístralo de nuevo dejándolo dicho en "
+                "`opciones` (p. ej. 'segunda tanda, pedida por el cliente')."
+            ),
+            "pedido_id": repetido.id,
+        }
 
     # ── LA ZONA (si la mandó): de la lista CERRADA, y su costo lo pone el CÓDIGO ──
     zona = None
