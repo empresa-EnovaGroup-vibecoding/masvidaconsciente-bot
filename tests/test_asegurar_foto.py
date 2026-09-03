@@ -18,7 +18,12 @@ import pytest
 
 from app.agent import agent as ag
 from app.agent.agent import _asegurar_foto, _es_charla_pura
-from app.agent.tools import _productos_nombrados_en, etiqueta_del_cliente
+from app.agent.tools import (
+    _buscar_producto,
+    _productos_nombrados_en,
+    etiqueta_del_cliente,
+    ver_catalogo,
+)
 
 NOMBRES = ["Empanadas", "Empanadas Keto", "Pan de Sándwich", "Quesillo", "Galletas New York"]
 
@@ -95,6 +100,185 @@ def test_forma_en_colision_entre_productos_distintos_se_descarta():
     reclamarían LOS DOS: la forma se descarta entera. Mejor ninguna foto que la equivocada
     (la doctrina del bug $12/$14)."""
     assert _productos_nombrados_en("Perfecto, las empanadas entonces 💚", ["Empanadas", COMPUESTO]) == []
+
+
+# El catálogo REAL tiene un producto llamado exactamente ``CHOCOLATE`` además de tortas
+# cuyo sabor puede ser chocolate. También tiene ``Kéfir de Leche...`` y ``Yogurt
+# Kéfirado``: el primero se pide naturalmente como "kéfir", sin recitar el título entero.
+# Estos casos prueban la IDENTIDAD del producto, no una lista manual de excepciones.
+CATALOGO_NOMBRES_PARCIALES = [
+    "Torta baja en carbohidratos",
+    "Tortas keto",
+    "Untable de Chocolate",
+    "CHOCOLATE",
+    "Kéfir de Leche de cabra de libre pastoreo",
+    "Yogurt Kéfirado",
+]
+
+
+def test_chocolate_como_sabor_no_se_convierte_en_el_producto_chocolate():
+    """El texto que destapó el bug: hay DOS tortas; ``chocolate`` es un sabor, no una
+    tercera oferta. Si cuenta como producto, el tope anti-spam ve 3 y apaga todas las fotos."""
+    frase = (
+        "Tenemos dos tipos de tortas. Torta baja en carbohidratos, en sabores como limón, "
+        "zanahoria, naranja, piña, vainilla, marmoleada, manzana canela y cambur. Disponible "
+        "en 250g, 500g y 1kg. Tortas keto, en sabores limón, almendras, chocolate y pistacho. "
+        "También en 250g, 500g y 1kg. Cuál te provoca?"
+    )
+    assert sorted(_productos_nombrados_en(frase, CATALOGO_NOMBRES_PARCIALES)) == sorted([
+        "Torta baja en carbohidratos", "Tortas keto",
+    ])
+
+
+def test_chocolate_a_secas_si_es_el_producto_chocolate():
+    """Sin un contexto de sabor/ingrediente, el título exacto manda."""
+    assert _productos_nombrados_en(
+        "Sí, tenemos chocolate", CATALOGO_NOMBRES_PARCIALES
+    ) == ["CHOCOLATE"]
+
+
+def test_el_titulo_mas_largo_separa_untable_de_chocolate():
+    """``Untable de Chocolate`` es su propio producto; no se parte en dos identidades."""
+    assert _productos_nombrados_en(
+        "Te recomiendo el untable de chocolate", CATALOGO_NOMBRES_PARCIALES
+    ) == ["Untable de Chocolate"]
+
+
+def test_kefir_a_secas_resuelve_el_titulo_que_empieza_por_kefir():
+    """``kéfir`` es una palabra completa del título del Kéfir de Leche; ``kéfirado``
+    es otra palabra y pertenece al yogurt. Una no puede calzar como prefijo de la otra."""
+    assert _productos_nombrados_en(
+        "¿Tienes kéfir?", CATALOGO_NOMBRES_PARCIALES
+    ) == ["Kéfir de Leche de cabra de libre pastoreo"]
+
+
+def test_yogurt_de_kefir_resuelve_el_yogurt_no_el_kefir_de_leche():
+    assert _productos_nombrados_en(
+        "Quiero el yogurt de kéfir", CATALOGO_NOMBRES_PARCIALES
+    ) == ["Yogurt Kéfirado"]
+
+
+class _ResultadoProductos:
+    def __init__(self, productos):
+        self._productos = productos
+
+    def scalars(self):
+        return self
+
+    def all(self):
+        return self._productos
+
+
+class _SesionProductos:
+    def __init__(self, productos):
+        self._productos = productos
+
+    async def execute(self, _consulta):
+        return _ResultadoProductos(self._productos)
+
+
+class _Producto:
+    def __init__(self, id_, nombre, descripcion="", categoria="dulceria"):
+        self.id = id_
+        self.nombre = nombre
+        self.descripcion = descripcion
+        self.categoria = categoria
+        self.disponible = True
+
+
+def _catalogo_colisiones(*, sabores_en_descripcion=False):
+    torta_1 = "Harina de almendra y coco"
+    torta_2 = "Harina de almendra"
+    if sabores_en_descripcion:
+        # El doble unitario no modela ProductoVariante; ``ver_catalogo`` recibe esos sabores
+        # como texto extra en producción. El banco real prueba ese cableado contra Postgres.
+        torta_1 += ". Sabores: limón y chocolate"
+        torta_2 += ". Sabores: almendra y chocolate"
+    return [
+        # En el catálogo vivo los sabores están en las VARIANTES. El carril del dinero solo
+        # mira esta descripción: si el test pusiera "chocolate" aquí escondería la caída al
+        # difuso que llegó a devolver Untable de Chocolate para "torta de chocolate".
+        _Producto(1, "Torta baja en carbohidratos", torta_1),
+        _Producto(2, "Tortas keto", torta_2),
+        _Producto(3, "Untable de Chocolate", "Chocolate Dubai y almendras"),
+        _Producto(4, "CHOCOLATE", "Cacao casi puro"),
+        _Producto(5, "Kéfir de Leche de cabra de libre pastoreo", "Bebida fermentada"),
+        _Producto(6, "Yogurt Kéfirado", "Yogurt con cultivos de kéfir"),
+    ]
+
+
+@pytest.mark.parametrize(("pedido", "esperado"), [
+    ("kéfir", "Kéfir de Leche de cabra de libre pastoreo"),
+    ("tienes kéfir de leche", "Kéfir de Leche de cabra de libre pastoreo"),
+    ("quiero yogurt de kéfir", "Yogurt Kéfirado"),
+    ("quiero chocolate", "CHOCOLATE"),
+    ("quiero el untable de chocolate", "Untable de Chocolate"),
+])
+async def test_el_carril_estricto_resuelve_titulos_parciales_sin_confundirlos(pedido, esperado):
+    producto = await _buscar_producto(_SesionProductos(_catalogo_colisiones()), pedido)
+    assert producto is not None
+    assert producto.nombre == esperado
+
+
+async def test_torta_de_chocolate_no_se_cobra_como_el_producto_chocolate():
+    """Hay dos tortas que pueden llevar ese sabor: el resultado correcto es preguntar cuál,
+    nunca escoger el producto independiente ``CHOCOLATE`` por encontrar esa palabra dentro."""
+    producto = await _buscar_producto(
+        _SesionProductos(_catalogo_colisiones()), "quiero una torta de chocolate"
+    )
+    assert producto is None
+
+
+async def test_tortas_es_una_familia_y_el_cobro_pregunta_cual():
+    producto = await _buscar_producto(
+        _SesionProductos(_catalogo_colisiones()), "envíame por favor las tortas que tienes"
+    )
+    assert producto is None
+
+
+class _SesionCatalogo:
+    """Primera consulta = productos; las siguientes = variantes (vacías para esta prueba)."""
+
+    def __init__(self, productos):
+        self._productos = productos
+        self._consultas = 0
+
+    async def execute(self, _consulta):
+        self._consultas += 1
+        return _ResultadoProductos(self._productos if self._consultas == 1 else [])
+
+
+@pytest.mark.parametrize(("busqueda", "esperados"), [
+    ("kéfir", ["Kéfir de Leche de cabra de libre pastoreo"]),
+    ("kéfir de leche", ["Kéfir de Leche de cabra de libre pastoreo"]),
+    ("yogurt de kéfir", ["Yogurt Kéfirado"]),
+    ("chocolate", ["CHOCOLATE"]),
+    ("untable de chocolate", ["Untable de Chocolate"]),
+    ("envíame por favor las tortas que tienes", [
+        "Torta baja en carbohidratos", "Tortas keto",
+    ]),
+    ("torta de chocolate", ["Torta baja en carbohidratos", "Tortas keto"]),
+])
+async def test_catalogo_separa_identidad_de_producto_y_atributos(busqueda, esperados):
+    resultado = await ver_catalogo(
+        _SesionCatalogo(_catalogo_colisiones(sabores_en_descripcion=True)),
+        "__prueba__",
+        busqueda=busqueda,
+    )
+    assert [p["nombre"] for p in resultado["productos"]] == esperados
+
+
+async def test_una_categoria_directa_no_se_reduce_a_los_titulos_que_se_le_parecen():
+    productos = [
+        _Producto(1, "Premezclas", categoria="harinas"),
+        _Producto(2, "Harina de Almendra", categoria="harinas"),
+        _Producto(3, "Harina de Merey", categoria="harinas"),
+        _Producto(4, "Harina de Yuca", categoria="otro"),
+    ]
+    resultado = await ver_catalogo(_SesionCatalogo(productos), "__prueba__", busqueda="harinas")
+    assert [p["nombre"] for p in resultado["productos"]] == [
+        "Premezclas", "Harina de Almendra", "Harina de Merey",
+    ]
 
 
 @pytest.mark.parametrize(("mensaje", "esperada"), [
@@ -270,7 +454,24 @@ async def test_el_TOPE_de_verdad_con_tres_productos_en_el_texto(monkeypatch):
     falso — si no, quitar el tope dejaría la suite en verde (la lección de R36/R29/R17)."""
     from app.agent import tools as tl
 
-    catalogo = ["Pan de Sándwich", "Pan de Hamburguesa", "Pan Keto", "Quesillo"]
+    class _Prod:
+        def __init__(self, id_, nombre, categoria="dulceria"):
+            self.id = id_
+            self.nombre = nombre
+            self.categoria = categoria
+            self.disponible = True
+
+    catalogo = [
+        _Prod(1, "Pan de Sándwich", "panaderia"),
+        _Prod(2, "Pan de Hamburguesa", "panaderia"),
+        _Prod(3, "Pan Keto", "panaderia"),
+        _Prod(4, "Quesillo"),
+        _Prod(5, "Torta baja en carbohidratos"),
+        _Prod(6, "Tortas keto"),
+        _Prod(7, "Premezclas", "harinas"),
+        _Prod(8, "Harina de Almendra", "harinas"),
+        _Prod(9, "Harina de Merey", "harinas"),
+    ]
 
     class _R:
         def scalars(self):
@@ -289,13 +490,9 @@ async def test_el_TOPE_de_verdad_con_tres_productos_en_el_texto(monkeypatch):
         async def execute(self, _q):
             return _R()
 
-    class _Prod:
-        def __init__(self, nombre):
-            self.nombre = nombre
-
     async def _resolver(_session, mencion):
         """`_buscar_producto` de verdad hace SU propia consulta; aquí solo interesa el TOPE."""
-        return _Prod(mencion)
+        return _Prod(99, mencion)
 
     monkeypatch.setattr(tl, "get_session_factory", lambda: (lambda: _S()))
     monkeypatch.setattr(tl, "_buscar_producto", _resolver)
@@ -308,6 +505,12 @@ async def test_el_TOPE_de_verdad_con_tres_productos_en_el_texto(monkeypatch):
     assert len(await tl.productos_enfocados("tengo Pan Keto y Quesillo", 2)) == 2
     # con UNO, uno (el caso mayoritario no cambia)
     assert len(await tl.productos_enfocados("te recomiendo el Quesillo", 2)) == 1
+    # una familia que tiene exactamente DOS productos muestra una foto de cada uno
+    assert await tl.productos_enfocados(
+        "envíame por favor las tortas que tienes", 2
+    ) == ["Torta baja en carbohidratos", "Tortas keto"]
+    # categoría de tres: no elige dos por el cliente ni manda una galería parcial
+    assert await tl.productos_enfocados("muéstrame las harinas", 2) == []
 
 
 async def test_si_no_hay_fotos_cargadas_no_pasa_nada(monkeypatch):

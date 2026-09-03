@@ -491,6 +491,10 @@ _STOP_BUSQUEDA = {
     "con", "sin", "los", "las", "una", "uno", "unos", "unas", "por", "para", "del",
     "que", "tienes", "tienen", "tiene", "quiero", "hay", "algo", "dame", "tipo",
     "producto", "productos", "relleno", "rellenos", "sabor", "sabores", "masa",
+    # Verbos y cortesía alrededor del nombre. Sin quitarlos, el alias inequívoco funciona en
+    # "tortas" pero no en lo que una persona escribe de verdad: "envíame por favor las tortas".
+    "busco", "buscando", "enviame", "favor", "gustaria", "mandame", "muestra", "muestrame",
+    "necesito", "quisiera",
 }
 
 
@@ -870,13 +874,41 @@ async def ver_catalogo(session, telefono, categoria=None, busqueda=None):
         def _con(fn):
             return [p for p in todos if fn(p)]
 
-        # ── ESCALÓN 1 · EXACTO. El AND estricto de siempre (el mismo del cobro).
-        #    'empanada plátano' trae SOLO las de plátano, nunca las Horneadas de yuca.
-        hallados = (
-            _con(lambda p: _coincide_texto(p, palabras, _extra.get(p.id, "")))
-            if palabras
-            else todos
+        # ── ESCALÓN 0a · CATEGORÍA DIRECTA. Una palabra que ES la categoría manda sobre
+        #    coincidencias accidentales de título: "harinas" incluye Premezclas además de los
+        #    dos productos que empiezan por Harina; "dulces" no es solo Wafles Dulces. Solo se
+        #    adelanta con UNA palabra: "harina almendra" sigue siendo un producto concreto.
+        de_categoria = (
+            _con(lambda p: _calza_categoria(palabras[0], p.categoria))
+            if len(palabras) == 1
+            else []
         )
+        if de_categoria:
+            hallados = de_categoria
+            como = "categoria"
+        else:
+            # ── ESCALÓN 0b · IDENTIDAD POR TÍTULO. Antes de mirar ingredientes,
+            #    reconoce cómo la gente acorta los títulos: "kéfir" = "Kéfir de Leche de
+            #    cabra…", pero NO "Yogurt Kéfirado". Solo se adelanta cuando hay UNA identidad.
+            menciones_titulo = _productos_nombrados_en(busqueda, [p.nombre for p in todos])
+            if len(menciones_titulo) == 1:
+                elegido = menciones_titulo[0]
+                hallados = _con(lambda p: p.nombre == elegido)
+            else:
+                aliases_titulo = _productos_por_alias_titulo(
+                    busqueda, [p.nombre for p in todos]
+                )
+                if aliases_titulo:
+                    elegidos = set(aliases_titulo)
+                    hallados = _con(lambda p: p.nombre in elegidos)
+                else:
+                    # ── ESCALÓN 1 · EXACTO. El AND estricto de siempre (el mismo del
+                    #    cobro). 'empanada plátano' trae SOLO las de plátano, no las Horneadas.
+                    hallados = (
+                        _con(lambda p: _coincide_texto(p, palabras, _extra.get(p.id, "")))
+                        if palabras
+                        else todos
+                    )
 
         # ── ESCALÓN 2 · CATEGORÍA. 'harinas', 'dulces', 'congelados'… son categorías reales,
         #    y NUNCA fueron buscables (`_tokens_producto` las excluye a propósito, y con razón:
@@ -1176,8 +1208,9 @@ async def _buscar_producto(session, nombre: str, solo_disponibles: bool = False)
 
     Escalones, de más a menos preciso (gana el primero que resuelve):
     1) nombre EXACTO (sin acentos ni mayúsculas).
-    2) el texto pedido CONTIENE el nombre completo de un producto → gana el MÁS ESPECÍFICO
-       (nombre más largo): "quiero Empanadas Keto" → Empanadas Keto, no Empanadas.
+    2) mención inequívoca del TÍTULO, aunque venga abreviado: "kéfir" → Kéfir de
+       Leche…; "yogurt de kéfir" → Yogurt Kéfirado. El contexto separa un atributo
+       ("torta de chocolate") del producto que se llama CHOCOLATE.
     3) cada palabra pedida es PREFIJO DE PALABRA del producto (nombre + ingredientes),
        reusando el filtro determinista del catálogo: 'pan' calza con 'Pan de Sándwich'
        pero NO con em-PAN-adas, y 'empanada plátano' NO calza con las Keto (almendra).
@@ -1212,10 +1245,20 @@ async def _buscar_producto(session, nombre: str, solo_disponibles: bool = False)
     if len(exactos_sg) == 1:
         return exactos_sg[0]
 
-    # 2) El pedido trae el nombre completo de un producto dentro → el MÁS específico.
-    contenidos = [p for p in prods if _nombre_norm(p.nombre) and _nombre_norm(p.nombre) in objetivo]
-    if contenidos:
-        return max(contenidos, key=lambda p: (len(_nombre_norm(p.nombre)), -p.id))
+    # 2) La misma identidad por título que usa la asesoría y la red de la foto. Antes este
+    #    escalón era un ``nombre in texto``: "torta de chocolate" contenía el producto de una
+    #    sola palabra ``CHOCOLATE`` y podía llevar el carril del dinero al producto equivocado.
+    #    Con UNA mención gana; con varias o ninguna, el AND estricto de abajo decide o pregunta.
+    mencionados = _productos_nombrados_en(nombre, [p.nombre for p in prods])
+    if len(mencionados) == 1:
+        elegido = mencionados[0]
+        return next(p for p in prods if p.nombre == elegido)
+    aliases_titulo = _productos_por_alias_titulo(nombre, [p.nombre for p in prods])
+    if len(aliases_titulo) == 1:
+        elegido = aliases_titulo[0]
+        return next(p for p in prods if p.nombre == elegido)
+    if len(aliases_titulo) > 1:
+        return None  # familia real ("tortas", "empanadas") → preguntar cuál
 
     # 3) Prefijo de PALABRA (mismo filtro determinista que usa ver_catalogo).
     #    Si calza UNO solo, ese es. Si calzan VARIOS ('pan' → Pan Keto / de Sándwich /
@@ -1228,6 +1271,21 @@ async def _buscar_producto(session, nombre: str, solo_disponibles: bool = False)
             return calzan[0]
         if len(calzan) > 1:
             return None  # ambiguo de verdad: preguntar, jamás cobrar a la suerte
+
+        # Si el cliente nombró con exactitud el TIPO de producto, el difuso no puede borrarlo.
+        # Caso real: "torta de chocolate" no calzaba en el carril del dinero porque los sabores
+        # de las tortas viven en sus variantes, no en ``productos.descripcion``. El último
+        # recurso difuso ignoraba "torta" y devolvía ``Untable de Chocolate`` por cercanía con
+        # la otra palabra. Con una cabeza exacta y cero calces, la respuesta segura es None:
+        # asesorar con ``ver_catalogo`` y preguntar cuál, nunca cobrar otro producto.
+        palabras_sg = {_singular(p) for p in palabras}
+        cabezas = {
+            _frase_comparable(p.nombre).split()[0]
+            for p in prods
+            if _frase_comparable(p.nombre)
+        }
+        if palabras_sg & cabezas:
+            return None
 
     # 4) Difuso con umbral ALTO. Solo un parecido MUY claro (typo); jamás otro producto.
     candidatos = await _buscar_productos_difuso(
@@ -1247,25 +1305,58 @@ def _frase_comparable(texto: str) -> str:
     return _singular(" ".join(plano.split()))
 
 
+def _frase_comparable_con_limites(texto: str) -> str:
+    """Como :func:`_frase_comparable`, pero conserva los límites de una idea.
+
+    El detector de productos necesita distinguir ``sabores: limón, chocolate`` de
+    ``tenemos Chocolate``. Si se elimina toda la puntuación antes de mirar el contexto, el
+    marcador ``sabores`` deja de tener alcance: o solo protege la palabra siguiente, o termina
+    contaminando todo el mensaje. ``¶`` conserva oraciones, puntos y saltos de línea sin formar
+    parte de ningún nombre de producto.
+    """
+    con_limites = re.sub(r"[.!?;\n\r]+", " ¶ ", _sin_acentos(texto or ""))
+    plano = re.sub(r"[^a-z0-9¶]+", " ", con_limites)
+    return _singular(" ".join(plano.split()))
+
+
+# Una persona rara vez recita el título entero del catálogo. Estos conectores no pueden cerrar
+# un alias parcial ("kefir de" no es un nombre útil), pero sí pueden vivir dentro del título
+# completo. Los prefijos que terminan en una palabra real se someten después al detector de
+# colisiones: "torta" no resuelve si dos productos empiezan por Torta; "kefir" sí resuelve si
+# solo el Kéfir de Leche empieza por esa PALABRA ("kefirado" es otra palabra).
+_CONECTORES_ALIAS = frozenset({"a", "al", "con", "de", "del", "en", "o", "para", "sin", "y"})
+
+
 def _formas_de_un_nombre(nombre: str) -> list[str]:
     """Las formas comparables en que un texto puede nombrar este producto.
 
-    Para un nombre simple es una sola: el nombre entero. Para un nombre COMPUESTO con ' o '
-    —UN producto con varias versiones, como el REAL del taller: "Empanadas de masa de yuca o
-    de masa de plátano" (un solo producto, dos fotos etiquetadas)— el bot nunca lo dice entero:
-    confirma "las Empanadas de masa de plátano". Sin estas formas, la red de la foto era CIEGA
-    justo al producto estrella (hueco encontrado por Erwin con el bot real, 2026-08-08). Se
-    aceptan además del nombre entero:
+    Además del nombre entero acepta sus prefijos naturales. El cliente dice ``kéfir`` o
+    ``kéfir de leche``, no ``Kéfir de Leche de cabra de libre pastoreo``. Un prefijo solo se
+    usa si ningún otro producto lo reclama; esa colisión la resuelve
+    :func:`_productos_nombrados_en`. Por eso ``torta`` no elige entre dos tortas, mientras que
+    ``kéfir`` no se confunde con ``Yogurt Kéfirado``: kéfir y kéfirado son palabras distintas.
+
+    Para un nombre COMPUESTO con ' o' —UN producto con varias versiones, como el REAL del
+    taller: "Empanadas de masa de yuca o de masa de plátano" (un solo producto, dos fotos
+    etiquetadas)— se aceptan además:
     - cada alternativa con la CABEZA del nombre delante ("empanada de masa de platano");
     - la alternativa sola, SOLO si trae ≥2 palabras de contenido (con una sola, " de yuca "
       calzaría con cualquier frase que mencione yuca);
-    - la cabeza sola ("las Empanadas" = este producto)… si ningún OTRO producto la reclama:
-      esa colisión la resuelve `_productos_nombrados_en`, no esta función.
+    - la cabeza sola, sujeta a la misma regla de colisión.
     """
     base = _frase_comparable(nombre)
     if not base:
         return []
     formas = {base}
+    tokens = base.split()
+    # Todos los prefijos que cierran en una palabra con significado. La forma de una sola
+    # palabra exige al menos 4 caracteres: evita alias explosivos como "te", "de" o "pan" de
+    # tres letras; los nombres completos cortos siguen entrando por ``base``.
+    for hasta in range(1, len(tokens)):
+        ultimo = tokens[hasta - 1]
+        prefijo = " ".join(tokens[:hasta])
+        if ultimo not in _CONECTORES_ALIAS and (hasta > 1 or len(prefijo) >= 4):
+            formas.add(prefijo)
     if " o " in base:
         partes = [p.strip() for p in base.split(" o ") if p.strip()]
         cabeza = base.split()[0]
@@ -1281,14 +1372,60 @@ def _formas_de_un_nombre(nombre: str) -> list[str]:
 # Palabras que convierten lo que viene detrás en un INGREDIENTE, no en una oferta:
 # "vienen CON harina de almendra", "LLEVAN azúcar de coco", "ENDULZADAS con alulosa",
 # "RELLENO de queso de cabra", "a BASE de yuca".
-_MARCA_INGREDIENTE = frozenset({
+_MARCA_INGREDIENTE = frozenset(_singular(p) for p in {
     "con", "lleva", "llevan", "lleve", "lleven", "base", "hecho", "hecha", "hechos", "hechas",
     "contiene", "contienen", "endulzado", "endulzada", "endulzados", "endulzadas",
-    "relleno", "rellenos", "rellena", "rellenas", "sabor", "sabores",
+    "ingrediente", "ingredientes", "relleno", "rellenos", "rellena", "rellenas", "sabor",
+    "sabores", "topping", "toppings",
+})
+
+# Un marcador de atributo deja de mandar si, dentro de la misma oración, el bot vuelve a
+# introducir una oferta: "sabores: limón; también TENEMOS Chocolate". Sin este reinicio, todo lo
+# que viniera después de la palabra "sabores" se consideraría ingrediente hasta el próximo punto.
+_MARCA_NUEVA_OFERTA = frozenset(_singular(p) for p in {
+    "hay", "ofrecemos", "ofrezco", "recomendamos", "recomiendo", "tenemos", "tengo",
+    "vendemos", "vendo",
 })
 
 
-def _solo_como_ingrediente(campo: str, marca: str) -> bool:
+def _productos_por_alias_titulo(consulta: str, nombres: list[str]) -> list[str]:
+    """Productos cuyo título comparte exactamente el alias que escribió el cliente.
+
+    A diferencia de :func:`_productos_nombrados_en`, aquí una colisión NO se descarta:
+    ``tortas`` devuelve las dos tortas para que la asesoría las muestre y el cobro pregunte
+    cuál. Un título completo tiene prioridad sobre aliases de otros productos, de modo que
+    ``chocolate`` devuelve el producto CHOCOLATE, no todos los títulos que contienen esa palabra.
+
+    Solo acepta consultas que sean el alias entero. ``torta de chocolate`` no es el alias
+    ``torta``: lleva un atributo adicional y debe pasar por el filtro nombre+sabores. Las
+    consultas marcadas como atributo (``sabor chocolate``, ``con chocolate``) tampoco pueden
+    convertirse en el producto CHOCOLATE.
+    """
+    contexto = _frase_comparable_con_limites(consulta)
+    if any(token in _MARCA_INGREDIENTE for token in contexto.split()):
+        return []
+    pedido = tuple(_singular(p) for p in _palabras_busqueda(consulta))
+    if not pedido:
+        return []
+
+    exactos: list[str] = []
+    aliases: list[str] = []
+    for nombre in nombres:
+        completo = tuple(_singular(p) for p in _palabras_busqueda(nombre))
+        if completo == pedido:
+            exactos.append(nombre)
+            continue
+        for forma in _formas_de_un_nombre(nombre):
+            comparable = tuple(_singular(p) for p in _palabras_busqueda(forma))
+            if comparable == pedido:
+                aliases.append(nombre)
+                break
+    return exactos or aliases
+
+
+def _solo_como_ingrediente(
+    campo: str, marca: str, cabezas_producto: frozenset[str] = frozenset()
+) -> bool:
     """True si TODAS las apariciones de `marca` en el texto van detrás de un marcador de
     ingrediente — o sea, el bot la nombró describiendo de qué está hecho algo, no ofreciéndola.
 
@@ -1311,9 +1448,28 @@ def _solo_como_ingrediente(campo: str, marca: str) -> bool:
     """
     trozos = campo.split(marca)
     for antes in trozos[:-1]:            # el texto que precede a cada aparición
-        previas = antes.split()[-2:]     # las dos palabras de delante
-        if not any(p in _MARCA_INGREDIENTE for p in previas):
-            return False                 # esta aparición SÍ es una oferta
+        # El alcance empieza en la última oración/burbuja. Así "sabores: limón, almendra,
+        # chocolate" protege TODA la lista y no solo las dos palabras inmediatamente anteriores.
+        previas = antes.rsplit("¶", 1)[-1].split()
+        ultima_marca = max(
+            (i for i, p in enumerate(previas) if p in _MARCA_INGREDIENTE), default=-1
+        )
+        ultima_oferta = max(
+            (i for i, p in enumerate(previas) if p in _MARCA_NUEVA_OFERTA), default=-1
+        )
+        if ultima_marca > ultima_oferta:
+            continue
+
+        # "torta DE chocolate" y "yogurt DE kéfir": hay otro producto/tipo antes de ``de`` y
+        # la palabra actual lo modifica. En cambio "un paquete de Quesillo" no tiene otra
+        # cabeza de producto delante y Quesillo sigue contando como producto.
+        if (
+            previas
+            and previas[-1] == "de"
+            and any(p in cabezas_producto for p in previas[:-1])
+        ):
+            continue
+        return False                     # esta aparición SÍ es una oferta
     return True
 
 
@@ -1336,12 +1492,34 @@ def _productos_nombrados_en(texto: str, nombres: list[str]) -> list[str]:
       "Empanadas de masa de yuca o …" en el mismo catálogo, "las empanadas" a secas no calza
       con ninguno — mejor ninguna foto que la del producto equivocado.
     """
-    campo = f" {_frase_comparable(texto)} "
+    # ``contexto`` no se modifica: sirve para decidir si CADA aparición era producto o atributo.
+    # ``campo`` sí se va tachando para que el título más específico reclame su propio texto.
+    contexto = f" {_frase_comparable_con_limites(texto)} "
+    campo = contexto
+    cabezas_producto = frozenset(
+        base.split()[0]
+        for nombre in nombres
+        if (base := _frase_comparable(nombre)) and len(base.split()[0]) >= 4
+    )
     # forma comparable → índice del ÚNICO producto que la reclama (colisiones fuera).
     duenos: dict[str, int] = {}
     repetidas: set[str] = set()
+    bases = {_frase_comparable(nombre): i for i, nombre in enumerate(nombres)}
     for i, nombre in enumerate(nombres):
+        base = _frase_comparable(nombre)
         for forma in _formas_de_un_nombre(nombre):
+            # El alias parcial de otro producto no le puede robar un TÍTULO COMPLETO. Con
+            # "Empanadas" y "Empanadas Keto", la forma abreviada de las Keto ("empanadas")
+            # se cae y el producto que de verdad se llama Empanadas conserva su identidad.
+            # Los nombres compuestos con " o " mantienen la ambigüedad histórica: allí la
+            # cabeza representa dos versiones reales del mismo producto y preguntar es seguro.
+            if (
+                forma != base
+                and " o " not in base
+                and forma in bases
+                and bases[forma] != i
+            ):
+                continue
             if forma in duenos and duenos[forma] != i:
                 repetidas.add(forma)
             else:
@@ -1354,7 +1532,7 @@ def _productos_nombrados_en(texto: str, nombres: list[str]) -> list[str]:
         if forma in repetidas:
             continue
         marca = f" {forma} "
-        if marca in campo and _solo_como_ingrediente(campo, marca):
+        if marca in campo and _solo_como_ingrediente(contexto, marca, cabezas_producto):
             # Nombrado SOLO como ingrediente: se tacha para que no vuelva a calzar, pero NO
             # cuenta como producto ofrecido.
             campo = campo.replace(marca, " § ")
@@ -1723,12 +1901,31 @@ async def productos_enfocados(texto: str, maximo: int = 2) -> list[str]:
     try:
         factory = get_session_factory()
         async with factory() as session:
-            nombres = (
+            productos = (
                 await session.execute(
-                    select(Producto.nombre).where(Producto.disponible.is_(True))
+                    select(Producto)
+                    .where(Producto.disponible.is_(True))
+                    .order_by(Producto.id)
                 )
             ).scalars().all()
-            menciones = _productos_nombrados_en(texto, list(nombres))
+            nombres = [p.nombre for p in productos]
+            menciones = _productos_nombrados_en(texto, nombres)
+            if not menciones:
+                palabras = _palabras_busqueda(texto)
+                de_categoria = (
+                    [p.nombre for p in productos if _calza_categoria(palabras[0], p.categoria)]
+                    if len(palabras) == 1
+                    else []
+                )
+                if de_categoria:
+                    # No escoger dos elementos de una categoría de once. El tope de abajo la
+                    # apagará completa; la respuesta de texto deja que el cliente elija.
+                    menciones = de_categoria
+                else:
+                    # Una familia expresada por su alias completo ("las tortas") puede resolver
+                    # a dos títulos reales: una imagen de cada una. Por encima de ``maximo`` se
+                    # conserva el freno anti-spam de abajo.
+                    menciones = _productos_por_alias_titulo(texto, nombres)
             if not menciones or len(menciones) > maximo:
                 return []
             resueltos = []

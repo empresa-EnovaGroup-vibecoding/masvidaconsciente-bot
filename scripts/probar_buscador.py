@@ -37,7 +37,7 @@ Por eso la parte 3 de abajo comprueba que el carril del dinero sigue siendo ESTR
 import asyncio
 import sys
 
-from app.agent.tools import _buscar_producto, ver_catalogo
+from app.agent.tools import _buscar_producto, productos_enfocados, ver_catalogo
 from app.services.db import get_session_factory
 
 TEL = "__prueba_buscador__"
@@ -90,6 +90,21 @@ CONSULTAS = [
     ("kombuncha", "Kombucha"),
 ]
 
+# ── IDENTIDAD DEL TÍTULO VS. ATRIBUTOS ──
+# La coincidencia por prefijo convertía ``kefir`` en ``kefirado``; y una palabra que es a la
+# vez producto y sabor (CHOCOLATE) podía secuestrar ``torta de chocolate``. Aquí no basta con
+# que aparezca "algo relacionado": el conjunto exacto es el contrato.
+IDENTIDAD = [
+    ("kefir", ["Kéfir de Leche de cabra de libre pastoreo"]),
+    ("kefir de leche", ["Kéfir de Leche de cabra de libre pastoreo"]),
+    ("yogurt de kefir", ["Yogurt Kéfirado"]),
+    ("chocolate", ["CHOCOLATE"]),
+    ("untable de chocolate", ["Untable de Chocolate"]),
+    ("enviame por favor las tortas que tienes", [
+        "Tortas keto", "Torta baja en carbohidratos",
+    ]),
+]
+
 # ── 3. EL CARRIL DEL DINERO SIGUE ESTRICTO ──
 # (lo que se busca, qué producto DEBE salir o None si es ambiguo/no existe)
 # 🔴 'pan' TIENE que ser ambiguo (hay 4 panes con precios distintos) ⇒ None ⇒ el bot PREGUNTA.
@@ -111,6 +126,16 @@ DINERO = [
     # Verificado contra `master`: allí da None. Por eso `con_descripcion` es opt-in y el cobro
     # NO la enciende. Este caso es el que lo vigila: si alguien la enciende, esto se pone rojo.
     ("bebidas", None),
+    # Títulos abreviados: la identidad se conserva sin pedirle al cliente que recite la ficha.
+    ("kefir", "Kéfir de Leche de cabra de libre pastoreo"),
+    ("kefir de leche", "Kéfir de Leche de cabra de libre pastoreo"),
+    ("yogurt de kefir", "Yogurt Kéfirado"),
+    ("quiero chocolate", "CHOCOLATE"),
+    ("quiero el untable de chocolate", "Untable de Chocolate"),
+    # ``chocolate`` aquí es SABOR de una torta. Hay varias tortas posibles: preguntar cuál,
+    # nunca cobrar el producto independiente CHOCOLATE.
+    ("torta de chocolate", None),
+    ("enviame por favor las tortas que tienes", None),
 ]
 
 
@@ -152,6 +177,72 @@ async def main() -> None:
                 if "empanada" in p["nombre"].lower()
             ]
             check(f"'{q}' NUNCA trae una empanada", not malos, str(malos))
+        for consulta, categoria, imprescindible in (
+            ("harinas", "harinas", "Premezclas"),
+            ("dulces", "dulceria", "Quesillo"),
+        ):
+            r = await ver_catalogo(session, TEL, busqueda=consulta)
+            prods = r.get("productos") or []
+            check(
+                f"'{consulta}' devuelve la CATEGORÍA completa",
+                bool(prods)
+                and all(p["categoria"] == categoria for p in prods)
+                and imprescindible in [p["nombre"] for p in prods],
+                f"devolvió {[(p['nombre'], p['categoria']) for p in prods]}",
+            )
+
+        print("\n1b) EL TÍTULO, EL APODO Y EL ATRIBUTO NO SE CONFUNDEN")
+        for consulta, esperados in IDENTIDAD:
+            r = await ver_catalogo(session, TEL, busqueda=consulta)
+            nombres = [p["nombre"] for p in (r.get("productos") or [])]
+            check(
+                f"'{consulta}' resuelve exactamente {esperados}",
+                nombres == esperados,
+                f"devolvió {nombres}",
+            )
+        for consulta in ("torta de chocolate", "torta sabor chocolate"):
+            r = await ver_catalogo(session, TEL, busqueda=consulta)
+            nombres = [p["nombre"] for p in (r.get("productos") or [])]
+            check(
+                f"'{consulta}': chocolate es SABOR, no el producto CHOCOLATE",
+                bool(nombres) and "CHOCOLATE" not in nombres
+                and all("torta" in n.lower() or "ponqué" in n.lower() for n in nombres),
+                f"devolvió {nombres}",
+            )
+
+        # La misma identidad gobierna la RED DE LA FOTO. Este es el texto REAL que se envió en
+        # el chat del 3-sep: antes detectaba también el producto CHOCOLATE y, al creer que eran
+        # tres, el tope anti-spam apagaba las dos fotos de torta.
+        respuesta_real_tortas = (
+            "Tenemos dos tipos de tortas. Torta baja en carbohidratos, en sabores como limón, "
+            "zanahoria, naranja, piña, vainilla, marmoleada, manzana canela y cambur. Disponible "
+            "en 250g, 500g y 1kg. Tortas keto, en sabores limón, almendras, chocolate y pistacho. "
+            "También en 250g, 500g y 1kg. Cuál te provoca?"
+        )
+        focos = await productos_enfocados(respuesta_real_tortas, 2)
+        check(
+            "red de foto: la respuesta real tiene DOS tortas, no el producto CHOCOLATE",
+            focos == ["Torta baja en carbohidratos", "Tortas keto"],
+            f"detectó {focos}",
+        )
+        focos = await productos_enfocados("¿Tienes kéfir?", 2)
+        check(
+            "red de foto: 'kéfir' es el Kéfir de Leche, no Yogurt Kéfirado",
+            focos == ["Kéfir de Leche de cabra de libre pastoreo"],
+            f"detectó {focos}",
+        )
+        focos = await productos_enfocados("envíame por favor las tortas que tienes", 2)
+        check(
+            "red de foto: pedir 'las tortas' enfoca las DOS tortas del catálogo",
+            focos == ["Tortas keto", "Torta baja en carbohidratos"],
+            f"detectó {focos}",
+        )
+        focos = await productos_enfocados("muéstrame las harinas", 2)
+        check(
+            "red de foto: una categoría de TRES no enseña solo dos elegidas al azar",
+            focos == [],
+            f"detectó {focos}",
+        )
 
         print("\n2) LA NOTA NUNCA ORDENA NEGAR EL CATÁLOGO")
         for consulta in ("bebidas", "postres", "pan sin gluten", "pizza", "sushi",
