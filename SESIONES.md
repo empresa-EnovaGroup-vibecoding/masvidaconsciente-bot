@@ -24,6 +24,38 @@
 
 ---
 
+## 2026-09-03 (19) — 🧠 PRODUCTO, SABOR Y FAMILIA YA NO COMPITEN POR LA MISMA PALABRA
+
+**Caso real que lo destapó:** la clienta pidió ver las tortas. El bot nombró las dos tortas y,
+al describir ``Tortas keto``, escribió *"sabores limón, almendras, chocolate y pistacho"*. La red
+de fotos leyó también ``CHOCOLATE`` como un tercer producto (existe con ese título en el catálogo)
+y su tope anti-spam apagó las dos fotos. La misma familia aparecía en ``kéfir``: el filtro por
+prefijo también alcanzaba ``kéfirado`` y mezclaba Kéfir de Leche con Yogurt Kéfirado.
+
+**Arreglo en la rama `resolver-catalogo-contextual` (sin desplegar):**
+- Un mismo resolvedor de títulos gobierna asesoría, fotos y cobro: título completo primero;
+  después prefijos naturales del título solo si conservan la identidad. ``kéfir`` resuelve al
+  Kéfir de Leche porque es una palabra completa de SU título; ``kéfirado`` sigue siendo otra.
+- El contexto conserva los límites de cada idea y separa producto de atributo: ``chocolate`` a
+  secas = producto CHOCOLATE; ``sabor chocolate`` o ``torta de chocolate`` = atributo; ``untable
+  de chocolate`` = el título más largo, Untable de Chocolate.
+- Una familia abreviada conserva todos sus miembros: ``las tortas`` devuelve las DOS tortas y la
+  red puede mandar una foto de cada una; en el carril del dinero devuelve ambigüedad y obliga a
+  preguntar cuál. Una categoría directa manda sobre un parecido de título: ``harinas`` incluye
+  Premezclas y ``dulces`` devuelve toda Dulcería.
+- El difuso ya no puede borrar un tipo exacto: ``torta de chocolate`` nunca cae en Untable de
+  Chocolate. Si hay varias tortas con ese sabor, pregunta cuál antes de cobrar.
+
+**Pruebas:** caso unitario con la respuesta REAL del chat + Kéfir/Yogurt/Chocolate/Untable,
+categorías y carril estricto; **815 tests en verde** + ruff ✅. El banco `probar_buscador` se
+corrió de solo lectura contra los **31 productos vivos de pruebas**: todo verde, incluidas las dos
+tortas y la red de fotos. No se modificó la BD, no se envió WhatsApp y no se tocó producción.
+
+**Pendiente:** revisar/fusionar la rama, desplegar bot + worker en pruebas y hacer una conversación
+manual con el número de Enova antes de considerar producción.
+
+---
+
 ## 2026-09-03 (18) — 🔧 INFRA DEL PDF ARREGLADA EN PRUEBAS: VARIABLE CIFRADA + REDEPLOY VERDE
 
 **Cerrado el paso de infraestructura del entorno de pruebas.** El PR #18 ya estaba fusionado en
