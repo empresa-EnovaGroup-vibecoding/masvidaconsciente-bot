@@ -127,6 +127,64 @@ familia 2 (¿dónde y cuándo probó? ¿el sabor vive en la casilla o en la pros
 mando" y no llegó? → familia 3 (la de anoche, arreglo ya diseñado) · ¿negó algo que sí venden? →
 familia 4 (datos) · ¿el PDF muestra precios viejos? → familia 5.
 
+### 🧨 Y LA SEGUNDA PREGUNTA DE MAIRED: "¿tenemos riesgo de que otra cosa así pase, con la estructura que tenemos?"
+
+Pregunta correcta — el catálogo pertenece a una CLASE ("algo apunta a infraestructura muerta o
+de OTRO entorno, funcionaba de casualidad, y falla o contamina en silencio"), así que se corrió
+una **cacería de esa clase completa**: 4 lentes en paralelo (defaults hardcodeados · fallos
+silenciosos · infra muerta ejecutable · acoplamientos entre entornos) + síntesis, alimentadas
+con datos EN VIVO de los dos servidores (envs comparadas por huella sha256, sin exponer valores)
+y las minas graves re-verificadas a mano.
+
+**Lo SANO primero (que también es respuesta):** BDs, Redis y WABAs bien separadas entre pruebas
+y producción · el pipeline de deploy limpio (push a master = SOLO la CI; producción exige un
+humano eligiendo `produccion=true`) · ningún script Python con hosts muertos en el camino que
+corre · **el respaldo de producción está VIVO** (verificado ese día: `[backup] OK` a las 11:11,
+54 copias, la última del mismo día).
+
+**Las minas, rankeadas (el detalle operativo quedó con Maired; aquí las acciones):**
+1. 🔴 **Pruebas y producción COMPARTEN 3 cosas que no deben** (herencia de clonar el env del
+   taller): el **secreto de sesiones del panel** (separarlo por entorno: 1 variable + redeploy,
+   ya en la lista de rotación D5) · el **balde de fotos R2** (`masvida-media` único: borrar o
+   "mantener" fotos desde pruebas toca los archivos que producción sirve — separar
+   bucket/prefijo; MIENTRAS TANTO: no borrar fotos en el panel de pruebas, y
+   `recomprimir_fotos.py`/`convertir_media_vieja.py` SOLO en producción) · la **llave de
+   OpenRouter** (las pruebas gastan el saldo de producción y comparten sus límites — llave
+   propia con tope para pruebas; hoy el freno anti-abuso cuenta mensajes en el Redis LOCAL de
+   cada entorno, no dólares de la cuenta común).
+2. 🔴 **Nadie vigila producción desde fuera:** `salud.py:49` afirma que un monitor externo vigila
+   `/salud`… en la URL del taller MUERTO, y no hay rastro de monitor contra la URL viva. El
+   incidente de julio (bot mudo por saldo, todo en verde) puede repetirse idéntico. 15 min.
+3. 🔴 **El aviso "el panel está perdiendo mensajes" no tiene a quién llegar:** lee
+   `DUENO_TELEFONO` del ENV a propósito (se dispara cuando la BD — donde vive el teléfono
+   editable — acaba de fallar), pero la variable no está definida en NINGÚN contenedor y el
+   default es `""` → ese aviso jamás sale (`tasks.py:134` + `config.py:96`). Definirla en los 4.
+4. 🟠 **El respaldo de producción no tiene testigo** (si un día muere — p. ej. al rotar las
+   llaves R2 de D5 — nadie grita) y su manual de emergencia apunta a una ruta que NO existe en
+   la máquina de Maired y a un servicio del compose que nunca se desplegó. Corregir RESPALDO.md
+   + sonda de edad del último snapshot (o ping a Healthchecks).
+5. 🟠 **D2 se REABRIÓ en silencio:** "los bancos corren solos tras cada deploy" murió con el
+   taller (el deploy de producción los corre A MANO); el ROADMAP aún la da por cerrada. La CI
+   podría recuperar 24/27 con un Postgres desechable (la receta ya existe: `banco_local.sh`).
+   Y **D4 cambió de casa:** pruebas-Enova tiene CERO respaldo (verificado: ni contenedor, ni
+   cron, ni programado en Coolify) — el piso es el dump local del 1-sep.
+6. 🟡 Menores: `promover_a_produccion.sh` apunta por default al Hostinger muerto y su
+   `TRUNCATE+COPY` de `producto_media` re-ataría los buckets en la próxima promoción (decidir
+   las fotos ANTES de promover) · `correr_bancos.py` aún avisa por WhatsApp hablando "del
+   taller" · la palabra "taller" quedó como guarda vacía en scripts que escriben BD
+   (`--confirmar-taller`) · el compose de la fábrica re-sembraría el default muerto en un
+   cliente nuevo.
+
+**Falsas alarmas (no re-investigar):** `HISTORIAL_RESPALDO_DIAS` solo-en-pruebas (default
+idéntico, mecanismo 100% local) · `META_APP_SECRET` compartido (CORRECTO: ambas WABAs viven
+bajo la misma app de Meta) · subir fotos nuevas en pruebas (cada archivo nace con uuid propio,
+no pisa nada).
+
+**El patrón de fondo (doctrina):** pruebas nació CLONANDO el env del taller, y el taller
+compartía con producción cosas que un entorno de la agencia no debe compartir. La regla que mata
+la clase entera: **cada entorno con SUS llaves y SUS baldes; lo único compartido es el código.**
+Al montar el próximo entorno (demo/cliente de Enova), esa es la lista de chequeo.
+
 **Además esta sesión:** PR #16 fusionado por Maired (2:28am) · sigue pendiente rotar las
 credenciales expuestas del 1-sep (Coolify de Enova + proveedor del VPS) y decidir el `modelo_ia`
 de producción (Sonnet aprobado vs Haiku actual).

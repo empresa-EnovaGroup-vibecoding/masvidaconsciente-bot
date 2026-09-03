@@ -66,6 +66,41 @@ apunta ahí) y el bug quedaría enmascarado.
 > Colateral a verificar: editar producto de tamaño único pisa `disponible` de su variante
 > (`router.py:752-754`) — puede resucitar agotados desde el panel.
 
+### 🧨 LAS MINAS DE LA MISMA CLASE *(cacería del 2-sep, a pregunta de Maired — detalle y evidencia en SESIONES (15))*
+
+**⚡ YA (baratas, esta semana; esperan el OK de Maired):**
+- [ ] Separar el **secreto de sesiones del panel** por entorno (1 variable en Coolify de pruebas
+  + redeploy; y rotar el de producción, que es parte de D5).
+- [ ] **Fotos:** separar el bucket R2 (o prefijo) por entorno. **MIENTRAS TANTO, regla dura: NO
+  borrar fotos desde el panel de pruebas** y los scripts de mantenimiento de fotos SOLO en
+  producción (el balde es compartido — borrar en pruebas rompe producción).
+- [ ] **Monitor externo** contra `https://api.masvidaconsciente.store/salud` (60s, las DOS
+  reglas del docstring de `salud.py`) — hoy NADIE vigila producción; corregir `salud.py:49`.
+- [ ] Definir **`DUENO_TELEFONO`** en los 4 contenedores (bot/worker × prod/pruebas) — sin ella,
+  el aviso "el panel está perdiendo mensajes" no puede salir jamás.
+- [x] ~~Verificar que el respaldo de producción corre~~ — **verificado 2-sep: VIVO** (54
+  snapshots, el último de ese mismo día).
+
+**🚚 ANTES DE LA ENTREGA:**
+- [ ] Llave de **OpenRouter propia para pruebas** con tope bajo (hoy las pruebas gastan el
+  saldo de producción y comparten sus rate limits).
+- [ ] **Testigo del respaldo** (sonda de edad del snapshot en `/salud` o ping a Healthchecks) +
+  corregir RESPALDO.md (la ruta real de la clave de cifrado en la máquina de Maired; la
+  verificación es por `docker logs masvida-backup`, no por Coolify).
+- [ ] **D2 quedó REABIERTA de facto:** el vigilante de bancos post-deploy murió con el taller
+  (producción los corre a mano). Recuperar 24/27 en la CI con Postgres desechable
+  (`banco_local.sh` es la receta).
+- [ ] Decidir la **próxima promoción** pruebas→producción ANTES de necesitarla:
+  `promover_a_produccion.sh` apunta al Hostinger muerto, y su copia de `producto_media` debe
+  decidir qué pasa con las fotos si los buckets ya están separados.
+
+**⚪ Algún día:** respaldo automático para pruebas-Enova (la D4 de hoy — el piso es el dump
+local del 1-sep) · limpiar el lenguaje "taller" de scripts y avisos (`--confirmar-taller`,
+`correr_bancos.py`) · el compose de la fábrica no debe heredar defaults de UN entorno.
+
+**Doctrina que mata la clase:** cada entorno con SUS llaves y SUS baldes; lo único compartido
+es el código. Es la lista de chequeo para montar cualquier entorno nuevo de Enova.
+
 ### 🧵 EL TRABAJO EN CURSO: "que no repregunte lo que la clienta YA dijo" (abierto el 2026-08-31)
 
 **La clase de bug, nombrada:** *LA VENTANA SIN ESTADO*. Entre que el cliente dice un dato y
