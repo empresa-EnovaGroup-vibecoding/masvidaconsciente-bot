@@ -33,3 +33,7 @@ os.environ.setdefault("ADMIN_PASSWORD", "pytest-password")
 os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://test:test@localhost/test")
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 os.environ.setdefault("OPENROUTER_API_KEY", "sk-or-v1-de-mentira-para-pytest")
+# La URL pública ya no trae default (mató el catálogo el 1-sep): sin esto, el validador de
+# `config.py` gritaría un `logger.error` en CADA corrida de tests. El test que prueba la
+# DEGRADACIÓN pone la suya (vacía) por su cuenta. Ver `tests/test_catalogo_url_publica.py`.
+os.environ.setdefault("PUBLIC_BASE_URL", "https://pruebas.example.test")

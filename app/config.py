@@ -16,6 +16,18 @@ _SECRETOS_INSEGUROS = {"", "cambia-esto-en-produccion", "masvida2026", "changeme
 _PROPORCION_TOPE_BUFFER = 4
 
 
+def url_publica_utilizable(url: str) -> bool:
+    """True si `url` sirve para que Meta DESCARGUE la media del bot (el catalogo en PDF).
+
+    Meta exige un enlace HTTPS publico. Vacia o sin `https://` => el envio moriria con
+    `131053 Media upload error`, asi que aqui se corta antes: el unico requisito que se puede
+    comprobar SIN salir a la red es el esquema. Un `https://` que apunta a un host MUERTO pasa
+    este filtro (no hay forma de saberlo sin pedirlo) — de ESE caso avisa la telemetria del
+    webhook cuando Meta reporta el `fallido` (`_avisar_media_no_entregada`).
+    """
+    return (url or "").strip().lower().startswith("https://")
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
@@ -107,7 +119,15 @@ class Settings(BaseSettings):
     # Catálogo en PDF (archivo en el volumen) + URL pública del bot para que Meta
     # pueda descargar el PDF al enviarlo al cliente.
     catalogo_dir: str = "/data/catalogo"
-    public_base_url: str = "https://api-masvida.enovagroup.tech"
+    # 🔴 SIN DEFAULT A PROPÓSITO: cada entorno define la SUYA (Coolify). Antes traía
+    # hardcodeada la URL del TALLER (`https://api-masvida.enovagroup.tech`); cuando el
+    # taller murió (1-sep) el link del catálogo apuntó a un dominio muerto en TODOS los
+    # entornos, Meta no podía descargar el PDF (error 131053) y el envío moría en SILENCIO
+    # — hizo falta una autopsia a la BD para verlo (SESIONES 2-sep (15)). Un default con la
+    # URL de UN entorno es la enfermedad D3 en versión config: funciona de casualidad hasta
+    # que ese entorno se cae. Vacía ⇒ el catálogo se degrada al texto (`enviar_catalogo`) y
+    # el arranque avisa fuerte; jamás se manda un PDF que Meta no pueda descargar.
+    public_base_url: str = ""
 
     # Dashboard (login) — SIN defaults inseguros: se exigen al arranque.
     jwt_secret: str = ""
@@ -184,6 +204,34 @@ class Settings(BaseSettings):
                 self.buffer_max_segundos, self.buffer_segundos, reparado,
             )
             self.buffer_max_segundos = reparado
+        return self
+
+    @model_validator(mode="after")
+    def _avisar_si_falta_la_url_publica(self) -> "Settings":
+        """Grita al arrancar si `public_base_url` no sirve — pero NO bloquea el arranque.
+
+        Es la misma disyuntiva del validador de arriba, y se resuelve igual (por las mismas
+        razones): los dos `raise` de `_exigir_secretos_seguros` son de SEGURIDAD —una contraseña
+        pública ⇒ el proceso NO debe arrancar—. Esto NO lo es. La URL pública la usa UN solo
+        sitio, el catálogo en PDF (`enviar_catalogo`): sin ella el bot SIGUE vendiendo, cobrando
+        y atendiendo — el catálogo se degrada solo al de TEXTO. Apagar el webhook, el worker, los
+        bancos y cada script por un PDF sería bloquear la venta por una pieza que se degrada sola.
+        En esta casa se DEGRADA, nunca se bloquea la venta. *(Y un `raise` aquí reventaría hasta
+        el import de los tests y los bancos, que tampoco definen esta URL — ver `tests/conftest.py`.)*
+
+        Pero NO queda mudo, que es justo lo que costó la autopsia del 2-sep: sale un `logger.error`
+        en la PRIMERA línea del arranque (el `lastResort` de Python lo escribe en stderr aunque no
+        haya logging configurado), así se ve en los logs del contenedor antes de que nadie pida el
+        catálogo.
+        """
+        if not url_publica_utilizable(self.public_base_url):
+            logger.error(
+                "CONFIG: PUBLIC_BASE_URL no está definida o no es HTTPS (%r). El catálogo en PDF "
+                "se degradará al catálogo de TEXTO (Meta no podría descargar el PDF: error 131053). "
+                "Define PUBLIC_BASE_URL con la URL pública HTTPS de ESTE entorno en las variables "
+                "de entorno (Coolify).",
+                self.public_base_url,
+            )
         return self
 
 

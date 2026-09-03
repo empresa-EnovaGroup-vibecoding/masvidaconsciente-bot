@@ -24,6 +24,51 @@
 
 ---
 
+## 2026-09-03 (17) — 📄 EL CATÁLOGO EN PDF: MATA EL DEFAULT MUERTO Y AVISA CUANDO NO LLEGA (PR #18, el paso 3 del plan)
+
+**El código que cierra el bug diagnosticado el 2-sep (entrada (15)).** Maired lo pidió de frente:
+*"que no se repita"*. La autopsia ya tenía la causa raíz con evidencia de la BD; esta sesión
+escribió el arreglo — el paso 3 del plan (el del código; los pasos 1 y 2 son variables de entorno,
+al final). Reproducido primero en el mapa del código, no de memoria.
+
+**La raíz, recordada:** `config.py` traía **hardcodeada** la URL del taller
+(`https://api-masvida.enovagroup.tech`) como default de `public_base_url`. Muerto el taller, el
+link del PDF apuntaba a un dominio muerto en TODOS los entornos; Meta no podía descargarlo (**131053
+Media upload error**) y el envío moría en silencio. Verificado: `public_base_url` se usa en UN solo
+sitio, [`tools.py`](masvidaconsciente-bot/app/agent/tools.py) → el link del catálogo.
+
+**Tres piezas, que cierran CADA camino de recaída (aditivo, nada borrado):**
+1. 🩹 **`config.py` mata la enfermedad.** `public_base_url` **sin default** (cada entorno pone la
+   suya en Coolify) + validador que **avisa fuerte al arranque** pero **NO bloquea**. La decisión
+   doctrinal —y aquí desobedecí a propósito el *"fail-fast como JWT_SECRET"* del ROADMAP—: el
+   validador del buffer que vive 20 líneas más arriba ya sentó el precedente (*"en esta casa se
+   DEGRADA, nunca se bloquea la venta"*). La URL solo la usa el catálogo: apagar webhook + worker
+   + bancos + scripts por un PDF sería bloquear la venta por una pieza que se degrada sola — y un
+   `raise` reventaría hasta el import de los tests (lo avisa `conftest.py`). Helper puro
+   `url_publica_utilizable()`.
+2. 🩹 **`enviar_catalogo` degrada limpio.** URL que no sirve ⇒ manda el **catálogo de TEXTO**
+   (`ver_catalogo`) en vez de un PDF condenado. El cliente igual recibe el catálogo; el simulador
+   queda exento (es falso, no baja nada de Meta).
+3. 🛡️ **El webhook evita la PRÓXIMA autopsia.** `_avisar_media_no_entregada` le manda **WhatsApp a
+   la dueña** cuando Meta reporta el `fallido` **131053/131052**. Es el ÚNICO que atrapa el caso que
+   1 y 2 no pueden: un link `https` con buena forma pero **host caído** (exactamente lo que pasó con
+   el taller). Antes ese fallo solo dejaba un `logger.error("ENVÍO FALLIDO")` que nadie miraba —
+   por eso hizo falta la autopsia. Códigos nuevos en `meta_client.py` (`CODIGOS_DE_MEDIA`), disjuntos
+   de los de calidad: cada `failed` dispara como mucho una de las dos telemetrías.
+
+**Pruebas.** `tests/test_catalogo_url_publica.py` (CI, puro) con **reversión-roja verificada** (sin
+el guardia, el test cae) + caso `caso_media_no_entregada` en el banco `probar_meta.py` (post-deploy).
+**793 tests en verde**, ruff ✅, compileall ✅. *(Los 2 rojos de la corrida local son un problema de
+encoding de Windows —Python 3.14 lee los `.py` como cp1252—, fallan igual en master y son verdes en
+la CI de Linux.)*
+
+**⚠️ FALTA (infra, NO código) — los pasos 1 y 2 del plan, para Maired/Erwin:** definir
+`PUBLIC_BASE_URL` en Coolify → **pruebas** (`https://jthc51…sslip.io`) y **producción**
+(`https://api.masvidaconsciente.store`, con su OK), en bot **y** worker, y redeploy. 🟢 **El orden
+ahora es SEGURO gracias a este PR:** desplegar el código sin la variable NO tumba el bot — solo
+degrada el catálogo a texto y grita en el log; la variable RE-ENCIENDE el PDF. Se fue el
+acoplamiento peligroso de orden que tenía el plan original.
+
 ## 2026-09-03 (16) — 🛡️ LAS MINAS "YA" QUEDAN DESACTIVADAS (con OK general de Maired: "si hay que hacerlo, hay que hacer todo esto")
 
 **Ejecutado y VERIFICADO el mismo día de la cacería (las minas: entrada (15) y checklist en ROADMAP):**

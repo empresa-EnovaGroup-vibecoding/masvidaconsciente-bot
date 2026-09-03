@@ -40,6 +40,20 @@ CODIGOS_DE_CALIDAD = frozenset(
 )
 
 
+# ─── Y cuando Meta ACEPTA el envío pero no puede traer el ARCHIVO del link ──
+#
+# 🔴 Estos NO son de calidad del número: son del ENLACE. Meta contesta 200 al recibir el envío
+# (el mensaje queda con su `wa_message_id`) y SEGUNDOS después manda un `failed` porque no pudo
+# descargar el archivo de la URL pública. Fue la raíz del catálogo del 2-sep: el link apuntaba al
+# taller muerto (SESIONES (15)). Casi siempre es PUBLIC_BASE_URL mal puesta o un host caído — por
+# eso avisan distinto que los de calidad ("no es tu número, es la dirección del servidor").
+#   · 131052 — "Media download error": Meta no pudo DESCARGAR el archivo del enlace.
+#   · 131053 — "Media upload error": el enlace no era servible/alcanzable.
+CODIGO_MEDIA_DOWNLOAD = 131052
+CODIGO_MEDIA_UPLOAD = 131053
+CODIGOS_DE_MEDIA = frozenset({CODIGO_MEDIA_DOWNLOAD, CODIGO_MEDIA_UPLOAD})
+
+
 class MetaRechazo(RuntimeError):
     """Meta rechazó un envío Y SABEMOS CON QUÉ CÓDIGO.
 

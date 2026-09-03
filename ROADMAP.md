@@ -28,7 +28,12 @@ Las **FASES 0 a 3 ya están hechas y desplegadas**:
 > sin tocar a la clienta. URLs y estado: `ESTADO.md` bloque 🏭 · historia: SESIONES 1-sep (14).
 > El panel de pruebas ya tiene su dominio propio: `panel-masvida.enovagroup.tech` (2-sep).
 
-### 🐛 LA SIGUIENTE TAREA: EL CATÁLOGO EN PDF NO LLEGA *(diagnosticada el 2-sep — falta solo ARREGLAR)*
+### 🐛 EL CATÁLOGO EN PDF NO LLEGA *(diagnosticada el 2-sep · EL CÓDIGO YA ESTÁ: PR #18 — falta el paso de INFRA)*
+
+> 🎯 **ESTADO AL 3-sep:** el **paso 3 (código) está HECHO** en el **PR #18** (esperando que Maired
+> lo fusione). **LA SIGUIENTE ACCIÓN es de INFRA, no de código:** definir `PUBLIC_BASE_URL` en
+> Coolify (pasos 1 y 2 de abajo). 🟢 Gracias al PR el orden ya es SEGURO: desplegar el código sin
+> la variable NO tumba el bot — solo degrada el catálogo a texto y grita en el log.
 
 **El síntoma que Maired lleva viendo:** pide el catálogo → el bot dice "ahí te lo dejo" → el PDF
 **nunca llega** → "no me has enviado". **La autopsia del 2-sep lo cerró con evidencia** (SESIONES
@@ -38,21 +43,25 @@ MUERTO (`api-masvida.enovagroup.tech`) y ningún entorno define `PUBLIC_BASE_URL
 error" de junio (el bot mentía sin llamar la herramienta; eso lo tapó `_asegurar_catalogo`): ahora
 el bot SÍ manda, y es Meta quien no puede DESCARGAR el PDF. Mismo dolor, raíz nueva.
 
-**El arreglo, en orden (esperando el OK de Maired):**
-1. **Pruebas (2 min, sin tocar Meta):** definir `PUBLIC_BASE_URL=https://jthc51…sslip.io` en bot
-   y worker (Coolify de Enova) y reiniciar → probar pidiendo el catálogo por WhatsApp.
-2. **Producción (2 min, sin tocar Meta — con su OK explícito):** definir
+**El arreglo, en orden:**
+1. ⏳ **Pruebas (2 min, sin tocar Meta):** definir `PUBLIC_BASE_URL=https://jthc51…sslip.io` en bot
+   y worker (Coolify de Enova) y reiniciar → probar pidiendo el catálogo por WhatsApp. *(Se puede
+   hacer ya, antes o después de fusionar el PR #18: si es antes, el catálogo sigue igual de roto
+   que hoy hasta el deploy; si es después, con el PR fusionado el catálogo pasa a texto hasta que
+   se ponga la variable.)*
+2. ⏳ **Producción (2 min, sin tocar Meta — con su OK explícito):** definir
    `PUBLIC_BASE_URL=https://api.masvidaconsciente.store` en bot y worker de netcup y reiniciar.
    Hoy la lista blanca tapa la mina, pero la casilla 5 de "TERMINADO" (pruebas de humo con
    catálogo) la va a pisar sí o sí.
-3. **El código (PR, mata la causa):** quitar el default hardcodeado de `config.py:110` — exigir
-   `PUBLIC_BASE_URL` al arranque (fail-fast como JWT_SECRET) o derivarlo de `COOLIFY_URL`. Un
-   default con la URL de UN entorno es la enfermedad D3 en versión config: funcionó de casualidad
-   mientras el taller vivía y se rompió en TODOS los entornos cuando murió. **Y en el mismo PR,
-   considerar el segundo hueco verificado:** `enviar_catalogo` devuelve ok al ENCOLAR, no al
-   entregar (`cola_media.py:136-137` traga el fallo) — el bot "jura que lo mandó" porque su
-   herramienta se lo dijo. Mínimo: que el fallo del PDF avise (a la dueña o al log en ERROR con
-   el motivo de Meta), para que la próxima vez no haga falta una autopsia.
+3. ✅ **El código — HECHO (PR #18).** Quitado el default hardcodeado de `config.py`; `public_base_url`
+   ya no trae la URL de UN entorno. **Decisión tomada (se apartó del "fail-fast como JWT_SECRET"
+   con razón):** el validador **AVISA fuerte al arranque pero NO bloquea** — el catálogo se degrada
+   al texto (`enviar_catalogo`) y el bot sigue vendiendo, siguiendo el precedente del validador del
+   buffer (*"se DEGRADA, nunca se bloquea la venta"*; un `raise` apagaría todo por un PDF y
+   reventaría hasta los tests). **El segundo hueco también cerrado:** el `fallido` **131053** (el
+   caso del link válido pero host muerto, que el arranque no puede ver) ahora **le avisa a la dueña**
+   por WhatsApp (`_avisar_media_no_entregada` en el webhook) — para que la próxima vez no haga falta
+   una autopsia. Con test de reversión-roja + caso en `probar_meta.py`.
 ⚠️ **Trampa a no pisar:** NO darle el dominio `api-masvida.enovagroup.tech` al bot de pruebas
 antes del paso 2 — el catálogo de PRUEBAS se serviría a los clientes de PRODUCCIÓN (el default
 apunta ahí) y el bug quedaría enmascarado.
