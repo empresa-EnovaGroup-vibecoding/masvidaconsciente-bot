@@ -68,6 +68,24 @@ esta instalación local: su `.venv` no contiene `asyncpg` y no hay PostgreSQL es
 `localhost:5432`; queda como puerta obligatoria post-deploy en pruebas, donde vive el runtime
 completo. Producción no se tocó.
 
+**4) ✅ FUSIÓN + DESPLIEGUE EN PRUEBAS + OPERACIÓN DE VIDEOS.** PR #22 fusionado en
+`f85f781`; la CI de GitHub pasó y el job de producción quedó omitido por su candado. Antes de
+desplegar se creó el respaldo de PostgreSQL
+`/root/masvida-pruebas-backups/pre-f85f781-20260903.dump` (3.075.878 bytes, SHA-256
+`512b66d75e1a00c281757902f8b66a8494b9b2f516ea05bb8fc368a26935a8f9`) y la migración 036 se
+ensayó dentro de una transacción: antes 0/0 columna/índice, dentro 1/1, tras ROLLBACK 0/0.
+Bot y worker quedaron en el mismo commit; `/salud` `ok`, Meta GREEN, 37 migraciones.
+`probar_migraciones`, `probar_drift` y `probar_media` completos: verdes.
+
+El dashboard PR #1 se fusionó en `c8bf95d` y quedó desplegado en pruebas; el dominio respondió
+200 y el OpenAPI del bot publica `PATCH /api/media/{media_id}/principal`. Antes de reescribir R2
+se guardaron los 5 originales en
+`/root/masvida-pruebas-backups/r2-videos-pre-f85f781` (cada archivo con SHA-256). El barrido
+convirtió los 5 QuickTime a MP4 real; una segunda corrida confirmó **0 convertidos / 5 videos ya
+sanos**. El video de Tortas keto (media 12) ya es enviable, pero sigue siendo un cuadro fijo con
+audio: hace falta que la dueña suba una grabación real. **Producción no se desplegó y la lista
+blanca no se tocó.**
+
 ## 2026-09-03 (19) — 🧠 PRODUCTO, SABOR Y FAMILIA YA NO COMPITEN POR LA MISMA PALABRA
 
 **Caso real que lo destapó:** la clienta pidió ver las tortas. El bot nombró las dos tortas y,

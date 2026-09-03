@@ -52,14 +52,14 @@ y salud, memoria que no se olvida a las 24h, y 8 migraciones nuevas (hasta la 03
 | | 🏭 PRUEBAS (Enova) |
 |---|---|
 | **Servidor** | VPS del socio de Enova `152.53.194.89` · Coolify propio `coolify.enovagroup.tech` (proyecto `masvida-pruebas`) |
-| **Qué corre** | bot + worker en `master a798aac` (merge del PR #18) + panel + PostgreSQL 16 + Redis 7 · **auto-deploy OFF** en las 3 apps — deploy SOLO manual |
+| **Qué corre** | bot + worker en `master f85f781` (PRs #21 y #22) + panel `c8bf95d` (PR #1) + PostgreSQL 16 + Redis 7 · **auto-deploy OFF** en las 3 apps — deploy SOLO manual |
 | **Número** | **+57 313 2933806** (WABA "Enova Soporte", SEPARADA de la de la clienta) |
 | **Webhook** | re-apuntado por Graph API (`/{waba}/subscribed_apps` + `override_callback_uri`) → `https://jthc51nxqitd9opc8ywioocr.152.53.194.89.sslip.io/webhook/whatsapp` |
 | **BD** | dump FINAL del taller restaurado: 36 migraciones · 6 clientes · 32 productos · 10 conocimiento |
 | **Modelo IA** | `anthropic/claude-sonnet-4.6` (el aprobado por Maired en el taller) |
-| **Salud** | `https://jthc51nxqitd9opc8ywioocr.152.53.194.89.sslip.io/salud` — verificado 3-sep 12:35 ET: `ok`, Meta GREEN, saldo $2.8987 |
+| **Salud** | `https://jthc51nxqitd9opc8ywioocr.152.53.194.89.sslip.io/salud` — verificado tras `f85f781`: `ok`, Meta GREEN, 37 migraciones, saldo $2.552 |
 | **Prueba de fuego** | ✅ "Hola" de Maired → respuesta en 5,8s **con la memoria del taller** (13 mensajes rescatados de Postgres) |
-| **Panel** | ✅ **`https://panel-masvida.enovagroup.tech/login`** (dominio propio + HTTPS Let's Encrypt, desde el 2-sep; el sslip `http://h14aei…sslip.io` sigue vivo de respaldo). Rebuild con el bot por https: hecho. Login: `admin@masvidaconsciente.com` + la clave de siempre del taller. |
+| **Panel** | ✅ **`https://panel-masvida.enovagroup.tech/login`** (dominio propio + HTTPS Let's Encrypt). `c8bf95d`: ya trae la ★ para elegir la foto principal; `/catalogo` responde 200. Login: `admin@masvidaconsciente.com` + la clave de siempre del taller. |
 | **DNS (Namecheap)** | `panel-masvida` y `api-masvida` .enovagroup.tech → `152.53.194.89` (los creó Maired el 2-sep). ⚠️ `api-masvida` apunta al VPS pero **ningún servicio lo atiende todavía** — ver el bug del catálogo abajo. |
 
 > ✅ **CATÁLOGO PDF ARREGLADO EN PRUEBAS (3-sep 12:35 ET; SESIONES (18)):** PR #18 fusionado y
@@ -69,6 +69,13 @@ y salud, memoria que no se olvida a las 24h, y 8 migraciones nuevas (hasta la 03
 > número de pruebas. 🔴 **Producción conserva la misma mina** hasta definir allí
 > `PUBLIC_BASE_URL=https://api.masvidaconsciente.store` y redeployar con OK explícito de Maired.
 > **NO asignar `api-masvida.enovagroup.tech` al bot de pruebas**: mezclaría los entornos.
+
+> ✅ **FOTO PRINCIPAL + VIDEOS CERRADOS EN PRUEBAS (3-sep; SESIONES (20)):** bot y worker
+> `f85f781`, panel `c8bf95d`, migración 036 aplicada (37 totales), `probar_migraciones`,
+> `probar_drift` y `probar_media` verdes. La ★ encabeza el `ORDER BY` real con ROLLBACK. Los 5
+> QuickTime disfrazados se respaldaron y convirtieron a MP4 ISO; una segunda corrida dejó los 5
+> sin tocar. Queda pedir un video real de Tortas keto: el archivo ya es compatible, pero su
+> contenido sigue siendo un solo cuadro con audio. **Producción no recibió deploy.**
 
 ## Última verificación: **2026-09-01 (~02:30 ET) — LA PROMOCIÓN A PRODUCCIÓN SE HIZO (y hubo incidente de seguridad, contenido)**
 
