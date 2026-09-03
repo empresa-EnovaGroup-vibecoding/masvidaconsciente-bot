@@ -52,25 +52,23 @@ y salud, memoria que no se olvida a las 24h, y 8 migraciones nuevas (hasta la 03
 | | 🏭 PRUEBAS (Enova) |
 |---|---|
 | **Servidor** | VPS del socio de Enova `152.53.194.89` · Coolify propio `coolify.enovagroup.tech` (proyecto `masvida-pruebas`) |
-| **Qué corre** | bot + worker + panel + PostgreSQL 16 + Redis 7 · `master 05d81ff` (merge del PR #15) · **auto-deploy OFF** en las 3 apps — deploy SOLO manual |
+| **Qué corre** | bot + worker en `master a798aac` (merge del PR #18) + panel + PostgreSQL 16 + Redis 7 · **auto-deploy OFF** en las 3 apps — deploy SOLO manual |
 | **Número** | **+57 313 2933806** (WABA "Enova Soporte", SEPARADA de la de la clienta) |
 | **Webhook** | re-apuntado por Graph API (`/{waba}/subscribed_apps` + `override_callback_uri`) → `https://jthc51nxqitd9opc8ywioocr.152.53.194.89.sslip.io/webhook/whatsapp` |
 | **BD** | dump FINAL del taller restaurado: 36 migraciones · 6 clientes · 32 productos · 10 conocimiento |
 | **Modelo IA** | `anthropic/claude-sonnet-4.6` (el aprobado por Maired en el taller) |
-| **Salud** | `https://jthc51nxqitd9opc8ywioocr.152.53.194.89.sslip.io/salud` — al nacer: `ok`, Meta GREEN, saldo $3.20 |
+| **Salud** | `https://jthc51nxqitd9opc8ywioocr.152.53.194.89.sslip.io/salud` — verificado 3-sep 12:35 ET: `ok`, Meta GREEN, saldo $2.8987 |
 | **Prueba de fuego** | ✅ "Hola" de Maired → respuesta en 5,8s **con la memoria del taller** (13 mensajes rescatados de Postgres) |
 | **Panel** | ✅ **`https://panel-masvida.enovagroup.tech/login`** (dominio propio + HTTPS Let's Encrypt, desde el 2-sep; el sslip `http://h14aei…sslip.io` sigue vivo de respaldo). Rebuild con el bot por https: hecho. Login: `admin@masvidaconsciente.com` + la clave de siempre del taller. |
 | **DNS (Namecheap)** | `panel-masvida` y `api-masvida` .enovagroup.tech → `152.53.194.89` (los creó Maired el 2-sep). ⚠️ `api-masvida` apunta al VPS pero **ningún servicio lo atiende todavía** — ver el bug del catálogo abajo. |
 
-> 🐛 **BUG VIVO — EL CATÁLOGO EN PDF NO LLEGA (diagnosticado el 2-sep con evidencia; SESIONES (15)):**
-> el bot dice "ahí te dejo el catálogo", el TEXTO llega, y el PDF muere con **error de Meta
-> `131053 Media upload error`** (`estado='fallido'` en `mensajes`). Causa: `config.py:110` trae
-> **hardcodeado** `public_base_url = "https://api-masvida.enovagroup.tech"` (el taller muerto) como
-> default, y NI pruebas NI producción definen `PUBLIC_BASE_URL` → Meta no puede descargar el PDF.
-> 🔴 **Producción tiene la misma mina** (verificado en el contenedor vivo de netcup): la lista
-> blanca la ha tapado. El plan de arreglo (3 pasos) está en SESIONES 2-sep (15). **NO asignar
-> `api-masvida` al bot de pruebas antes de arreglar producción** — serviría el catálogo de
-> pruebas a los clientes de producción y taparía el bug.
+> ✅ **CATÁLOGO PDF ARREGLADO EN PRUEBAS (3-sep 12:35 ET; SESIONES (18)):** PR #18 fusionado y
+> desplegado (`a798aac`) en bot + worker; `PUBLIC_BASE_URL` propia del entorno, creada cifrada por
+> la API de Coolify. El archivo público responde **200 · `application/pdf` · 2.803.311 bytes ·
+> `%PDF-`** y `/salud` sigue en `ok`. ⏳ Falta confirmar el último tramo pidiéndolo por WhatsApp al
+> número de pruebas. 🔴 **Producción conserva la misma mina** hasta definir allí
+> `PUBLIC_BASE_URL=https://api.masvidaconsciente.store` y redeployar con OK explícito de Maired.
+> **NO asignar `api-masvida.enovagroup.tech` al bot de pruebas**: mezclaría los entornos.
 
 ## Última verificación: **2026-09-01 (~02:30 ET) — LA PROMOCIÓN A PRODUCCIÓN SE HIZO (y hubo incidente de seguridad, contenido)**
 

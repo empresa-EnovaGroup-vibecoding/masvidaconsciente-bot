@@ -24,6 +24,33 @@
 
 ---
 
+## 2026-09-03 (18) — 🔧 INFRA DEL PDF ARREGLADA EN PRUEBAS: VARIABLE CIFRADA + REDEPLOY VERDE
+
+**Cerrado el paso de infraestructura del entorno de pruebas.** El PR #18 ya estaba fusionado en
+`master` (`a798aac`), pero el primer intento de redeploy de bot + worker falló antes de construir.
+La causa NO era el código: `PUBLIC_BASE_URL` se había insertado directamente en la BD de Coolify
+como texto plano con `is_literal=false`; al cargarla, Coolify intentó descifrarla y abortó con
+`Illuminate\Contracts\Encryption\DecryptException: The payload is invalid`. Los contenedores
+anteriores siguieron arriba y sanos durante el fallo.
+
+**Reparación, con red de seguridad:** se identificaron las dos filas exactas (bot y worker), se
+ensayó su borrado dentro de una transacción y se hizo **ROLLBACK** (2/2 restauradas). Después se
+retiraron solamente esas filas y `PUBLIC_BASE_URL` se creó por el endpoint oficial de variables de
+Coolify. La versión 4.1.2 genera por diseño una fila activa y otra `preview` por aplicación: **4/4
+cifradas**, 2 activas + 2 preview, 2 aplicaciones. Coolify pudo leer ambos juegos antes de desplegar.
+La API temporal quedó otra vez en `false` y el token temporal se borró (**0 restantes**).
+
+**Resultado vivo (3-sep, 12:35 ET):** bot `fjnlsug6i4mt…` y worker `t53qwgg10u2o…` terminaron en
+`finished`, ambos con commit **`a798aac`** y `PUBLIC_BASE_URL` correcta dentro del contenedor.
+`/salud` = **200 · `estado: ok` · Meta GREEN · 36 migraciones**. El enlace que recibe Meta
+(`/api/catalogo/archivo`) devuelve **200 · `application/pdf` · 2.803.311 bytes · firma `%PDF-`**.
+
+**No se tocó producción y no se envió ningún WhatsApp proactivo.** Falta que Maired pida el catálogo
+desde el número de pruebas para verificar el último tramo Meta → cliente. Después, con su OK
+explícito, repetir en producción con `PUBLIC_BASE_URL=https://api.masvidaconsciente.store`.
+
+---
+
 ## 2026-09-03 (17) — 📄 EL CATÁLOGO EN PDF: MATA EL DEFAULT MUERTO Y AVISA CUANDO NO LLEGA (PR #18, el paso 3 del plan)
 
 **El código que cierra el bug diagnosticado el 2-sep (entrada (15)).** Maired lo pidió de frente:
