@@ -24,6 +24,35 @@
 
 ---
 
+## 2026-09-03 (16) — 🛡️ LAS MINAS "YA" QUEDAN DESACTIVADAS (con OK general de Maired: "si hay que hacerlo, hay que hacer todo esto")
+
+**Ejecutado y VERIFICADO el mismo día de la cacería (las minas: entrada (15) y checklist en ROADMAP):**
+1. ✅ **Secreto de sesiones del panel SEPARADO en pruebas** — generado EN el servidor (nunca
+   impreso), aplicado a bot y worker vía la API de Coolify de Enova (activada→usada→apagada,
+   token temporal borrado) + deploy real. Verificado dentro de los contenedores: huella nueva,
+   idéntica bot=worker, distinta de la compartida. Login de Maired intacto (solo se cerró la
+   sesión abierta). *(El de PRODUCCIÓN se rota con el resto de D5 — sigue pendiente.)*
+2. ✅ **`DUENO_TELEFONO` definido en los 4 contenedores** (bot/worker × pruebas/producción) —
+   el aviso "el panel está perdiendo mensajes" por fin tiene a quién llegar. Producción se
+   re-desplegó (lista blanca verificada intacta; `/salud` ok, Meta GREEN, 36 migraciones).
+3. ✅ **EL VIGÍA de producción** — nació la vigilancia externa que `salud.py:49` prometía contra
+   el dominio muerto: cron cada 2 min EN EL VPS DE ENOVA (cruzado: un servidor vigila al otro)
+   → `GET /salud` de producción con la regla DOBLE (200 **y** `"estado":"ok"`) → al 2º fallo
+   seguido, **WhatsApp a la dueña** desde el bot de pruebas (credenciales leídas del contenedor
+   al momento, nada en disco), repetición máx. cada 30 min + mensaje de "volvió". Probado en
+   vivo con fallo simulado: la alerta y la recuperación llegaron al teléfono de Maired.
+   Vive en `/root/vigia-masvida/vigia.sh` (VPS de Enova). *(Mejora futura: UptimeRobot además,
+   por si se cae el propio VPS de Enova.)*
+4. ✅ De paso verificado: **el respaldo de producción VIVO** (snapshot del mismo día, 54 en
+   total) · el saldo IA bajó $4.11→$2.90 en dos días — la evidencia viva de la llave de
+   OpenRouter compartida (su separación quedó "antes de la entrega": la llave nueva la crea
+   Maired en OpenRouter, 3 min guiados).
+5. 🔵 **Fotos (bucket compartido): Maired decidió ESPERAR.** Aclarado que NO es "reinstalar
+   Coolify": es crear un balde nuevo + copiar ~35 archivos + 5 variables (~30-45 min). Las
+   llaves R2 actuales están limitadas al balde (verificado: ListBuckets denegado), así que hará
+   falta que ella cree el balde y su token en Cloudflare (~2 min) el día que se haga. **Mientras
+   tanto rige la regla: NO borrar fotos desde el panel de pruebas** (subir sí es seguro).
+
 ## 2026-09-02 (15) — 🌐 El panel recupera su dirección bonita + 🔬 LA AUTOPSIA DEL CATÁLOGO: por fin se sabe POR QUÉ el PDF no llega
 
 **Primera sesión completa sobre el entorno de pruebas de Enova. Dos frentes: uno cerrado, uno

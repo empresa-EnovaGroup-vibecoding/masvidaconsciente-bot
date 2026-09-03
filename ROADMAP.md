@@ -68,16 +68,20 @@ apunta ahí) y el bug quedaría enmascarado.
 
 ### 🧨 LAS MINAS DE LA MISMA CLASE *(cacería del 2-sep, a pregunta de Maired — detalle y evidencia en SESIONES (15))*
 
-**⚡ YA (baratas, esta semana; esperan el OK de Maired):**
-- [ ] Separar el **secreto de sesiones del panel** por entorno (1 variable en Coolify de pruebas
-  + redeploy; y rotar el de producción, que es parte de D5).
-- [ ] **Fotos:** separar el bucket R2 (o prefijo) por entorno. **MIENTRAS TANTO, regla dura: NO
-  borrar fotos desde el panel de pruebas** y los scripts de mantenimiento de fotos SOLO en
-  producción (el balde es compartido — borrar en pruebas rompe producción).
-- [ ] **Monitor externo** contra `https://api.masvidaconsciente.store/salud` (60s, las DOS
-  reglas del docstring de `salud.py`) — hoy NADIE vigila producción; corregir `salud.py:49`.
-- [ ] Definir **`DUENO_TELEFONO`** en los 4 contenedores (bot/worker × prod/pruebas) — sin ella,
-  el aviso "el panel está perdiendo mensajes" no puede salir jamás.
+**⚡ YA (baratas — EJECUTADAS el 3-sep con OK de Maired; detalle en SESIONES (16)):**
+- [x] **Secreto de sesiones del panel separado en pruebas** — hecho y verificado (huella nueva
+  bot=worker). El de producción se rota con el resto de D5.
+- [ ] **Fotos:** separar el bucket R2 por entorno — **Maired decidió ESPERAR** (no es urgente si
+  se respeta la regla). **Regla dura VIGENTE: NO borrar fotos desde el panel de pruebas** y los
+  scripts de mantenimiento de fotos SOLO en producción (el balde es compartido). Cuando se haga:
+  ella crea balde+token en Cloudflare (~2 min; las llaves actuales no pueden — ListBuckets
+  denegado, verificado) y el resto es copiar ~35 archivos + 5 variables.
+- [x] **El VIGÍA** — cron cada 2 min en el VPS de Enova → `/salud` de producción (regla doble) →
+  WhatsApp a la dueña al 2º fallo, máx cada 30 min + aviso de recuperación. Probado en vivo
+  (alerta y recuperación llegaron al teléfono). `/root/vigia-masvida/vigia.sh`. Falta corregir
+  el docstring `salud.py:49` (va con el PR del catálogo). Mejora futura: UptimeRobot además.
+- [x] **`DUENO_TELEFONO` definido en los 4 contenedores** — producción re-desplegada, lista
+  blanca intacta, `/salud` ok.
 - [x] ~~Verificar que el respaldo de producción corre~~ — **verificado 2-sep: VIVO** (54
   snapshots, el último de ese mismo día).
 
