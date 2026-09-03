@@ -323,7 +323,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "enviar_fotos_producto",
-            "description": "Envía al cliente las FOTOS y VIDEOS de UN producto por WhatsApp. Es tu arma de venta, ÚSALA PROACTIVA: en cuanto el cliente se enfoque en UN producto concreto (lo elija, te pida su info o pregunte por él), muéstraselo SIN esperar a que pida la foto; y también cuando pida ver/mostrar ('muéstrame', 'mándame una foto', 'quiero verlo'), pregunte cómo se ve, o dude. UN producto a la vez (no mandes fotos de varios a la vez). Es la ÚNICA forma de saber si el producto tiene fotos: NO asumas que no hay sin llamarla primero. Manda las mejores (hasta 3). Si no tiene fotos cargadas, te avisa para que lo digas con sinceridad. Si el cliente ya eligió una VERSIÓN (la de yuca, la de plátano…), pásala en `etiqueta`. Si ese producto YA se le mostró antes en este chat, NO se reenvía y te aviso (repetirlas es spam); para reenviar de verdad está `reenviar`. (Para ver el menú/opciones en general usa enviar_catalogo.)",
+            "description": "Envía al cliente las FOTOS y VIDEOS de UN producto por WhatsApp. Es tu arma de venta, ÚSALA PROACTIVA: en cuanto el cliente se enfoque en UN producto concreto (lo elija, te pida su info o pregunte por él), muéstraselo SIN esperar a que pida la foto; y también cuando pida ver/mostrar ('muéstrame', 'mándame una foto', 'quiero verlo'), pregunte cómo se ve, o dude. UN producto a la vez (no mandes fotos de varios a la vez). Es la ÚNICA forma de saber si el producto tiene fotos: NO asumas que no hay sin llamarla primero. En el envío PROACTIVO va UNA foto (la principal del producto — no pongas `maximo`); si el cliente PIDE ver fotos o más ángulos, ahí sí salen hasta 3. Si no tiene fotos cargadas, te avisa para que lo digas con sinceridad. Si el cliente ya eligió una VERSIÓN (la de yuca, la de plátano…), pásala en `etiqueta`. Si ese producto YA se le mostró antes en este chat, NO se reenvía y te aviso (repetirlas es spam); para reenviar de verdad está `reenviar`. (Para ver el menú/opciones en general usa enviar_catalogo.)",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -342,9 +342,10 @@ TOOL_SCHEMAS = [
                     "maximo": {
                         "type": "integer",
                         "description": (
-                            "OPCIONAL, casi nunca hace falta: cuántos archivos mandar (3 por "
-                            "defecto). Úsalo solo si vas a enseñar DOS productos en el mismo "
-                            "turno; ahí manda 1 de cada uno para no bombardear."
+                            "OPCIONAL, casi nunca hace falta: cuántos archivos mandar. NO lo "
+                            "pongas en el envío proactivo (el código manda UNA, la principal). "
+                            "Solo tiene sentido subirlo (hasta 3) cuando el cliente PIDE ver "
+                            "las fotos o más ángulos de ESE producto."
                         ),
                     },
                     "etiqueta": {
@@ -4000,6 +4001,52 @@ async def media_ya_mostrada(
         return si_falla
 
 
+async def _urls_de_media_ya_enviadas(session, telefono: str) -> set[str]:
+    """Las URLs de TODAS las fotos/videos que este cliente ya recibió (tabla `mensajes`).
+
+    Es la memoria FINA de la variedad: `media_ya_mostrada` sabe si el PRODUCTO ya se mostró;
+    esto sabe CUÁLES archivos exactos — `_guardar_media_saliente` guarda la `media_url` de cada
+    envío, y esa URL es determinista (`r2.url_publica(clave)`), así que sirve de identidad.
+    Si la lectura falla, conjunto vacío: sin memoria se reenvía en el orden de siempre — la
+    variedad es un empujón de venta, jamás puede frenar un envío.
+    """
+    if not (telefono or ""):
+        return set()
+    try:
+        filas = await session.execute(
+            select(Mensaje.media_url).where(
+                Mensaje.cliente_telefono == telefono,
+                Mensaje.rol == "assistant",
+                Mensaje.tipo.in_(("image", "video")),
+                Mensaje.media_url.is_not(None),
+            )
+        )
+        return set(filas.scalars().all())
+    except Exception:  # noqa: BLE001 — sin memoria fina, el orden de siempre
+        logger.exception("_urls_de_media_ya_enviadas: no se pudo leer mensajes para %s", telefono)
+        return set()
+
+
+def _para_reenvio_primero_las_no_vistas(medios, vistas: set[str], etiqueta_pedida) -> list:
+    """En el "muéstramelas OTRA VEZ", la variedad vende: las fotos que el cliente NO ha visto
+    van PRIMERO (lo pidió Maired el 2026-09-03 — con 5 fotos cargadas, repetirle la misma de
+    entrada aburre; enseñarle otro ángulo ayuda a comparar y cerrar).
+
+    Dos reglas que la mantienen sana:
+    - Si el cliente pidió una VERSIÓN concreta ("la de plátano otra vez"), NO se reordena nada:
+      lo pedido manda sobre la variedad — `_elegir_medios` ya puso esa versión primero y aquí
+      no se le quita el puesto.
+    - El orden es un sort ESTABLE por "ya vista": dentro de las no vistas (y de las vistas) se
+      conserva el orden de `_elegir_medios` — la principal primero, después las demás. Con todo
+      ya visto, queda idéntico a hoy: pidió repetir y se le repite.
+    """
+    if (etiqueta_pedida or "").strip() or not vistas:
+        return list(medios)
+    from app.services import r2
+
+    return sorted(medios, key=lambda m: r2.url_publica(m.clave) in vistas)
+
+
 async def _memoria_de_fotos_apagada(session) -> bool:
     """El interruptor de la garantía de la memoria (clave `fotos_memoria` en `configuracion`).
 
@@ -4214,13 +4261,25 @@ async def enviar_fotos_producto(
         await session.execute(
             select(ProductoMedia)
             .where(ProductoMedia.producto_id == prod.id)
-            .order_by(ProductoMedia.orden, ProductoMedia.id)
+            # La PRINCIPAL encabeza (036): con maximo=1 (el proactivo de hoy) es LA que sale.
+            # Sin principal marcada, el orden de siempre (subida). `_elegir_medios` respeta el
+            # orden de entrada dentro de cada grupo, así que si el cliente pidió una VERSIÓN,
+            # la etiqueta sigue mandando sobre la estrella (lo específico gana a lo general).
+            .order_by(ProductoMedia.es_principal.desc(), ProductoMedia.orden, ProductoMedia.id)
         )
     ).scalars().all()
     # Qué fotos van: el tamaño (como siempre) y, si el cliente dijo cuál versión quiere, la que
     # la dueña nombró así. Toda la decisión vive en `_elegir_medios`, que es PURA y está probada.
     _vid = variante.id if (variante is not None and variante.producto_id == prod.id) else None
     medios, et_enviada, ets_disp = _elegir_medios(todos, _vid, etiqueta)
+    # 🔁 EN EL "OTRA VEZ", VARIEDAD: si el cliente pide VOLVER a ver (reenviar) y el producto
+    # tiene más fotos de las que ya recibió, las NO vistas salen primero — otro ángulo vende
+    # más que la misma foto repetida. Ver `_para_reenvio_primero_las_no_vistas` (y sus reglas:
+    # una versión pedida jamás pierde su puesto; todo-visto = idéntico a hoy).
+    if reenviar and medios:
+        medios = _para_reenvio_primero_las_no_vistas(
+            medios, await _urls_de_media_ya_enviadas(session, telefono), etiqueta
+        )
     # Lo que el cliente pidió, ya limpio: es lo que se le repite al modelo en los avisos.
     _pedido = (etiqueta or "").strip()
     logger.info(

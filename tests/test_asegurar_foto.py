@@ -369,7 +369,7 @@ async def test_dispara_y_manda_la_foto_del_producto_exacto(monkeypatch):
     """EL CASO DEL SMOKE: turno enfocado en UN producto, cero media → la foto la manda el
     código, con el nombre EXACTO resuelto (jamás uno parecido)."""
     llamadas, _ = await _correr_red(monkeypatch)
-    assert llamadas == [("enviar_fotos_producto", {"nombre": "Quesillo", "maximo": 3})]
+    assert llamadas == [("enviar_fotos_producto", {"nombre": "Quesillo", "maximo": 1})]
 
 
 async def test_cuando_el_cliente_dijo_la_version_la_etiqueta_viaja(monkeypatch):
@@ -382,7 +382,7 @@ async def test_cuando_el_cliente_dijo_la_version_la_etiqueta_viaja(monkeypatch):
         mensaje="de platano",
         enfocado=COMPUESTO,
     )
-    assert llamadas == [("enviar_fotos_producto", {"nombre": COMPUESTO, "maximo": 3, "etiqueta": "platano"})]
+    assert llamadas == [("enviar_fotos_producto", {"nombre": COMPUESTO, "maximo": 1, "etiqueta": "platano"})]
 
 
 async def test_con_la_tool_apagada_la_red_no_existe(monkeypatch):
@@ -520,13 +520,13 @@ async def test_si_no_hay_fotos_cargadas_no_pasa_nada(monkeypatch):
         monkeypatch,
         resultado_tool={"enviadas": 0, "nota": "'Quesillo' no tiene fotos ni videos cargados."},
     )
-    assert llamadas == [("enviar_fotos_producto", {"nombre": "Quesillo", "maximo": 3})]
+    assert llamadas == [("enviar_fotos_producto", {"nombre": "Quesillo", "maximo": 1})]
 
 
 async def test_si_la_tool_revienta_el_turno_sigue_intacto(monkeypatch):
     """La foto es un empujón de venta: una excepción suya JAMÁS puede tumbar un turno bueno."""
     llamadas, _ = await _correr_red(monkeypatch, resultado_tool=RuntimeError("Meta caída"))
-    assert llamadas == [("enviar_fotos_producto", {"nombre": "Quesillo", "maximo": 3})]  # lo intentó y siguió
+    assert llamadas == [("enviar_fotos_producto", {"nombre": "Quesillo", "maximo": 1})]  # lo intentó y siguió
 
 
 # ══════════════════════════════════════════════════════════════════════════════════
@@ -603,7 +603,7 @@ async def _correr_turno(
 
 async def test_por_la_puerta_real_la_foto_sale_y_el_texto_no_se_toca(monkeypatch):
     salida, llamadas = await _correr_turno(monkeypatch)
-    assert ("enviar_fotos_producto", {"nombre": "Quesillo", "maximo": 3}) in llamadas
+    assert ("enviar_fotos_producto", {"nombre": "Quesillo", "maximo": 1}) in llamadas
     assert salida == TEXTO_ENFOCADO, "la red suma una foto: el texto JAMÁS se toca"
 
 
@@ -611,7 +611,7 @@ async def test_por_la_puerta_real_la_etiqueta_del_compuesto_viaja(monkeypatch):
     """El flujo completo del caso de Erwin: cliente "de platano", producto compuesto → la
     llamada sale con `etiqueta` para que la foto sea la de ESA masa."""
     _, llamadas = await _correr_turno(monkeypatch, enfocado=COMPUESTO, mensaje="de platano")
-    assert ("enviar_fotos_producto", {"nombre": COMPUESTO, "maximo": 3, "etiqueta": "platano"}) in llamadas
+    assert ("enviar_fotos_producto", {"nombre": COMPUESTO, "maximo": 1, "etiqueta": "platano"}) in llamadas
 
 
 async def test_por_la_puerta_real_apagada_no_existe(monkeypatch):
@@ -708,7 +708,7 @@ async def test_con_un_CUAL_en_el_texto_pero_producto_claro_SI_manda_la_foto(monk
         enfocado=None,                                  # el bot NO nombra el producto…
         enfocado_cliente="Empanadas de masa de plátano",  # …pero el cliente sí
     )
-    assert llamadas == [("enviar_fotos_producto", {"nombre": "Empanadas de masa de plátano", "maximo": 3})], (
+    assert llamadas == [("enviar_fotos_producto", {"nombre": "Empanadas de masa de plátano", "maximo": 1})], (
         f"no mandó la foto con el producto ya elegido: {llamadas}"
     )
 
@@ -819,10 +819,15 @@ async def test_con_DOS_productos_manda_UN_archivo_de_cada_uno(monkeypatch):
     assert [m for _, m in llamadas] == [1, 1], f"mandó de más: {llamadas}"
 
 
-async def test_con_UN_solo_producto_siguen_los_TRES_de_siempre(monkeypatch):
-    """El control: recortar a 1 en el caso normal sería empeorar lo que ya funcionaba."""
+async def test_con_UN_solo_producto_va_UNA_la_principal(monkeypatch):
+    """🔴 EL CONTRATO DEL PROACTIVO (decisión de producto 2026-09-03, Maired tras su prueba en
+    vivo): el empuje que nadie pidió muestra LA CARA del producto — una foto, la principal de
+    la 036 (o la primera si no hay marcada) —, no una galería de 3. "Ver más ángulos" no
+    desaparece: cuando el cliente PIDE ver, la llamada va por el modelo y
+    `_ejecutar_con_guardas` deja hasta 3 (test en test_foto_principal.py). Hasta hoy este test
+    fijaba maximo==3 ("los TRES de siempre"); cambió CON la conducta, a propósito."""
     llamadas, _ = await _correr_red(monkeypatch, enfocado="Quesillo")
-    assert llamadas[0][1].get("maximo") == 3
+    assert llamadas[0][1].get("maximo") == 1
 
 
 # ── El tope de archivos, en la TOOL y en el SCHEMA (R50 y R51 lo pidieron) ─────────

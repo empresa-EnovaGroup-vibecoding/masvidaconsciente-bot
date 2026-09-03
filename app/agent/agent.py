@@ -224,12 +224,15 @@ async def _asegurar_foto(
                 "RED DE LA FOTO: %s ya se le mostró a %s — no se repite", nombres, telefono
             )
             return
-        # 🔴 CUÁNTOS ARCHIVOS por producto. Con DOS productos se manda UNO de cada uno: la tool
-        # manda hasta 3 por defecto, y 2 × 3 = **6 archivos seguidos** — 5 salieron en la primera
-        # prueba real, y eso es el bombardeo que la regla quería evitar (y que arriesga la calidad
-        # del número con Meta). Con un solo producto se mantienen los 3 de siempre: ahí es
-        # enseñarlo desde varios ángulos, no spam.
-        por_producto = 1 if len(pendientes) > 1 else 3
+        # 🔴 CUÁNTOS ARCHIVOS por producto: UNO — LA PRINCIPAL. Decisión de producto del
+        # 2026-09-03 (Maired, tras su prueba en vivo, con la recomendación revisada de comercio):
+        # el envío PROACTIVO muestra la CARA del producto (la foto principal de la 036, o la
+        # primera si no hay marcada), no una galería. Con DOS productos comparados, una de cada
+        # uno (eso ya era así desde el 2026-08-21: 2 × 3 eran 6 archivos seguidos, el bombardeo
+        # que arriesga la calidad del número con Meta). Ver "más ángulos" sigue existiendo: si el
+        # cliente PIDE ver fotos, la llamada va por el MODELO y `_ejecutar_con_guardas` deja
+        # hasta 3 (más `reenviar`). Proactivo ≠ pedido: aquí nadie pidió nada, una basta.
+        por_producto = 1
         for nombre in pendientes:
             args: dict = {"nombre": nombre, "maximo": por_producto}
             # Si el producto es COMPUESTO ("… de masa de yuca o de masa de plátano") y el cliente
@@ -1731,15 +1734,26 @@ async def _ejecutar_con_guardas(
                 telefono, str(args)[:200],
             )
             return rechazo
-    if nombre_tool == "enviar_fotos_producto" and _pide_fotos(mensaje_usuario):
-        # 🔒 LA VÁLVULA EN CÓDIGO (rama fotos-con-memoria): la herramienta ahora tiene memoria y
-        # no repite un producto ya mostrado — pero si el CLIENTE está pidiendo ver ("mándame la
-        # foto", "muéstramela otra vez", "no me llegó el video"), reenviar es lo correcto y no
-        # puede depender de que el modelo se acuerde de pasar `reenviar`: lo enciende el código
-        # leyendo las palabras del cliente. Un cliente pidiendo VER nunca es spam. Las llamadas
-        # de la RED DE LA FOTO no pasan por esta puerta (van por `ejecutar` directo): su empuje
-        # proactivo sigue frenado por su propio filtro de `media_ya_mostrada`.
-        args = {**args, "reenviar": True}
+    if nombre_tool == "enviar_fotos_producto":
+        if _pide_fotos(mensaje_usuario):
+            # 🔒 LA VÁLVULA EN CÓDIGO (rama fotos-con-memoria): la herramienta ahora tiene
+            # memoria y no repite un producto ya mostrado — pero si el CLIENTE está pidiendo ver
+            # ("mándame la foto", "muéstramela otra vez", "no me llegó el video"), reenviar es lo
+            # correcto y no puede depender de que el modelo se acuerde de pasar `reenviar`: lo
+            # enciende el código leyendo las palabras del cliente. Un cliente pidiendo VER nunca
+            # es spam. Y como PIDIÓ ver, se mantienen los hasta 3 archivos de siempre (el default
+            # de la tool): quien pide ver quiere ver bien. Las llamadas de la RED DE LA FOTO no
+            # pasan por esta puerta (van por `ejecutar` directo): su empuje proactivo sigue
+            # frenado por su propio filtro de `media_ya_mostrada`.
+            args = {**args, "reenviar": True}
+        elif "maximo" not in args:
+            # 📷 EL PROACTIVO MANDA UNA — LA PRINCIPAL (decisión de producto 2026-09-03, ver la
+            # red de la foto). Si el cliente NO pidió ver y el modelo no decidió un `maximo` a
+            # propósito, la política la pone el código: una foto (la principal de la 036, o la
+            # primera del producto), no una galería. Si el modelo SÍ pasó `maximo`, se respeta
+            # (recortado a 1..3 dentro de la tool): el prompt sugiere, y aquí el código solo
+            # rellena lo que el modelo dejó en blanco — no le tuerce la mano.
+            args = {**args, "maximo": 1}
     return await ejecutar(nombre_tool, args, telefono)
 
 
