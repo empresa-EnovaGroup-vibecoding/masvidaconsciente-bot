@@ -53,16 +53,42 @@ def _ffprobe(ruta: str) -> dict:
     return json.loads(out.stdout or "{}")
 
 
+# Marcas ISO-MP4 de verdad (format.tags.major_brand). Es LISTA BLANCA a propósito: lo que no
+# esté aquí se re-convierte — el lado seguro es convertir de más, jamás dejar pasar un contenedor
+# que Meta va a rechazar. "dash" (MP4 fragmentado) queda FUERA a propósito: mejor normalizarlo.
+_BRANDS_MP4 = frozenset({
+    "isom", "iso2", "iso3", "iso4", "iso5", "iso6", "mp41", "mp42", "avc1",
+})
+
+
 def _video_ya_sirve(info: dict) -> bool:
-    """True si YA es MP4 con H.264 (+ AAC si tiene audio): no hay que tocarlo."""
-    formato = (info.get("format", {}).get("format_name") or "")
-    if "mp4" not in formato:
+    """True si YA es un MP4 ISO real con H.264 (+ AAC si tiene audio): no hay que tocarlo.
+
+    🔴 LA LECCIÓN DEL 2026-09-03 (autopsia del video de la Torta keto, error Meta 131053):
+    aquí se comparaba `"mp4" in format_name` — pero ffprobe reporta para CUALQUIER QuickTime
+    (.mov de iPhone) el format_name compartido `"mov,mp4,m4a,3gp,3g2,mj2"`, que CONTIENE la
+    subcadena "mp4". Resultado: los 5 videos .mov del catálogo pasaron como "ya sirven", el
+    barrido del 14-jul los re-subió byte a byte solo cambiándoles la extensión, y el primer
+    envío real de un video murió con `131053 Media upload error` (Meta descarga el archivo y su
+    procesador rechaza el contenedor QuickTime). El contenedor REAL lo dice `major_brand`, no
+    el format_name: un MP4 ISO trae isom/mp42/…; un QuickTime trae `qt`.
+
+    Además: los videos de iPhone arrastran streams `data` (metadata) que aquí no se miraban.
+    Cualquier stream que no sea video/audio ⇒ se convierte (el ffmpeg de abajo los descarta
+    con `-map`).
+    """
+    tags = info.get("format", {}).get("tags") or {}
+    brand = (tags.get("major_brand") or "").strip().lower()
+    if brand not in _BRANDS_MP4:
         return False
     for s in info.get("streams", []):
-        if s.get("codec_type") == "video" and s.get("codec_name") != "h264":
+        tipo = s.get("codec_type")
+        if tipo == "video" and s.get("codec_name") != "h264":
             return False
-        if s.get("codec_type") == "audio" and s.get("codec_name") != "aac":
+        if tipo == "audio" and s.get("codec_name") != "aac":
             return False
+        if tipo not in ("video", "audio"):
+            return False  # streams 'data'/'subtitle' de cámara: fuera — se re-empaqueta limpio
     return True
 
 
@@ -81,6 +107,9 @@ def _convertir_video_sync(contenido: bytes) -> bytes:
         for escala, crf in (("1280", "26"), ("720", "28")):
             cmd = [
                 "ffmpeg", "-y", "-i", origen,
+                # Solo EL video y EL audio (si hay). Los .mov de iPhone traen streams `data`
+                # (metadata de cámara) que ffmpeg copiaría al MP4 — y Meta no los quiere.
+                "-map", "0:v:0", "-map", "0:a:0?",
                 "-c:v", "libx264", "-preset", "medium", "-crf", crf,
                 "-pix_fmt", "yuv420p",
                 "-vf", f"scale='min({escala},iw)':-2",
