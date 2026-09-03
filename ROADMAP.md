@@ -28,12 +28,13 @@ Las **FASES 0 a 3 ya están hechas y desplegadas**:
 > sin tocar a la clienta. URLs y estado: `ESTADO.md` bloque 🏭 · historia: SESIONES 1-sep (14).
 > El panel de pruebas ya tiene su dominio propio: `panel-masvida.enovagroup.tech` (2-sep).
 
-### 🐛 EL CATÁLOGO EN PDF NO LLEGA *(diagnosticada el 2-sep · EL CÓDIGO YA ESTÁ: PR #18 — falta el paso de INFRA)*
+### 🐛 EL CATÁLOGO EN PDF NO LLEGA *(ARREGLADO EN PRUEBAS el 3-sep · falta producción + prueba por WhatsApp)*
 
-> 🎯 **ESTADO AL 3-sep:** el **paso 3 (código) está HECHO** en el **PR #18** (esperando que Maired
-> lo fusione). **LA SIGUIENTE ACCIÓN es de INFRA, no de código:** definir `PUBLIC_BASE_URL` en
-> Coolify (pasos 1 y 2 de abajo). 🟢 Gracias al PR el orden ya es SEGURO: desplegar el código sin
-> la variable NO tumba el bot — solo degrada el catálogo a texto y grita en el log.
+> 🎯 **ESTADO AL 3-sep (12:35 ET):** el **PR #18 está FUSIONADO** y el entorno de pruebas corre
+> `a798aac`. `PUBLIC_BASE_URL` quedó cifrada y definida en bot + worker; ambos redeploys terminaron
+> bien. El enlace público devuelve **200 · `application/pdf` · 2.803.311 bytes · firma `%PDF-`** y
+> `/salud` sigue en `ok`. **Falta la prueba final pidiéndolo por WhatsApp** y repetir la variable en
+> producción con OK explícito. Detalle y autopsia del primer deploy fallido: SESIONES (18).
 
 **El síntoma que Maired lleva viendo:** pide el catálogo → el bot dice "ahí te lo dejo" → el PDF
 **nunca llega** → "no me has enviado". **La autopsia del 2-sep lo cerró con evidencia** (SESIONES
@@ -44,16 +45,15 @@ error" de junio (el bot mentía sin llamar la herramienta; eso lo tapó `_asegur
 el bot SÍ manda, y es Meta quien no puede DESCARGAR el PDF. Mismo dolor, raíz nueva.
 
 **El arreglo, en orden:**
-1. ⏳ **Pruebas (2 min, sin tocar Meta):** definir `PUBLIC_BASE_URL=https://jthc51…sslip.io` en bot
-   y worker (Coolify de Enova) y reiniciar → probar pidiendo el catálogo por WhatsApp. *(Se puede
-   hacer ya, antes o después de fusionar el PR #18: si es antes, el catálogo sigue igual de roto
-   que hoy hasta el deploy; si es después, con el PR fusionado el catálogo pasa a texto hasta que
-   se ponga la variable.)*
+1. ✅ **Pruebas (infra HECHA):** `PUBLIC_BASE_URL=https://jthc51…sslip.io` definida por la API de
+   Coolify —activa + preview, cifradas— en bot y worker. Redeploy `a798aac` terminado y PDF público
+   verificado. ⏳ Falta pedir el catálogo desde WhatsApp al número de pruebas para confirmar el
+   recorrido completo Meta → cliente; no se mandó ningún mensaje proactivo desde la reparación.
 2. ⏳ **Producción (2 min, sin tocar Meta — con su OK explícito):** definir
    `PUBLIC_BASE_URL=https://api.masvidaconsciente.store` en bot y worker de netcup y reiniciar.
    Hoy la lista blanca tapa la mina, pero la casilla 5 de "TERMINADO" (pruebas de humo con
    catálogo) la va a pisar sí o sí.
-3. ✅ **El código — HECHO (PR #18).** Quitado el default hardcodeado de `config.py`; `public_base_url`
+3. ✅ **El código — HECHO Y FUSIONADO (PR #18).** Quitado el default hardcodeado de `config.py`; `public_base_url`
    ya no trae la URL de UN entorno. **Decisión tomada (se apartó del "fail-fast como JWT_SECRET"
    con razón):** el validador **AVISA fuerte al arranque pero NO bloquea** — el catálogo se degrada
    al texto (`enviar_catalogo`) y el bot sigue vendiendo, siguiendo el precedente del validador del
