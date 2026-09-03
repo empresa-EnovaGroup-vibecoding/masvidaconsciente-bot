@@ -15,7 +15,7 @@ from decimal import Decimal
 from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 
-from app.config import get_settings
+from app.config import get_settings, url_publica_utilizable
 from app.models import (
     CatalogoPdf,
     Cliente,
@@ -3841,6 +3841,26 @@ async def enviar_catalogo(session, telefono):
             url=link, respuesta=None,
         )
         return {"ok": True, "nota": "(SIMULADOR) le enviaste el catálogo PDF; confírmaselo con calidez"}
+
+    # 🔴 SIN URL PÚBLICA HTTPS, Meta no puede DESCARGAR el PDF: el envío muere con `131053 Media
+    # upload error` y hasta la autopsia del 2-sep eso no dejaba rastro útil (config.py traía
+    # hardcodeada la URL del taller muerto). Se DEGRADA al catálogo de TEXTO en vez de mandarle a
+    # Meta un link condenado — el cliente igual recibe el catálogo y el motivo queda en el log.
+    # (El simulador de arriba queda exento a propósito: es falso, no baja nada de Meta, y así la
+    # dueña puede probar el flujo aunque su entorno local no tenga la URL puesta.)
+    if not url_publica_utilizable(settings.public_base_url):
+        logger.error(
+            "enviar_catalogo: PUBLIC_BASE_URL no sirve (%r) — Meta no podría descargar el PDF de "
+            "%s. Se usa el catálogo de TEXTO. Define PUBLIC_BASE_URL en el entorno (Coolify).",
+            settings.public_base_url, telefono,
+        )
+        return {
+            "ok": False,
+            "nota": (
+                "no se pudo enviar el catálogo en PDF (falta configurar la URL pública del "
+                "servidor); usa ver_catalogo (texto)"
+            ),
+        }
 
     # ÚLTIMA MIRADA AL FRENO, con el PDF ya en la mano (META-5). Sin esto, el catálogo salía
     # aunque la dueña hubiera tomado el chat mientras el bot pensaba.

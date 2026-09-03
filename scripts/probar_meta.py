@@ -111,6 +111,7 @@ async def _limpiar() -> None:
         "aviso:pago_con_bot_apagado",
         f"aviso:comprobante_doc:{TEL_DOC}",
         "aviso:meta_fallo:131049",
+        "aviso:media_fallo:131053",  # el candado del aviso del catálogo fantasma (caso 3b)
         # Los candados del aviso nuevo (bug 1): sin soltarlos, la SEGUNDA corrida del día no
         # vería ningún WhatsApp y el banco saldría rojo por estar el código haciendo su trabajo.
         f"aviso:pago_en_chat_tomado:{TEL}",
@@ -389,6 +390,58 @@ async def caso_telemetria_de_calidad() -> None:
     await W._aplicar_estado({"clase": "estado", "wa_message_id": "wamid.CAL2",
                              "estado": "fallido", "error": '{"code":131047}'})
     check("✅ un fallo de un teléfono interno (__) no molesta a la dueña", not enviados, str(enviados))
+    async with factory() as s:
+        await s.execute(delete(Mensaje).where(Mensaje.cliente_telefono == TEL_INTERNO))
+        await s.commit()
+
+
+# ─── 3b) EL CATÁLOGO FANTASMA: UN `failed 131053` LE AVISA A LA DUEÑA ─
+
+async def caso_media_no_entregada() -> None:
+    print("\n3b) 📎 EL CATÁLOGO FANTASMA: un `failed 131053` (link muerto) le avisa a la dueña")
+    await _limpiar()
+    factory = get_session_factory()
+    async with factory() as s:
+        s.add(Cliente(telefono=TEL, nombre="Rosa"))
+        s.add(Mensaje(cliente_telefono=TEL, rol="assistant", contenido="(catálogo en PDF)",
+                      wa_message_id="wamid.MEDIA1", estado="enviado"))
+        s.add(Mensaje(cliente_telefono=TEL_INTERNO, rol="assistant", contenido="(catálogo en PDF)",
+                      wa_message_id="wamid.MEDIA2", estado="enviado"))
+        await s.commit()
+
+    check("el 131053 se lee igual de un `mensajes.error` que de un cuerpo de Graph",
+          mc.codigo_meta("131053: Media upload error") == 131053
+          and mc.codigo_meta('{"code":131053}') == 131053)
+
+    # El caso EXACTO del 2-sep: Meta aceptó el envío (200 + wa_message_id), y SEGUNDOS después
+    # mandó el `failed` porque no pudo bajar el PDF del link muerto. Hasta hoy eso moría en un log.
+    enviados.clear()
+    await W._aplicar_estado({"clase": "estado", "wa_message_id": "wamid.MEDIA1",
+                             "estado": "fallido",
+                             "error": '131053: Media upload error — {"code":131053}'})
+    check("🔴 el 131053 (Meta no pudo BAJAR el PDF del link) abre fila en la bandeja",
+          "media_no_entregada" in await _motivos(TEL), str(await _motivos(TEL)))
+    check("   ...y le sale el WhatsApp a la dueña (ya no hace falta una autopsia)",
+          bool(enviados), str(enviados))
+
+    # No inunda: el mismo código otra vez dentro de las 6 h es UN aviso, no dos.
+    enviados.clear()
+    await W._aplicar_estado({"clase": "estado", "wa_message_id": "wamid.MEDIA1",
+                             "estado": "fallido", "error": '{"code":131053}'})
+    check("🔴 el segundo 131053 seguido NO manda otro WhatsApp (candado de 6 h)",
+          not enviados, str(enviados))
+
+    # Un código de CALIDAD no entra por aquí (los conjuntos son disjuntos: cada `failed` dispara
+    # como mucho UNA de las dos telemetrías), y un teléfono interno jamás molesta a la dueña.
+    await _limpiar()
+    async with factory() as s:
+        s.add(Mensaje(cliente_telefono=TEL_INTERNO, rol="assistant", contenido="(catálogo)",
+                      wa_message_id="wamid.MEDIA2", estado="enviado"))
+        await s.commit()
+    enviados.clear()
+    await W._aplicar_estado({"clase": "estado", "wa_message_id": "wamid.MEDIA2",
+                             "estado": "fallido", "error": '{"code":131053}'})
+    check("✅ un 131053 de un teléfono interno (__) no molesta a la dueña", not enviados, str(enviados))
     async with factory() as s:
         await s.execute(delete(Mensaje).where(Mensaje.cliente_telefono == TEL_INTERNO))
         await s.commit()
@@ -843,6 +896,7 @@ async def main() -> None:
     await caso_interruptor_del_aviso_de_pago()
     await caso_ventana_de_la_duena()
     await caso_telemetria_de_calidad()
+    await caso_media_no_entregada()
     await caso_documento_no_es_pago()
     await caso_media_con_el_chat_tomado()
     await caso_webhook()

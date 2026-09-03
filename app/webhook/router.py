@@ -533,6 +533,7 @@ async def _aplicar_estado(ev) -> str:
     if estado == "fallido":
         logger.error("ENVÍO FALLIDO (%s): %s", wa_id, ev.get("error"))
         await _telemetria_de_calidad(wa_id, ev.get("error"))
+        await _avisar_media_no_entregada(wa_id, ev.get("error"))
     return "estado" if res.rowcount else "estado_sin_dueño"
 
 
@@ -619,6 +620,83 @@ async def _telemetria_de_calidad(wa_id: str, error: str | None) -> None:
         )
     except Exception:  # noqa: BLE001 — la telemetría NUNCA puede tumbar el webhook
         logger.exception("No se pudo procesar el fallo de calidad de Meta (%s)", wa_id)
+
+
+async def _avisar_media_no_entregada(wa_id: str, error: str | None) -> None:
+    """Un archivo (catálogo/foto) que Meta ACEPTÓ pero luego no pudo entregar no puede morir en un log.
+
+    🔴 Por qué existe (autopsia 2026-09-02, SESIONES (15)): el catálogo en PDF salía, Meta
+    contestaba 200 y SEGUNDOS después mandaba un `failed` con `131053 Media upload error` porque
+    no podía DESCARGAR el PDF del enlace (apuntaba al taller muerto). Eso dejaba
+    `mensajes.estado='fallido'` y el `logger.error("ENVÍO FALLIDO")` de arriba… que NADIE miraba:
+    hizo falta abrir la BD para encontrarlo. Ese es EXACTAMENTE el caso que `enviar_catalogo` y el
+    validador de `config.py` NO pueden atrapar: el link era `https://` y con forma buena, solo que
+    el host estaba muerto — no hay forma de saberlo sin que Meta lo intente y lo reporte.
+
+    A diferencia de los códigos de CALIDAD (que son del NÚMERO), esto casi siempre es del ENLACE:
+    PUBLIC_BASE_URL mal puesta o un host caído. Por eso avisa distinto, y por eso NO vive dentro de
+    `_telemetria_de_calidad` (los conjuntos de códigos son disjuntos: para un `failed` dado dispara
+    exactamente una de las dos, o ninguna).
+
+    Un aviso por código cada 6 h (candado, reusando el contador diario del anti-abuso), y —como toda
+    la telemetría de este archivo— jamás puede tumbar el webhook.
+    """
+    from sqlalchemy import select
+
+    from app.models import Mensaje
+    from app.services.db import get_session_factory
+    from app.services.meta_client import CODIGOS_DE_MEDIA, codigo_meta
+
+    try:
+        codigo = codigo_meta(error)
+        if codigo not in CODIGOS_DE_MEDIA:
+            return
+
+        # De quién era el mensaje: para no molestar por los teléfonos internos (simulador y
+        # bancos, que fallan a propósito) y para colgar la fila del chat correcto.
+        factory = get_session_factory()
+        async with factory() as session:
+            destino = (
+                await session.execute(
+                    select(Mensaje.cliente_telefono)
+                    .where(Mensaje.wa_message_id == wa_id).limit(1)
+                )
+            ).scalars().first()
+        if not destino or destino.startswith("__"):
+            return
+
+        from app.services import redis_client as rc
+        from app.workers.tasks import _avisar_a_la_duena
+
+        try:
+            n = await rc.contar_mensaje_dia(f"metafallo:{codigo}")
+        except Exception:  # noqa: BLE001 — sin contador el aviso sale igual
+            n = 0
+        logger.error(
+            "🔴 META NO PUDO ENTREGAR UN ARCHIVO — código %s, cliente %s, van %s hoy: %s. "
+            "Casi siempre es PUBLIC_BASE_URL mal puesta o el servidor caído.",
+            codigo, destino, n or "?", error,
+        )
+
+        await _avisar_a_la_duena(
+            destino,
+            motivo="media_no_entregada",
+            detalle=(
+                f"Un archivo (el catálogo o una foto) NO le llegó al cliente: WhatsApp no pudo "
+                f"descargarlo del enlace del servidor (código {codigo} de WhatsApp). Casi siempre "
+                "es que la dirección pública del bot (PUBLIC_BASE_URL) está mal puesta o el "
+                "servidor no responde. Avísale a Enova."
+            ),
+            mensaje_cliente="(WhatsApp no pudo entregar un archivo del bot)",
+            whatsapp=(
+                f"📎 Un archivo del bot NO le llegó a {destino}: WhatsApp no pudo descargarlo "
+                f"(código {codigo}). Suele ser la dirección pública del servidor, no el número. "
+                "Avísale a Enova."
+            ),
+            candado=(f"media_fallo:{codigo}", 21600),
+        )
+    except Exception:  # noqa: BLE001 — la telemetría NUNCA puede tumbar el webhook
+        logger.exception("No se pudo procesar el fallo de media de Meta (%s)", wa_id)
 
 
 def _fecha_meta(ts: str | None):
