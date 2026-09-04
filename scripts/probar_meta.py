@@ -55,8 +55,8 @@ TEL = "58999100001"          # el cliente de siempre
 TEL_DOC = "58999100002"      # el que manda un PDF
 TEL_MEDIA = "58999100003"    # el que pide fotos con el chat tomado
 DUENA = "58999100999"        # el teléfono "personal" de la dueña, para las pruebas
-TODOS = [TEL, TEL_DOC, TEL_MEDIA, DUENA]
 TEL_INTERNO = "__prueba_meta__"
+TODOS = [TEL, TEL_DOC, TEL_MEDIA, DUENA, TEL_INTERNO]
 
 # ⚠️ Ids ÚNICOS por corrida, igual que en `probar_fase2`: los candados de idempotencia
 # (`comprob:`, `cache:eco:`) recuerdan cada id en Redis durante 24 h. Con ids fijos, la segunda
