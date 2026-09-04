@@ -2406,6 +2406,115 @@ def _respuesta_registro(
     }
 
 
+# ─── EL CANDADO DEL PEDIDO DUPLICADO (2026-09-03) ─────────────────────────────────────
+#
+# 🔴 EL CASO REAL, verificado en la BD de pruebas ese mismo día: Maired pagó el pedido #2602
+# ($24, Binance), la dueña aprobó el pago (clic en «Pago aprobado»), el bot coordinó la
+# entrega… y al responderle "6pm" el modelo REGISTRÓ EL PEDIDO #2603 — idéntico, 22 minutos
+# después — y le generó el cobro: le volvió a mandar los datos de Binance a una clienta que
+# ACABABA de pagar. TODOS los candados del cobro funcionaron (generar_datos_pago rechaza
+# pedidos pagados; la red de datos bancarios solo deja pasar lo que una herramienta dio en el
+# turno): el hueco era que NADA impedía fabricar un pedido nuevo idéntico — y un pedido nuevo
+# es legítimamente cobrable. Es la familia del pedido duplicado #2074 (25-ago), ahora
+# disparada por el propio modelo después del pago. El prompt sugiere; esto es lo que impide.
+
+# La ventana se mide contra la ÚLTIMA ACTIVIDAD DE DINERO (el pago más nuevo del pedido, o su
+# creación si no tiene pagos), NO solo contra created_at: el flujo real es "cotizar hoy, pagar
+# mañana, coordinar en la noche" — anclada a la creación, el duplicado típico nacía justo fuera
+# de la ventana (cacería del 3-sep, hallazgos C1/C14/C22).
+_VENTANA_DUPLICADO_MIN = 24 * 60
+
+# Estados con DINERO COMPROMETIDO por sí solos. Un pedido abierto (pendiente/esperando_pago)
+# también cuenta si tiene un pago vivo encima (reportado/parcial/confirmado).
+_ESTADOS_COMPROMETIDOS = ("pagado", "confirmado", "preparando")
+_PAGOS_VIVOS = ("reportado", "parcial", "confirmado")
+
+
+def _firma_de_items(items) -> tuple:
+    """La identidad COMPARABLE de un pedido: CUÁNTO de CADA VARIANTE — y nada más.
+
+    Sirve igual para los `items` del modelo y para el JSON de `pedidos.items`. Se ACUMULA la
+    cantidad por variante (una línea de 2 == dos líneas de 1: la partición no es identidad —
+    cacería 3-sep, C15) y las `opciones` NO entran a propósito (son texto libre que el modelo
+    REDACTA distinto en cada llamada: 'queso de búfala' vs 'relleno de queso de búfala' era la
+    puerta de escape del duplicado — C2/C13). `presentacion` y `precio_unitario` tampoco:
+    derivan del variante_id."""
+    acumulado: dict[int, int] = {}
+    for it in items or []:
+        try:
+            vid = int(it.get("variante_id"))
+        except (TypeError, ValueError):
+            continue
+        if vid <= 0:
+            continue
+        try:
+            cant = int(it.get("cantidad", 1))
+        except (TypeError, ValueError):
+            cant = 0
+        acumulado[vid] = acumulado.get(vid, 0) + cant
+    return tuple(sorted(acumulado.items()))
+
+
+async def _pedido_igual_reciente(session, telefono, items):
+    """El pedido de este cliente con DINERO COMPROMETIDO y estas MISMAS cantidades — o None.
+
+    Solo miran los pedidos comprometidos: los que ya están pagado/confirmado/preparando, o los
+    abiertos que tienen un pago vivo encima. Los ABIERTOS SIN PAGO quedan fuera A PROPÓSITO
+    (cacería 3-sep, C12/C18 — el hallazgo crítico contra la v1 de este candado): re-registrar
+    los mismos items para AGREGAR la zona o la fecha es el flujo LEGÍTIMO que las propias notas
+    de la caja ordenan, y de ese caso se encarga la reutilización del pedido abierto más abajo.
+    'cancelado' y 'entregado' tampoco cuentan: eso sí se puede volver a comprar.
+
+    Si la lectura falla, None: este candado protege contra un duplicado, jamás puede frenar
+    una venta legítima por un hipo de la BD (el lado del error es vender, no bloquear)."""
+    from datetime import timedelta
+
+    from app.models import now_utc
+
+    firma = _firma_de_items(items)
+    if not firma:
+        return None  # sin variantes legibles no hay identidad; las validaciones de abajo hablan
+    try:
+        candidatos = (
+            await session.execute(
+                select(Pedido)
+                .where(
+                    Pedido.cliente_telefono == telefono,
+                    Pedido.estado.notin_(("cancelado", "entregado")),
+                )
+                .order_by(Pedido.created_at.desc())
+            )
+        ).scalars().all()
+        if not candidatos:
+            return None
+        pagos = (
+            await session.execute(
+                select(Pago.pedido_id, Pago.created_at).where(
+                    Pago.pedido_id.in_([p.id for p in candidatos]),
+                    Pago.estado.in_(_PAGOS_VIVOS),
+                )
+            )
+        ).all()
+        pago_mas_nuevo: dict[int, object] = {}
+        for pid, creado in pagos:
+            if creado is not None and (pid not in pago_mas_nuevo or creado > pago_mas_nuevo[pid]):
+                pago_mas_nuevo[pid] = creado
+        desde = now_utc() - timedelta(minutes=_VENTANA_DUPLICADO_MIN)
+        for p in candidatos:
+            comprometido = p.estado in _ESTADOS_COMPROMETIDOS or p.id in pago_mas_nuevo
+            if not comprometido:
+                continue
+            actividad = pago_mas_nuevo.get(p.id) or p.created_at
+            if actividad is None or actividad < desde:
+                continue
+            if _firma_de_items(p.items or []) == firma:
+                return p
+    except Exception:  # noqa: BLE001 — sin lectura no hay candado, pero la venta sigue
+        logger.exception("_pedido_igual_reciente: no se pudo comparar; se deja registrar")
+        return None
+    return None
+
+
 async def registrar_pedido(
     session, telefono, items, notas=None, entrega=None, entrega_fecha=None, zona_id=None
 ):
@@ -2423,6 +2532,36 @@ async def registrar_pedido(
     ).scalar_one_or_none()
     if cliente is None:
         session.add(Cliente(telefono=telefono))
+
+    # ── UN PEDIDO SIN PRODUCTOS NO EXISTE (cacería 3-sep, C4/C17): con items=[] el bucle de
+    # validaciones no itera y antes esto podía VACIAR un pedido abierto (items=[] y total=solo
+    # el flete) o crear uno de $0. El panel ya lo validaba (router.py); la tool, no.
+    if not items:
+        return {
+            "ok": False,
+            "nota": (
+                "un pedido sin productos no existe: NO registres listas vacías. Pregúntale al "
+                "cliente qué quiere llevar y registra el pedido con sus items."
+            ),
+        }
+
+    # ── EL CANDADO DEL DUPLICADO: dinero comprometido + mismas cantidades = no se repite ──
+    repetido = await _pedido_igual_reciente(session, telefono, items)
+    if repetido is not None:
+        return {
+            "ok": False,
+            "nota": (
+                f"⛔ DUPLICADO: este cliente YA tiene el pedido #{repetido.id} con estas mismas "
+                f"cantidades y su dinero está en curso o confirmado (está '{repetido.estado}'). "
+                "NO registres otro, NO lo cobres de nuevo y NO le pidas otra captura. Si solo "
+                "estás confirmando la hora, la fecha o la entrega de ESE pedido, no hay nada "
+                "que registrar: confírmaselo y sigue. Y si el cliente dijo con todas sus letras "
+                "que quiere comprar OTRA tanda igual habiendo pagado ya, llama a `pedir_ayuda` "
+                "(motivo='pedido_repetido', detalle con lo que pidió) para que la dueña lo "
+                "maneje — esa venta no se registra sola."
+            ),
+            "pedido_id": repetido.id,
+        }
 
     # ── LA ZONA (si la mandó): de la lista CERRADA, y su costo lo pone el CÓDIGO ──
     zona = None
@@ -2958,6 +3097,48 @@ def _matchear_metodo(texto, metodos):
     return None, [m.titulo for m in candidatos]
 
 
+def _nota_cobro_metodo_elegido(titulo: str, tipo: str, otros: list[str]) -> str:
+    """Instrucción de entrega para el método elegido, sin confundir efectivo con un pago digital.
+
+    Efectivo no tiene cuenta ni comprobante previo que enviar: pedirle una captura dejaba al
+    cliente en un callejón imposible. El pedido queda `esperando_pago` para que la dueña confirme
+    el dinero cuando lo reciba; los métodos digitales conservan el flujo de comprobante."""
+    cambio = (
+        " Solo si el cliente CAMBIA de método, vuelve a llamarme con el nuevo `metodo` "
+        "(los otros son: " + " · ".join(otros) + ")."
+        if otros
+        else ""
+    )
+    if _tipo_canonico(tipo) == "efectivo":
+        return (
+            f"El cliente ELIGIÓ pagar por {titulo} y quedó GUARDADO en el pedido: NO le "
+            "vuelvas a ofrecer los demás métodos ni la otra moneda. Presenta el cobro "
+            "copiando EXACTO `resumen_cobro` (NO recalcules). Es EFECTIVO: no hay cuenta, "
+            "teléfono, correo ni wallet que enviar, y NO debes pedir captura de comprobante. "
+            "Confirma con naturalidad que ese es el monto que pagará en efectivo al recibir "
+            "o retirar su pedido; la dueña confirmará el pago cuando reciba el dinero. Si "
+            "pregunta de dónde sale el monto, pásale `desglose_efectivo` una línea debajo "
+            "de otra, copiado TAL CUAL."
+            + cambio
+        )
+    return (
+        f"El cliente ELIGIÓ pagar por {titulo} y quedó GUARDADO en el pedido: NO le "
+        "vuelvas a ofrecer los demás métodos ni la otra moneda. Presenta el cobro "
+        "copiando EXACTO `resumen_cobro` (NO recalcules) y dale los datos de "
+        "`metodos_de_pago` copiados TAL CUAL. Al entregarlos, DI QUÉ MÉTODO ES por su "
+        "nombre (el campo `metodo`: 'Pago Móvil', 'Zelle'…) y pon cada dato con su "
+        "etiqueta en su propia línea (cédula, teléfono, banco…), no tres números pegados. "
+        "Pide la captura del comprobante."
+        + (
+            " Si pregunta de dónde sale el monto, pásale `desglose_efectivo` una línea "
+            "debajo de otra, copiado TAL CUAL."
+            if _MONEDA_POR_TIPO.get(_tipo_canonico(tipo)) == "usd"
+            else ""
+        )
+        + cambio
+    )
+
+
 async def generar_datos_pago(session, telefono, pedido_id=None, metodo=None):
     """Calcula el monto en Bs (tasa del dia), deja el pedido en 'esperando_pago'
     y devuelve el cobro. En DOS pasos (rama B, 31-ago): sin `metodo`, el cobro completo y los
@@ -3272,27 +3453,7 @@ async def generar_datos_pago(session, telefono, pedido_id=None, metodo=None):
             # decir que eso es un Pago Móvil es la forma más fácil de que el cliente pague mal
             # (o no pague). El dato sigue saliendo TAL CUAL de la herramienta: esto es solo
             # ponerle su nombre delante.
-            "nota": (
-                f"El cliente ELIGIÓ pagar por {titulo} y quedó GUARDADO en el pedido: NO le "
-                "vuelvas a ofrecer los demás métodos ni la otra moneda. Presenta el cobro "
-                "copiando EXACTO `resumen_cobro` (NO recalcules) y dale los datos de "
-                "`metodos_de_pago` copiados TAL CUAL. Al entregarlos, "
-                "DI QUÉ MÉTODO ES por su nombre (el campo `metodo`: 'Pago Móvil', 'Zelle'…) "
-                "y pon cada dato con su etiqueta en su propia línea (cédula, teléfono, "
-                "banco…), no tres números pegados. Pide la captura del comprobante."
-                + (
-                    " Si pregunta de dónde sale el monto, pásale `desglose_efectivo` una "
-                    "línea debajo de otra, copiado TAL CUAL."
-                    if moneda == "usd"
-                    else ""
-                )
-                + (
-                    " Solo si el cliente CAMBIA de método, vuelve a llamarme con el nuevo "
-                    "`metodo` (los otros son: " + " · ".join(otros) + ")."
-                    if otros
-                    else ""
-                )
-            ),
+            "nota": _nota_cobro_metodo_elegido(titulo, elegido.tipo, otros),
         }
         if moneda == "usd":
             resultado["monto_usd_divisas"] = float(monto_usd_divisas)
@@ -4142,6 +4303,19 @@ async def enviar_catalogo(session, telefono):
             url=link,
             respuesta=resp,
         )
+
+    # 🔒 CANDADO INTRA-TURNO (cacería 3-sep, C19 — espejo exacto del de fotos): si el modelo
+    # llama la herramienta DOS veces en el mismo turno, sin esto se encolaban DOS PDFs y ambos
+    # salían detrás del texto (la cola no de-duplica, y la fila de `mensajes` que la memoria
+    # miraría se escribe recién al vaciar la cola).
+    if cola_media.ya_encolada("catálogo en PDF"):
+        return {
+            "ok": True,
+            "nota": (
+                "el catálogo YA va saliendo en este mismo turno: NO vuelvas a llamar la "
+                "herramienta ni le digas que se lo mandaste dos veces"
+            ),
+        }
 
     # 🔴 EL TEXTO SALE PRIMERO, y este es EL caso canónico de los documentos de Whuilianny:
     #     [00:54] "Hola carlos buenas noches bendiciones."

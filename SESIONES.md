@@ -24,6 +24,44 @@
 
 ---
 
+## 2026-09-03 (21) — 🧠 LA INTENCIÓN ACTUAL MANDA + 🔒 DUPLICADO v2 + 💵 EFECTIVO COHERENTE (PR #24)
+
+**Por qué el bot estaba respondiendo tan mal:** la conversación real de pruebas demostró que
+una pregunta nueva (*"Recomiéndame algo para la cena"*) seguía atada a las empanadas habladas
+antes. El hilo convertía masa/sabor viejos en estado vinculante y las redes de asesoría,
+cierre y reapertura corregían el mismo turno en direcciones distintas. La telemetría confirmó
+entre **2 y 6 llamadas al modelo por un solo mensaje** (hasta 153.216 tokens de entrada), sin
+resolver la pregunta. A las 19:29 ET se sumó otro factor: Sonnet empezó a devolver **HTTP 402**
+por saldo casi agotado y el fallback contestó con GPT-4.1; `/salud` quedó degradado con
+`saldo_ia` en **$0,6341**. Eso es operación, no un defecto que deba esconder el código.
+
+**Arreglo de arquitectura en esta rama:** una asesoría explícita ahora abre una frontera de
+intención: no destila elecciones anteriores como HECHOS, inyecta la prioridad del mensaje
+actual y ejecuta la red de asesoría antes de las redes de cierre/reapertura. Consulta catálogo
+o ficha, recomienda 1–2 opciones concretas y espera la elección antes de pedir entrega o cobro.
+El caso literal quedó como regresión: borrador malo → consulta → recomendación, **3 llamadas y
+un solo aviso interno**, sin reabrir la venta anterior.
+
+**Pedido duplicado #2603, candado v2:** la ventana ahora se ancla a la última actividad de
+dinero durante 24 h; solo bloquea pedidos con dinero comprometido; acumula cantidades por
+variante y no permite escapar con paráfrasis en `opciones`; rechaza `items=[]`; una segunda
+tanda idéntica ya pagada pasa a la dueña mediante `pedir_ayuda`. El estado `pagado` deja de
+empujar *"pedido nuevo"*: hora y entrega continúan en el pedido pagado, sin registrar ni cobrar
+otra vez. También se de-duplica el PDF si el modelo llama dos veces en el mismo turno.
+
+**Efectivo:** la personalidad y el cálculo aceptaban efectivo en dólares con 20%, pero la tabla
+activa no tenía esa fila; por eso el bot lo negó. La migración 037 lo siembra solo si falta y
+sin duplicar ni reactivar decisiones existentes. El efectivo ya no pide cuenta ni captura de
+comprobante: informa el monto calculado y queda pendiente de confirmación de la dueña cuando
+reciba el dinero. Los métodos digitales conservan su comprobante.
+
+**Verificación local:** suite completa en verde, `ruff --no-cache` verde y `git diff --check`
+verde. Los dos fallos de lectura UTF-8 de los bancos en Windows quedaron corregidos. **Aún no
+desplegado**: primero se sube al PR #24; para una prueba viva válida hay que recargar OpenRouter,
+desplegar manualmente en Enova y repetir los casos exactos. Producción no se tocó.
+
+---
+
 ## 2026-09-03 (20) — 🎬 EL VIDEO QUE NUNCA LLEGÓ + 📸 LA FOTO PRINCIPAL (PRs #21, #22 y panel #1)
 
 **Además esta sesión: el resolvedor (#20) quedó DESPLEGADO en pruebas** (deploy manual por la API

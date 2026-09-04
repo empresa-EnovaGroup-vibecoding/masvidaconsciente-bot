@@ -193,7 +193,7 @@ def test_ningun_banco_se_queda_huerfano():
     import pathlib
 
     raiz = pathlib.Path(__file__).resolve().parent.parent
-    arbol = ast.parse((raiz / "scripts" / "correr_bancos.py").read_text())
+    arbol = ast.parse((raiz / "scripts" / "correr_bancos.py").read_text(encoding="utf-8"))
     lista = []
     for n in ast.walk(arbol):
         if isinstance(n, ast.Assign) and any(getattr(x, "id", "") == "BANCOS" for x in n.targets):
