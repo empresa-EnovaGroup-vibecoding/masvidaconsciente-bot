@@ -206,6 +206,30 @@ def test_ningun_banco_se_queda_huerfano():
     )
 
 
+def test_el_banco_meta_limpia_su_telefono_interno_antes_de_reutilizar_el_wa_id():
+    """🔴 Post-deploy 3-sep: `probar_meta` inserta `wamid.MEDIA2` dos veces dentro de la
+    misma corrida, con `_limpiar()` entre ambas. `TEL_INTERNO` no estaba en `TODOS`, así que la
+    primera fila sobrevivía y la segunda chocaba con `ux_mensajes_wa_id`. El banco era rojo por
+    su propia basura aunque el producto estuviera sano.
+    """
+    import ast
+    import pathlib
+
+    raiz = pathlib.Path(__file__).resolve().parent.parent
+    arbol = ast.parse(
+        (raiz / "scripts" / "probar_meta.py").read_text(encoding="utf-8")
+    )
+    todos = next(
+        n.value for n in ast.walk(arbol)
+        if isinstance(n, ast.Assign)
+        and any(getattr(t, "id", "") == "TODOS" for t in n.targets)
+    )
+    nombres = {e.id for e in todos.elts if isinstance(e, ast.Name)}
+    assert "TEL_INTERNO" in nombres, (
+        "_limpiar() vuelve a dejar wamid.MEDIA2 vivo entre los dos casos del banco Meta"
+    )
+
+
 # ══════════════════════════════════════════════════════════════════════════════════
 #  6 · 🪦 EL RECIBO DUPLICADO — la red de la INSERCIÓN se quitó el 2026-08-24
 # ══════════════════════════════════════════════════════════════════════════════════
