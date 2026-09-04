@@ -266,6 +266,79 @@ async def test_producto_concreto_no_dispara_por_la_puerta_real():
     assert salida == texto
 
 
+async def test_recomendacion_nueva_no_queda_secuestrada_por_la_compra_anterior(monkeypatch):
+    """🔴 CASO REAL DEL 3-SEP: venían hablando de un paquete de empanadas y la clienta
+    cambió la intención con "Recomiéndame algo para la cena". El bot ignoró la pregunta,
+    siguió cerrando las empanadas y las redes de cierre/reapertura encadenaron llamadas.
+
+    La asesoría explícita es una frontera: NO destila elecciones viejas como estado, corrige
+    primero la respuesta de memoria, consulta y entrega una recomendación concreta en tres
+    llamadas (borrador + tool + respuesta), sin pasar por las redes de la venta anterior.
+    """
+    destilaciones = {"hilo": 0, "variante": 0}
+
+    async def _hilo(*_a, **_kw):
+        destilaciones["hilo"] += 1
+        return [("Empanadas de masa de yuca o de masa de plátano", "plátano")]
+
+    async def _variante(*_a, **_kw):
+        destilaciones["variante"] += 1
+        return [("Empanadas Horneadas", "sabor", "queso de búfala")]
+
+    monkeypatch.setattr(ag, "hilo_de_la_venta", _hilo)
+    monkeypatch.setattr(ag, "elecciones_de_variante", _variante)
+
+    historial = [
+        {"role": "user", "content": "Tienes empanadas de plátano?"},
+        {"role": "assistant", "content": "Sí 💚 cuántos paquetes te preparo?"},
+        {"role": "user", "content": "Un paquete. Me puedes mostrar fotos?"},
+        {"role": "assistant", "content": "Claro. Un paquete de empanadas de plátano."},
+    ]
+    pendientes = [
+        _msg("Perfecto, Enova! Para cuándo lo quieres y lo retiras o te lo llevo?"),
+        _msg("", tools=[("ver_catalogo", {"busqueda": "cena"})]),
+        _msg(
+            "Para cenar te recomiendo las Empanadas de yuca o el Pan keto 💚 "
+            "quieres que te cuente cuál te conviene más?"
+        ),
+    ]
+    llamadas_llm = 0
+    llamadas_tool: list[str] = []
+    ultima_lista: list[dict] = []
+
+    async def llm(messages, tools, model):
+        nonlocal llamadas_llm, ultima_lista
+        llamadas_llm += 1
+        ultima_lista = messages
+        return {"choices": [{"message": pendientes.pop(0)}]}
+
+    async def ejecutar(nombre, args, telefono):
+        llamadas_tool.append(nombre)
+        return {"ok": True, "productos": ["Empanadas de yuca", "Pan keto"]}
+
+    salida = await ag.responder(
+        "584240000000", "Recomiéndame algo para la cena", historial, "Enova",
+        llm=llm, ejecutar=ejecutar,
+    )
+
+    assert destilaciones == {"hilo": 0, "variante": 0}, (
+        "una asesoría nueva no puede convertir elecciones viejas en estado vinculante"
+    )
+    prompt = str(ultima_lista[0].get("content"))
+    assert "INTENCIÓN ACTUAL DEL CLIENTE" in prompt
+    assert "EL HILO DE LA VENTA" not in prompt
+    avisos = [
+        str(m.get("content") or "") for m in ultima_lista
+        if m.get("role") == "user" and str(m.get("content") or "").startswith("[SISTEMA]")
+    ]
+    assert len(avisos) == 1 and "RECOMENDACIÓN" in avisos[0]
+    assert "YA LE PREGUNTASTE" not in avisos[0] and "VOLVIENDO A PREGUNTAR" not in avisos[0]
+    assert llamadas_llm == 3
+    assert llamadas_tool == ["ver_catalogo"]
+    assert salida.startswith("Para cenar te recomiendo")
+    assert "para cuándo" not in salida.lower() and "cobro" not in salida.lower()
+
+
 # ══════════════════════════════════════════════════════════════════════════════════
 # LA ELECCIÓN — `_elige_entre_opciones` (fija además la lección L20: historial vacío)
 # ══════════════════════════════════════════════════════════════════════════════════

@@ -244,18 +244,16 @@ def test_los_datos_de_pago_se_entregan_ETIQUETADOS_y_con_su_metodo():
     """Del análisis: Whuilianny los manda secos ("Datos. [cédula] [teléfono] Banesco") porque al
     otro lado hay alguien que ya sabe qué es cada número. El bot le escribe a gente que NO lo
     sabe: tres números pegados es la forma más fácil de que el cliente pague mal."""
-    import inspect
-
-    from app.agent.tools import generar_datos_pago
+    from app.agent.tools import _nota_cobro_metodo_elegido
 
     # 🔴 SE MIRA LA `nota` QUE DEVUELVE LA HERRAMIENTA, no la descripción del schema. La primera
     # versión de este test miraba el schema y pasaba… midiendo otra cosa: el schema dice de dónde
     # salen los datos, y la instrucción de ETIQUETARLOS vive en la `nota` del resultado, que es
     # lo que el modelo lee en el turno del cobro.
-    fuente = inspect.getsource(generar_datos_pago)
-    assert "DI QUÉ MÉTODO ES por su nombre" in fuente
-    assert "cada dato con su etiqueta en su propia línea" in fuente
-    assert "no tres números pegados" in fuente
+    nota = _nota_cobro_metodo_elegido("Pago Móvil", "pago_movil", ["Zelle"])
+    assert "DI QUÉ MÉTODO ES por su nombre" in nota
+    assert "cada dato con su etiqueta en su propia línea" in nota
+    assert "no tres números pegados" in nota
 
     esquema = next(
         t for t in TOOL_SCHEMAS if t["function"]["name"] == "generar_datos_pago"

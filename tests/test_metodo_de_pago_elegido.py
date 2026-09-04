@@ -32,6 +32,7 @@ from app.agent.tools import (
     _MONEDA_POR_TIPO,
     _PARAMS_DECLARADOS,
     _matchear_metodo,
+    _nota_cobro_metodo_elegido,
     _tipo_canonico,
 )
 
@@ -134,6 +135,34 @@ def test_dolares_fisicos_es_el_efectivo():
     m, candidatos = _matchear_metodo("dolares fisicos", _METODOS)
     assert m is _METODOS[3]
     assert candidatos == []
+
+
+def test_el_efectivo_no_pide_un_comprobante_que_no_existe():
+    nota = _nota_cobro_metodo_elegido(
+        "Efectivo en dólares", "efectivo", ["Zelle", "Binance"]
+    )
+    assert "NO debes pedir captura" in nota
+    assert "no hay cuenta" in nota
+    assert "al recibir o retirar" in nota
+    assert "la dueña confirmará el pago" in nota
+
+
+def test_un_metodo_digital_sigue_pidiendo_el_comprobante():
+    nota = _nota_cobro_metodo_elegido("Zelle", "zelle", ["Efectivo"])
+    assert "Pide la captura del comprobante" in nota
+    assert "datos de `metodos_de_pago`" in nota
+
+
+def test_la_migracion_siembra_efectivo_sin_duplicarlo():
+    from pathlib import Path
+
+    sql = (
+        Path(__file__).resolve().parent.parent / "migrations" / "037_efectivo_coherente.sql"
+    ).read_text(encoding="utf-8")
+    assert "INSERT INTO metodos_pago" in sql
+    assert "WHERE NOT EXISTS" in sql
+    assert "LOWER(TRIM(tipo)) = 'efectivo'" in sql
+    assert "captura de comprobante" in sql
 
 
 # ══════════════════════════════════════════════════════════════════════════════════

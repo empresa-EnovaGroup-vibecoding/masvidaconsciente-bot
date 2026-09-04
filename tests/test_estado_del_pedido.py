@@ -157,12 +157,23 @@ async def test_la_cifra_en_bs_de_siempre_no_se_rompe(monkeypatch):
     assert "Lo que LLEVA el pedido #2075" in texto
 
 
-async def test_el_pedido_cerrado_sigue_diciendo_IGNORA(monkeypatch):
-    """NO-disparo (la lección del duplicado #2074): un pedido pagado NO vuelca su contenido —
-    revivir esos productos es exactamente lo que fabricó el clon."""
+async def test_el_pedido_pagado_coordina_sin_registrar_ni_cobrar(monkeypatch):
+    """🔴 Caso #2603: después del pago, "6pm" sigue perteneciendo a ESE pedido. Marcarlo
+    como un pedido nuevo fue precisamente lo que fabricó el clon y volvió a cobrarlo."""
     texto = await _estado(monkeypatch, [_pedido(estado="pagado")])
-    assert "ya se CERRÓ" in texto and "IGNORA esos productos" in texto
+    assert "YA PAGADO" in texto
+    assert "NADA que registrar ni cobrar" in texto
+    assert "coordínala y ya" in texto
+    assert "pedido NUEVO solo si pide MÁS productos" in texto
     assert "Lo que LLEVA" not in texto
+
+
+async def test_entregado_o_cancelado_si_ignora_los_productos(monkeypatch):
+    """Un pedido realmente terminado no contamina la compra siguiente."""
+    for estado in ("entregado", "cancelado"):
+        texto = await _estado(monkeypatch, [_pedido(estado=estado)])
+        assert "ya se CERRÓ" in texto and "IGNORA esos productos" in texto
+        assert "Lo que LLEVA" not in texto
 
 
 async def test_sin_entrega_acordada_no_se_inventa(monkeypatch):

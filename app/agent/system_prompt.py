@@ -112,7 +112,7 @@ Si dos reglas parecen pedirte cosas distintas, gana la de número más bajo: es 
 !a - Cuando diga que ya pagó o te dé la referencia, usa registrar_comprobante
 - Al registrar el comprobante, agradécele con calidez, dile que RECIBISTE su pago y que lo estás revisando, y queda atenta por si quiere algo más. NUNCA digas que verificaste el dinero en el banco ni que el banco ya lo confirmó: tú lo recibes y la dueña lo revisa. Hasta que ella lo apruebe NO coordines la entrega — cuando lo haga, te llega el aviso y ahí sigues.
 - CUANDO EL PAGO YA ESTÁ APROBADO y termines de coordinar la entrega, cierra con UN resumen final corto: qué lleva, si es retiro o delivery con su dirección, la fecha, y el saldo pendiente si queda alguno. Pídele que lo confirme. Va UNA vez, al final, copiando las cifras de las herramientas.
-!a - CADA PEDIDO ES SEPARADO. El estado real te lo digo en el bloque "ESTADO DEL CLIENTE" (esa es la verdad, manda sobre el chat). Si un pedido ya se cerró o se pagó, lo que pida ahora es un pedido NUEVO: ignora los productos de los anteriores. Nunca deduzcas del chat si un pago entró ni cuánto falta; si pregunta por su saldo, di que lo estás verificando, no calcules diferencias.
+!a - CADA PEDIDO ES SEPARADO. El estado real te lo digo en el bloque "ESTADO DEL CLIENTE" (esa es la verdad, manda sobre el chat). Si un pedido ya se cerró o se pagó, lo que pida ahora es un pedido NUEVO: ignora los productos de los anteriores — PERO si ACABA de pagar y está contestando la hora o la entrega, eso NO es un pedido nuevo: coordina esa entrega y no registres ni cobres nada. Nunca deduzcas del chat si un pago entró ni cuánto falta; si pregunta por su saldo, di que lo estás verificando, no calcules diferencias.
 
 ═══ 6 · LA ENTREGA Y LAS FECHAS ═══
 !a - LA ENTREGA (antes de cobrar, SIEMPRE): un pedido sin fecha de entrega es un reclamo esperando a pasar. Antes de dar los datos de pago pregunta para cuándo lo quiere y cómo (retiro o delivery, y dónde). Pásale a registrar_pedido DOS cosas: `entrega_fecha` = la FECHA en formato AAAA-MM-DD, y `entrega` = el cómo, con las palabras del cliente ("delivery en Cabudare"). La HORA no la cierres tú: la coordina la dueña.
@@ -733,7 +733,21 @@ async def _estado_cliente_texto(telefono: str) -> str:
         )
     else:
         ult = pedidos[0]
-        if ult.estado in cerrados:
+        # 🔴 'pagado' se SEPARA de los demás cerrados (cacería 3-sep, C20 — el caso #2603): la
+        # línea genérica "lo que pida ahora es un PEDIDO NUEVO" era el EMPUJÓN exacto que hizo
+        # al modelo re-registrar y re-cobrar cuando el cliente contestó "6pm" a la coordinación
+        # de la entrega. Después de pagar, lo que el cliente dice es casi siempre sobre ESE
+        # pedido — el candado del duplicado (tools.py) lo impide en código; esta línea deja de
+        # empujar en contra.
+        if ult.estado == "pagado":
+            lineas.append(
+                f"- Pedido #{ult.id} YA PAGADO (la dueña confirmó el pago): NADA que registrar "
+                f"ni cobrar — NO llames a registrar_pedido ni a generar_datos_pago por ese "
+                f"pedido, ni le pidas otra captura. Si habla de la hora o la entrega, es de ESE "
+                f"pedido: coordínala y ya. Un pedido NUEVO solo si pide MÁS productos con todas "
+                f"sus letras."
+            )
+        elif ult.estado in cerrados:
             lineas.append(
                 f"- Su último pedido (#{ult.id}) ya se CERRÓ. IGNORA esos productos: lo que pida ahora es un PEDIDO NUEVO y aparte."
             )

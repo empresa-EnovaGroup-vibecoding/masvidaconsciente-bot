@@ -170,7 +170,9 @@ def test_las_frases_del_cobro_que_protege_el_banco_siguen_LITERALES():
     import ast
     import pathlib
 
-    fuente = (pathlib.Path(__file__).parent.parent / "scripts" / "probar_herramientas.py").read_text()
+    fuente = (
+        pathlib.Path(__file__).parent.parent / "scripts" / "probar_herramientas.py"
+    ).read_text(encoding="utf-8")
     arbol = ast.parse(fuente)
     frases = next(
         [e.value for e in n.value.elts]

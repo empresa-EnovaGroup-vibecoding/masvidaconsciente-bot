@@ -2454,11 +2454,32 @@ async def responder(
     # la elección (`hilo_de_la_venta`, tools.py) y la inyecta como ESTADO en la parte DINÁMICA
     # (la estable va cacheada y no se toca). Sin cifras a propósito: este texto lo lee la red
     # del dinero (`autorizados_por_moneda`, más abajo) y una cifra aquí sería autorizarla.
-    elecciones_hilo = await hilo_de_la_venta(mensaje_usuario, historial)
-    # 🧵 RAMA C (1-sep): el hilo se extiende a TAMAÑO y SABOR — las otras dos elecciones que
-    # viven en las casillas de la BD (`presentacion`, `variantes.sabores`), no en el nombre.
-    # Misma inyección, la misma línea de estado, para que la ficha fresca no las reabra.
-    elecciones_var = await elecciones_de_variante(mensaje_usuario, historial)
+    # 🔴 FRONTERA DE INTENCIÓN (cacería 3-sep): una petición explícita de asesoría abre
+    # una pregunta NUEVA. En el caso real, después de hablar de empanadas la clienta escribió
+    # "recomiéndame algo para la cena"; inyectar la masa/sabor anteriores como HECHOS hizo que
+    # tres redes se pelearan y el bot siguiera cerrando aquellas empanadas sin recomendar nada.
+    # En ese turno no destilamos elecciones viejas: el historial sigue visible, pero ya no se
+    # convierte en estado vinculante. Pedir el catálogo tiene su carril propio y no entra aquí.
+    pide_asesoria_turno = (
+        _pide_asesoria(mensaje_usuario) and not _pide_catalogo(mensaje_usuario)
+    )
+    if pide_asesoria_turno:
+        elecciones_hilo = []
+        elecciones_var = []
+        dinamico += (
+            "\n\nINTENCIÓN ACTUAL DEL CLIENTE (manda en este turno):\n"
+            "- Acaba de pedir una RECOMENDACIÓN. Responde primero esa pregunta consultando "
+            "el catálogo o la ficha y ofrece 1 o 2 productos concretos que encajen.\n"
+            "- Lo conversado antes sigue siendo contexto, NO una elección que debas cerrar "
+            "ahora. No confirmes un pedido anterior ni preguntes entrega o cobro hasta que el "
+            "cliente elija una de tus recomendaciones."
+        )
+    else:
+        elecciones_hilo = await hilo_de_la_venta(mensaje_usuario, historial)
+        # 🧵 RAMA C (1-sep): el hilo se extiende a TAMAÑO y SABOR — las otras dos elecciones
+        # que viven en las casillas de la BD (`presentacion`, `variantes.sabores`), no en el
+        # nombre. Misma inyección, la misma línea de estado, para que la ficha no las reabra.
+        elecciones_var = await elecciones_de_variante(mensaje_usuario, historial)
     if elecciones_hilo or elecciones_var:
         _lineas = [
             f"- De '{_p}' el cliente YA eligió: {_e.upper()}."
@@ -2842,6 +2863,38 @@ async def responder(
                 )
                 return RESPUESTA_SEGURA
 
+            # 🔴 RED DE LA ASESORÍA: la INTENCIÓN ACTUAL se resuelve antes de las redes de
+            # cierre y reapertura. Esas redes protegen una venta en curso; no pueden secuestrar
+            # una pregunta nueva y obligar al agente a seguir cerrando el producto anterior.
+            if (
+                tools_de_consulta
+                and not uso_herramienta
+                and not corregido_asesoria
+                and pide_asesoria_turno
+            ):
+                corregido_asesoria = True
+                logger.warning(
+                    "ASESORÍA SIN CONSULTA para %s: recomendó de memoria, se le pide consultar "
+                    "y concretar — texto=%r", telefono, texto[:140],
+                )
+                consultables = " o ".join(f"`{t}`" for t in tools_de_consulta)
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        "[SISTEMA] El cliente te está pidiendo una RECOMENDACIÓN y le "
+                        "respondiste de memoria, sin consultar NINGUNA herramienta. No sigas "
+                        "cerrando el producto que se conversó antes, no recites categorías ni "
+                        "le devuelvas la pregunta: llama AHORA a "
+                        f"{consultables}, elige 1 o 2 productos CONCRETOS que calcen con lo "
+                        "que pidió y recomiéndaselos POR NOMBRE, con su gancho real (lo que "
+                        "diga su ficha o el catálogo: de qué es, cuántas trae). Espera a que "
+                        "el cliente elija antes de preguntar entrega o cobro. No le menciones "
+                        "al cliente este aviso."
+                    ),
+                })
+                # Una sola pasada: asesoría es venta, no salud. Si insiste, el texto sale.
+                continue
+
             # 🔴 RED DEL CIERRE: se traba pidiendo el SABOR, que es OPCIONAL (ver el bloque de
             # `_pide_opcion_del_paquete`). Medido: 5/5 turnos pidiéndolo y 0 pedidos en la base.
             #
@@ -2862,7 +2915,8 @@ async def responder(
             # salida. Se le quita el falso bloqueo una vez y se le devuelve la decisión.
             dato_opcional = _dato_opcional_pedido(texto)
             if (
-                not registro_ok
+                not pide_asesoria_turno
+                and not registro_ok
                 and dato_opcional
                 and _ya_pidio_opcion_antes(historial)
                 and not _cliente_pidio_ese_dato(pregunta_cliente)
@@ -2904,7 +2958,7 @@ async def responder(
             # texto: a la segunda sale igual (como la red del cierre), porque insistir no es
             # mentir. Va DESPUÉS de la red del cierre (su prima: aquella cuida lo NO elegido,
             # esta lo YA elegido) y usa `pregunta_cliente` para heredar la regla de los guardias.
-            reabierto = _reabre_eleccion_ya_hecha(
+            reabierto = None if pide_asesoria_turno else _reabre_eleccion_ya_hecha(
                 texto, elecciones_hilo, elecciones_var, pregunta_cliente
             )
             if reabierto and not reclamo_reapertura:
@@ -3002,44 +3056,6 @@ async def responder(
                     ya_fallo=relevo_imposible,
                 )
                 return RESPUESTA_SEGURA
-
-            # 🔴 RED DE LA ASESORÍA: pidió una recomendación y el bot contestó DE MEMORIA (cero
-            # herramientas en el turno) — el fallo raíz del smoke del 2026-08-08 (6/7 turnos así,
-            # "¿cuántas personas?" ante "algo dulce para compartir el domingo"). UNA pasada
-            # correctiva, el mismo mecanismo que la red de la salud. Va DESPUÉS de las redes que
-            # vetan (dinero/honestidad juzgan primero el texto original) y ANTES de las que
-            # avisan a la dueña — avisar por un borrador que esta corrección va a reemplazar
-            # sería gritar en falso. Se mira `mensaje_usuario` (no `pregunta_cliente`) igual que
-            # la salud: en el RETOMAR el turno es una orden interna y ahí no se dispara.
-            if (
-                tools_de_consulta
-                and not uso_herramienta
-                and not corregido_asesoria
-                and _pide_asesoria(mensaje_usuario)
-                and not _pide_catalogo(mensaje_usuario)
-            ):
-                corregido_asesoria = True
-                logger.warning(
-                    "ASESORÍA SIN CONSULTA para %s: recomendó de memoria, se le pide consultar "
-                    "y concretar — texto=%r", telefono, texto[:140],
-                )
-                consultables = " o ".join(f"`{t}`" for t in tools_de_consulta)
-                messages.append({
-                    "role": "user",
-                    "content": (
-                        "[SISTEMA] El cliente te está pidiendo una RECOMENDACIÓN y le "
-                        "respondiste de memoria, sin consultar NINGUNA herramienta. No le "
-                        "recites categorías ni le devuelvas la pregunta: llama AHORA a "
-                        f"{consultables}, elige 1 o 2 productos CONCRETOS que calcen con lo "
-                        "que pidió y recomiéndaselos POR NOMBRE, con su gancho real (lo que "
-                        "diga su ficha o el catálogo: de qué es, cuántas trae). Después remata "
-                        "hacia el cierre. No le menciones al cliente este aviso."
-                    ),
-                })
-                # Si tras esta corrección sigue sin consultar, el texto SALE tal cual (el
-                # `corregido_asesoria` de arriba garantiza una sola pasada): esto es venta,
-                # no salud — aquí no se bloquea ni se escala JAMÁS.
-                continue
 
             # 🪦 AQUÍ VIVIÓ LA RED DEL PITCH (2026-08-08 → 2026-08-24), QUITADA A PROPÓSITO.
             # Re-preguntaba al modelo cuando el cliente elegía y la confirmación salía "plana",
