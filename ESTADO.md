@@ -66,8 +66,8 @@ y salud, memoria que no se olvida a las 24h, y 8 migraciones nuevas (hasta la 03
 > desplegado (`a798aac`) en bot + worker; `PUBLIC_BASE_URL` propia del entorno, creada cifrada por
 > la API de Coolify. El archivo público responde **200 · `application/pdf` · 2.803.311 bytes ·
 > `%PDF-`** y `/salud` sigue en `ok`. ⏳ Falta confirmar el último tramo pidiéndolo por WhatsApp al
-> número de pruebas. 🔴 **Producción conserva la misma mina** hasta definir allí
-> `PUBLIC_BASE_URL=https://api.masvidaconsciente.store` y redeployar con OK explícito de Maired.
+> número de pruebas. ✅ **La mina de producción quedó desactivada el 5-sep**: `PUBLIC_BASE_URL`
+> propia, cifrada, y deploy completo (ver "Última verificación" abajo).
 > **NO asignar `api-masvida.enovagroup.tech` al bot de pruebas**: mezclaría los entornos.
 
 > ✅ **FOTO PRINCIPAL + VIDEOS CERRADOS EN PRUEBAS (3-sep; SESIONES (20)):** bot y worker
@@ -75,9 +75,26 @@ y salud, memoria que no se olvida a las 24h, y 8 migraciones nuevas (hasta la 03
 > `probar_drift` y `probar_media` verdes. La ★ encabeza el `ORDER BY` real con ROLLBACK. Los 5
 > QuickTime disfrazados se respaldaron y convirtieron a MP4 ISO; una segunda corrida dejó los 5
 > sin tocar. Queda pedir un video real de Tortas keto: el archivo ya es compatible, pero su
-> contenido sigue siendo un solo cuadro con audio. **Producción no recibió deploy.**
+> contenido sigue siendo un solo cuadro con audio. ✅ **Producción alcanzó todo esto el 5-sep.**
 
-## Última verificación: **2026-09-01 (~02:30 ET) — LA PROMOCIÓN A PRODUCCIÓN SE HIZO (y hubo incidente de seguridad, contenido)**
+## Última verificación: **2026-09-05 (~19:40 VET) — PRODUCCIÓN PROMOVIDA A MASTER COMPLETO (89aea1d)**
+
+> ✅ **La promoción del 5-sep, con OK expreso de Maired, liturgia completa:** respaldo previo
+> (`/root/respaldos-pre-promocion/prod_pre_promocion_20260905_2337.dump`, 3.8MB + personalidad) →
+> `PUBLIC_BASE_URL=https://api.masvidaconsciente.store` creada CIFRADA por la API de Coolify en
+> bot y worker → deploy por `workflow_dispatch destino=produccion` (verde en 2m12s, con los
+> detectores de esquema dentro del contenedor nuevo) → verificación: bot y worker en `89aea1d`,
+> **38 migraciones** (036 foto principal + 037 efectivo aplicadas — `metodos_pago` ya trae
+> `efectivo`), datos IDÉNTICOS al pre-deploy (32/37/299/14.910/0/34), personalidad intacta
+> (7.331 car), lista blanca intacta (solo Maired), `/salud` ok, Meta GREEN, saldo $8.02 →
+> **LOS 27 BANCOS EN VERDE** (`/root/bancos_post_promo.log`) → panel re-desplegado con la ★
+> (`/login` 200). Producción trae ahora TODO lo de sep: catálogo PDF, resolvedor, videos MP4
+> reales (el bucket compartido ya estaba sano), foto principal, proactivo=1+variedad, candado de
+> duplicados v2 + prioridad de intención, efectivo coherente.
+> ⏳ **Lo que sigue:** pruebas de humo con el número real (casilla 5 — necesita OK de horario con
+> Whuilianny) · deuda del carril del pago C5-C11 (cacería 3-sep) · llave de IA por cliente.
+
+## Verificación anterior: **2026-09-01 (~02:30 ET) — LA PROMOCIÓN A PRODUCCIÓN SE HIZO (y hubo incidente de seguridad, contenido)**
 
 > 🚨 **El 1-sep, en medio de la promoción (la hizo ChatGPT con Maired), apareció un MINERO
 > (`xmrig`) dentro del panel VIEJO de producción** (Next.js 15.1.3 con RCE público, sin
@@ -93,8 +110,8 @@ y salud, memoria que no se olvida a las 24h, y 8 migraciones nuevas (hasta la 03
 |---|---|---|
 | **Servidor** | netcup `152.53.89.118` (endurecido 1-sep) | Hostinger `2.25.139.106` |
 | **Quién le escribe** | las clientas reales | número de la agencia: **+57 313 293 3806** |
-| **Bot: versión** | ✅ **`f4e200c`** (1-sep) — AL DÍA: trae todo agosto + el plan A→D completo. 36 migraciones aplicadas, sin drift | ✅ **`f4e200c`** (mismo master) |
-| **Panel: versión** | ✅ **`608f61c`** parchado (Next 15.5.24 / React 19.0.8, audit 0 vulns) | `b9a97c8` + el parche va llegando por master |
+| **Bot: versión** | ✅ **`89aea1d`** (5-sep) — master COMPLETO: PRs #16-#25. **38 migraciones**, sin drift, `PUBLIC_BASE_URL` cifrada | *(histórico)* |
+| **Panel: versión** | ✅ con la **★ foto principal** (PR #1 del dashboard, re-desplegado 5-sep, `/login` 200) | *(histórico)* |
 | **Modelo IA activo** | ✅ `anthropic/claude-haiku-4.5` · **saldo IA $4.11** (recargado) | `anthropic/claude-sonnet-4.6` (Maired probando) |
 | **Modo del agente** | UN agente | UN agente |
 | **Lista blanca** | ✅ **ACTIVA: 1 solo número** (`NUMEROS_PERMITIDOS=573005690062`, extra=None). ⚠️ `bot_activo` no existe en la config ⇒ el código lo trata como ENCENDIDO: **lo que protege a las clientas es la lista blanca** | ✅ activa |
