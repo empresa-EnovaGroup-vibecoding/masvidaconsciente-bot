@@ -1458,6 +1458,86 @@ async def borrar_usuario(usuario_id: int, _: str = Depends(proveedora_actual)):
     return {"ok": True}
 
 
+# ─── Contraseñas del panel (lo pidió Maired, 6-sep) ─────────────────
+#
+# Hasta hoy NADIE podía cambiar una contraseña: ni la propia ni la de otro. La única vía era
+# tocar ADMIN_PASSWORD en el servidor. Dos puertas nuevas:
+#   · la DUEÑA cambia la SUYA (actual + nueva);
+#   · la PROVEEDORA le pone una nueva a quien la olvidó ("Restablecer clave").
+# 🔒 LA CUENTA PRINCIPAL (ADMIN_EMAIL) QUEDA FUERA A PROPÓSITO: `_crear_admin` (init_db.py)
+# re-sincroniza su hash con ADMIN_PASSWORD EN CADA ARRANQUE — es la red anti-bloqueo de Enova
+# (aunque todo lo demás falle, el servidor siempre sabe cómo entra la proveedora). Si aquí se
+# cambiara, el siguiente deploy la revertiría en silencio: peor que negarse con un mensaje claro.
+
+class PasswordPropiaIn(BaseModel):
+    actual: Annotated[str, StringConstraints(min_length=1, max_length=72)]
+    nueva: Annotated[str, StringConstraints(min_length=8, max_length=72)]
+
+
+class PasswordAjenaIn(BaseModel):
+    nueva: Annotated[str, StringConstraints(min_length=8, max_length=72)]
+
+
+_MSG_CUENTA_PRINCIPAL = (
+    "La cuenta principal (Enova) no se cambia desde el panel: su contraseña vive en el servidor "
+    "y se re-sincroniza en cada arranque. Cámbiala con Enova."
+)
+
+
+def _es_cuenta_principal(email: str) -> bool:
+    return (email or "").lower() == get_settings().admin_email.lower()
+
+
+@router.patch("/usuarios/me/password")
+async def cambiar_mi_password(datos: PasswordPropiaIn, email: str = Depends(usuario_actual)):
+    """La dueña (o cualquier usuario NO principal) cambia su propia contraseña.
+
+    Exige la actual: un token robado de una sesión abierta no basta para cerrarle la puerta a
+    la persona real. La ruta va ANTES de `/usuarios/{usuario_id}/password` a propósito: FastAPI
+    resuelve en orden y "me" no es un entero."""
+    from app.api.security import hash_password
+
+    if _es_cuenta_principal(email):
+        raise HTTPException(status_code=400, detail=_MSG_CUENTA_PRINCIPAL)
+    if datos.actual == datos.nueva:
+        raise HTTPException(status_code=400, detail="La contraseña nueva debe ser distinta a la actual.")
+    factory = get_session_factory()
+    async with factory() as session:
+        u = (
+            await session.execute(select(Usuario).where(Usuario.email == email))
+        ).scalar_one_or_none()
+        if u is None:
+            raise HTTPException(status_code=404, detail="Ese usuario ya no existe.")
+        if not verify_password(datos.actual, u.password_hash):
+            raise HTTPException(status_code=401, detail="La contraseña actual no es correcta.")
+        u.password_hash = hash_password(datos.nueva)
+        await session.commit()
+    return {"ok": True}
+
+
+@router.patch("/usuarios/{usuario_id}/password")
+async def restablecer_password(
+    usuario_id: int, datos: PasswordAjenaIn, _: str = Depends(proveedora_actual)
+):
+    """La proveedora le pone una contraseña nueva a un usuario que la olvidó. Solo Enova.
+
+    Es el camino de "olvidé mi contraseña" de esta casa: un solo cliente, y su Tech Provider
+    como guardián — sin correos de recuperación ni códigos que dependan de la ventana de 24h
+    de WhatsApp. La cuenta principal no se toca (ver arriba)."""
+    from app.api.security import hash_password
+
+    factory = get_session_factory()
+    async with factory() as session:
+        u = await session.get(Usuario, usuario_id)
+        if u is None:
+            raise HTTPException(status_code=404, detail="Ese usuario no existe.")
+        if _es_cuenta_principal(u.email):
+            raise HTTPException(status_code=400, detail=_MSG_CUENTA_PRINCIPAL)
+        u.password_hash = hash_password(datos.nueva)
+        await session.commit()
+    return {"ok": True, "id": usuario_id}
+
+
 # ─── Tasa BCV (margen + candado manual) ──────────────────────────────
 
 @router.get("/tasa")
