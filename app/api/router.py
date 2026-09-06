@@ -12,7 +12,7 @@ import httpx
 from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, StringConstraints
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 
 from app.api.security import (
@@ -1563,20 +1563,34 @@ async def probar_bot(datos: ProbarIn, _: str = Depends(usuario_actual)):
             detail="El simulador solo puede usar teléfonos de prueba (empiezan por __simulador__).",
         )
 
-    factory = get_session_factory()
-    async with factory() as session:
-        corte = (
-            await session.execute(
-                select(func.max(Mensaje.id)).where(Mensaje.cliente_telefono == telefono)
-            )
-        ).scalar() or 0
+    # 🔒 EL MISMO LOCK POR TELÉFONO QUE USA EL WORKER (cacería 3-sep, C3): sin él, dos clics
+    # rápidos del panel sobre el MISMO __simulador__ corrían `responder` en paralelo y podían
+    # duplicar registros en la BD de pruebas (dos lecturas antes del commit del otro) — basura
+    # que después contamina los bancos. Ocupado ⇒ 429 legible, no una carrera.
+    from app.services import redis_client as rc
 
-    respuesta = await responder(
-        telefono=telefono,
-        mensaje_usuario=datos.mensaje,
-        historial=datos.historial or [],
-        nombre_cliente="Prueba",
-    )
+    if not await rc.adquirir_lock(telefono):
+        raise HTTPException(
+            status_code=429,
+            detail="El simulador todavía está procesando el mensaje anterior de este cliente; espera un momento.",
+        )
+    try:
+        factory = get_session_factory()
+        async with factory() as session:
+            corte = (
+                await session.execute(
+                    select(func.max(Mensaje.id)).where(Mensaje.cliente_telefono == telefono)
+                )
+            ).scalar() or 0
+
+        respuesta = await responder(
+            telefono=telefono,
+            mensaje_usuario=datos.mensaje,
+            historial=datos.historial or [],
+            nombre_cliente="Prueba",
+        )
+    finally:
+        await rc.liberar_lock(telefono)
 
     # ⚠️ Igual que la burbuja del hilo: esto es COSMÉTICO. Si la consulta fallara, el turno ya
     # ocurrió y la respuesta del bot es válida — se devuelve sin media antes que romper la
@@ -2983,17 +2997,11 @@ async def listar_pagos(estado: str | None = None, _: str = Depends(usuario_actua
     return salida
 
 
-async def _no_hay_otro_pago_confirmado(session, pago: Pago) -> None:
-    """🔴 UN PEDIDO SE COBRA UNA SOLA VEZ.
-
-    Sin esto la venta se contaba DOS veces en `/reporte` y en la ficha del cliente, y la
-    secuencia para llegar ahí era de lo más normal: el cliente paga de menos (pago1 queda
-    'parcial'), completa con un segundo comprobante (pago2, por el total), la dueña confirma
-    pago2 ⇒ el pedido queda 'pagado'… y pago1 sigue en la bandeja ofreciendo **Reabrir** y, ya
-    en 'reportado', **Confirmar**. Dos pagos confirmados sobre el mismo pedido, cada uno por el
-    total. Nada lo impedía. (Auditoría 2026-08-02, DIN-4.)
-    """
-    otro = (
+async def _otro_pago_confirmado_de(session, pago: Pago):
+    """El id de OTRO pago confirmado del mismo pedido, o None. La pregunta en una sola pieza:
+    la usan el 409 de confirmar/verificar Y —desde la cacería del 3-sep (C9)— el guardia que
+    impide que rechazar un pago residual devuelva a 'esperando_pago' un pedido ya cobrado."""
+    return (
         await session.execute(
             select(Pago.id)
             .where(
@@ -3004,6 +3012,19 @@ async def _no_hay_otro_pago_confirmado(session, pago: Pago) -> None:
             .limit(1)
         )
     ).scalar_one_or_none()
+
+
+async def _no_hay_otro_pago_confirmado(session, pago: Pago) -> None:
+    """🔴 UN PEDIDO SE COBRA UNA SOLA VEZ.
+
+    Sin esto la venta se contaba DOS veces en `/reporte` y en la ficha del cliente, y la
+    secuencia para llegar ahí era de lo más normal: el cliente paga de menos (pago1 queda
+    'parcial'), completa con un segundo comprobante (pago2, por el total), la dueña confirma
+    pago2 ⇒ el pedido queda 'pagado'… y pago1 sigue en la bandeja ofreciendo **Reabrir** y, ya
+    en 'reportado', **Confirmar**. Dos pagos confirmados sobre el mismo pedido, cada uno por el
+    total. Nada lo impedía. (Auditoría 2026-08-02, DIN-4.)
+    """
+    otro = await _otro_pago_confirmado_de(session, pago)
     if otro is not None:
         raise HTTPException(
             status_code=409,
@@ -3012,6 +3033,41 @@ async def _no_hay_otro_pago_confirmado(session, pago: Pago) -> None:
                 "estuvo mal, anúlalo primero (botón Anular) y vuelve a intentarlo."
             ),
         )
+
+
+def _reclamar_transicion(res) -> None:
+    """🔒 EL CANDADO DEL DOBLE CLIC (cacería 3-sep, C7): la transición del pago se RECLAMA con
+    un UPDATE condicionado al estado viejo, y quien no la ganó recibe 409 — no un segundo envío.
+
+    El caso real: dos POST casi simultáneos (la dueña en el celular y en la PC, o dos
+    operadores). Ambos leían el pago 'reportado' ANTES del commit del otro (check-then-act),
+    ambos pasaban el guard y AMBOS encolaban `notificar_cliente_pago`: el cliente recibía DOS
+    confirmaciones redactadas distinto. La comprobación y la escritura tienen que ser un mismo
+    acto — la misma doctrina del índice de la 026, aplicada a la transición."""
+    if getattr(res, "rowcount", 1) == 0:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Otro clic llegó primero: este pago acaba de cambiar de estado. Refresca la "
+                "página para ver cómo quedó."
+            ),
+        )
+
+
+def _encolar_notificacion(tarea, args) -> bool:
+    """Encola el aviso al cliente SIN dejar que un Redis caído convierta el éxito en un 500.
+
+    🔴 Cacería 3-sep, C11: el commit ya cerró cuando se encola; si el broker está caído, la
+    excepción subía como 500 DESPUÉS de confirmar — la dueña reintentaba, recibía el 409 de
+    'ya está confirmado', y el clic que reactiva al bot no existía más: cliente pagado y mudo.
+    Ahora el fallo se reporta en la respuesta (`notificacion_encolada: false`) y en el log;
+    el estado del pago queda como debe."""
+    try:
+        tarea.apply_async(args)
+        return True
+    except Exception:  # noqa: BLE001 — el pago YA quedó bien; el aviso es lo que falló
+        logger.exception("No se pudo encolar la notificación al cliente %s", args[:1])
+        return False
 
 
 def _pedido_admite_cobro(pedido: Pedido | None) -> None:
@@ -3045,14 +3101,20 @@ async def confirmar_pago(pago_id: int, usuario: str = Depends(usuario_actual)):
         pedido = await session.get(Pedido, pago.pedido_id)
         await _no_hay_otro_pago_confirmado(session, pago)
         _pedido_admite_cobro(pedido)
-        pago.estado = "confirmado"
-        pago.confirmado_por = usuario
-        pago.updated_at = now_utc()
+        # La transición se RECLAMA (UPDATE condicionado): dos clics concurrentes = un solo
+        # ganador; el otro recibe 409 y el cliente UNA sola confirmación. Ver _reclamar_transicion.
+        res = await session.execute(
+            update(Pago)
+            .where(Pago.id == pago_id, Pago.estado == "reportado")
+            .values(estado="confirmado", confirmado_por=usuario, updated_at=now_utc())
+        )
+        _reclamar_transicion(res)
         if pedido is not None:
             pedido.estado = "pagado"
         await session.commit()
         telefono = pedido.cliente_telefono if pedido else None
 
+    encolada = True
     if telefono:
         from app.services.mensajes import contexto_entrega, leer_guia
         from app.workers.tasks import notificar_cliente_pago
@@ -3065,8 +3127,11 @@ async def confirmar_pago(pago_id: int, usuario: str = Depends(usuario_actual)):
         # Y no lleva NI UN MONTO: lo que entra en la situación queda decible ese turno
         # (`autorizados_por_moneda(situacion)` en `redactar_mensaje`). Ver `contexto_entrega`.
         situacion = await leer_guia("msg_guia_confirmado") + await contexto_entrega(pedido)
-        notificar_cliente_pago.apply_async((telefono, situacion))
-    return {"ok": True, "pago_id": pago_id, "estado": "confirmado"}
+        encolada = _encolar_notificacion(notificar_cliente_pago, (telefono, situacion))
+    return {
+        "ok": True, "pago_id": pago_id, "estado": "confirmado",
+        "notificacion_encolada": encolada,
+    }
 
 
 @router.post("/pagos/{pago_id}/rechazar")
@@ -3080,26 +3145,44 @@ async def rechazar_pago(
             raise HTTPException(status_code=404, detail="Pago no encontrado")
         if pago.estado != "reportado":
             raise HTTPException(status_code=409, detail=f"El pago ya está {pago.estado}")
-        pago.estado = "rechazado"
-        pago.confirmado_por = usuario
-        pago.motivo_rechazo = datos.motivo if datos else None
-        pago.updated_at = now_utc()
+        res = await session.execute(
+            update(Pago)
+            .where(Pago.id == pago_id, Pago.estado == "reportado")
+            .values(
+                estado="rechazado", confirmado_por=usuario,
+                motivo_rechazo=(datos.motivo if datos else None), updated_at=now_utc(),
+            )
+        )
+        _reclamar_transicion(res)
         pedido = await session.get(Pedido, pago.pedido_id)
         # Un pedido ya ENTREGADO (o cancelado) NO vuelve a "esperando_pago" porque se rechace un
         # comprobante: el estado del pedido dice dónde está la MERCANCÍA, y esa ya salió. Antes se
         # pisaba desde cualquier estado, así que rechazar un pago residual hacía desaparecer el
         # pedido de la lista de entregados. (Auditoría 2026-08-02, DIN-7.)
-        if pedido is not None and pedido.estado not in ("entregado", "cancelado"):
+        # 🔴 Y TAMPOCO SI OTRO PAGO YA LO COBRÓ (cacería 3-sep, C9): rechazar un 'reportado'
+        # residual devolvía a 'esperando_pago' un pedido PAGADO por otro pago — la venta se caía
+        # de la lista de pagadas y el pedido volvía a ser el imán del próximo comprobante.
+        if (
+            pedido is not None
+            and pedido.estado not in ("entregado", "cancelado")
+            and await _otro_pago_confirmado_de(session, pago) is None
+        ):
             pedido.estado = "esperando_pago"
         await session.commit()
         telefono = pedido.cliente_telefono if pedido else None
 
+    encolada = True
     if telefono:
         from app.services.mensajes import leer_guia
         from app.workers.tasks import notificar_cliente_pago
 
-        notificar_cliente_pago.apply_async((telefono, await leer_guia("msg_guia_rechazado")))
-    return {"ok": True, "pago_id": pago_id, "estado": "rechazado"}
+        encolada = _encolar_notificacion(
+            notificar_cliente_pago, (telefono, await leer_guia("msg_guia_rechazado"))
+        )
+    return {
+        "ok": True, "pago_id": pago_id, "estado": "rechazado",
+        "notificacion_encolada": encolada,
+    }
 
 
 @router.post("/pagos/{pago_id}/verificar-monto")
@@ -3135,21 +3218,26 @@ async def verificar_monto(pago_id: int, datos: MontoIn, usuario: str = Depends(u
             )
         moneda = "Bs" if en_bs else "$"
         recibido = Decimal(str(datos.monto_recibido))
-        pago.monto_recibido = recibido
-        pago.confirmado_por = usuario
-        pago.updated_at = now_utc()
-        if recibido >= total:
-            pago.estado = "confirmado"
+        estado_final = "confirmado" if recibido >= total else "parcial"
+        # La transición se RECLAMA (doble clic ⇒ un solo ganador; ver _reclamar_transicion).
+        res = await session.execute(
+            update(Pago)
+            .where(Pago.id == pago_id, Pago.estado.in_(("reportado", "parcial")))
+            .values(
+                estado=estado_final, monto_recibido=recibido,
+                confirmado_por=usuario, updated_at=now_utc(),
+            )
+        )
+        _reclamar_transicion(res)
+        if estado_final == "confirmado":
             if pedido is not None:
                 pedido.estado = "pagado"
         else:
-            pago.estado = "parcial"
             # Mismo criterio que en `rechazar`: si ya se entregó, el pedido no vuelve atrás.
             if pedido is not None and pedido.estado != "entregado":
                 pedido.estado = "esperando_pago"
         await session.commit()
         telefono = pedido.cliente_telefono if pedido else None
-        estado_final = pago.estado
 
     if telefono:
         from app.services.mensajes import contexto_entrega
@@ -3175,10 +3263,15 @@ async def verificar_monto(pago_id: int, datos: MontoIn, usuario: str = Depends(u
                 f"asi que faltan {moneda} {(total - recibido):.2f}. Pidele con suavidad y sin "
                 f"reclamar que complete ese monto restante para poder despachar su pedido"
             )
-        notificar_cliente_pago.apply_async((telefono, situacion))
+        encolada = _encolar_notificacion(notificar_cliente_pago, (telefono, situacion))
+    else:
+        encolada = True
     # `moneda` viaja al panel para que muestre la etiqueta correcta al pedir el monto recibido:
     # hoy dice "Bs" siempre, y en un pago en divisas eso induce a escribir la cifra equivocada.
-    return {"ok": True, "pago_id": pago_id, "estado": estado_final, "moneda": moneda}
+    return {
+        "ok": True, "pago_id": pago_id, "estado": estado_final, "moneda": moneda,
+        "notificacion_encolada": encolada,
+    }
 
 
 @router.post("/pagos/{pago_id}/reabrir")
@@ -3195,10 +3288,51 @@ async def reabrir_pago(pago_id: int, _: str = Depends(usuario_actual)):
                 status_code=409,
                 detail="Solo se puede reabrir un pago rechazado o parcial.",
             )
+        # 🔴 Cacería 3-sep, C8: si el pedido YA tiene otro 'reportado' vivo, reabrir este
+        # violaba el índice único de la 026 y el panel recibía un 500 crudo. La BD hacía su
+        # trabajo; faltaba el 409 legible. Y C9 en su versión de reabrir: si el pedido ya
+        # quedó COBRADO por otro pago, este residual no tiene a qué volver.
+        otro_reportado = (
+            await session.execute(
+                select(Pago.id)
+                .where(
+                    Pago.pedido_id == pago.pedido_id,
+                    Pago.estado == "reportado",
+                    Pago.id != pago.id,
+                )
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if otro_reportado is not None:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"El pedido #{pago.pedido_id} ya tiene el pago #{otro_reportado} por "
+                    "verificar: resuélvelo primero (confírmalo o recházalo) y luego reabre este."
+                ),
+            )
+        otro_confirmado = await _otro_pago_confirmado_de(session, pago)
+        if otro_confirmado is not None:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"El pedido #{pago.pedido_id} ya quedó cobrado con el pago "
+                    f"#{otro_confirmado}: este residual no se reabre. Si aquel estuvo mal, "
+                    "anúlalo primero."
+                ),
+            )
         pago.estado = "reportado"
         pago.motivo_rechazo = None
         pago.updated_at = now_utc()
-        await session.commit()
+        try:
+            await session.commit()
+        except IntegrityError as exc:
+            # El cinturón del cinturón: si aun así dos reabrir compiten, la 026 gana en la BD
+            # y aquí se traduce a un 409 en vez de un 500.
+            raise HTTPException(
+                status_code=409,
+                detail="Ese pedido ya tiene un pago por verificar (se te adelantó otro clic).",
+            ) from exc
     return {"ok": True}
 
 
