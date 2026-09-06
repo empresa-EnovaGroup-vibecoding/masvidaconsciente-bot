@@ -10,7 +10,7 @@
 
 ## 1. Qué es másvida
 Sistema de **ventas y cobro por WhatsApp** para *masvidaconsciente* (comida saludable, Cabudare, Venezuela). Primer cliente de **Enova (Maired)**, que es **Tech Provider oficial de Meta**. Diseñado para **replicarse cliente por cliente** (una "caja cerrada" por cliente: su VPS, su bot, su panel).
-- **bot** (esta carpeta `masvidaconsciente-bot`): el cerebro. Recibe WhatsApp, responde como *"Whuilianny"*, cobra.
+- **bot** (esta carpeta `masvidaconsciente-bot`): el cerebro. Recibe WhatsApp, responde como **"Alejandra"** (la asesora del negocio; Whuilianny es la DUEÑA, y el bot habla de ella en tercera persona — así está en la voz viva de la BD desde antes del 6-sep), cobra.
 - **`masvidaconsciente-dashboard`** (carpeta hermana): el panel de la dueña.
 - App de conexión `sistema-recepcion-digital` (en Vercel, usa Supabase): onboarding del número por **coexistencia**.
 
