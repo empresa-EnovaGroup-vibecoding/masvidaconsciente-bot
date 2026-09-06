@@ -183,6 +183,15 @@ TOOL_SCHEMAS = [
                             "barata para cerrar la venta."
                         ),
                     },
+                    "referencia": {
+                        "type": "string",
+                        "description": (
+                            "Si es DELIVERY y el cliente YA dio su dirección o punto de "
+                            "referencia, pásalo aquí con sus palabras (ej. 'calle 25 frente a "
+                            "la farmacia'). Si aún no lo dio, omítelo: se pide después y se "
+                            "guarda con anotar_entrega. Sin referencia un delivery NO se cobra."
+                        ),
+                    },
                 },
                 "required": ["items"],
             },
@@ -2262,8 +2271,8 @@ async def _falta_referencia(session, pedido) -> bool:
 
 _NOTA_FALTA_REFERENCIA = (
     "⚠️ Es DELIVERY y el pedido NO tiene dirección: pídele al cliente un punto de referencia "
-    "(una línea, sin formulario) y guárdalo con anotar_entrega ANTES de cobrar — "
-    "generar_datos_pago lo va a exigir."
+    "(una línea, sin formulario) y guárdalo con anotar_entrega (o pásalo en `referencia` al "
+    "volver a registrar) ANTES de cobrar — generar_datos_pago lo va a exigir."
 )
 
 
@@ -2768,7 +2777,8 @@ async def _pedido_igual_reciente(session, telefono, items):
 
 
 async def registrar_pedido(
-    session, telefono, items, notas=None, entrega=None, entrega_fecha=None, zona_id=None
+    session, telefono, items, notas=None, entrega=None, entrega_fecha=None, zona_id=None,
+    referencia=None,
 ):
     """Registra el pedido. El TOTAL lo suma el CÓDIGO: productos + envío.
 
@@ -2957,6 +2967,9 @@ async def registrar_pedido(
             abierto = None
 
     entrega_txt = str(entrega or "").strip() or None
+    # La DIRECCIÓN (038): si el cliente ya la dio, se guarda aquí mismo y el modelo se ahorra una
+    # vuelta por anotar_entrega. Recortada igual que allá; texto libre del cliente.
+    referencia_txt = " ".join(str(referencia or "").split())[:_REFERENCIA_MAX] or None
 
     # ══ LA SUMA DEL ENVÍO LA HACE EL CÓDIGO ══
     # `total` hasta aquí = solo los productos. El envío se suma AQUÍ, con el costo que sale de la
@@ -3037,6 +3050,8 @@ async def registrar_pedido(
             pedido.entrega = entrega_txt
         if fecha_entrega:
             pedido.entrega_fecha = fecha_entrega
+        if referencia_txt:
+            pedido.entrega_referencia = referencia_txt
         if zona is not None:
             # CONGELADOS en el pedido: si mañana sube el envío, este pedido no cambia de precio.
             pedido.zona_id = zona.id
@@ -3048,6 +3063,7 @@ async def registrar_pedido(
         pedido = Pedido(
             cliente_telefono=telefono, items=items_pedido, total=total,
             notas=notas, entrega=entrega_txt, entrega_fecha=fecha_entrega,
+            entrega_referencia=referencia_txt,
             zona_id=(zona.id if zona else None),
             zona_nombre=(zona.nombre if zona else None),
             costo_envio=costo_envio,

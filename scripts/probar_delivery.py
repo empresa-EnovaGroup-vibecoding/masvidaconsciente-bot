@@ -132,6 +132,19 @@ async def main() -> None:
         print("\n1) 🧮 EL CÓDIGO SUMA EL ENVÍO (el bot NO)")
         r = await registrar_pedido(s, TEL, items, entrega_fecha=manana, zona_id=cerca.id)
         check("el pedido se registró", r.get("ok") is True, str(r.get("nota"))[:90])
+        # 🚚 LA DIRECCIÓN (038, 6-sep): un delivery sin punto de referencia NO se cobra. El registro
+        # avisa que falta, la caja lo exige, y al pasar la referencia el mismo pedido queda listo.
+        check("🚚 el registro avisa que falta la dirección (es delivery)",
+              r.get("falta_referencia") is True and "anotar_entrega" in str(r.get("nota")))
+        sin_ref = await generar_datos_pago(s, TEL, r["pedido_id"])
+        check("🔒 y la CAJA no cobra un delivery sin dirección",
+              sin_ref.get("ok") is False and sin_ref.get("falta_referencia") is True,
+              str(sin_ref.get("nota"))[:80])
+        r = await registrar_pedido(s, TEL, items, entrega_fecha=manana, zona_id=cerca.id,
+                                   referencia="frente a la farmacia (banco)")
+        check("con la referencia, el MISMO pedido queda completo",
+              r.get("ok") is True and r.get("falta_referencia") is False
+              and r["pedido_id"] == sin_ref.get("pedido_id", r["pedido_id"]))
         esperado = float(precio + Decimal("3"))
         check(f"total = producto ${precio} + envío $3 = ${esperado:g}",
               r.get("ok") and abs(r["total_usd"] - esperado) < 0.01, str(r.get("total_usd")))
@@ -217,7 +230,8 @@ async def main() -> None:
         await _limpiar(s)
         s.add(Cliente(telefono=TEL, nombre="Prueba Delivery"))
         await s.commit()
-        r5 = await registrar_pedido(s, TEL, items, entrega_fecha=manana, zona_id=cerca.id)
+        r5 = await registrar_pedido(s, TEL, items, entrega_fecha=manana, zona_id=cerca.id,
+                                    referencia="frente a la farmacia (banco)")
         check("primero se registra CON zona", r5.get("ok") is True, str(r5.get("nota"))[:80])
 
         # El cliente agrega uno más y el bot re-registra… olvidándose de mandar la zona.
