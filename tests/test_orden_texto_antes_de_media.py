@@ -190,10 +190,67 @@ async def test_el_saludo_le_llega_antes_que_las_fotos(carril, monkeypatch):
     assert len(partes) == 2
     assert carril[0].startswith("TEXTO"), f"lo PRIMERO tiene que ser texto, y fue: {carril[0]}"
     assert "Hola, Ana, buenas noches" in carril[0]
-    # Y todas las imágenes, después de todo el texto.
+    # Las imágenes salen DESPUÉS del saludo (el bug de Erwin)… y, desde el 6-sep, ANTES de la
+    # pregunta final: el último globo es "Cuantas quieres?", y una pregunta enterrada bajo tres
+    # fotos no se contesta (ver `test_la_pregunta_va_ultima_y_la_foto_antes`).
     primera_imagen = next(i for i, e in enumerate(carril) if e.startswith("IMAGEN"))
-    ultimo_texto = max(i for i, e in enumerate(carril) if e.startswith("TEXTO"))
-    assert primera_imagen > ultimo_texto, f"la media se colό entre el texto: {carril}"
+    assert primera_imagen > 0, f"la media se coló antes del saludo: {carril}"
+    assert carril[-1] == "TEXTO: Si tenemos Empanadas de platano, vienen 8 por paquete. Cuantas quieres?"
+
+
+@pytest.mark.asyncio
+async def test_la_pregunta_va_ultima_y_la_foto_antes(carril, monkeypatch):
+    """🔴 LO QUE VIO MAIRED EL 6-SEP en pruebas: "te dejo la foto… de cuál sabor te provoca?" y la
+    foto caía DESPUÉS de la pregunta, enterrándola. Una persona anuncia, manda la foto y remata
+    con la pregunta. El saludo sigue yendo primero (Erwin) — las dos cosas a la vez."""
+    monkeypatch.setattr(
+        tasks, "responder",
+        _responder_que_manda_fotos(
+            "Hola, Enova, buenas tardes 💚\n\nSi, tenemos las Galletas New York: chocolate, limon pistacho, canela naranja o chocomerey. Te dejo la foto.\n\nde cual sabor te provoca?",
+            ["Galletas New York"],
+            carril,
+        ),
+    )
+    await tasks._pensar_y_enviar("584264399792", "Hola, tienes galletas?", [], "Enova")
+
+    assert carril == [
+        "TEXTO: Hola, Enova, buenas tardes 💚",
+        "TEXTO: Si, tenemos las Galletas New York: chocolate, limon pistacho, canela naranja o chocomerey. Te dejo la foto.",
+        "IMAGEN: Galletas New York",
+        "TEXTO: de cual sabor te provoca?",
+    ]
+    assert cola_media.cuantos() == 0
+
+
+@pytest.mark.asyncio
+async def test_si_el_ultimo_globo_no_pregunta_la_foto_sigue_al_final(carril, monkeypatch):
+    """NO DISPARA: sin pregunta al final, el orden de siempre (anuncia y después muestra)."""
+    monkeypatch.setattr(
+        tasks, "responder",
+        _responder_que_manda_fotos("Hola\n\nAhi te dejo la foto de las galletas 💚", ["Galletas"], carril),
+    )
+    await tasks._pensar_y_enviar("584264399792", "foto?", [], None)
+    assert carril[-1] == "IMAGEN: Galletas"
+
+
+@pytest.mark.asyncio
+async def test_con_un_solo_globo_que_pregunta_la_foto_va_despues(carril, monkeypatch):
+    """NO DISPARA: con UN solo globo no hay "antes" posible sin mandar la foto delante del saludo
+    (el bug de Erwin). Se mantiene texto → foto."""
+    monkeypatch.setattr(
+        tasks, "responder",
+        _responder_que_manda_fotos("Te dejo la foto, de cual te llevo?", ["Galletas"], carril),
+    )
+    await tasks._pensar_y_enviar("584264399792", "foto?", [], None)
+    assert carril == ["TEXTO: Te dejo la foto, de cual te llevo?", "IMAGEN: Galletas"]
+
+
+def test_es_pregunta_mira_el_remate():
+    assert tasks._es_pregunta("de cual sabor te provoca?") is True
+    assert tasks._es_pregunta("cuantas quieres? 💚") is True
+    assert tasks._es_pregunta("de cual quieres? te dejo la foto") is False
+    assert tasks._es_pregunta("ahi te dejo la foto.") is False
+    assert tasks._es_pregunta("") is False
 
 
 @pytest.mark.asyncio

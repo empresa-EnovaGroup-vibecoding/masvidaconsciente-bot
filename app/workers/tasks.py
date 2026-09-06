@@ -310,6 +310,14 @@ async def _enviar_en_partes(telefono: str, texto: str) -> list[dict]:
     for i, parte in enumerate(partes):
         if i:
             await asyncio.sleep(1.0)  # pausa breve entre globos, como una persona
+        # 📷 LA PREGUNTA VA ÚLTIMA, LA FOTO ANTES (lo vio Maired el 6-sep en pruebas): el bot
+        # decía "te dejo la foto… de cuál te provoca?" y la foto caía DESPUÉS de la pregunta,
+        # enterrándola. Una persona anuncia, manda la foto y remata con la pregunta. Por eso, si
+        # hay media en cola y el último globo es una pregunta, la media sale ANTES de ese globo.
+        # Solo cuando ya salió al menos un globo (i > 0): si el primero falla, el `break` de
+        # abajo no llega hasta aquí y la media se descarta con el texto, como siempre.
+        if i and i == len(partes) - 1 and _es_pregunta(parte) and cola_media.cuantos():
+            await cola_media.vaciar()
         try:
             resp = await enviar_texto(telefono, parte)
             wa_id = ((resp.get("messages") or [{}])[0] or {}).get("id")
@@ -339,6 +347,13 @@ async def _enviar_en_partes(telefono: str, texto: str) -> list[dict]:
                 })
             break  # si el primero no pasó, los siguientes tampoco: no se insiste
     return enviados
+
+
+def _es_pregunta(globo: str) -> bool:
+    """¿El globo termina preguntando? Mira el remate, no el medio: "te dejo la foto. de cual te
+    provoca?" es pregunta; "de cual quieres? te dejo la foto" no lo es (la foto ya va anunciada
+    al final y puede salir detrás)."""
+    return (globo or "").rstrip().rstrip("💚🙂😊✨.").rstrip().endswith("?")
 
 
 def _algo_llego(partes: list[dict]) -> bool:
