@@ -223,6 +223,50 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "anotar_entrega",
+            # 🔴 NACIÓ EL 6-SEP DE DOS GUIONES IDÉNTICOS (GLM y Sonnet): el cliente dijo "a las 8
+            # am", el bot dijo "anotado" y no anotó en NINGUNA parte; y los dos registraron un
+            # delivery sin pedir jamás la dirección. Esta es la casilla que faltaba.
+            "description": (
+                "Guarda EN EL PEDIDO cómo se va a entregar: la FRANJA que eligió el cliente "
+                "(de las que te da proxima_fecha_entrega en `franjas_de_entrega`, copiada tal "
+                "cual) y/o la DIRECCIÓN o punto de REFERENCIA que dio (con sus palabras). "
+                "Llámala apenas el cliente diga cualquiera de las dos, aunque el pedido ya esté "
+                "pagado (coordinar la entrega de un pedido pagado es lo normal). El cliente NO "
+                "elige una hora exacta: si dice una hora ('a las 8'), NO la prometas — ofrécele "
+                "las franjas y guarda la que elija; la hora exacta la confirma la dueña según su "
+                "ruta. Si es DELIVERY, sin referencia guardada NO se puede cobrar."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "franja": {
+                        "type": "string",
+                        "description": (
+                            "La franja elegida, COPIADA de `franjas_de_entrega` (ej. 'en la "
+                            "mañana (10 a 12)'). Si el cliente dijo una hora suelta, NO la "
+                            "mandes aquí: ofrécele las franjas primero."
+                        ),
+                    },
+                    "referencia": {
+                        "type": "string",
+                        "description": (
+                            "Dirección o punto de referencia con las palabras del cliente "
+                            "(ej. 'calle 25 entre carreras 19 y 20, frente a la farmacia'). "
+                            "Solo si es delivery."
+                        ),
+                    },
+                    "pedido_id": {
+                        "type": "integer",
+                        "description": "El pedido, si lo sabes. Omítelo para usar el último del cliente.",
+                    },
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "info_negocio",
             "description": "Da información del negocio: ubicación, método de pago y redes. Úsala para dudas de ubicación, cómo pagar, etc.",
             "parameters": {"type": "object", "properties": {}},
@@ -403,6 +447,13 @@ TOOL_SCHEMAS = [
                             "En una línea, QUÉ necesita la dueña para poder responder. "
                             "Sé concreto: 'pregunta el precio de la Torta keto de 1kg' o "
                             "'pregunta si hacen envíos a Caracas'."
+                        ),
+                    },
+                    "mensaje_cliente": {
+                        "type": "string",
+                        "description": (
+                            "Opcional: lo último que escribió el cliente, TAL CUAL. Normalmente "
+                            "lo pone el sistema; si lo mandas, cópialo sin resumir."
                         ),
                     },
                 },
@@ -2137,6 +2188,85 @@ async def _dias_de_entrega(session) -> set[str]:
     return dias or set(_DIAS_SEMANA)
 
 
+# ─── LAS FRANJAS DE ENTREGA (6-sep): el cliente elige una franja, NUNCA una hora ──────────
+#
+# Regla de negocio de Maired (6-sep): la hora exacta la pone Whuilianny según su ruta y la
+# confirma ella. Lo que el cliente elige es una FRANJA de una lista CERRADA que edita la dueña
+# (`franjas_entrega`, una por línea o separadas por coma). FAIL-OPEN: sin configurar, las de
+# fábrica — la venta nunca se queda sin franjas que ofrecer.
+_FRANJAS_DEFAULT = ["en la mañana (10 a 12)", "en la tarde (2 a 6)"]
+
+
+def _parsear_franjas(valor: str | None) -> list[str]:
+    """CSV o una por línea → lista limpia, sin repetidos, en el orden de la dueña."""
+    crudas = re.split(r"[\n,;]+", valor or "")
+    vistas: list[str] = []
+    for f in crudas:
+        f = " ".join(f.split())
+        if f and f not in vistas:
+            vistas.append(f)
+    return vistas or list(_FRANJAS_DEFAULT)
+
+
+async def _franjas_de_entrega(session) -> list[str]:
+    """Las franjas en que el negocio entrega. Nunca vacía (fail-open a las de fábrica)."""
+    try:
+        valor = (
+            await session.execute(
+                select(Configuracion.valor).where(Configuracion.clave == "franjas_entrega")
+            )
+        ).scalars().first()
+    except Exception:  # noqa: BLE001 — un fallo de lectura no deja al bot sin franjas
+        valor = None
+    return _parsear_franjas(valor)
+
+
+def _matchear_franja(texto: str | None, franjas: list[str]) -> str | None:
+    """La franja que dijo el modelo contra la lista CERRADA. Vocabulario cerrado, como el método
+    de pago: exacta → contención → palabra clave (mañana/tarde/noche/mediodía). Ambigua o sin
+    calce ⇒ None, y quien llama enseña la lista completa. Jamás se guarda texto libre."""
+    t = " ".join(_sin_acentos(texto or "").split())
+    if not t:
+        return None
+    norm = {f: " ".join(_sin_acentos(f).split()) for f in franjas}
+    exactas = [f for f, n in norm.items() if n == t]
+    if len(exactas) == 1:
+        return exactas[0]
+    contenidas = [f for f, n in norm.items() if t in n or n in t]
+    if len(contenidas) == 1:
+        return contenidas[0]
+    claves = [p for p in ("manana", "tarde", "noche", "mediodia") if p in t]
+    if len(claves) == 1:
+        por_clave = [f for f, n in norm.items() if claves[0] in n]
+        if len(por_clave) == 1:
+            return por_clave[0]
+    return None
+
+
+async def _falta_referencia(session, pedido) -> bool:
+    """¿Es un DELIVERY sin dirección? Solo True cuando se SABE que la zona no es de retiro y el
+    pedido no tiene referencia. Ante cualquier duda (zona borrada, fila vieja, fallo de lectura),
+    False: antes que trabar una venta, dejarla pasar como siempre (fail-open)."""
+    from app.models import ZonaEntrega
+
+    try:
+        if getattr(pedido, "zona_id", None) is None:
+            return False
+        if str(getattr(pedido, "entrega_referencia", None) or "").strip():
+            return False
+        zona = await session.get(ZonaEntrega, int(pedido.zona_id))
+        return zona is not None and zona.es_retiro is False
+    except Exception:  # noqa: BLE001 — la duda no traba el cobro
+        return False
+
+
+_NOTA_FALTA_REFERENCIA = (
+    "⚠️ Es DELIVERY y el pedido NO tiene dirección: pídele al cliente un punto de referencia "
+    "(una línea, sin formulario) y guárdalo con anotar_entrega ANTES de cobrar — "
+    "generar_datos_pago lo va a exigir."
+)
+
+
 async def _anticipacion_del_pedido(session, items_pedido) -> int:
     """Los días de anticipación que necesita el pedido = el MÁS lento de sus productos.
     (Si lleva empanadas congeladas —0 días— y una torta —2 días—, el pedido necesita 2.)"""
@@ -2281,9 +2411,13 @@ async def proxima_fecha_entrega(session, telefono, productos=None):
         and _DIAS_SEMANA[hoy.weekday()] in dias_ok
         and hoy not in feriados
     )
+    franjas = await _franjas_de_entrega(session)
     return {
         "ok": True,
         "hoy_es": _fecha_larga(hoy),
+        # Las FRANJAS en que se entrega (lista CERRADA de la dueña). El cliente elige una de
+        # estas; la hora exacta la confirma Whuilianny según su ruta. Se guardan con anotar_entrega.
+        "franjas_de_entrega": franjas,
         "hoy_se_puede_entregar": hoy_sirve,
         "hora_de_corte": corte,
         "ya_paso_la_hora_de_corte": paso_corte,
@@ -2295,7 +2429,10 @@ async def proxima_fecha_entrega(session, telefono, productos=None):
             "Estas son LAS ÚNICAS fechas que puedes ofrecer. No sumes ni restes días por tu "
             "cuenta, no supongas que mañana se entrega, y no inventes una hora: si el cliente "
             "pide un día que no está en esta lista, dile con cariño cuál es el más cercano que "
-            "sí puedes y ofréceselo. La HORA exacta no la cierras tú: la coordina Whuilianny. "
+            "sí puedes y ofréceselo. La HORA exacta NO existe como opción: ni la preguntes ni la "
+            "prometas. Lo que el cliente elige es una de las `franjas_de_entrega` (ofrécelas tal "
+            "cual y guarda la elegida con anotar_entrega); la hora exacta la confirma la dueña "
+            "según su ruta. Si dice una hora suelta ('a las 8'), respóndele con las franjas. "
             # 🔴 GUARDIA DE HILO (31-ago): re-consultar el calendario (por una duda o un
             # producto nuevo) traía 4 fechas frescas sin memoria de la ya acordada — y el
             # modelo podía repreguntar "¿para cuándo?" con la fecha firme en la conversación.
@@ -2303,6 +2440,113 @@ async def proxima_fecha_entrega(session, telefono, productos=None):
             "sigue apareciendo aquí, dala por FIJA y NO la repreguntes; solo si dejó de servir "
             "ofrécele la primera_fecha."
         ),
+    }
+
+
+_ESTADOS_CON_ENTREGA = ("pendiente", "esperando_pago", "pagado", "confirmado", "preparando")
+_REFERENCIA_MAX = 300
+
+
+async def anotar_entrega(session, telefono, franja=None, referencia=None, pedido_id=None):
+    """LA CASILLA DE LA ENTREGA (6-sep). Guarda en el pedido la FRANJA elegida (de la lista
+    CERRADA de la dueña, jamás texto libre) y/o la REFERENCIA de la dirección.
+
+    🔴 POR QUÉ EXISTE: en los dos guiones del 6-sep el cliente dijo "a las 8 am", el bot dijo
+    "anotado" y no había DÓNDE anotar. Y coordinar la entrega ocurre casi siempre DESPUÉS del
+    pago (el pedido ya está 'pagado'): por eso esta herramienta acepta pedidos pagados — es la
+    única del carril que lo hace, y no toca ni items, ni total, ni estado.
+
+    La franja se ELIGE (`_matchear_franja`): si lo que mandó el modelo no calza con una sola,
+    no se guarda nada y se devuelve la lista para que pregunte. Una hora suelta ("8 am") no
+    calza con ninguna franja a propósito: la hora exacta la confirma la dueña según su ruta.
+    """
+    if pedido_id is not None:
+        try:
+            pedido = await session.get(Pedido, int(pedido_id))
+        except (TypeError, ValueError):
+            pedido = None
+        if pedido is None or pedido.cliente_telefono != telefono:
+            return {"ok": False, "nota": "no encontré ese pedido para este cliente"}
+    else:
+        pedido = (
+            await session.execute(
+                select(Pedido)
+                .where(
+                    Pedido.cliente_telefono == telefono,
+                    Pedido.estado.in_(_ESTADOS_CON_ENTREGA),
+                )
+                .order_by(Pedido.created_at.desc())
+            )
+        ).scalars().first()
+        if pedido is None:
+            return {
+                "ok": False,
+                "nota": (
+                    "este cliente no tiene ningún pedido al que anotarle la entrega: primero "
+                    "registra el pedido con registrar_pedido."
+                ),
+            }
+
+    franjas = await _franjas_de_entrega(session)
+    guardado: list[str] = []
+    franja_txt = str(franja or "").strip()
+    if franja_txt:
+        elegida = _matchear_franja(franja_txt, franjas)
+        if elegida is None:
+            return {
+                "ok": False,
+                "franjas_de_entrega": franjas,
+                "nota": (
+                    f"'{franja_txt}' no es una de las franjas del negocio (y una hora suelta "
+                    "tampoco lo es: la hora exacta la confirma la dueña según su ruta). Ofrécele "
+                    "al cliente SOLO estas franjas, tal cual, y vuelve a llamarme con la que "
+                    "elija: " + " · ".join(franjas)
+                ),
+            }
+        pedido.entrega_franja = elegida
+        guardado.append(f"franja = {elegida}")
+
+    ref_txt = " ".join(str(referencia or "").split())[:_REFERENCIA_MAX]
+    if ref_txt:
+        pedido.entrega_referencia = ref_txt
+        guardado.append("referencia guardada")
+
+    if not guardado:
+        return {
+            "ok": False,
+            "franjas_de_entrega": franjas,
+            "nota": (
+                "no mandaste ni franja ni referencia: no hay nada que anotar. Pregúntale al "
+                "cliente en cuál franja le queda mejor (" + " · ".join(franjas) + ") y, si es "
+                "delivery, un punto de referencia."
+            ),
+        }
+
+    pedido.updated_at = now_utc()
+    await session.commit()
+
+    falta: list[str] = []
+    if not pedido.entrega_franja:
+        falta.append("la franja (ofrécele: " + " · ".join(franjas) + ")")
+    if await _falta_referencia(session, pedido):
+        falta.append("la dirección o punto de referencia (es delivery)")
+    nota = f"pedido #{pedido.id}: " + ", ".join(guardado) + "."
+    if falta:
+        nota += " Todavía falta " + " y ".join(falta) + ": pídelo con naturalidad, de a poco."
+    else:
+        nota += (
+            " La entrega quedó completa. Díselo con tus palabras y aclárale que la hora exacta "
+            "se la confirma la dueña (según su ruta). NO prometas una hora."
+        )
+    # ⚠️ La referencia NO se devuelve aquí (texto libre del cliente): en el pedido y en el panel
+    # está; al modelo le basta saber que quedó guardada.
+    return {
+        "ok": True,
+        "pedido_id": pedido.id,
+        "franja": pedido.entrega_franja,
+        "referencia_guardada": bool(pedido.entrega_referencia),
+        "falta": falta,
+        "nota": nota,
     }
 
 
@@ -2390,19 +2634,27 @@ def _respuesta_registro(
     pedido: Pedido,
     nuevo: bool,
     sin_cambios: bool = False,
+    falta_referencia: bool = False,
 ) -> dict[str, object]:
     estado = "SIN CAMBIOS: ya esperaba pago" if sin_cambios else ("NUEVO" if nuevo else "ACTUALIZADO")
+    nota = (
+        f"pedido #{pedido.id} {estado}. "
+        "Dile al cliente EXACTAMENTE este `resumen` (cópialo, NO recalcules el total). "
+        "Para cobrar, llama a generar_datos_pago con este mismo `pedido_id`."
+    )
+    # 🔴 La dirección se pide AQUÍ, al registrar, y no recién cuando la caja la exige: así el
+    # modelo la pide en el turno natural ("¿y a qué punto de referencia te lo llevo?") en vez de
+    # chocar con el rechazo de generar_datos_pago con el cliente ya esperando los datos.
+    if falta_referencia:
+        nota += " " + _NOTA_FALTA_REFERENCIA
     return {
         "ok": True,
         "pedido_id": pedido.id,
         "items": pedido.items,
         "total_usd": float(pedido.total) if pedido.total is not None else None,
         "resumen": _resumen_del_pedido(pedido),
-        "nota": (
-            f"pedido #{pedido.id} {estado}. "
-            "Dile al cliente EXACTAMENTE este `resumen` (cópialo, NO recalcules el total). "
-            "Para cobrar, llama a generar_datos_pago con este mismo `pedido_id`."
-        ),
+        "falta_referencia": falta_referencia,
+        "nota": nota,
     }
 
 
@@ -2771,7 +3023,10 @@ async def registrar_pedido(
     ):
         # El cliente solo eligió cómo pagar y el modelo intentó registrar TODO otra vez.
         # No reabrimos ni recalculamos: conserva el recibo y el precio que ya vio.
-        return _respuesta_registro(abierto, nuevo=False, sin_cambios=True)
+        return _respuesta_registro(
+            abierto, nuevo=False, sin_cambios=True,
+            falta_referencia=await _falta_referencia(session, abierto),
+        )
     if abierto is not None:
         pedido = abierto
         pedido.items = items_pedido
@@ -2801,7 +3056,9 @@ async def registrar_pedido(
         nuevo = True
     await session.commit()
     await session.refresh(pedido)
-    return _respuesta_registro(pedido, nuevo=nuevo)
+    return _respuesta_registro(
+        pedido, nuevo=nuevo, falta_referencia=await _falta_referencia(session, pedido)
+    )
 
 
 async def info_negocio(session, telefono):
@@ -3228,6 +3485,24 @@ async def generar_datos_pago(session, telefono, pedido_id=None, metodo=None):
             "zonas": zonas,
         }
 
+    # 🔴 CANDADO DE LA DIRECCIÓN (6-sep, migración 038): un DELIVERY sin punto de referencia NO
+    # se cobra. Los dos guiones del 6-sep (GLM y Sonnet) cobraron y cerraron un delivery a
+    # "Barquisimeto centro" sin pedir jamás la dirección: el lunes el repartidor no tiene a dónde
+    # ir, con el pedido ya pagado. Pedirla no bloquea la venta — es un paso, como la zona. El
+    # candado va en la CAJA (como el del envío) para que ningún camino raro se cuele. Fail-open
+    # ante la duda: `_falta_referencia` solo es True cuando se SABE que la zona no es de retiro.
+    if await _falta_referencia(session, pedido):
+        return {
+            "ok": False,
+            "falta_referencia": True,
+            "nota": (
+                "todavía NO le puedes cobrar: es DELIVERY y falta la DIRECCIÓN. Pídele al "
+                "cliente un punto de referencia (una línea, con naturalidad: '¿y a qué punto de "
+                "referencia te lo llevo?'), guárdalo con anotar_entrega y recién entonces cobra. "
+                "NO le des los datos de pago sin eso."
+            ),
+        }
+
     # ── LA CASILLA DEL MÉTODO (rama B, migración 035) ──────────────────────────────────
     # Los métodos se leen AQUÍ (antes de tocar estado o tasa) para que un `metodo` que no
     # calce se rechace SIN haber escrito nada en la BD. La lectura es la misma de siempre:
@@ -3527,7 +3802,9 @@ _MOTIVO_TITULO = {
 _MOTIVOS_DE_PAUSA = {"pide_persona", "reclamo"}
 
 
-async def pedir_ayuda(session, telefono, motivo: str, detalle: str = ""):
+async def pedir_ayuda(
+    session, telefono, motivo: str, detalle: str = "", mensaje_cliente: str | None = None
+):
     """RELEVO A LA HUMANA. El bot se topó con algo que NO le toca resolver (un precio que
     cambia, algo que no sabe, un cliente que pide una persona, un reclamo). En vez de
     inventar: PAUSA este chat, deja el aviso en la bandeja del panel, y le manda un
@@ -3560,14 +3837,20 @@ async def pedir_ayuda(session, telefono, motivo: str, detalle: str = ""):
         cliente.pausado_por = "bot"
 
     # 2) Lo último que dijo el cliente (para que la dueña entienda sin abrir nada).
-    ultimo = (
-        await session.execute(
-            select(Mensaje.contenido)
-            .where(Mensaje.cliente_telefono == telefono, Mensaje.rol == "user")
-            .order_by(Mensaje.created_at.desc())
-            .limit(1)
-        )
-    ).scalar_one_or_none()
+    # 🔴 EL MENSAJE EN VUELO MANDA (6-sep): el turno del cliente se escribe en `mensajes` AL FINAL
+    # del turno (tasks.py `_guardar_conversacion`), así que leer la tabla desde aquí devolvía el
+    # mensaje ANTERIOR — el aviso del "8 am" salió diciendo que el cliente había mandado
+    # "(comprobante)". Si quien llama (las redes de agent.py) trae el mensaje en vuelo, ése va.
+    ultimo = (mensaje_cliente or "").strip() or None
+    if ultimo is None:
+        ultimo = (
+            await session.execute(
+                select(Mensaje.contenido)
+                .where(Mensaje.cliente_telefono == telefono, Mensaje.rol == "user")
+                .order_by(Mensaje.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
 
     # 3) UN SOLO AVISO VIVO POR CHAT — pero que NO SE TRAGUE EL PROBLEMA NUEVO.
     #
@@ -4744,6 +5027,7 @@ _DISPATCH = {
     "enviar_catalogo": enviar_catalogo,
     "pedir_ayuda": pedir_ayuda,
     "proxima_fecha_entrega": proxima_fecha_entrega,
+    "anotar_entrega": anotar_entrega,
 }
 
 

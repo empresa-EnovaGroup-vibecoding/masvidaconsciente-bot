@@ -114,6 +114,16 @@ TOOLS: dict[str, dict] = {
             "ofreció 'mañana domingo' con el negocio cerrado y se inventó que ya eran las 6."
         ),
     },
+    "anotar_entrega": {
+        "etiqueta": "Anotar la entrega",
+        "descripcion": "Guarda en el pedido la franja que eligió el cliente y su punto de referencia.",
+        "pierde": "—",
+        "motivo_blindaje": (
+            "Es la casilla de la ENTREGA: sin ella la franja y la dirección viven solo en el chat "
+            "(el 6-sep el bot dijo 'anotado' y no anotó en ninguna parte), y como la caja exige la "
+            "dirección para cobrar un delivery, apagarla dejaría los deliveries sin poder cobrarse."
+        ),
+    },
     "pedir_ayuda": {
         "etiqueta": "Llamarte a ti",
         "descripcion": "Pausa el bot y te avisa por WhatsApp cuando no sabe algo.",
@@ -135,8 +145,12 @@ _REDES = frozenset({"pedir_ayuda", "enviar_catalogo"})
 # Apagarlas no le quitaría una capacidad al bot — le quitaría el ancla, y empezaría a inventar.
 # Si algún día se quieren abrir, es UNA línea… y hay que marcar sus 21 menciones del prompt.
 _NUCLEO = frozenset({"ver_catalogo", "info_producto", "proxima_fecha_entrega"})
+# EL CARRIL DE LA ENTREGA (6-sep): `generar_datos_pago` exige la dirección en un delivery, y la
+# única puerta para guardarla es esta. Apagarla no le quita una capacidad al bot: deja los
+# deliveries sin poder cobrarse.
+_ENTREGA = frozenset({"anotar_entrega"})
 
-BLINDADAS = _COBRO | _REDES | _NUCLEO
+BLINDADAS = _COBRO | _REDES | _NUCLEO | _ENTREGA
 DESACTIVABLES = frozenset(TOOLS) - BLINDADAS  # hoy: 5
 
 

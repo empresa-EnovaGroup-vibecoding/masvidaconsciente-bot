@@ -24,6 +24,60 @@
 
 ---
 
+## 2026-09-06 (24) — 🚚 LA ENTREGA COMPLETA: franja + referencia con casilla (migración 038)
+
+**El caso (pruebas, 6-sep, el MISMO guion con dos modelos — GLM-5.3-Flash y Sonnet 4.6):** el
+cliente dijo "a las 8 am", el bot dijo "anotado"… y no había DÓNDE anotar (`pedidos.notas` y
+`clientes.notas` vacíos). Los dos registraron un delivery a "Barquisimeto centro" sin pedir jamás
+la dirección: pedido pagado, repartidor sin destino. Y `services/mensajes.py` ordenaba al cierre
+del pago "pregúntale a qué hora le queda bien": el propio código empujaba a prometer una hora
+que la dueña no controla. Misma clase que el método de pago (035): LA VENTANA SIN ESTADO.
+
+**La regla de negocio (la decidió Maired, 6-sep):** el cliente NO elige una hora, elige una
+**FRANJA** de la lista CERRADA de la dueña (`franjas_entrega`, en Horario del panel; sin
+configurar, las de fábrica: "en la mañana (10 a 12)" / "en la tarde (2 a 6)"). La HORA EXACTA la
+pone Whuilianny según su ruta y la confirma ella desde su teléfono. Un DELIVERY sin referencia
+**NO se cobra**. No se construyó "productos que no van en la mañana" (YAGNI: ella confirma igual).
+
+**Lo que cambió (bot, PR `entrega-completa`):**
+1. **Migración 038:** `pedidos.entrega_franja` + `pedidos.entrega_referencia` (aditiva, nullable).
+2. **Tool nueva `anotar_entrega(franja, referencia, pedido_id)`** — BLINDADA. Franja de vocabulario
+   cerrado (`_matchear_franja`: exacta → contención → palabra clave; "8 am" NO calza a propósito);
+   referencia con las palabras del cliente (recortada a 300). Acepta pedidos PAGADOS (coordinar
+   ocurre después del pago). La referencia no viaja de vuelta al modelo.
+3. **`proxima_fecha_entrega` devuelve `franjas_de_entrega`** y su nota ya no dice "la hora la
+   coordina Whuilianny" sino "la hora exacta NO existe como opción: ofrece las franjas".
+4. **Candado en la CAJA:** `generar_datos_pago` rechaza cobrar un delivery sin referencia
+   (`_falta_referencia`, fail-open: solo traba cuando se SABE que la zona no es de retiro).
+   `registrar_pedido` avisa lo mismo en su nota para que se pida en el turno natural.
+5. **El cierre del pago** (`_frase_entrega` / `contexto_entrega`) pregunta la FRANJA, recuerda la
+   ya elegida, pide la referencia si falta — y la pared del dinero no se mueve (test).
+   `msg_guia_confirmado` por defecto ya no dice "a qué hora". ⚠️ La copia GUARDADA de la dueña en
+   ambas BD dice "dile que coordinan la entrega" (texto viejo, inofensivo): el contexto del código
+   manda igual.
+6. **ESTADO DEL CLIENTE** muestra franja/referencia guardadas y lo que FALTA (también en pedidos
+   pagados). Regla 118 y el bloque del calendario reescritos: franja sí, hora no.
+7. **Aviso del guardia de promesas ya no sale desfasado un turno:** `pedir_ayuda` acepta
+   `mensaje_cliente` y `_escalar` le pasa el mensaje en vuelo (antes leía `mensajes`, que se
+   escribe al FINAL del turno → el aviso del "8 am" decía "(comprobante)").
+8. **Panel:** Horario → sección "Franjas de entrega" (una por línea); tarjeta del pedido muestra
+   Franja y Referencia ("falta la dirección" en rojo si es delivery sin ella).
+
+**Tests:** `tests/test_entrega_completa.py` (30) — la suite completa en verde (exit 0), ruff limpio,
+`tsc` + `next build` del panel en verde.
+
+**Corrección del día:** la agente se llama **Alejandra** (asesora), no Whuilianny — está así en
+la voz viva de la BD. "La dueña te confirma la entrega" es correcto en tercera persona.
+
+**Medido hoy (telemetría `llamadas_ia`, mismo guion):** GLM-5.3-Flash $0,022 / 12,6 s por
+respuesta / 7 grietas de humanidad; Sonnet 4.6 $0,39 / 2,2 s / mejor voz. Sonnet se queda. El
+costo se ataca por código (próximo PR): fotos repetidas frenadas (3 vueltas botadas, ~9%), prefijo
+del prompt del comprobante alineado a caché (~19%), y a mediano plazo adelgazar los 24k tokens.
+
+**Pendiente:** repetir el guion en pruebas con esto desplegado; PR "menos tokens, misma voz";
+medir modo DOS (Haiku operador + Sonnet voz); el schema de `pedir_ayuda` aún dice "tú ERES
+Whuilianny" (debería decir Alejandra).
+
 ## 2026-09-05 (23) — 🔒 EL CARRIL DEL PAGO, BLINDADO: los 7 huecos de la cacería (C3, C5-C11)
 
 **Lo ordenó Maired ("arregla los del camino del dinero antes de abrirlo a clientas reales").**

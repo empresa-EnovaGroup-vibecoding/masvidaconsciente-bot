@@ -267,7 +267,8 @@ async def _asegurar_foto(
 
 
 async def _escalar(
-    ejecutar, telefono: str, motivo: str, detalle: str, *, ya_fallo: bool = False
+    ejecutar, telefono: str, motivo: str, detalle: str, *,
+    ya_fallo: bool = False, mensaje_cliente: str | None = None,
 ) -> bool:
     """Escala a la dueña Y DICE SI LO LOGRÓ. True solo si el aviso quedó registrado de verdad.
 
@@ -298,6 +299,11 @@ async def _escalar(
         )
         return False
     args = {"motivo": motivo, "detalle": detalle}
+    # El mensaje EN VUELO del cliente (6-sep): `pedir_ayuda` lo lee de `mensajes`, pero ese turno
+    # se escribe al FINAL, así que desde aquí veía el mensaje ANTERIOR ("(comprobante)" en vez de
+    # "8 am"). Si quien escala lo tiene a mano, viaja.
+    if mensaje_cliente:
+        args["mensaje_cliente"] = str(mensaje_cliente)[:500]
     for intento in (1, 2):
         try:
             resultado = await ejecutar("pedir_ayuda", args, telefono)
@@ -3079,7 +3085,7 @@ async def responder(
                     ejecutar, telefono, "no_se",
                     'el bot le prometió al cliente que le confirma algo que NO sabe. '
                     f'El cliente preguntó: "{(pregunta_cliente or "")[:160]}"',
-                    ya_fallo=relevo_imposible,
+                    ya_fallo=relevo_imposible, mensaje_cliente=pregunta_cliente,
                 )
                 relevo_imposible = relevo_imposible or not pidio_ayuda
 
@@ -3093,7 +3099,7 @@ async def responder(
                     "el bot lleva TRES turnos preguntando lo mismo y el cliente no se lo contesta: "
                     "está atascado y la venta se está cayendo. Entra tú y destrábalo. "
                     f'Lo último que preguntó el cliente: "{(pregunta_cliente or "")[:160]}"',
-                    ya_fallo=relevo_imposible,
+                    ya_fallo=relevo_imposible, mensaje_cliente=pregunta_cliente,
                 )
                 relevo_imposible = relevo_imposible or not pidio_ayuda
 

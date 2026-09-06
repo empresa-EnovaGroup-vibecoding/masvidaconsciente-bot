@@ -121,6 +121,10 @@ CLAVES_CONFIG = [
     # Hasta qué hora se aceptan pedidos para el MISMO día. Pasada esa hora, el código deja de
     # permitir "hoy" y el bot ofrece el próximo día de entrega. Es un CANDADO.
     "hora_corte",
+    # FRANJAS DE ENTREGA (6-sep, migración 038): una por línea o separadas por coma. El cliente
+    # elige UNA de estas (nunca una hora exacta: esa la confirma la dueña según su ruta) y el bot
+    # la guarda en el pedido con `anotar_entrega`. Vacío = las de fábrica (tools.py).
+    "franjas_entrega",
     # Modelo de IA conversacional, lo elige la PROVEEDORA (no la clienta). El bot
     # lo lee con leer_modelo_ia(). La voz (transcripción) va aparte y fija.
     "modelo_ia",
@@ -403,6 +407,10 @@ async def listar_pedidos(_: str = Depends(usuario_actual)):
             # (Auditoría 2026-08-02, API-4.)
             "entrega": p.entrega,
             "entrega_fecha": p.entrega_fecha.isoformat() if p.entrega_fecha else None,
+            # LA ENTREGA COMPLETA (038): la franja elegida y la dirección. Es lo que Whuilianny
+            # necesita ver para armar su ruta y confirmar la hora.
+            "entrega_franja": p.entrega_franja,
+            "entrega_referencia": p.entrega_referencia,
             "zona_nombre": p.zona_nombre,
             "costo_envio": float(p.costo_envio or 0),
             # Lo que el panel necesita para cuadrar a ojo: ítems + envío = total.
