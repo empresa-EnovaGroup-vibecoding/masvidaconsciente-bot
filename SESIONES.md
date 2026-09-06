@@ -24,6 +24,42 @@
 
 ---
 
+## 2026-09-05 (22) — 🚀 PRODUCCIÓN PROMOVIDA A MASTER COMPLETO (89aea1d) — con la liturgia entera
+
+**Lo pidió Maired de frente ("dale, vamos con la primera") y el gatillo del deploy lo apretó
+ella misma** (el clasificador de permisos de Claude bloqueó —con razón— que la IA disparara sola
+un deploy a producción; ella dio la orden expresa y se ejecutó). Producción estaba 9 PRs atrás.
+
+**La liturgia, paso a paso y verificada:**
+1. **Respaldo previo**: `pg_dump -Fc` (3.8MB) + personalidad a texto →
+   `/root/respaldos-pre-promocion/prod_pre_promocion_20260905_2337.*` + foto de datos anotada.
+2. **`PUBLIC_BASE_URL=https://api.masvidaconsciente.store`** en bot Y worker de netcup, creada
+   por la **API de Coolify** (token de `~/.ssh/coolify_token.txt`; la API de netcup vive
+   encendida porque el workflow de deploy la usa — NO se toca). Quedó **CIFRADA** (256 bytes,
+   par producción+preview: normal de Coolify). La lección del 3-sep se respetó: jamás INSERT
+   directo del value.
+3. **Deploy oficial**: `gh workflow run deploy.yml -f destino=produccion` → verde en 2m12s,
+   detectores de esquema OK dentro del contenedor nuevo.
+4. **Verificación**: bot y worker `89aea1d` (= master exacto) · `PUBLIC_BASE_URL` adentro ·
+   **38 migraciones** (036+037: `metodos_pago` ya trae `efectivo`) · datos IDÉNTICOS
+   (32/37/299/14.910/0/34) · personalidad 7.331 car intacta · lista blanca intacta (solo
+   Maired) · `/salud` ok · Meta GREEN · saldo $8.02.
+5. **LOS 27 BANCOS EN VERDE** en el contenedor de producción (`/root/bancos_post_promo.log`),
+   corridos con `nohup` para sobrevivir cortes de conexión.
+6. **Panel re-desplegado** (API de Coolify): contenedor nuevo arriba, `/login` 200 — la ★ de la
+   foto principal ya está en producción.
+
+**Producción trae ahora TODO septiembre**: catálogo PDF que llega · resolvedor de
+títulos/sabores/familias · los 5 videos MP4 reales (bucket compartido ya sano) · foto principal
+· proactivo=1 + variedad en el "otra vez" · candado de duplicados v2 + prioridad de intención ·
+efectivo coherente.
+
+**Lo que sigue (en orden):** pruebas de humo con el número real (casilla 5 de TERMINADO — con
+OK de horario por la coexistencia) · anular el pedido basura #2603 de PRUEBAS (sigue en
+esperando_pago) · la deuda del carril del pago C5-C11 (cacería del 3-sep, próximo PR) · llave
+de IA por cliente + reporte de consumo (adoptado de la comparación con fooddy, SESIONES aparte)
+· decisiones de Maired: modelo de producción, rotar clave panel+JWT (D5), abrir lista blanca.
+
 ## 2026-09-03 (21) — 🧠 LA INTENCIÓN ACTUAL MANDA + 🔒 DUPLICADO v2 + 💵 EFECTIVO COHERENTE (PR #24)
 
 **Por qué el bot estaba respondiendo tan mal:** la conversación real de pruebas demostró que
