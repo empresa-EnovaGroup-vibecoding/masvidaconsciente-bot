@@ -264,6 +264,13 @@ class Pedido(Base):
     # La FECHA real acordada (no un texto que haya que adivinar). El código la valida contra
     # el calendario del negocio: día de entrega, feriados y anticipación de los productos.
     entrega_fecha: Mapped[date | None] = mapped_column(Date, nullable=True)
+    # ── LA ENTREGA COMPLETA (migración 038) ──
+    # `entrega_franja` = la FRANJA que eligió el cliente, tal cual está en la lista CERRADA de la
+    # dueña (`franjas_entrega`). El cliente no elige una hora: la hora exacta la pone Whuilianny
+    # según su ruta. `entrega_referencia` = la dirección / punto de referencia, con las palabras
+    # del cliente. Nacieron el 6-sep: el bot decía "anotado" y no anotaba en ninguna parte.
+    entrega_franja: Mapped[str | None] = mapped_column(Text, nullable=True)
+    entrega_referencia: Mapped[str | None] = mapped_column(Text, nullable=True)
     # ── EL ENVÍO (migración 023) ──
     # `zona_id` = de qué zona es (lista CERRADA: el bot la ELIGE, no la escribe).
     # `zona_nombre` y `costo_envio` van CONGELADOS aquí, igual que el precio del producto: si

@@ -115,7 +115,7 @@ Si dos reglas parecen pedirte cosas distintas, gana la de número más bajo: es 
 !a - CADA PEDIDO ES SEPARADO. El estado real te lo digo en el bloque "ESTADO DEL CLIENTE" (esa es la verdad, manda sobre el chat). Si un pedido ya se cerró o se pagó, lo que pida ahora es un pedido NUEVO: ignora los productos de los anteriores — PERO si ACABA de pagar y está contestando la hora o la entrega, eso NO es un pedido nuevo: coordina esa entrega y no registres ni cobres nada. Nunca deduzcas del chat si un pago entró ni cuánto falta; si pregunta por su saldo, di que lo estás verificando, no calcules diferencias.
 
 ═══ 6 · LA ENTREGA Y LAS FECHAS ═══
-!a - LA ENTREGA (antes de cobrar, SIEMPRE): un pedido sin fecha de entrega es un reclamo esperando a pasar. Antes de dar los datos de pago pregunta para cuándo lo quiere y cómo (retiro o delivery, y dónde). Pásale a registrar_pedido DOS cosas: `entrega_fecha` = la FECHA en formato AAAA-MM-DD, y `entrega` = el cómo, con las palabras del cliente ("delivery en Cabudare"). La HORA no la cierres tú: la coordina la dueña.
+!a - LA ENTREGA (antes de cobrar, SIEMPRE): un pedido sin fecha de entrega es un reclamo esperando a pasar. Antes de dar los datos de pago pregunta para cuándo lo quiere y cómo (retiro o delivery, y dónde). Pásale a registrar_pedido DOS cosas: `entrega_fecha` = la FECHA en formato AAAA-MM-DD, y `entrega` = el cómo, con las palabras del cliente ("delivery en Cabudare"). LA HORA EXACTA NO EXISTE COMO OPCIÓN: ni la preguntes ni la prometas. El cliente elige una de las FRANJAS que te da proxima_fecha_entrega (`franjas_de_entrega`, ofrécelas tal cual) y tú la guardas con anotar_entrega; la hora exacta la confirma la dueña según su ruta. Si el cliente dice una hora suelta ("a las 8"), respóndele con las franjas. Y si es DELIVERY, pide un punto de REFERENCIA (una línea, sin formulario) y guárdalo con anotar_entrega: sin él NO puedes cobrar (generar_datos_pago te lo rechaza).
   · El CÓDIGO valida esa fecha contra el calendario real (días de entrega, feriados y los días de ANTICIPACIÓN de cada producto). Si no se puede, te devuelve el motivo y la PRIMERA fecha que sí sirve: ofrécele ESA con cariño. Sin fecha de entrega acordada NO PUEDES COBRAR: generar_datos_pago te lo va a rechazar.
 !a @proxima_fecha_entrega - LAS FECHAS SE CONSULTAN, NO SE CALCULAN. Antes de nombrar CUALQUIER día de entrega —"mañana", "el lunes", "pasado mañana", una fecha— llama a proxima_fecha_entrega y ofrece SOLO lo que te devuelva, copiado. Nunca cuentes días tú ni supongas que mañana se entrega: el negocio no abre todos los días y hay productos que necesitan preparación. Y nunca te inventes qué hora es ni si "ya pasó la hora": la herramienta te lo dice. Es la misma regla que el dinero — una fecha es una cifra, y las cifras se copian.
 !v - LA FECHA SE AFIRMA, NO SE PONE A VOTACIÓN. Cuando sepas para cuándo puedes, díselo con naturalidad ("te lo dejo para el lunes"). No le ofrezcas dos días para que elija ni le preguntes qué día prefiere: tú sabes cuál se puede y él no. Si ÉL pide otro día, ahí sí lo conversas.
@@ -651,6 +651,50 @@ def _items_sin_dinero(items) -> str:
     return " · ".join(partes)
 
 
+def _parece_delivery(pedido) -> bool:
+    """¿Se lo LLEVAN? Heurística SOLO para informar al modelo (el candado real, que sí consulta
+    la zona, vive en `generar_datos_pago`): flete > 0, o el texto de la entrega habla de delivery."""
+    try:
+        if float(getattr(pedido, "costo_envio", 0) or 0) > 0:
+            return True
+    except (TypeError, ValueError):
+        pass
+    entrega = str(getattr(pedido, "entrega", None) or "").lower()
+    return any(p in entrega for p in ("delivery", "domicilio", "envío", "envio", "llevar"))
+
+
+def _lineas_entrega_pendiente(pedido) -> list[str]:
+    """La FRANJA y la DIRECCIÓN del pedido (migración 038): lo guardado se muestra, lo que falta
+    se pide. `getattr` con default: las filas viejas y los dobles de los tests no traen estos
+    campos, y sin dato simplemente no sale la línea. La casilla nació el 6-sep: el bot decía
+    "anotado" a "8 am" y no anotaba en ninguna parte."""
+    lineas: list[str] = []
+    franja = str(getattr(pedido, "entrega_franja", None) or "").strip()
+    referencia = str(getattr(pedido, "entrega_referencia", None) or "").strip()
+    if franja:
+        lineas.append(
+            f"- Franja de entrega YA ELEGIDA: {franja}. NO la repreguntes; la hora exacta la "
+            "confirma la dueña según su ruta (no prometas una hora)."
+        )
+    else:
+        lineas.append(
+            "- Franja de entrega SIN ELEGIR: ofrécele las `franjas_de_entrega` que te da "
+            "proxima_fecha_entrega (tal cual, nunca una hora exacta) y guarda la que elija con "
+            "anotar_entrega."
+        )
+    if _parece_delivery(pedido):
+        if referencia:
+            lineas.append(
+                f"- Dirección / referencia YA GUARDADA: {referencia}. NO la vuelvas a pedir."
+            )
+        else:
+            lineas.append(
+                "- Es DELIVERY y FALTA la dirección: pídele un punto de referencia (una línea) "
+                "y guárdalo con anotar_entrega. Sin eso no se puede cobrar ni entregar."
+            )
+    return lineas
+
+
 async def _estado_cliente_texto(telefono: str) -> str:
     """Estado REAL de los pedidos del cliente (desde la BD), inyectado cada turno
     para que el modelo NO lo adivine del chat. Mismo principio que el dinero: la
@@ -747,6 +791,9 @@ async def _estado_cliente_texto(telefono: str) -> str:
                 f"pedido: coordínala y ya. Un pedido NUEVO solo si pide MÁS productos con todas "
                 f"sus letras."
             )
+            # Lo que FALTA de la entrega de ese pedido pagado (6-sep): coordinar la franja y la
+            # dirección ocurre casi siempre DESPUÉS del pago, y el modelo tiene que ver qué hay.
+            lineas.extend(_lineas_entrega_pendiente(ult))
         elif ult.estado in cerrados:
             lineas.append(
                 f"- Su último pedido (#{ult.id}) ya se CERRÓ. IGNORA esos productos: lo que pida ahora es un PEDIDO NUEVO y aparte."
@@ -786,6 +833,7 @@ async def _estado_cliente_texto(telefono: str) -> str:
                 "- Entrega YA ACORDADA: " + " — ".join(entrega_partes) + ". NO la vuelvas a "
                 "preguntar; si el cliente la cambia, vale lo nuevo que diga."
             )
+        lineas.extend(_lineas_entrega_pendiente(abierto))
     lineas.append(
         "Si en ESTE turno registras un pedido nuevo, ese manda (esto es el estado al inicio del turno). NO calcules saldos ni si un pago entró."
     )
@@ -911,7 +959,9 @@ async def _calendario_texto() -> str:
         "\nCuando acuerdes la entrega, pásale a registrar_pedido la FECHA en formato AAAA-MM-DD "
         "(`entrega_fecha`). El código la valida contra este calendario y la anticipación de cada "
         "producto: si no se puede, te dice la primera fecha que SÍ. NO prometas fechas por tu "
-        "cuenta ni calcules tú los días hábiles."
+        "cuenta ni calcules tú los días hábiles. La HORA no se acuerda: el cliente elige una "
+        "FRANJA (las trae proxima_fecha_entrega en `franjas_de_entrega`) y la guardas con "
+        "anotar_entrega; la hora exacta la confirma la dueña según su ruta."
     )
     return texto
 

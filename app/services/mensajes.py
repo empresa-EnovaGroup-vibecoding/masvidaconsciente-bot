@@ -27,8 +27,9 @@ MENSAJES_DEFAULT = {
     "msg_guia_confirmado": (
         "el pago del cliente acaba de quedar CONFIRMADO; cierra la venta con calidez, "
         "agradécele su compra y CIERRA LA ENTREGA: si te digo cómo y cuándo la recibe, "
-        "díselo con tus palabras y pregúntale a qué hora le queda bien; si no lo sabes, "
-        "dile que coordinan la entrega"
+        "díselo con tus palabras y pregúntale en cuál FRANJA le queda mejor (nunca una hora "
+        "exacta: esa la confirma la dueña según su ruta); si no lo sabes, dile que coordinan "
+        "la entrega"
     ),
     "msg_guia_rechazado": (
         "no se pudo verificar el pago del cliente; pídele con suavidad y sin alarmar que "
@@ -61,8 +62,21 @@ async def leer_guia(clave: str) -> str:
     return default
 
 
-def _frase_entrega(zona: str | None, es_retiro: bool | None, fecha: date | None) -> str:
+def _frase_entrega(
+    zona: str | None,
+    es_retiro: bool | None,
+    fecha: date | None,
+    franjas: list[str] | None = None,
+    franja_elegida: str | None = None,
+    falta_referencia: bool = False,
+) -> str:
     """La frase que se le PEGA a la situación del pago confirmado. PURA (sin BD): la prueba el CI.
+
+    🗓️ LA HORA YA NO SE PREGUNTA (6-sep, regla de negocio de Maired): el cliente elige una FRANJA
+    de la lista cerrada de la dueña (`franjas`) y la hora exacta la confirma Whuilianny según su
+    ruta. Con `franja_elegida` ya guardada, se le recuerda y no se repregunta. Sin franjas (los
+    llamadores viejos), sale la redacción de siempre. `falta_referencia`: es delivery y no hay
+    dirección — se pide en el mismo cierre.
 
     🔴 NI UNA CIFRA DE DINERO SALE DE AQUÍ, Y NO ES UN ESCRÚPULO: `redactar_mensaje` arma la lista
     blanca del carril del dinero con `autorizados_por_moneda(situacion)`, así que **todo monto que
@@ -109,10 +123,27 @@ def _frase_entrega(zona: str | None, es_retiro: bool | None, fecha: date | None)
     partes = [p for p in (como, cuando) if p]
     if not partes:
         return ""  # no sabemos nada de la entrega: la situación queda EXACTAMENTE como hoy
-    return (
-        " Y la entrega ya está acordada: " + " · ".join(partes) + ". Díselo con tus palabras "
-        "y pregúntale a qué hora le queda bien."
-    )
+    texto = " Y la entrega ya está acordada: " + " · ".join(partes) + ". Díselo con tus palabras"
+    franja = " ".join((franja_elegida or "").split())
+    if franja:
+        texto += (
+            f" y recuérdale que la eligió {franja}: la hora exacta se la confirma la dueña "
+            "según su ruta (NO prometas una hora)."
+        )
+    elif franjas:
+        texto += (
+            " y pregúntale en cuál de estas franjas le queda mejor: " + " o ".join(franjas)
+            + " (NO preguntes una hora exacta: esa la confirma la dueña según su ruta). Cuando "
+            "elija, guárdala con anotar_entrega."
+        )
+    else:
+        texto += " y pregúntale a qué hora le queda bien."
+    if falta_referencia:
+        texto += (
+            " Y pídele un punto de referencia de la dirección (una línea) y guárdalo con "
+            "anotar_entrega: sin eso no hay a dónde llevarlo."
+        )
+    return texto
 
 
 async def contexto_entrega(pedido) -> str:
@@ -138,16 +169,26 @@ async def contexto_entrega(pedido) -> str:
     if pedido is None:
         return ""
     try:
+        from app.agent.tools import _franjas_de_entrega
+
         es_retiro = None
-        if pedido.zona_id is not None:
-            factory = get_session_factory()
-            async with factory() as session:
+        factory = get_session_factory()
+        async with factory() as session:
+            if pedido.zona_id is not None:
                 es_retiro = (
                     await session.execute(
                         select(ZonaEntrega.es_retiro).where(ZonaEntrega.id == pedido.zona_id)
                     )
                 ).scalars().first()
-        return _frase_entrega(pedido.zona_nombre, es_retiro, pedido.entrega_fecha)
+            franjas = await _franjas_de_entrega(session)
+        # `getattr` con default: filas anteriores a la 038 y dobles de tests sin esos campos.
+        franja_elegida = getattr(pedido, "entrega_franja", None)
+        referencia = str(getattr(pedido, "entrega_referencia", None) or "").strip()
+        falta_referencia = es_retiro is False and not referencia
+        return _frase_entrega(
+            pedido.zona_nombre, es_retiro, pedido.entrega_fecha,
+            franjas=franjas, franja_elegida=franja_elegida, falta_referencia=falta_referencia,
+        )
     except Exception:  # noqa: BLE001 — el aviso del PAGO no se cae por un adorno de la entrega
         logger.exception(
             "No se pudo armar el contexto de entrega del pedido %s", getattr(pedido, "id", None)
