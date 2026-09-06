@@ -86,7 +86,7 @@ Si dos reglas parecen pedirte cosas distintas, gana la de número más bajo: es 
 - ERES UNA CERRADORA, NO UNA RECEPCIONISTA: tu trabajo no es informar, es VENDER. Vive estas cuatro:
   · NO REPREGUNTES LO QUE YA SABES. Si ya te dio con qué trabajar, ACTÚA con eso. A "quiero una docena de empanadas keto" no le preguntes de cuál ni cuántos paquetes: ya sabes que son keto y que quiere 12. Registra y CIERRA: "listo, con 3 paquetes te llevas 12 empanadas keto 💚 para cuándo te las preparo?". Cada pregunta de algo que ya dijo lo aleja de comprar.
   · UN SOLO PASO A LA VEZ. Nunca amontones 2-3 preguntas en un mensaje: eso es un interrogatorio, no una venta. Pide SOLO el siguiente dato que te falta. El orden es: qué producto → cuántos → para cuándo y cómo → cobrar. No preguntes el relleno si aún no sabes cuántos quiere; no preguntes la fecha si aún no eligió el producto.
-  · UNA PREGUNTA DE ELECCIÓN LLEVA SUS OPCIONES. Si le preguntas "de cuál relleno / sabor / masa / tamaño?", NOMBRA en ese mismo mensaje las opciones REALES de ESE producto (las de su ficha o del catálogo), cortas y en una línea: "chocolate, limón pistacho, canela naranja o chocomerey, cuál te provoca?". Una pregunta de elegir sin las opciones no se puede contestar: el cliente no las sabe. Esto NO contradice "no recites la ficha": recitar es soltar ingredientes y duración sin que nadie pregunte; aquí solo nombras lo que le estás pidiendo que elija.
+  · UNA PREGUNTA DE ELECCIÓN LLEVA SUS OPCIONES. Si le preguntas "de cuál relleno / sabor / masa / tamaño?", NOMBRA en ese mismo mensaje las opciones REALES de ESE producto (las de su ficha o del catálogo), cortas y en una línea: "chocolate, limón pistacho, canela naranja o chocomerey, cuál te provoca?". Una pregunta de elegir sin las opciones no se puede contestar: el cliente no las sabe. Las opciones de cada producto están en su ficha del CATÁLOGO ("sabores/rellenos para elegir"); si ahí no aparecen, consúltalas con info_producto ANTES de preguntar — jamás preguntes "de cuál" a ciegas. Esto NO contradice "no recites la ficha": recitar es soltar ingredientes y duración sin que nadie pregunte; aquí solo nombras lo que le estás pidiendo que elija.
   · ASUME EL SÍ. Habla como si la venta ya va: "te preparo…", "te dejo…", "te lo tengo para el sábado?" — no "quieres que…?", "te gustaría…?". Propón, no pidas permiso. Pero asumir el sí NO es dar por hecho algo que todavía no hiciste: los verbos de REGISTRO ("te lo anoto", "te lo agendo", "te lo aparto", "queda registrado") solo se dicen cuando el pedido YA quedó registrado de verdad. Antes de eso avanza con "te preparo…", "te llevas…".
   · CIERRA CON GANCHO. Cuando dude, no sueltes más datos: dale el motivo REAL de ESE producto y remata hacia decidir. REAL = que esté en SU ficha o en el CATÁLOGO de este mensaje (de qué es, cuántas trae, cuánto dura, si se congela, si es apto para diabéticos). Si el gancho que se te ocurre no está escrito en ningún sitio, NO lo digas. Si sigue sin decidirse, {{enviar_fotos_producto|muéstrale la foto (enviar_fotos_producto): verlo convence más que mil palabras}}.
 - SI DUDAN DE QUE SEA SANO O DE QUE VALGA LO QUE CUESTA: EDUCA, NO REBAJES. Dos movimientos:
@@ -375,6 +375,30 @@ async def leer_modelo_ia() -> str:
     return settings.openrouter_model
 
 
+# La línea de rellenos/sabores dentro de una descripción libre: "rellenos: chocolate, limón…" o
+# "relleno de maca merey o de mantequilla de pistacho". Solo se usa cuando el tamaño no tiene
+# `sabores` cargado (ver `_catalogo_bloque`).
+_OPCIONES_DESCRIPCION_RE = re.compile(
+    r"(?im)^\s*(?:rellenos?|sabores?)\s*:\s*(.+?)\s*\.?\s*$"
+)
+_OPCIONES_INLINE_RE = re.compile(r"(?i)\brellenos?\s+de\s+(.+?)(?:\.|$)")
+
+
+def _opciones_en_descripcion(descripcion: str | None) -> str | None:
+    """Las opciones (rellenos/sabores) escritas en la descripción libre, o None. Primero una
+    línea "rellenos: …"; si no, un "relleno de X o de Y" dentro del texto. Corta y en una línea."""
+    texto = str(descripcion or "")
+    if not texto.strip():
+        return None
+    m = _OPCIONES_DESCRIPCION_RE.search(texto)
+    if not m:
+        m = _OPCIONES_INLINE_RE.search(texto)
+    if not m:
+        return None
+    opciones = " ".join(m.group(1).split()).rstrip(".")
+    return opciones[:160] or None
+
+
 # Si el catálogo tiene MÁS de este número de productos, en el prompt va solo el índice
 # de categorías (no cada producto), para no inflarlo. El detalle lo trae ver_catalogo.
 # Por debajo, va la lista completa como ancla anti-invención (negocio chico, como másvida).
@@ -461,6 +485,16 @@ async def _catalogo_bloque() -> str:
                 return f"${e}" if e is not None else _SIN_PRECIO
 
             interno = []
+            # 🔴 LAS OPCIONES A LA VISTA (6-sep). Las Galletas New York tenían sus rellenos SOLO en
+            # la `descripcion` ("rellenos: chocolate, limón pistacho…"), que aquí se excluye a
+            # propósito, y el campo estructurado `sabores` del tamaño estaba VACÍO. Resultado
+            # medido tres veces el mismo día: el modelo preguntaba "de cuál relleno te llevo?"
+            # sin poder nombrar ninguno — no los tenía delante. La regla del prompt ("una
+            # pregunta de elección lleva sus opciones") no puede cumplirse con un dato que no
+            # está: el código lo pone. Si `sabores` está vacío, se rescata la línea de rellenos
+            # o sabores de la descripción. Es un respaldo: la casilla correcta sigue siendo
+            # `sabores` en el panel.
+            rescate = _opciones_en_descripcion(p.descripcion)
             if len(vs) > 1:
                 # MÁS DE UN TAMAÑO: cada uno con SU precio y SU id. El bot TIENE que preguntar
                 # cuál quiere antes de registrar: si adivina, cobra mal (era la fuga de $3 de
@@ -468,8 +502,8 @@ async def _catalogo_bloque() -> str:
                 partes = []
                 for v in vs:
                     trozo = f"{v.presentacion} = {_pre(v)} (id_para_pedir={v.id})"
-                    if v.sabores:
-                        trozo += f" [sabores: {v.sabores}]"
+                    if v.sabores or rescate:
+                        trozo += f" [sabores: {v.sabores or rescate}]"
                     if not v.disponible:
                         trozo += " [AGOTADO]"
                     partes.append(trozo)
@@ -480,8 +514,10 @@ async def _catalogo_bloque() -> str:
             elif vs:
                 v = vs[0]
                 interno.append(f"precio {_pre(v)} (id_para_pedir={v.id})")
-                if v.sabores:
-                    interno.append(f"sabores: {v.sabores}")
+                if v.sabores or rescate:
+                    interno.append(
+                        f"sabores/rellenos para elegir (nómbralos al preguntar): {v.sabores or rescate}"
+                    )
                 if not v.disponible:
                     interno.append("AGOTADO")
             else:
