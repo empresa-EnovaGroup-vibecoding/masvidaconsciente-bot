@@ -77,7 +77,15 @@ y salud, memoria que no se olvida a las 24h, y 8 migraciones nuevas (hasta la 03
 > sin tocar. Queda pedir un video real de Tortas keto: el archivo ya es compatible, pero su
 > contenido sigue siendo un solo cuadro con audio. ✅ **Producción alcanzó todo esto el 5-sep.**
 
-## Última verificación: **2026-09-05 (~19:40 VET) — PRODUCCIÓN PROMOVIDA A MASTER COMPLETO (89aea1d)**
+## Última verificación: **2026-09-05 (~21:15 VET) — LOS DOS ENTORNOS EN `df67e4b` (el carril del pago blindado, PR #27)**
+
+> ✅ Tras fusionar Maired el #27: **pruebas desplegado primero como puerta** (27/27 bancos verdes
+> con el código nuevo del dinero) → **producción** por `workflow_dispatch` (CI verde) → bot y
+> worker de LOS DOS entornos en `df67e4b` · 38 migraciones · `/salud` ok · lista blanca intacta ·
+> **27/27 bancos también en producción** (`/root/bancos_pr27.log` en cada VPS). Los 7 candados
+> nuevos del carril del pago (C3, C5-C11 de la cacería) están vivos en producción.
+
+## Verificación anterior: **2026-09-05 (~19:40 VET) — PRODUCCIÓN PROMOVIDA A MASTER COMPLETO (89aea1d)**
 
 > ✅ **La promoción del 5-sep, con OK expreso de Maired, liturgia completa:** respaldo previo
 > (`/root/respaldos-pre-promocion/prod_pre_promocion_20260905_2337.dump`, 3.8MB + personalidad) →
