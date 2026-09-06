@@ -1696,17 +1696,42 @@ async def _procesar_comprobante(
             "dirección: eso viene después, cuando el pago quede aprobado. Y NO digas que "
             "verificaste el pago en el banco ni que está 'confirmado'."
         )
-        # El aviso a ella es lo que cierra el círculo: sin esto, esperar sería abandonar.
-        await _avisar_a_la_duena(
-            telefono,
-            motivo="pago_por_aprobar",
-            detalle=(
-                f"{nombre or telefono} mandó su comprobante y el monto CUADRA con lo cobrado. "
-                "El bot ya le dijo que lo está revisando y NO va a coordinar la entrega hasta "
-                "que tú apruebes. Míralo en el panel y pulsa «Pago aprobado»: ese clic reactiva "
-                "al bot para que cierre la entrega con él."
-            ),
-        )
+        # 🔴 EL GUARDIÁN DE LA REFERENCIA (cacería 3-sep, C5/C10): si la referencia de ESTE
+        # comprobante ya vive en otro pago (reportado/parcial/confirmado), lo más probable es
+        # que sea el MISMO pago reenviado pegándose a otro pedido — el "CUADRA… aprueba" era
+        # justo la frase que convertía eso en doble cobro con un clic. El registro NO se frena
+        # (el dinero jamás se descarta); lo que cambia es el AVISO: de "aprueba" a "OJO".
+        repetida = await _referencia_repetida(resultado.get("pago_id"))
+        if repetida is not None:
+            await _avisar_a_la_duena(
+                telefono,
+                motivo="pago_por_aprobar",
+                detalle=(
+                    f"⚠️ OJO: {nombre or telefono} mandó un comprobante cuyo monto cuadra, "
+                    f"PERO su referencia ({repetida['referencia']}) YA está en el pago "
+                    f"#{repetida['pago_id']} del pedido #{repetida['pedido_id']} — puede ser "
+                    "el MISMO pago reenviado. NO pulses «Pago aprobado» sin comparar los dos "
+                    "en el panel: si es el mismo, rechaza este con motivo 'comprobante repetido'."
+                ),
+                mensaje_cliente="(comprobante con referencia repetida)",
+                whatsapp=(
+                    f"⚠️ {nombre or telefono} mandó un comprobante que CUADRA pero su "
+                    f"referencia ya está en el pago #{repetida['pago_id']} de otro pedido. "
+                    "Puede ser un reenvío del mismo pago: compáralos antes de aprobar."
+                ),
+            )
+        else:
+            # El aviso a ella es lo que cierra el círculo: sin esto, esperar sería abandonar.
+            await _avisar_a_la_duena(
+                telefono,
+                motivo="pago_por_aprobar",
+                detalle=(
+                    f"{nombre or telefono} mandó su comprobante y el monto CUADRA con lo "
+                    "cobrado. El bot ya le dijo que lo está revisando y NO va a coordinar la "
+                    "entrega hasta que tú apruebes. Míralo en el panel y pulsa «Pago "
+                    "aprobado»: ese clic reactiva al bot para que cierre la entrega con él."
+                ),
+            )
     elif resultado.get("ok"):
         # Registrado, pero el monto NO cuadra con lo cobrado: no afirmar que está completo.
         situacion = (
@@ -1719,6 +1744,29 @@ async def _procesar_comprobante(
             "el cliente te envió una imagen pero no hay un pedido esperando pago; "
             "pregúntale con calidez si es un comprobante y en qué lo puedes ayudar"
         )
+        # 🔴 EL CARRIL DEL DINERO NUNCA ES SILENCIOSO — también aquí (cacería 3-sep, C6).
+        # Este else es un comprobante que la VISIÓN reconoció como real pero que no encontró
+        # pedido en 'esperando_pago' (cliente repitente que paga antes del cobro, o un reenvío
+        # sobre un pedido ya pagado). Hasta hoy: sin fila en pagos, sin aviso a la dueña, y el
+        # message_id marcado — dinero verificado por visión evaporándose en silencio. El
+        # registro sigue sin ocurrir (no hay a qué pegarlo, y adivinar pedidos es la enfermedad
+        # del #2074); lo que ya no ocurre es el silencio. Candado 15 min por cliente.
+        await _avisar_a_la_duena(
+            telefono,
+            motivo="comprobante_sin_pedido",
+            detalle=(
+                f"{nombre or telefono} mandó una imagen que parece un comprobante REAL, pero "
+                "no hay ningún pedido esperando pago al cual pegarlo (puede ser un pago "
+                "adelantado o un reenvío de uno viejo). NO quedó registrado en pagos: ábrelo "
+                "en el chat, y si es un pago de verdad, decide tú a qué pedido va."
+            ),
+            mensaje_cliente="(comprobante sin cobro abierto)",
+            whatsapp=(
+                f"⚠️ {nombre or telefono} mandó un comprobante y NO hay cobro abierto: no "
+                "quedó registrado. Míralo en el chat y decide tú."
+            ),
+            candado=(f"comprobante_sin_pedido:{telefono}", 900),
+        )
     partes = await _responder_situacion(telefono, situacion, nombre)
 
     # 🔴 EL CARRIL DEL DINERO NUNCA ES SILENCIOSO.
@@ -1728,6 +1776,49 @@ async def _procesar_comprobante(
     if resultado.get("ok") and not partes:
         await _avisar_pago_en_chat_pausado(telefono, nombre)
     return "ok"
+
+
+async def _referencia_repetida(pago_id):
+    """OTRO pago vivo con la MISMA referencia bancaria que el recién registrado — o None.
+
+    🔴 Cacería 3-sep, C5/C10 (la mitad no cerrada del caso #2602/#2603): el cliente reenvía el
+    comprobante de un pago YA cobrado teniendo OTRO pedido abierto; el reenvío trae media_id
+    NUEVO de Meta (la idempotencia no lo ve), el pago nace 'reportado' sobre el pedido abierto
+    y, si los montos coinciden, el aviso decía "el monto CUADRA… pulsa Pago aprobado" — un clic
+    y la misma plata contada dos veces. La referencia bancaria es la huella que sí delata el
+    reenvío, y hasta hoy se guardaba pero JAMÁS se comparaba.
+
+    Devuelve {'pago_id', 'pedido_id', 'referencia'} del pago viejo, o None. Si la lectura
+    falla, None: este guardián DEGRADA un aviso, jamás puede frenar el registro del dinero."""
+    from sqlalchemy import select
+
+    from app.models import Pago
+
+    try:
+        factory = get_session_factory()
+        async with factory() as session:
+            pago = await session.get(Pago, pago_id)
+            referencia = (getattr(pago, "referencia", None) or "").strip() if pago else ""
+            if not referencia:
+                return None
+            otro = (
+                await session.execute(
+                    select(Pago.id, Pago.pedido_id)
+                    .where(
+                        Pago.referencia == referencia,
+                        Pago.id != pago_id,
+                        Pago.estado.in_(("reportado", "parcial", "confirmado")),
+                    )
+                    .order_by(Pago.id.desc())
+                    .limit(1)
+                )
+            ).first()
+            if otro is None:
+                return None
+            return {"pago_id": otro[0], "pedido_id": otro[1], "referencia": referencia}
+    except Exception:  # noqa: BLE001 — sin lectura no hay guardián, pero el registro ya ocurrió
+        logger.exception("_referencia_repetida: no se pudo comparar la referencia")
+        return None
 
 
 async def _comprobante_a_ciegas(

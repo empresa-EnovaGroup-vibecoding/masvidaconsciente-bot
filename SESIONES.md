@@ -24,6 +24,46 @@
 
 ---
 
+## 2026-09-05 (23) — 🔒 EL CARRIL DEL PAGO, BLINDADO: los 7 huecos de la cacería (C3, C5-C11)
+
+**Lo ordenó Maired ("arregla los del camino del dinero antes de abrirlo a clientas reales").**
+Son los hallazgos confirmados de la cacería adversarial del 3-sep que ningún PR había tocado:
+
+1. **C7 — el doble clic ya no duplica avisos.** Confirmar/Rechazar/Verificar-monto pasaban por
+   check-then-act: dos POST casi simultáneos (celular + PC) confirmaban dos veces y el cliente
+   recibía DOS mensajes. Ahora la transición se RECLAMA con un `UPDATE … WHERE estado=`
+   condicionado (`_reclamar_transicion`): un ganador, el otro recibe 409 — la doctrina de la
+   026 aplicada a la transición.
+2. **C9 — rechazar un residual ya no resucita el cobro.** Si el pedido está PAGADO por otro
+   pago confirmado, rechazar un 'reportado' viejo deja el pedido quieto (antes lo devolvía a
+   'esperando_pago' y volvía a ser imán del próximo comprobante). Helper compartido
+   `_otro_pago_confirmado_de`, también usado por `/reabrir`.
+3. **C8 — `/reabrir` con 409 legible, nunca 500.** Con otro 'reportado' vivo o con el pedido ya
+   cobrado, reabrir explica el porqué; el `IntegrityError` de la 026 queda de cinturón (409).
+4. **C11 — Redis caído no rompe la confirmación.** El encolado de `notificar_cliente_pago` va
+   en `_encolar_notificacion` (try/except): el pago queda bien, la respuesta trae
+   `notificacion_encolada: false` y el log grita — antes era un 500 post-commit y el reintento
+   chocaba con "ya está confirmado": cliente pagado y mudo para siempre.
+5. **C5/C10 — el guardián de la REFERENCIA.** Un comprobante reenviado trae media_id NUEVO (la
+   idempotencia no lo ve) y se pegaba a OTRO pedido abierto; si el monto coincidía, el aviso
+   decía "CUADRA… pulsa Pago aprobado" — doble cobro con un clic. `_referencia_repetida`
+   compara la referencia bancaria contra los pagos vivos del sistema y DEGRADA el aviso a
+   "⚠️ OJO: esta referencia YA está en el pago #N del pedido #M — compara antes de aprobar".
+   El registro jamás se frena: el dinero no se descarta, el aviso se pone honesto.
+6. **C6 — se acabó el silencio del comprobante sin pedido.** Visión dice "es real" pero no hay
+   'esperando_pago' (cliente repitente que paga antes del cobro, o reenvío sobre pagado): ahora
+   avisa a la dueña con bandeja + WhatsApp (candado 15 min) — "el carril del dinero nunca es
+   silencioso", también en este else.
+7. **C3 — el simulador toma el lock.** `POST /bot/probar` corre `responder` con el mismo lock
+   por teléfono del worker (ocupado ⇒ 429 legible): dos clics rápidos ya no duplican registros
+   en la BD de pruebas.
+
+**Tests:** `tests/test_carril_del_pago.py` (15 casos: el doble clic pierde con 409 y cero
+commits, el residual no toca el pedido cobrado, los dos 409 de reabrir, el broker caído, el
+gemelo de la referencia, y los cableados fijados en fuente). **Suite completa: 883 en verde** ·
+ruff ✅ · compileall ✅. Queda anotado (no cerrado): la carrera arquitectónica del lock de 120s
+sin renovación (C3-a) — necesita heartbeat, va aparte.
+
 ## 2026-09-05 (22) — 🚀 PRODUCCIÓN PROMOVIDA A MASTER COMPLETO (89aea1d) — con la liturgia entera
 
 **Lo pidió Maired de frente ("dale, vamos con la primera") y el gatillo del deploy lo apretó
