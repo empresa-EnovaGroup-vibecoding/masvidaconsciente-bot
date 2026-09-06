@@ -440,7 +440,8 @@ TOOL_SCHEMAS = [
                 "(4) el cliente RECLAME de verdad (algo llegó mal, no le llegó, quiere su dinero). "
                 "Después de llamarla, dile al cliente CON TUS PROPIAS PALABRAS, cálida y natural, "
                 "que le confirmas eso enseguida (nunca una plantilla, y NUNCA le digas que "
-                "'le preguntas a la dueña': tú ERES Whuilianny)."
+                "'le preguntas a la dueña': hablas en primera persona del negocio, 'te lo "
+                "confirmo')."
             ),
             "parameters": {
                 "type": "object",
@@ -3938,7 +3939,8 @@ async def pedir_ayuda(
             "cliente, CON TUS PROPIAS PALABRAS (cálida, natural, distinta cada vez), que eso "
             "se lo confirmas enseguida. NO inventes el dato, NO des un precio, y NUNCA digas "
             "que 'le preguntas a la dueña' ni la menciones como si fuera otra persona: tú "
-            "ERES Whuilianny. Después de este mensaje NO sigas respondiendo en este chat."
+            "hablas en primera persona del negocio ('te lo confirmo'). Después de este mensaje NO "
+            "sigas respondiendo en este chat."
         ),
     }
 
