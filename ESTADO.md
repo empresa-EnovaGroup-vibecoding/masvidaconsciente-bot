@@ -77,7 +77,18 @@ y salud, memoria que no se olvida a las 24h, y 8 migraciones nuevas (hasta la 03
 > sin tocar. Queda pedir un video real de Tortas keto: el archivo ya es compatible, pero su
 > contenido sigue siendo un solo cuadro con audio. ✅ **Producción alcanzó todo esto el 5-sep.**
 
-## Última verificación: **2026-09-05 (~21:15 VET) — LOS DOS ENTORNOS EN `df67e4b` (el carril del pago blindado, PR #27)**
+## Última verificación: **2026-09-06 (~09:10 VET) — LOS DOS ENTORNOS EN `42d37de` (contraseñas del panel, PR #29 + panel #3)**
+
+> ✅ Pruebas de puerta (27/27) → producción por `workflow_dispatch` (verde) → bot y worker en
+> `42d37de` · 38 migraciones · lista blanca intacta · **27/27 bancos en producción** · panel
+> re-desplegado en ambos (login 200; el ojito 👁️ y la sección "Mi contraseña" + botón
+> "Restablecer clave" ya viven en producción; `PATCH /api/usuarios/me/password` responde 401 sin
+> token = existe y está protegido). **La clave del panel quedó UNIFICADA** en los dos entornos
+> (pruebas alineada a la de producción vía API de Coolify). ⏳ **Falta crear la cuenta propia de
+> Whuilianny** (rol `duena`) en producción: hoy solo existe la principal (`admin@…`, Enova), que
+> por diseño NO se cambia desde el panel (`_crear_admin` la re-sincroniza al arrancar).
+
+## Verificación anterior: **2026-09-05 (~21:15 VET) — LOS DOS ENTORNOS EN `df67e4b` (el carril del pago blindado, PR #27)**
 
 > ✅ Tras fusionar Maired el #27: **pruebas desplegado primero como puerta** (27/27 bancos verdes
 > con el código nuevo del dinero) → **producción** por `workflow_dispatch` (CI verde) → bot y
