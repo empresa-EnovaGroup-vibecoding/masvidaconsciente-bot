@@ -136,9 +136,10 @@ async def main() -> None:
             print(f"\n   (producto real: {prod.nombre} {var.presentacion} = ${precio} · zona $3)")
 
             # El bot toma el pedido: 1 unidad + envío.
+            # `referencia` (038): un delivery sin dirección ya no se cobra — el banco la da.
             r = await registrar_pedido(
                 s, TEL, [{"variante_id": var.id, "cantidad": 1}],
-                entrega_fecha=manana, zona_id=zona.id,
+                entrega_fecha=manana, zona_id=zona.id, referencia="frente a la farmacia (banco)",
             )
             check("el bot registró el pedido con su zona", r.get("ok") is True,
                   str(r.get("nota"))[:80])

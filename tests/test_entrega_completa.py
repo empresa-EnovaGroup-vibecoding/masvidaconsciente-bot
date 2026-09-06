@@ -295,6 +295,9 @@ def test_la_tool_existe_para_el_modelo_y_para_el_codigo_y_esta_blindada():
     assert "anotar_entrega" in tools._DISPATCH
     assert any(t["function"]["name"] == "anotar_entrega" for t in tools.TOOL_SCHEMAS)
     assert tools._PARAMS_DECLARADOS["anotar_entrega"] == {"franja", "referencia", "pedido_id"}
+    # Y `registrar_pedido` acepta la dirección de una, para ahorrarle una vuelta al modelo.
+    assert "referencia" in tools._PARAMS_DECLARADOS["registrar_pedido"]
+    assert "referencia" in inspect.signature(tools.registrar_pedido).parameters
     assert "anotar_entrega" in tools_config.BLINDADAS
     # Aunque la proveedora la deje fuera del CSV, el bot la tiene igual.
     assert "anotar_entrega" in tools_config._parsear("ver_catalogo,info_producto")

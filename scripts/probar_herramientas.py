@@ -73,17 +73,18 @@ FRASES_DEL_COBRO = [
 
 async def main() -> None:
     print("\n1) EL REGISTRO: fail-open y blindadas irrevocables")
-    # 🗓️ SON 13 DESDE EL 2026-08-22: entró `proxima_fecha_entrega` (el bot consultando el
-    # calendario en vez de inventarse las fechas). Este número está escrito a mano a propósito —
-    # es lo que caza que alguien añada o borre una tool sin darse cuenta.
-    check("las 13 herramientas están declaradas", len(TOOLS) == 13, str(len(TOOLS)))
-    # 8 blindadas: la nueva va al NÚCLEO, por el mismo motivo que el catálogo — es la fuente
-    # cerrada de verdad sobre el calendario, y apagarla le devolvería al bot la de inventar.
-    check("8 blindadas + 5 desactivables", len(BLINDADAS) == 8 and len(DESACTIVABLES) == 5,
+    # 🗓️ SON 13 DESDE EL 2026-08-22 (entró `proxima_fecha_entrega`) y 🚚 14 DESDE EL 2026-09-06
+    # (entró `anotar_entrega`: la casilla de la franja y la dirección, migración 038). Este número
+    # está escrito a mano a propósito — es lo que caza que alguien añada o borre una tool sin
+    # darse cuenta. (Este banco fue el que lo cazó el 6-sep, como debía.)
+    check("las 14 herramientas están declaradas", len(TOOLS) == 14, str(len(TOOLS)))
+    # 9 blindadas: `anotar_entrega` es del carril de la ENTREGA — la caja exige la dirección en un
+    # delivery y esta es la única puerta para guardarla; apagarla dejaría los deliveries sin cobrar.
+    check("9 blindadas + 5 desactivables", len(BLINDADAS) == 9 and len(DESACTIVABLES) == 5,
           f"{len(BLINDADAS)} + {len(DESACTIVABLES)}")
-    check("clave AUSENTE ⇒ las 13 (fail-open)", _parsear(None) == frozenset(TOOLS))
-    check("clave VACÍA ⇒ las 13", _parsear("  ") == frozenset(TOOLS))
-    check("clave con BASURA ⇒ las 13", _parsear("no_existe,tampoco") == frozenset(TOOLS))
+    check("clave AUSENTE ⇒ las 14 (fail-open)", _parsear(None) == frozenset(TOOLS))
+    check("clave VACÍA ⇒ las 14", _parsear("  ") == frozenset(TOOLS))
+    check("clave con BASURA ⇒ las 14", _parsear("no_existe,tampoco") == frozenset(TOOLS))
     # 🔒 El candado que vive en la LECTURA, no solo en la API: si alguien escribe el CSV a mano en
     # Postgres y se deja fuera `pedir_ayuda`, el bot la tiene IGUAL.
     escrito_a_mano = _parsear("ver_catalogo,info_producto")
@@ -98,16 +99,16 @@ async def main() -> None:
     )
 
     print("\n2) EL FILTRO TOCA LO QUE EL MODELO VE — NUNCA EL DISPATCH")
-    check("_DISPATCH tiene las 13 SIEMPRE", len(_DISPATCH) == 13, str(len(_DISPATCH)))
+    check("_DISPATCH tiene las 14 SIEMPRE", len(_DISPATCH) == 14, str(len(_DISPATCH)))
     solo_blindadas = schemas_para(BLINDADAS)
     check(
-        f"con solo las blindadas, el LLM ve {len(BLINDADAS)} (no 13)",
+        f"con solo las blindadas, el LLM ve {len(BLINDADAS)} (no 14)",
         len(solo_blindadas) == len(BLINDADAS),
         f"ve {len(solo_blindadas)}",
     )
     check(
         "y el DISPATCH sigue entero (las redes pueden ejecutarlo TODO)",
-        len(_DISPATCH) == len(TOOL_SCHEMAS) == 13,
+        len(_DISPATCH) == len(TOOL_SCHEMAS) == 14,
     )
     check(
         "pedir_ayuda y enviar_catalogo siguen en el dispatch aunque el modelo no las viera",
@@ -173,7 +174,7 @@ async def main() -> None:
     )
     todo, _ = await construir_partes_prompt(activas=frozenset(TOOLS))
     check(
-        "con las 13 activas NO aparece ningún límite (prompt idéntico al de siempre)",
+        "con las 14 activas NO aparece ningún límite (prompt idéntico al de siempre)",
         "LO QUE HOY NO PUEDES HACER" not in todo,
     )
 
