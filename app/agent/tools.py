@@ -154,7 +154,8 @@ TOOL_SCHEMAS = [
                         "description": (
                             "CÓMO lo quiere, con las palabras del cliente: retiro o delivery, "
                             "y dónde (ej. 'delivery en Cabudare'; 'lo retiro en La Mendera'). "
-                            "La hora NO se cierra aquí: la coordina la dueña después."
+                            "La hora NO existe como opción: la franja se guarda después con "
+                            "anotar_entrega y la hora exacta la confirma la dueña según su ruta."
                         ),
                     },
                     "entrega_fecha": {
