@@ -28,7 +28,7 @@ Las **FASES 0 a 3 ya están hechas y desplegadas**:
 > sin tocar a la clienta. URLs y estado: `ESTADO.md` bloque 🏭 · historia: SESIONES 1-sep (14).
 > El panel de pruebas ya tiene su dominio propio: `panel-masvida.enovagroup.tech` (2-sep).
 
-### 🚀 AHORA MISMO (7-sep madrugada): PROMOVER A PRODUCCIÓN LO QUE YA ESTÁ VERDE EN PRUEBAS
+### 🚀 AHORA MISMO (6-sep noche): PROMOVER A PRODUCCIÓN LO QUE YA ESTÁ VERDE EN PRUEBAS
 
 > **Pruebas está listo** (`f60c3f7` + panel `d8b94ab`, 27/27 bancos, cero PRs abiertos) con todo
 > lo del 6-sep: entrega con franja + referencia (038), opciones a la vista, prompt compacto, modo de
@@ -43,7 +43,7 @@ Las **FASES 0 a 3 ya están hechas y desplegadas**:
 > ENTREGA; (5) adelgazar el prompt (24k tokens) midiendo antes/después; (6) medir modo DOS con el
 > mismo guion; (7) cerrar la carrera del lock 120s (`probar_vigilante` flaky tras deploy).
 
-### 🐛 EL CATÁLOGO EN PDF NO LLEGA *(ARREGLADO EN PRUEBAS el 3-sep · falta producción + prueba por WhatsApp)*
+### 🐛 EL CATÁLOGO EN PDF NO LLEGA *(ARREGLADO en pruebas el 3-sep y en producción el 5-sep · falta SOLO la prueba pidiéndolo por WhatsApp)*
 
 > 🎯 **ESTADO AL 3-sep (12:35 ET):** el **PR #18 está FUSIONADO** y el entorno de pruebas corre
 > `a798aac`. `PUBLIC_BASE_URL` quedó cifrada y definida en bot + worker; ambos redeploys terminaron
@@ -64,10 +64,10 @@ el bot SÍ manda, y es Meta quien no puede DESCARGAR el PDF. Mismo dolor, raíz 
    Coolify —activa + preview, cifradas— en bot y worker. Redeploy `a798aac` terminado y PDF público
    verificado. ⏳ Falta pedir el catálogo desde WhatsApp al número de pruebas para confirmar el
    recorrido completo Meta → cliente; no se mandó ningún mensaje proactivo desde la reparación.
-2. ⏳ **Producción (2 min, sin tocar Meta — con su OK explícito):** definir
-   `PUBLIC_BASE_URL=https://api.masvidaconsciente.store` en bot y worker de netcup y reiniciar.
-   Hoy la lista blanca tapa la mina, pero la casilla 5 de "TERMINADO" (pruebas de humo con
-   catálogo) la va a pisar sí o sí.
+2. ✅ **Producción (HECHO el 5-sep, con OK de Maired):** `PUBLIC_BASE_URL=https://api.masvidaconsciente.store`
+   creada CIFRADA por la API de Coolify en bot y worker de netcup, y deploy completo (ESTADO,
+   verificación 5-sep 19:40). La mina quedó desactivada; la casilla 5 de "TERMINADO" (humo con
+   catálogo por WhatsApp) sigue pendiente de OK de horario.
 3. ✅ **El código — HECHO Y FUSIONADO (PR #18).** Quitado el default hardcodeado de `config.py`; `public_base_url`
    ya no trae la URL de UN entorno. **Decisión tomada (se apartó del "fail-fast como JWT_SECRET"
    con razón):** el validador **AVISA fuerte al arranque pero NO bloquea** — el catálogo se degrada

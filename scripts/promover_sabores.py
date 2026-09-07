@@ -21,7 +21,10 @@ import urllib.request
 
 BASE = "http://localhost:8000"
 
-# (nombre del producto tal cual en el catálogo, presentación) → sabores a cargar
+# (nombre, presentación) TAL CUAL están en la BD VIVA de pruebas (variantes 9/10/34), NO en
+# migrations/002: la semilla dice 'Galletas New York / 4 unidades' y no tiene CHOCOLATE (nació en el
+# panel). Si en producción difieren, el script lo reporta en `no_encontrados` y sale con 1 sin
+# escribir nada — comparar entonces con GET /api/productos de producción antes de reintentar.
 SABORES = {
     ("Galletas New York", "6 unidades"): "chocolate, limón pistacho, canela naranja o chocomerey",
     ("Mini New York", "10 unidades"): "chocolate, limón pistacho, canela naranja o chocomerey",

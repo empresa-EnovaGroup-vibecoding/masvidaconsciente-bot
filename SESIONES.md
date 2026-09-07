@@ -94,8 +94,10 @@ casa. Y **diagnosticar completo antes de arreglar**.
 **Estado al cierre:** pruebas `f60c3f7` + panel `d8b94ab`, 27/27 bancos, cero PRs abiertos.
 Producción sigue en `42d37de` con la personalidad vieja. **Falta:** que Maired termine el guion
 en pruebas y dé el OK → liturgia de promoción (ESTADO, "Última verificación": 7 pasos, incluye
-`scripts/promover_personalidad.py` y `scripts/promover_sabores.py`). Anotado sin cerrar:
-`probar_vigilante` "el primero se lleva el turno" flaky tras deploy (carrera del lock 120s);
+`scripts/promover_personalidad.py` y `scripts/promover_sabores.py`). Cerrado el pendiente de (24):
+el schema de `pedir_ayuda` ya no dice "tú ERES Whuilianny" (#34); queda solo `PERSONALIDAD_DEFAULT`
+(system_prompt.py) con el nombre viejo, inofensivo mientras la BD tenga personalidad. Anotado sin
+cerrar: `probar_vigilante` "el primero se lleva el turno" flaky tras deploy (carrera del lock 120s);
 deploys simultáneos bot+worker en Enova fallaron una vez en apt (relanzar solo el que faltó);
 datos para Whuilianny (info de las empanadas con plantilla sin llenar, coma final en sabores de
 la torta, "CHOCOLATE" en mayúsculas); adelgazar el prompt; medir modo DOS.

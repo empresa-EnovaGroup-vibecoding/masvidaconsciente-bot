@@ -13,8 +13,9 @@ Para SACAR la personalidad viva de un entorno (y llevarla a otro):
 
     ssh root@<vps> '...; docker exec -i $BOT python scripts/promover_personalidad.py --leer' > personalidad.txt
 
-Nació el 6-sep-2026: la personalidad nueva (auditoría de las tres capas) se puso en PRUEBAS así,
-y producción se promueve con el mismo script. La fuente canónica de la voz sigue siendo la BD.
+Nació el 6-sep-2026: la personalidad nueva (auditoría de las tres capas) la pegó Maired en PRUEBAS
+desde el panel; este script nació para promoverla a PRODUCCIÓN por esa misma puerta (y para sacar
+la vieja con --leer antes de pisarla). La fuente canónica de la voz sigue siendo la BD.
 """
 import hashlib
 import json

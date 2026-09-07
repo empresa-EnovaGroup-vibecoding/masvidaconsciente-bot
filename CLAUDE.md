@@ -54,7 +54,7 @@ Antes de tocar datos reales, probar el cambio dentro de una transacción y hacer
 **Regla dura: un documento nuevo en la raíz solo si reemplaza a otro. Lo cumplido baja a `archivo/`.**
 
 - ⚠️ `BRIEF-*` y `PRP-*` son **LOCALES (gitignored)**: tienen estrategia/datos sensibles, **NO se suben** a GitHub.
-- 🟢 **SÍ EXISTEN en la máquina de Maired** (verificado 2026-08-21): `BRIEF-personalidad-whuilianny.md`, `BRIEF-closer-masvida.md`, `PRP-cobro.md` en la raíz + 9 más en `archivo/`. *(Nota histórica: el 2026-08-03 se anotó aquí que "no existía ni uno" — cierto desde el servidor/GitHub, donde por ser gitignored NUNCA aparecen; pero la copia local de Maired los conserva. NO se perdieron.)* Aun así, **la voz VIVA manda y vive en la BD** (tabla `configuracion`, clave `personalidad`): léela de ahí antes de tocar la personalidad.
+- 🟢 **SÍ EXISTEN en la máquina de Maired** (verificado 2026-08-21): `BRIEF-personalidad-whuilianny.md` (histórico), `BRIEF-personalidad-alejandra-2026-09-06.md` (la voz vigente, auditada el 6-sep; copia también en `C:\Developer\AI\Proyectos\respaldos-masvida\`), `BRIEF-closer-masvida.md`, `PRP-cobro.md` en la raíz + 9 más en `archivo/`. *(Nota histórica: el 2026-08-03 se anotó aquí que "no existía ni uno" — cierto desde el servidor/GitHub, donde por ser gitignored NUNCA aparecen; pero la copia local de Maired los conserva. NO se perdieron.)* Aun así, **la voz VIVA manda y vive en la BD** (tabla `configuracion`, clave `personalidad`): léela de ahí antes de tocar la personalidad.
 - Código del bot: `app/` (`webhook/`, `agent/`, `services/`, `workers/`, `api/`). Migraciones: `migrations/`.
 
 ## 7. Principios de código
@@ -64,7 +64,7 @@ KISS · YAGNI · DRY · una responsabilidad por pieza · nombres claros · archi
 
 > El comportamiento del bot se arma en **3 capas** que el código junta en cada mensaje
 > (`app/agent/system_prompt.py` → `construir_partes_prompt`):
-> 1. **Personalidad** (editable en el panel / BD, clave `personalidad`) = **SOLO la voz/esencia de Whuilianny**.
+> 1. **Personalidad** (editable en el panel / BD, clave `personalidad`) = **SOLO la voz/esencia de Alejandra**, la asesora (habla de Whuilianny, la dueña, en tercera persona).
 > 2. **`_REGLAS`** (blindadas en `system_prompt.py`, NO editables) = el cobro y las conductas duras.
 > 3. **Catálogo + notas de herramientas** (`_catalogo_bloque`) + **redes de seguridad** en `app/agent/agent.py`.
 >
@@ -135,7 +135,7 @@ KISS · YAGNI · DRY · una responsabilidad por pieza · nombres claros · archi
 - **Notas de voz y stickers:** responder con naturalidad. → `_REGLAS`.
 - **Dudas del negocio:** ubicación/pago/horarios (`info_negocio`), un producto (`info_producto`), generales (`buscar_info`; distingue envío nacional ≠ entrega local). → `_REGLAS`.
 
-**En la Personalidad (panel/BD) va SOLO:** quién es Whuilianny + su **voz/esencia** + su **bienvenida** + sus **ejemplos de cómo habla** (la dueña los definió: son intocables, no reescribir), los **hechos del producto** (sin gluten, azúcar de coco, alulosa…), **reglas del negocio** (horario, delivery, anticipación), **pagos** y los **datos bancarios**. 🔴 **La copia VIVA y canónica de la voz es la BD del servidor** (tabla `configuracion`, clave `personalidad`): **léela de ahí antes de tocar nada** — manda sobre cualquier archivo. *(El `BRIEF-personalidad-whuilianny.md` SÍ existe en la máquina de Maired como referencia de diseño —verificado 21-ago—, pero es gitignored: no aparece en el servidor ni en GitHub. Úsalo como contexto, nunca como la verdad actual de la voz.)*
+**En la Personalidad (panel/BD) va SOLO:** quién es Alejandra (la asesora; Whuilianny es la dueña) + su **voz/esencia** + su **bienvenida** + sus **ejemplos de cómo habla** (la dueña los definió: son intocables, no reescribir), los **hechos del producto** (sin gluten, azúcar de coco, alulosa…), **reglas del negocio** (horario, delivery, anticipación), **pagos** y los **datos bancarios**. 🔴 **La copia VIVA y canónica de la voz es la BD del servidor** (tabla `configuracion`, clave `personalidad`): **léela de ahí antes de tocar nada** — manda sobre cualquier archivo. *(El `BRIEF-personalidad-whuilianny.md` SÍ existe en la máquina de Maired como referencia de diseño —verificado 21-ago—, pero es gitignored: no aparece en el servidor ni en GitHub. Úsalo como contexto, nunca como la verdad actual de la voz.)*
 
 ---
 *Documento vivo. Si algo aquí ya no es cierto, corrígelo.*

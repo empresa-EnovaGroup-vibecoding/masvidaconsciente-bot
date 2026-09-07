@@ -52,14 +52,14 @@ y salud, memoria que no se olvida a las 24h, y 8 migraciones nuevas (hasta la 03
 | | 🏭 PRUEBAS (Enova) |
 |---|---|
 | **Servidor** | VPS del socio de Enova `152.53.194.89` · Coolify propio `coolify.enovagroup.tech` (proyecto `masvida-pruebas`) |
-| **Qué corre** | bot + worker en `master f60c3f7` (hasta el PR #41, 7-sep madrugada) + panel `d8b94ab` (PR #4) + PostgreSQL 16 + Redis 7 · **auto-deploy OFF** en las 3 apps — deploy SOLO manual (API de Coolify con token temporal: ver `entorno-pruebas` en la memoria de Claude / SESIONES (23)) |
+| **Qué corre** | bot + worker en `master f60c3f7` (hasta el PR #41, fusionado 6-sep 21:32 VET) + panel `d8b94ab` (PR #4) + PostgreSQL 16 + Redis 7 · **auto-deploy OFF** en las 3 apps — deploy SOLO manual (API de Coolify con token temporal: ver `entorno-pruebas-vps-enova` en la memoria de Claude / SESIONES (15), (16) y (18)) |
 | **Número** | **+57 313 2933806** (WABA "Enova Soporte", SEPARADA de la de la clienta) |
 | **Webhook** | re-apuntado por Graph API (`/{waba}/subscribed_apps` + `override_callback_uri`) → `https://jthc51nxqitd9opc8ywioocr.152.53.194.89.sslip.io/webhook/whatsapp` |
-| **BD** | dump FINAL del taller restaurado: 36 migraciones · 6 clientes · 32 productos · 10 conocimiento |
+| **BD** | dump FINAL del taller restaurado el 1-sep (36 migraciones entonces); hoy **39 migraciones** (038 franja + referencia) · 32 productos · 10 conocimiento · `sabores` cargados en Galletas / Mini / CHOCOLATE (6-sep) |
 | **Modelo IA** | `anthropic/claude-sonnet-4.6` (el aprobado por Maired en el taller) |
 | **Salud** | `https://jthc51nxqitd9opc8ywioocr.152.53.194.89.sslip.io/salud` — verificado tras `f85f781`: `ok`, Meta GREEN, 37 migraciones, saldo $2.552 |
 | **Prueba de fuego** | ✅ "Hola" de Maired → respuesta en 5,8s **con la memoria del taller** (13 mensajes rescatados de Postgres) |
-| **Panel** | ✅ **`https://panel-masvida.enovagroup.tech/login`** (dominio propio + HTTPS Let's Encrypt). `c8bf95d`: ya trae la ★ para elegir la foto principal; `/catalogo` responde 200. Login: `admin@masvidaconsciente.com` + la clave de siempre del taller. |
+| **Panel** | ✅ **`https://panel-masvida.enovagroup.tech/login`** (dominio propio + HTTPS Let's Encrypt). `d8b94ab` (PR #4: Franjas de entrega en Horario + franja/referencia en el pedido; trae la ★ del #1, el ojito del #2 y las contraseñas del #3). Login: `admin@masvidaconsciente.com` + la clave unificada con producción (6-sep). |
 | **DNS (Namecheap)** | `panel-masvida` y `api-masvida` .enovagroup.tech → `152.53.194.89` (los creó Maired el 2-sep). ⚠️ `api-masvida` apunta al VPS pero **ningún servicio lo atiende todavía** — ver el bug del catálogo abajo. |
 
 > ✅ **CATÁLOGO PDF ARREGLADO EN PRUEBAS (3-sep 12:35 ET; SESIONES (18)):** PR #18 fusionado y
@@ -77,7 +77,7 @@ y salud, memoria que no se olvida a las 24h, y 8 migraciones nuevas (hasta la 03
 > sin tocar. Queda pedir un video real de Tortas keto: el archivo ya es compatible, pero su
 > contenido sigue siendo un solo cuadro con audio. ✅ **Producción alcanzó todo esto el 5-sep.**
 
-## Última verificación: **2026-09-07 (~00:30 VET) — PRUEBAS LISTO PARA PROMOVER (`f60c3f7` + panel `d8b94ab`) · PRODUCCIÓN sigue en `42d37de`**
+## Última verificación: **2026-09-06 (~22:05 VET) — PRUEBAS LISTO PARA PROMOVER (`f60c3f7` + panel `d8b94ab`) · PRODUCCIÓN sigue en `42d37de`**
 
 > 🎯 **DÓNDE ESTAMOS (léelo antes de tocar nada):** el 6-sep se fusionaron **11 PRs del bot
 > (#30-#38, #40, #41; el #39 se cerró dentro del #40) + el #4 del panel**, TODOS desplegados y
@@ -119,7 +119,9 @@ y salud, memoria que no se olvida a las 24h, y 8 migraciones nuevas (hasta la 03
 >    (token en `~/.ssh/coolify_token.txt`) → login 200.
 > 5. Personalidad nueva: `docker exec -i <bot> python scripts/promover_personalidad.py <
 >    BRIEF-personalidad-alejandra-2026-09-06.md` → `coincide=True` (md5 `6328efca0e2f`).
-> 6. Sabores: `docker exec -i <bot> python scripts/promover_sabores.py` → `hechos=3`.
+> 6. Sabores: `docker exec -i <bot> python scripts/promover_sabores.py` → `hechos=3`. Empareja por
+>    nombre + presentación TAL CUAL están en pruebas; si sale `no_encontrados`, comparar con
+>    `GET /api/productos` de producción antes de reintentar (no escribe nada en ese caso).
 > 7. Whuilianny en Horario del panel: revisar/ajustar las franjas (de fábrica: mañana 10-12 /
 >    tarde 2-6). Anotar en ESTADO y SESIONES.
 > ⚠️ Los deploys SIMULTÁNEOS de bot + worker en Enova fallaron una vez en `apt` (exit 255): si uno
@@ -177,9 +179,9 @@ y salud, memoria que no se olvida a las 24h, y 8 migraciones nuevas (hasta la 03
 |---|---|---|
 | **Servidor** | netcup `152.53.89.118` (endurecido 1-sep) | Hostinger `2.25.139.106` |
 | **Quién le escribe** | las clientas reales | número de la agencia: **+57 313 293 3806** |
-| **Bot: versión** | ✅ **`89aea1d`** (5-sep) — master COMPLETO: PRs #16-#25. **38 migraciones**, sin drift, `PUBLIC_BASE_URL` cifrada | *(histórico)* |
-| **Panel: versión** | ✅ con la **★ foto principal** (PR #1 del dashboard, re-desplegado 5-sep, `/login` 200) | *(histórico)* |
-| **Modelo IA activo** | ✅ `anthropic/claude-haiku-4.5` · **saldo IA $4.11** (recargado) | `anthropic/claude-sonnet-4.6` (Maired probando) |
+| **Bot: versión** | ✅ **`42d37de`** (6-sep 09:10) — master hasta el PR #29 (contraseñas del panel). **38 migraciones**, `PUBLIC_BASE_URL` cifrada. ⏳ **Pendiente promover `f60c3f7`** (39 migr., PRs #30-#41): ver "Última verificación" | *(histórico)* |
+| **Panel: versión** | ✅ `6d40b73` (PR #3: contraseñas; incluye la ★ del #1 y el ojito del #2). ⏳ Pendiente `d8b94ab` (PR #4: franjas) | *(histórico)* |
+| **Modelo IA activo** | ✅ `anthropic/claude-sonnet-4.6` (leído de la BD el 6-sep; el env de respaldo es Gemini 2.5 Flash). Personalidad VIEJA (md5 `e9e1349b6a66`) hasta la promoción | `anthropic/claude-sonnet-4.6` (Maired probando) |
 | **Modo del agente** | UN agente | UN agente |
 | **Lista blanca** | ✅ **ACTIVA: 1 solo número** (`NUMEROS_PERMITIDOS=573005690062`, extra=None). ⚠️ `bot_activo` no existe en la config ⇒ el código lo trata como ENCENDIDO: **lo que protege a las clientas es la lista blanca** | ✅ activa |
 | **Bot en el mercado** | ❌ NO — cerrado a clientas reales (regla absoluta del relevo: no abrir sin autorización expresa de Maired) | pruebas |
