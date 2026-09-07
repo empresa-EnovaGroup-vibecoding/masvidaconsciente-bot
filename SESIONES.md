@@ -57,6 +57,8 @@ que vigilan que NADA de lo que lee el modelo diga "por nuestra cuenta", "deliver
 (no sobre el total con flete); (2) el 20% sigue valiendo para las TRES vías del dólar (efectivo,
 Zelle, Binance) — ella dijo "Binance"; si quiso decir SOLO Binance, es otro cambio.
 
+**CI rojo al promover (18:43 VET):** el workflow de producción se frenó en la puerta por UP038 en  (isinstance con tupla): el CI corre ruff 0.9.6 (requirements-dev) y la máquina local tenía 0.16.5, que ya no aplica esa regla. Se corrigió en el PR  y el venv local quedó en 0.9.6. Lección: correr el linter con la versión pineada antes de fusionar.
+
 **Colateral encontrado (no tocado):** hoy 16:41 VET alguien subió fotos nuevas de Galletas New York
 en el panel de PRODUCCIÓN (claves `fb6652…` y `992eaa…`) y el objeto viejo (`064f8ef8…`) se borró
 del balde R2 — que es COMPARTIDO con pruebas. En pruebas la fila 9 de `producto_media` sigue

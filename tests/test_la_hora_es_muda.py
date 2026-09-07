@@ -70,7 +70,7 @@ def _literales(ruta: pathlib.Path):
     arbol = ast.parse(ruta.read_text(encoding="utf-8"))
     docstrings: set[int] = set()
     for nodo in ast.walk(arbol):
-        if isinstance(nodo, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        if isinstance(nodo, ast.Module | ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
             cuerpo = getattr(nodo, "body", None) or []
             if (
                 cuerpo
