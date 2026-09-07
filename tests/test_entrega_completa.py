@@ -29,7 +29,7 @@ from app.models import Pedido, ZonaEntrega
 from app.services import tools_config
 from app.services.mensajes import MENSAJES_DEFAULT, _frase_entrega
 
-FRANJAS = ["en la mañana (10 a 12)", "en la tarde (2 a 6)"]
+FRANJAS = list(tools._FRANJAS_DEFAULT)  # los momentos de fábrica, tal como se le dicen al cliente
 
 
 # ══ Dobles ══
