@@ -89,6 +89,13 @@ y salud, memoria que no se olvida a las 24h, y 8 migraciones nuevas (hasta la 03
 > (md5 `e9e1349b6a66`), sin `sabores` en Galletas/Mini/Chocolate. ⏳ **Falta que Maired termine el
 > guion en pruebas** (zona → referencia → pago → comprobante → "8 am" → franja → resumen) y dé el OK.
 >
+> ⏳ **22:29-22:40 el guion corrió hasta el final** (pedido #2926 pagado, referencia guardada, franja SIN
+> elegir) y destapó 4 grietas de voz → **PR #43 `conversacion-2229`** (hora dentro de la franja se acepta;
+> el modelo no le contesta "tienes razón" al aviso interno; no pide permiso para registrar; sin la
+> palabra "franja" al cliente). **Fusionar #42 y #43 y redesplegar pruebas ANTES de promover.**
+> Anotado sin cerrar: re-saludo y pérdida del hilo tras 1 h de silencio (historial dura 24 h: no es el
+> TTL); un mensaje se perdió durante el redeploy del worker (promover en hora tranquila).
+>
 > **Lo que cambió hoy, en una línea cada uno** (detalle: SESIONES (24) y (25)):
 > · 038 franja + referencia: el cliente elige FRANJA (no hora), la hora la confirma Whuilianny; un
 >   delivery sin referencia NO se cobra (`generar_datos_pago`); tool `anotar_entrega`.
