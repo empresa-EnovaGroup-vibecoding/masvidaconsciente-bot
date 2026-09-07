@@ -1080,7 +1080,7 @@ async def _zonas_bloque() -> str:
         costo = "sin costo" if not z.costo or float(z.costo) == 0 else f"${float(z.costo):g}"
         linea = f"- {z.nombre} = {costo} (zona_id={z.id})"
         if z.es_retiro:
-            linea += " [el cliente lo RETIRA]"
+            linea += " [RETIRO: el cliente va a buscarlo — ofrécela SOLO si él dijo que retira]"
         if z.referencias:
             linea += f" — incluye: {z.referencias}"
         lineas.append(linea)
@@ -1088,12 +1088,15 @@ async def _zonas_bloque() -> str:
     return (
         "\n\nZONAS DE ENTREGA (lista CERRADA — el envío es DINERO):\n"
         + "\n".join(lineas)
-        + "\n· Antes de cobrar, pregunta si lo RETIRA o quiere DELIVERY, y pásale a "
-          "`registrar_pedido` el `zona_id` que corresponda. El sistema le suma el envío al total: "
-          "TÚ NUNCA lo sumes, ni lo estimes, ni lo descuentes.\n"
-        "· Si el sitio que dice el cliente NO calza claramente con una zona, LÉELE las zonas con "
-        "su costo y pregúntale en cuál está. Si sigue sin calzar, llama a `pedir_ayuda`. JAMÁS "
-        "adivines la zona, ni elijas la más barata para cerrar la venta."
+        + "\n· Antes de cobrar, si el cliente AÚN NO lo dijo, pregunta si lo RETIRA o quiere "
+          "DELIVERY, y pásale a `registrar_pedido` el `zona_id` que corresponda. El sistema le "
+          "suma el envío al total: TÚ NUNCA lo sumes, ni lo estimes, ni lo descuentes.\n"
+        "· LO QUE YA ELIGIÓ NO SE REPREGUNTA: si ya dijo DELIVERY, pregúntale solo en qué zona "
+        "está y nómbrale ÚNICAMENTE las zonas de delivery (la de retiro NO es una opción para él); "
+        "si ya dijo RETIRO, usa la zona de retiro y no le nombres las otras.\n"
+        "· Si el sitio que dice el cliente NO calza claramente con una zona, LÉELE las zonas de "
+        "delivery con su costo y pregúntale en cuál está. Si sigue sin calzar, llama a "
+        "`pedir_ayuda`. JAMÁS adivines la zona, ni elijas la más barata para cerrar la venta."
     )
 
 

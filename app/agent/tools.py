@@ -1769,6 +1769,49 @@ async def etiqueta_recordada(
 _TURNOS_HILO_VENTA = 10
 
 
+# ─── EL MODO DE ENTREGA YA ELEGIDO (6-sep) ────────────────────────────────────────────────
+#
+# 🔴 EL CASO (pruebas, 21:22): "Me gustaría que me lo enviaras por delivery" → el bot respondió
+# "En qué zona estás, Barquisimeto centro, oeste, este, o retiras en La Mendera?". El cliente YA
+# había elegido delivery y el bot le volvió a ofrecer el retiro. Causa: la elección vivía SOLO
+# en el chat (el pedido aún no existía, así que ESTADO DEL CLIENTE no tenía nada que decir) y la
+# lista CERRADA de zonas trae la de retiro como una zona más. Misma clase que la masa de yuca
+# (hilo_de_la_venta_en): el prompt sugiere seguir el hilo; el estado lo garantiza el código.
+_DELIVERY_RE = re.compile(
+    r"\b(delivery|deliveri|env[ií]o|env[ií]a(r|me|s|n|ras|rlo|rmelo)?|env[ií]en(lo|melo)?"
+    r"|domicilio|a (mi )?casa|me lo (llev|traig|mand)\w*|que me lo (llev|traig|mand)\w*"
+    r"|lo (llevan|traen|mandan)|traer(lo|melo)?|llevar(lo|melo)?)\b"
+)
+_RETIRO_RE = re.compile(
+    r"\b(retir\w*|lo (busco|paso buscando|recojo)|pas(o|ar[ée]) (a )?buscar\w*|voy a buscar\w*"
+    r"|ir a buscar\w*|recoger\w*|lo retiro|yo (lo )?busco|en la mendera)\b"
+)
+_TURNOS_MODO_ENTREGA = 8
+
+
+def modo_de_entrega_en(mensaje_usuario: str, historial: list | None) -> str | None:
+    """'delivery' | 'retiro' | None: lo que el CLIENTE dijo de cómo quiere recibirlo, en sus
+    últimos turnos. Función PURA. La mención más reciente gana; un mensaje que trae las dos
+    ("no sé si retirar o que me lo lleven") no decide y borra las anteriores: una duda no se
+    resuelve por mayoría (mismo criterio que el hilo de la venta)."""
+    turnos = [
+        str(h.get("content") or "")
+        for h in (historial or [])
+        if isinstance(h, dict) and h.get("role") == "user"
+    ]
+    turnos.append(mensaje_usuario or "")
+    for contenido in reversed(turnos[-_TURNOS_MODO_ENTREGA:]):
+        t = _sin_acentos(contenido)
+        d, r = bool(_DELIVERY_RE.search(t)), bool(_RETIRO_RE.search(t))
+        if d and r:
+            return None
+        if d:
+            return "delivery"
+        if r:
+            return "retiro"
+    return None
+
+
 def hilo_de_la_venta_en(
     mensaje_usuario: str, historial: list | None, nombres_catalogo: list[str]
 ) -> list[tuple[str, str]]:
@@ -3480,8 +3523,9 @@ async def generar_datos_pago(session, telefono, pedido_id=None, metodo=None):
             "ok": False,
             "nota": (
                 "todavía NO le puedes cobrar: falta acordar PARA CUÁNDO es la entrega. "
-                "Pregúntale al cliente qué día la quiere (y si es retiro o delivery), registra "
-                "el pedido con esa fecha (`entrega_fecha`) y recién entonces cobra."
+                "Consulta proxima_fecha_entrega, afírmale la fecha (y pregúntale cómo lo recibe "
+                "SOLO si aún no lo dijo), registra el pedido con esa fecha (`entrega_fecha`) y "
+                "recién entonces cobra."
             ),
         }
 
@@ -3494,11 +3538,14 @@ async def generar_datos_pago(session, telefono, pedido_id=None, metodo=None):
         return {
             "ok": False,
             "nota": (
-                "todavía NO le puedes cobrar: falta saber CÓMO lo recibe. Pregúntale si lo retira "
-                "o si quiere delivery, y en ese caso EN QUÉ ZONA está (léele las zonas con su "
-                "costo). Después vuelve a registrar el pedido COMPLETO pasando el `zona_id` que "
-                "corresponda. NUNCA sumes tú el envío ni lo estimes: el costo lo pone el sistema. "
-                "Si el sitio del cliente no calza con ninguna zona, llama a `pedir_ayuda`."
+                "todavía NO le puedes cobrar: falta la ZONA. Si el cliente YA dijo que quiere "
+                "delivery, NO le vuelvas a ofrecer retiro: pregúntale solo en qué zona está y "
+                "nómbrale únicamente las zonas de delivery con su costo. Si ya dijo que retira, "
+                "usa la zona de retiro. Solo si no ha dicho cómo lo recibe, pregúntale si lo "
+                "retira o quiere delivery. Después vuelve a registrar el pedido COMPLETO pasando "
+                "el `zona_id` que corresponda. NUNCA sumes tú el envío ni lo estimes: el costo lo "
+                "pone el sistema. Si el sitio del cliente no calza con ninguna zona, llama a "
+                "`pedir_ayuda`."
             ),
             "zonas": zonas,
         }

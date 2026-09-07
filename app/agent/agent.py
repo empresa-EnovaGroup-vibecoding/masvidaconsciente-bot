@@ -36,6 +36,7 @@ from app.agent.tools import (
     hilo_de_la_venta,
     horas_de_silencio,
     media_ya_mostrada,
+    modo_de_entrega_en,
     productos_enfocados,
     schemas_para,
     tamanos_hermanos,
@@ -2535,6 +2536,24 @@ async def responder(
             "confírmalas con naturalidad si hace falta y avanza SOLO con lo que aún falte "
             "(relleno, tamaño, cantidad, fecha, cobro). Si el cliente cambia alguna en su "
             "último mensaje, vale lo nuevo que diga."
+        )
+    # 🚚 EL MODO DE ENTREGA YA ELEGIDO (6-sep): "me lo enviaras por delivery" → el bot volvió a
+    # ofrecer "o retiras en La Mendera". La elección vivía solo en el chat (sin pedido aún no hay
+    # ESTADO) y la lista cerrada de zonas trae la de retiro como una más. Se destila del chat y
+    # se inyecta como HECHO, igual que la masa de yuca. Sin cifras: lo lee la red del dinero.
+    modo_entrega = modo_de_entrega_en(mensaje_usuario, historial)
+    if modo_entrega == "delivery":
+        dinamico += (
+            "\n\nMODO DE ENTREGA YA ELEGIDO por el cliente: DELIVERY (lo dijo él). NO le ofrezcas "
+            "retiro, NO le preguntes 'retiras o te lo llevo?' y NO le nombres la zona de retiro: "
+            "pregúntale SOLO en qué zona está, nombrando únicamente las zonas de delivery. Si "
+            "cambia de idea en su último mensaje, vale lo nuevo."
+        )
+    elif modo_entrega == "retiro":
+        dinamico += (
+            "\n\nMODO DE ENTREGA YA ELEGIDO por el cliente: RETIRO (lo dijo él). NO le ofrezcas "
+            "delivery ni le nombres zonas: usa la zona de retiro tal cual y sigue. Si cambia de "
+            "idea en su último mensaje, vale lo nuevo."
         )
     messages: list = [
         {
