@@ -57,3 +57,16 @@ def test_lo_que_SI_puede_decir_no_se_frena():
         "Soy Alejandra 💚 quieres que te pase con Whuilianny?",
     ):
         assert frase_prohibida_siempre(buena) is None, f"frenó un mensaje correcto: {buena!r}"
+
+
+def test_restaurar_original_tambien_es_alejandra():
+    """🔴 7-sep-2026: el botón "Restaurar original" del panel pone `PERSONALIDAD_DEFAULT`. Decía
+    "Eres Whuilianny Zabala… la asistente de Whuilianny": un clic devolvía al bot a suplantar a la
+    clienta y a contradecir a R130. El default tiene que decir lo mismo que las reglas."""
+    from app.agent.system_prompt import PERSONALIDAD_DEFAULT
+
+    bajo = PERSONALIDAD_DEFAULT.lower()
+    assert bajo.startswith("eres alejandra"), "el default volvió a presentarse como otra persona"
+    assert "asesora" in bajo
+    assert "asistente" not in bajo, "el default se llama 'asistente' y R130 dice asesora"
+    assert "dueña" not in bajo
