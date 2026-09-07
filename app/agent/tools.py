@@ -4056,7 +4056,7 @@ async def pedir_ayuda(
             "Listo: ya avisaste y una persona del negocio toma este chat. Dile al cliente, CON "
             "TUS PROPIAS PALABRAS y con calidez, que en un momento lo atienden; si pidió a "
             "Whuilianny por su nombre, dile que Whuilianny le escribe en un momento (su nombre "
-            "sí; 'la dueña', 'la propietaria' o 'la jefa', nunca). NO inventes datos ni des un "
+            "sí; ningún cargo ni título). NO inventes datos ni des un "
             "precio. Después de este mensaje NO sigas respondiendo en este chat."
         )
     else:
