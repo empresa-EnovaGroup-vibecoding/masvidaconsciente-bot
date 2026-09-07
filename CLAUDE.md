@@ -46,7 +46,7 @@ Antes de tocar datos reales, probar el cambio dentro de una transacción y hacer
 3. **`SESIONES.md`** → bitácora (leer solo la última entrada).
 4. **`CLAUDE.md`** (este) → las reglas.
 
-**Los 4 de referencia** (casi no cambian): `RESPALDO.md` · `BRIEF-personalidad-whuilianny.md` · `BRIEF-closer-masvida.md` · `PRP-cobro.md`.
+**Los 5 de referencia** (casi no cambian): `RESPALDO.md` · `BRIEF-personalidad-alejandra-2026-09-06.md` (la voz vigente) · `BRIEF-personalidad-whuilianny.md` (histórico) · `BRIEF-closer-masvida.md` · `PRP-cobro.md`.
 
 > Nota: el material del Tech Provider (modelo de negocio "ENOVA_BLUEPRINT", montar un cliente nuevo, onboarding de datos) ya NO vive aquí — es de Enova, no de másvida. Vive en su proyecto propio y está disponible como skill `/meta-tech-provider` en cualquier proyecto.
 

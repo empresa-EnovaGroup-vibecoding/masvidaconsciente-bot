@@ -30,15 +30,16 @@ Las **FASES 0 a 3 ya están hechas y desplegadas**:
 
 ### 🚀 AHORA MISMO (6-sep noche): PROMOVER A PRODUCCIÓN LO QUE YA ESTÁ VERDE EN PRUEBAS
 
-> **Pruebas está listo** (`f60c3f7` + panel `d8b94ab`, 27/27 bancos, cero PRs abiertos) con todo
+> **Pruebas está listo** (`f60c3f7` + panel `d8b94ab`, 27/27 bancos, cero PRs de código abiertos — solo el #42, los docs de este cierre) con todo
 > lo del 6-sep: entrega con franja + referencia (038), opciones a la vista, prompt compacto, modo de
 > entrega sin repreguntar, foto antes de la pregunta, caché de 1 hora, personalidad nueva.
 > **Producción sigue en `42d37de` con la personalidad vieja.** Los pasos exactos (7) están en
 > `ESTADO.md` → "Última verificación". El gatillo lo aprieta Maired; antes, ella termina el guion en
 > pruebas (zona → referencia → pago → comprobante → "8 am" → franja → resumen) y da el OK.
 >
-> **Después de producción, en este orden:** (1) crear la cuenta propia de Whuilianny (rol dueña) —
-> ya existe en pruebas; (2) datos que le tocan a Whuilianny (info de las empanadas, coma en sabores
+> **Después de producción, en este orden:** (1) entregarle a Whuilianny su cuenta propia del panel
+> (Maired la creó en PRODUCCIÓN el 6-sep: `masvidaconsciente1@gmail.com`, rol dueña) y que ella
+> cambie su clave en "Mi contraseña"; (2) datos que le tocan a Whuilianny (info de las empanadas, coma en sabores
 > de la torta, "CHOCOLATE"); (3) humo con el número real con OK de horario; (4) abrir lista blanca →
 > ENTREGA; (5) adelgazar el prompt (24k tokens) midiendo antes/después; (6) medir modo DOS con el
 > mismo guion; (7) cerrar la carrera del lock 120s (`probar_vigilante` flaky tras deploy).
@@ -48,8 +49,8 @@ Las **FASES 0 a 3 ya están hechas y desplegadas**:
 > 🎯 **ESTADO AL 3-sep (12:35 ET):** el **PR #18 está FUSIONADO** y el entorno de pruebas corre
 > `a798aac`. `PUBLIC_BASE_URL` quedó cifrada y definida en bot + worker; ambos redeploys terminaron
 > bien. El enlace público devuelve **200 · `application/pdf` · 2.803.311 bytes · firma `%PDF-`** y
-> `/salud` sigue en `ok`. **Falta la prueba final pidiéndolo por WhatsApp** y repetir la variable en
-> producción con OK explícito. Detalle y autopsia del primer deploy fallido: SESIONES (18).
+> `/salud` sigue en `ok`. **Falta la prueba final pidiéndolo por WhatsApp**; ~~repetir la variable en
+> producción con OK explícito~~ → hecho el 5-sep (paso 2). Detalle y autopsia del primer deploy fallido: SESIONES (18).
 
 **El síntoma que Maired lleva viendo:** pide el catálogo → el bot dice "ahí te lo dejo" → el PDF
 **nunca llega** → "no me has enviado". **La autopsia del 2-sep lo cerró con evidencia** (SESIONES
@@ -261,8 +262,8 @@ servidor en el momento (`docker ps`, y la clave de Redis sale de
 
 - [x] 1. Código de agosto de Erwin unificado en GitHub (hecho 21-ago: 32 commits del bot + 6 del panel).
 - [x] 2. **Despliegue reconectado y AUTOMÁTICO (hecho 22-ago).** Coolify reconectado a `master` y construyendo desde GitHub; y un push a `master` **despliega el taller solo**, con la CI (`ruff`/`compileall`/`pytest`) como puerta: si sale rojo, no se despliega. Producción sigue SOLO a mano (en un push el destino se fuerza a `taller`). Cómo funciona hoy está en `ESTADO.md` § "cómo se despliega".
-- [ ] 3. Producción actualizada a la última versión — CON respaldo previo de BD + personalidad de netcup.
-- [ ] 4. Los **27 bancos en verde en producción** (no solo en el taller). *(Eran 17 cuando se escribió esta casilla; hoy son 27 — y 24 de ellos corren en LOCAL antes de desplegar con `./banco_local.sh`.)*
+- [x] 3. Producción actualizada a la última versión — CON respaldo previo de BD + personalidad de netcup. *(Hecho el 5-sep con `89aea1d` y repetido el 6-sep con `42d37de`, con respaldo previo cada vez; ⏳ toca re-promover `f60c3f7` — ver ESTADO "Última verificación".)*
+- [x] 4. Los **27 bancos en verde en producción** (no solo en el taller). *(27/27 en producción el 5-sep y el 6-sep; se re-corren tras cada promoción, paso 3 de la liturgia.)* *(Eran 17 cuando se escribió esta casilla; hoy son 27 — y 24 de ellos corren en LOCAL antes de desplegar con `./banco_local.sh`.)*
 - [ ] 5. Pruebas de humo con el número real: saludo · catálogo · fotos · pedido · datos de pago · comprobante · delivery — **verificado en la BD, no en el chat**.
 - [ ] 6. La lista blanca se quita (o se amplía por grupos) y **el bot atiende clientas reales**.
 - [ ] 7. La dueña atiende desde la bandeja del panel y el bot escala cuando no sabe.

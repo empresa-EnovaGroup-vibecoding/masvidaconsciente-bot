@@ -91,7 +91,7 @@ GLM-5.3-Flash quedó descartado para la voz ($0,022 pero 7 grietas y 12,6 s por 
 la prueba: "¿se explica en una frase sin 'y'?". Un PR es una entrega, no una carpeta: master es la
 casa. Y **diagnosticar completo antes de arreglar**.
 
-**Estado al cierre:** pruebas `f60c3f7` + panel `d8b94ab`, 27/27 bancos, cero PRs abiertos.
+**Estado al cierre:** pruebas `f60c3f7` + panel `d8b94ab`, 27/27 bancos, cero PRs de código abiertos (solo el #42, los docs de este cierre).
 Producción sigue en `42d37de` con la personalidad vieja. **Falta:** que Maired termine el guion
 en pruebas y dé el OK → liturgia de promoción (ESTADO, "Última verificación": 7 pasos, incluye
 `scripts/promover_personalidad.py` y `scripts/promover_sabores.py`). Cerrado el pendiente de (24):

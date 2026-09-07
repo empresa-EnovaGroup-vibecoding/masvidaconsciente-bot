@@ -23,8 +23,8 @@ BASE = "http://localhost:8000"
 
 # (nombre, presentación) TAL CUAL están en la BD VIVA de pruebas (variantes 9/10/34), NO en
 # migrations/002: la semilla dice 'Galletas New York / 4 unidades' y no tiene CHOCOLATE (nació en el
-# panel). Si en producción difieren, el script lo reporta en `no_encontrados` y sale con 1 sin
-# escribir nada — comparar entonces con GET /api/productos de producción antes de reintentar.
+# panel). Si en producción difiere ALGUNA, el script las resuelve todas primero, lo reporta en
+# `no_encontrados` y sale con 1 SIN escribir ninguna — comparar con GET /api/productos y reintentar.
 SABORES = {
     ("Galletas New York", "6 unidades"): "chocolate, limón pistacho, canela naranja o chocomerey",
     ("Mini New York", "10 unidades"): "chocolate, limón pistacho, canela naranja o chocomerey",
@@ -48,8 +48,11 @@ def main() -> int:
         "access_token"
     ]
     productos = _req("GET", "/api/productos", token=token)
-    hechos, saltados, faltan = 0, 0, []
-    for (nombre, presentacion), sabores in SABORES.items():
+    # DOS FASES: primero se resuelven LAS TRES variantes; si falta alguna, se avisa y se sale
+    # SIN escribir nada (así el "no escribe nada" de la liturgia es cierto, no aproximado).
+    resueltas: dict[tuple[str, str], dict] = {}
+    faltan: list[str] = []
+    for nombre, presentacion in SABORES:
         variante = next(
             (
                 v
@@ -62,7 +65,16 @@ def main() -> int:
         )
         if variante is None:
             faltan.append(f"{nombre} / {presentacion}")
-            continue
+        else:
+            resueltas[(nombre, presentacion)] = variante
+    if faltan:
+        print(f"NO se escribió nada. no_encontrados={faltan} — compara con GET /api/productos "
+              "de este entorno (nombre y presentación tal cual) y ajusta SABORES antes de reintentar.")
+        return 1
+
+    hechos, saltados = 0, 0
+    for (nombre, presentacion), sabores in SABORES.items():
+        variante = resueltas[(nombre, presentacion)]
         if (variante.get("sabores") or "").strip():
             print(f"= {nombre} / {presentacion}: ya tiene sabores ({variante['sabores']!r}), no se toca")
             saltados += 1
@@ -81,8 +93,8 @@ def main() -> int:
         )
         print(f"+ {nombre} / {presentacion}: sabores <- {sabores!r}")
         hechos += 1
-    print(f"hechos={hechos} saltados={saltados} no_encontrados={faltan}")
-    return 0 if not faltan else 1
+    print(f"hechos={hechos} saltados={saltados} no_encontrados=[]")
+    return 0
 
 
 if __name__ == "__main__":

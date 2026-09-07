@@ -57,7 +57,7 @@ y salud, memoria que no se olvida a las 24h, y 8 migraciones nuevas (hasta la 03
 | **Webhook** | re-apuntado por Graph API (`/{waba}/subscribed_apps` + `override_callback_uri`) → `https://jthc51nxqitd9opc8ywioocr.152.53.194.89.sslip.io/webhook/whatsapp` |
 | **BD** | dump FINAL del taller restaurado el 1-sep (36 migraciones entonces); hoy **39 migraciones** (038 franja + referencia) · 32 productos · 10 conocimiento · `sabores` cargados en Galletas / Mini / CHOCOLATE (6-sep) |
 | **Modelo IA** | `anthropic/claude-sonnet-4.6` (el aprobado por Maired en el taller) |
-| **Salud** | `https://jthc51nxqitd9opc8ywioocr.152.53.194.89.sslip.io/salud` — verificado tras `f85f781`: `ok`, Meta GREEN, 37 migraciones, saldo $2.552 |
+| **Salud** | `https://jthc51nxqitd9opc8ywioocr.152.53.194.89.sslip.io/salud` — snapshot del 3-sep tras `f85f781`: `ok`, Meta GREEN, 37 migraciones, saldo $2.552 · **tras `f60c3f7` (6-sep): `ok`, fallos `[]`, 39 migraciones** |
 | **Prueba de fuego** | ✅ "Hola" de Maired → respuesta en 5,8s **con la memoria del taller** (13 mensajes rescatados de Postgres) |
 | **Panel** | ✅ **`https://panel-masvida.enovagroup.tech/login`** (dominio propio + HTTPS Let's Encrypt). `d8b94ab` (PR #4: Franjas de entrega en Horario + franja/referencia en el pedido; trae la ★ del #1, el ojito del #2 y las contraseñas del #3). Login: `admin@masvidaconsciente.com` + la clave unificada con producción (6-sep). |
 | **DNS (Namecheap)** | `panel-masvida` y `api-masvida` .enovagroup.tech → `152.53.194.89` (los creó Maired el 2-sep). ⚠️ `api-masvida` apunta al VPS pero **ningún servicio lo atiende todavía** — ver el bug del catálogo abajo. |
@@ -134,9 +134,11 @@ y salud, memoria que no se olvida a las 24h, y 8 migraciones nuevas (hasta la 03
 > re-desplegado en ambos (login 200; el ojito 👁️ y la sección "Mi contraseña" + botón
 > "Restablecer clave" ya viven en producción; `PATCH /api/usuarios/me/password` responde 401 sin
 > token = existe y está protegido). **La clave del panel quedó UNIFICADA** en los dos entornos
-> (pruebas alineada a la de producción vía API de Coolify). ⏳ **Falta crear la cuenta propia de
-> Whuilianny** (rol `duena`) en producción: hoy solo existe la principal (`admin@…`, Enova), que
-> por diseño NO se cambia desde el panel (`_crear_admin` la re-sincroniza al arrancar).
+> (pruebas alineada a la de producción vía API de Coolify). ✅ **Cuenta propia de Whuilianny
+> creada por Maired en producción ese mismo día** (`masvidaconsciente1@gmail.com`, rol `duena`,
+> id 7 — verificado en la BD el 6-sep por la tarde). La principal (`admin@…`, Enova) por diseño
+> NO se cambia desde el panel (`_crear_admin` la re-sincroniza al arrancar). ⏳ Falta entregarle
+> la clave inicial y que ella la cambie en "Mi contraseña".
 
 ## Verificación anterior: **2026-09-05 (~21:15 VET) — LOS DOS ENTORNOS EN `df67e4b` (el carril del pago blindado, PR #27)**
 
@@ -186,8 +188,8 @@ y salud, memoria que no se olvida a las 24h, y 8 migraciones nuevas (hasta la 03
 | **Lista blanca** | ✅ **ACTIVA: 1 solo número** (`NUMEROS_PERMITIDOS=573005690062`, extra=None). ⚠️ `bot_activo` no existe en la config ⇒ el código lo trata como ENCENDIDO: **lo que protege a las clientas es la lista blanca** | ✅ activa |
 | **Bot en el mercado** | ❌ NO — cerrado a clientas reales (regla absoluta del relevo: no abrir sin autorización expresa de Maired) | pruebas |
 | **Número real** | `+58 424-7047595` — 🔴 **COEXISTENCIA: Whuilianny lo ve en VIVO en su celular.** Cualquier mensaje ahí (aunque sea de prueba, aunque el remitente esté en la lista blanca) le suena el teléfono a ELLA. NUNCA probar aquí sin su OK de horario — ver CLAUDE.md §3 | `+57 313 293 3806` (agencia) — sin este riesgo |
-| **Bancos** | ✅ **27/27** (1-sep, tras cargar el Zelle que faltaba — ver abajo) | ✅ 27/27 |
-| **Datos** | 32 productos / 37 variantes / 277 clientes / 13.890 mensajes / **0 pedidos** (⚠️ confirmar con Maired que el 0 es esperado — hizo eliminaciones manuales; hay respaldo pre-migración en `/root/masvida-migration-backups/20260901_040209`) / personalidad 7.331 car | 32/37 + datos de prueba |
+| **Bancos** | ✅ **27/27** (6-sep tras `42d37de`; también 5-sep tras `89aea1d` y 1-sep tras cargar el Zelle — ver abajo) | ✅ 27/27 |
+| **Datos** | *(cifras del 1-sep; al 5-sep eran 32/37/299 clientes/14.910 mensajes/0 pedidos/34 media — ver verificación 5-sep 19:40)* 32 productos / 37 variantes / 277 clientes / 13.890 mensajes / **0 pedidos** (⚠️ confirmar con Maired que el 0 es esperado — hizo eliminaciones manuales; hay respaldo pre-migración en `/root/masvida-migration-backups/20260901_040209`) / personalidad 7.331 car | 32/37 + datos de prueba |
 | **Respaldos** | diario cifrado (7 semanas corriendo) + pre-migración + pre-endurecimiento (con SHA-256) + copia local `C:\Developer\AI\Proyectos\respaldos-masvida` | D4 sigue abierta |
 
 ✅ **CERRADO el 1-sep: el Zelle de producción.** Producción YA tenía Pago Móvil, Transferencia
@@ -423,7 +425,7 @@ siguiente despliegue. **Nada se edita en el servidor** (regla dura de CLAUDE.md 
 |---|---|
 | **El bot no contesta** | 1. Abre el `/salud` del entorno (pruebas: la URL del bloque 🏭 de arriba; producción: `api.masvidaconsciente.store/salud`) → ¿todo `ok`? ¿`saldo_usd` > 0? · 2. Panel → ¿`bot_activo` encendido? · 3. ¿Ese número está en la lista blanca? · 4. ¿Ese chat está pausado (bandeja / "atiendo yo")? *(La URL vieja `api-masvida.enovagroup.tech` murió con el taller.)* |
 | **Se acabó el saldo de IA** | `/salud` → `saldo_ia`. Recargar en OpenRouter. Sin saldo el bot NO responde. |
-| **Contesta raro o inventa** | 1. Panel → Configuración → ¿qué MODELO está activo? (hoy `anthropic/claude-haiku-4.5`) · 2. ¿Alguien editó la Personalidad? (vive en la BD) · 3. NO culpar al modelo primero: sospecha del código/datos. |
+| **Contesta raro o inventa** | 1. Panel → Configuración → ¿qué MODELO está activo? (hoy `anthropic/claude-sonnet-4.6` en los dos entornos; la fuente es la fila "Modelo IA activo" de las tablas de arriba) · 2. ¿Alguien editó la Personalidad? (vive en la BD) · 3. NO culpar al modelo primero: sospecha del código/datos. |
 | **Cobro o precio mal** | Verificar **en la BD**, no en el chat: `SELECT items, total FROM pedidos`. |
 | **Hice push y no pasó nada** | Es lo esperado: el deploy es a mano desde el 2-ago. Hay que lanzarlo desde Coolify/Actions. |
 | **El panel no carga datos** | ¿El build tiene `NEXT_PUBLIC_API_URL`? (sin eso: "Failed to fetch"). |
