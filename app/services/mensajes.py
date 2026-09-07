@@ -132,9 +132,10 @@ def _frase_entrega(
         )
     elif franjas:
         texto += (
-            " y pregúntale en cuál de estas franjas le queda mejor: " + " o ".join(franjas)
+            " y dile cuándo hay espacio para llevárselo, con tus palabras y sin la palabra "
+            "'franja' — los momentos, tal cual están escritos: " + " · ".join(franjas)
             + " (NO preguntes una hora exacta: esa la confirma la dueña según su ruta). Cuando "
-            "elija, guárdala con anotar_entrega."
+            "elija, guárdalo con anotar_entrega."
         )
     else:
         texto += " y pregúntale a qué hora le queda bien."

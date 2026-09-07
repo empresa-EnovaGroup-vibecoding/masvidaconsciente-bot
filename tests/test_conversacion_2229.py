@@ -30,7 +30,24 @@ FRANJAS = ["en la mañana (10 a 12)", "en la tarde (2 a 6)"]
 def test_los_rangos_se_leen_en_24h():
     assert _rango_de_franja("en la mañana (10 a 12)") == (10, 12)
     assert _rango_de_franja("en la tarde (2 a 6)") == (14, 18)
+    # Los momentos de fábrica ya son frases de persona (lo pidió Maired: nada de paréntesis):
+    assert _rango_de_franja("de 10 a 12 de la mañana") == (10, 12)
+    assert _rango_de_franja("de 2 a 6 de la tarde") == (14, 18)
+    assert tools._FRANJAS_DEFAULT == ["de 10 a 12 de la mañana", "de 2 a 6 de la tarde"]
     assert _rango_de_franja("mañana") is None
+
+
+def test_a_las_10_tambien_con_los_momentos_de_fabrica():
+    assert _matchear_franja("a las 10", tools._FRANJAS_DEFAULT) == "de 10 a 12 de la mañana"
+    assert _matchear_franja("a las 3", tools._FRANJAS_DEFAULT) == "de 2 a 6 de la tarde"
+
+
+def test_ninguna_frase_de_ejemplo_del_cliente_vive_en_codigo_ni_prompt():
+    """Lo pidió Maired: la redacción es del modelo; el código pasa las HORAS (del panel) y
+    prohíbe la palabra 'franja'. Ninguna frase hecha para el cliente queda escrita aquí."""
+    import inspect
+    for src in (inspect.getsource(tools.anotar_entrega), inspect.getsource(tools.proxima_fecha_entrega), sp._REGLAS):
+        assert "tengo espacio de 10 a 12" not in src
 
 
 def test_a_las_10_es_la_manana():
@@ -61,11 +78,12 @@ def test_las_formas_de_antes_siguen_igual():
 
 
 def test_las_notas_de_la_herramienta_prohiben_la_palabra_franja_al_cliente():
+    # (las frases se cortan por el salto de línea del código fuente: se buscan trozos enteros)
     src = inspect.getsource(tools.anotar_entrega)
-    assert "SIN usar la palabra 'franja'" in src
+    assert "usar la palabra 'franja'" in src
     assert "'en la mañana' o 'en la tarde'" in src
     src2 = inspect.getsource(tools.proxima_fecha_entrega)
-    assert "SIN la palabra 'franja'" in src2
+    assert "palabra 'franja'" in src2
     assert "pásasela igual a" in src2  # una hora se manda a anotar_entrega, no se rechaza de antemano
 
 

@@ -2248,7 +2248,7 @@ async def _dias_de_entrega(session) -> set[str]:
 # confirma ella. Lo que el cliente elige es una FRANJA de una lista CERRADA que edita la dueña
 # (`franjas_entrega`, una por línea o separadas por coma). FAIL-OPEN: sin configurar, las de
 # fábrica — la venta nunca se queda sin franjas que ofrecer.
-_FRANJAS_DEFAULT = ["en la mañana (10 a 12)", "en la tarde (2 a 6)"]
+_FRANJAS_DEFAULT = ["de 10 a 12 de la mañana", "de 2 a 6 de la tarde"]
 
 
 def _parsear_franjas(valor: str | None) -> list[str]:
@@ -2538,8 +2538,9 @@ async def proxima_fecha_entrega(session, telefono, productos=None):
             "pide un día que no está en esta lista, dile con cariño cuál es el más cercano que "
             "sí puedes y ofréceselo. La HORA exacta NO existe como opción: ni la preguntes ni la "
             "prometas. Lo que el cliente elige es uno de los momentos de `franjas_de_entrega` "
-            "(ofrécelos con naturalidad, 'en la mañana o en la tarde', SIN la palabra 'franja', "
-            "que es nuestra, y guarda el elegido con anotar_entrega); la hora exacta la confirma "
+            "(díselos TAL CUAL están escritos, como disponibilidad, SIN la "
+            "palabra 'franja', que es nuestra; guarda el elegido con anotar_entrega); la hora "
+            "exacta la confirma "
             "la dueña según su ruta. Si dice una hora ('a las 10'), pásasela igual a "
             "anotar_entrega: si cae dentro de un momento, queda elegido; si no, te lo digo. "
             # 🔴 GUARDIA DE HILO (31-ago): re-consultar el calendario (por una duda o un
@@ -2607,10 +2608,10 @@ async def anotar_entrega(session, telefono, franja=None, referencia=None, pedido
                 "franjas_de_entrega": franjas,
                 "nota": (
                     f"'{franja_txt}' no cae en ninguna franja del negocio (si dijo una hora, "
-                    "queda fuera de todas). Dile con naturalidad en qué momentos se entrega — "
-                    "SIN usar la palabra 'franja', que es nuestra: di 'en la mañana o en la "
-                    "tarde' — y vuelve a llamarme con la que elija: " + " · ".join(franjas)
-                    + ". La hora exacta la confirma la dueña según su ruta."
+                    "queda fuera de todas). Dile cuándo SÍ hay espacio, con tus palabras y SIN "
+                    "usar la palabra 'franja', que es nuestra — los momentos, tal cual están "
+                    "escritos: " + " · ".join(franjas) + " — y vuelve a llamarme con lo que elija. "
+                    "La hora exacta la confirma la dueña según su ruta."
                 ),
             }
         pedido.entrega_franja = elegida
@@ -2637,7 +2638,10 @@ async def anotar_entrega(session, telefono, franja=None, referencia=None, pedido
 
     falta: list[str] = []
     if not pedido.entrega_franja:
-        falta.append("la franja (ofrécele: " + " · ".join(franjas) + ")")
+        falta.append(
+            "el momento de entrega — ofrécelo como disponibilidad, con tus palabras y nunca "
+            "con la palabra 'franja'; los momentos, tal cual: " + " · ".join(franjas)
+        )
     if await _falta_referencia(session, pedido):
         falta.append("la dirección o punto de referencia (es delivery)")
     nota = f"pedido #{pedido.id}: " + ", ".join(guardado) + "."
@@ -2646,9 +2650,10 @@ async def anotar_entrega(session, telefono, franja=None, referencia=None, pedido
     else:
         nota += (
             " La entrega quedó completa. Díselo con tus palabras (sin la palabra 'franja': di "
-            "'en la mañana' o 'en la tarde') y aclárale que la hora exacta se la confirma la "
-            "dueña según su ruta. NO prometas una hora. Si el cliente dijo una hora que cae "
-            "dentro, confírmale el momento ('perfecto, en la mañana entonces'), no lo corrijas."
+            "'en la mañana' o 'en la tarde', con sus horas si hace falta) y aclárale que la hora "
+            "exacta se la confirma la dueña según su ruta. NO prometas una hora. Si el cliente "
+            "dijo una hora que cae dentro, confírmale el momento ('perfecto, en la mañana "
+            "entonces'), no lo corrijas."
         )
     # ⚠️ La referencia NO se devuelve aquí (texto libre del cliente): en el pedido y en el panel
     # está; al modelo le basta saber que quedó guardada.
