@@ -28,7 +28,7 @@ MENSAJES_DEFAULT = {
         "el pago del cliente acaba de quedar CONFIRMADO; cierra la venta con calidez, "
         "agradécele su compra y CIERRA LA ENTREGA: si te digo cómo y cuándo la recibe, "
         "díselo con tus palabras y pregúntale en cuál FRANJA le queda mejor (nunca una hora "
-        "exacta: esa la confirma la dueña según su ruta); si no lo sabes, dile que coordinan "
+        "exacta); si no lo sabes, dile que coordinan "
         "la entrega"
     ),
     "msg_guia_rechazado": (
@@ -73,8 +73,8 @@ def _frase_entrega(
     """La frase que se le PEGA a la situación del pago confirmado. PURA (sin BD): la prueba el CI.
 
     🗓️ LA HORA YA NO SE PREGUNTA (6-sep, regla de negocio de Maired): el cliente elige una FRANJA
-    de la lista cerrada de la dueña (`franjas`) y la hora exacta la confirma Whuilianny según su
-    ruta. Con `franja_elegida` ya guardada, se le recuerda y no se repregunta. Sin franjas (los
+    de la lista cerrada de la dueña (`franjas`); la hora exacta no se promete ni se le explica al
+    cliente. Con `franja_elegida` ya guardada, se le recuerda y no se repregunta. Sin franjas (los
     llamadores viejos), sale la redacción de siempre. `falta_referencia`: es delivery y no hay
     dirección — se pide en el mismo cierre.
 
@@ -128,8 +128,7 @@ def _frase_entrega(
     if franja:
         texto += (
             f" — ya eligió recibirlo {franja}: NO lo repreguntes, NO le repitas el pedido y "
-            "cierra con calidez (NO prometas una hora exacta ni le anuncies que la dueña la "
-            "confirma)."
+            "cierra con calidez (NO prometas una hora exacta ni expliques quién la pone)."
         )
     elif franjas:
         texto += (

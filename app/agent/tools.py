@@ -154,8 +154,8 @@ TOOL_SCHEMAS = [
                         "description": (
                             "CÓMO lo quiere, con las palabras del cliente: retiro o delivery, "
                             "y dónde (ej. 'delivery en Cabudare'; 'lo retiro en La Mendera'). "
-                            "La hora NO existe como opción: la franja se guarda después con "
-                            "anotar_entrega y la hora exacta la confirma la dueña según su ruta."
+                            "La hora NO existe como opción: la franja (el momento de entrega) "
+                            "se guarda después con anotar_entrega."
                         ),
                     },
                     "entrega_fecha": {
@@ -243,9 +243,10 @@ TOOL_SCHEMAS = [
                 "cual) y/o la DIRECCIÓN o punto de REFERENCIA que dio (con sus palabras). "
                 "Llámala apenas el cliente diga cualquiera de las dos, aunque el pedido ya esté "
                 "pagado (coordinar la entrega de un pedido pagado es lo normal). El cliente NO "
-                "elige una hora exacta: si dice una hora ('a las 8'), NO la prometas — ofrécele "
-                "las franjas y guarda la que elija; la hora exacta la confirma la dueña según su "
-                "ruta. Si es DELIVERY, sin referencia guardada NO se puede cobrar."
+                "elige una hora exacta: si dice una hora ('a las 8'), NO la prometas — pásamela "
+                "igual: si cae dentro de un momento queda elegido y, si no, te devuelvo los "
+                "momentos para que le digas cuándo sí hay espacio. Si es DELIVERY, sin "
+                "referencia guardada NO se puede cobrar."
             ),
             "parameters": {
                 "type": "object",
@@ -2536,12 +2537,12 @@ async def proxima_fecha_entrega(session, telefono, productos=None):
             "Estas son LAS ÚNICAS fechas que puedes ofrecer. No sumes ni restes días por tu "
             "cuenta, no supongas que mañana se entrega, y no inventes una hora: si el cliente "
             "pide un día que no está en esta lista, dile con cariño cuál es el más cercano que "
-            "sí puedes y ofréceselo. La HORA exacta NO existe como opción: ni la preguntes ni la "
-            "prometas. Lo que el cliente elige es uno de los momentos de `franjas_de_entrega` "
+            "sí puedes y ofréceselo. La HORA exacta NO existe como opción: ni la preguntes, "
+            "ni la prometas, ni expliques quién la pone. Lo que el cliente elige es uno de los "
+            "momentos de `franjas_de_entrega` "
             "(díselos TAL CUAL están escritos, como disponibilidad, SIN la "
-            "palabra 'franja', que es nuestra; guarda el elegido con anotar_entrega). No prometas "
-            "una hora exacta, y tampoco le anuncies que 'la dueña la confirma': solo no la "
-            "prometas. Si dice una hora ('a las 10'), pásasela igual a "
+            "palabra 'franja', que es nuestra; guarda el elegido con anotar_entrega). Si dice "
+            "una hora ('a las 10'), pásasela igual a "
             "anotar_entrega: si cae dentro de un momento, queda elegido; si no, te lo digo. "
             # 🔴 GUARDIA DE HILO (31-ago): re-consultar el calendario (por una duda o un
             # producto nuevo) traía 4 fechas frescas sin memoria de la ya acordada — y el
@@ -2567,8 +2568,9 @@ async def anotar_entrega(session, telefono, franja=None, referencia=None, pedido
     única del carril que lo hace, y no toca ni items, ni total, ni estado.
 
     La franja se ELIGE (`_matchear_franja`): si lo que mandó el modelo no calza con una sola,
-    no se guarda nada y se devuelve la lista para que pregunte. Una hora suelta ("8 am") no
-    calza con ninguna franja a propósito: la hora exacta la confirma la dueña según su ruta.
+    no se guarda nada y se devuelve la lista para que pregunte. Una hora suelta ("a las 10")
+    calza solo si cae DENTRO de una franja (`_hora_en_franja`, #43); fuera de todas, la lista.
+    La hora exacta no se promete ni se le explica al cliente quién la pone (7-sep, 2ª vuelta).
     """
     if pedido_id is not None:
         try:
@@ -2611,7 +2613,7 @@ async def anotar_entrega(session, telefono, franja=None, referencia=None, pedido
                     "queda fuera de todas). Dile cuándo SÍ hay espacio, con tus palabras y SIN "
                     "usar la palabra 'franja', que es nuestra — los momentos, tal cual están "
                     "escritos: " + " · ".join(franjas) + " — y vuelve a llamarme con lo que elija. "
-                    "No prometas una hora exacta (y no le anuncies que la dueña la confirma)."
+                    "De la hora exacta no digas nada: ni la prometas ni expliques quién la pone."
                 ),
             }
         pedido.entrega_franja = elegida
@@ -2651,8 +2653,8 @@ async def anotar_entrega(session, telefono, franja=None, referencia=None, pedido
         nota += (
             " La entrega quedó completa. Confírmaselo en UNA línea con tus palabras (sin la "
             "palabra 'franja': di 'en la mañana' o 'en la tarde') y deja morir la conversación "
-            "con calidez. NO le repitas el pedido (ya lo vio al cobrar), NO le anuncies que la "
-            "dueña le confirma la hora y NO prometas una hora exacta. Si el cliente dijo una hora "
+            "con calidez. NO le repitas el pedido (ya lo vio al cobrar) y de la hora exacta no "
+            "digas nada: ni la prometas ni expliques quién la pone. Si el cliente dijo una hora "
             "que cae dentro, confírmale el momento ('perfecto, en la mañana entonces'), no lo "
             "corrijas."
         )

@@ -24,6 +24,59 @@
 
 ---
 
+## 2026-09-07 (27) — 🔇 LA HORA ES MUDA, SEGUNDA VUELTA: la frase estaba ESCRITA en 4 sitios más, y la voz presentaba a la dueña
+
+**Lo vio Maired en vivo (pruebas, 16:34 VET):** "A las 10" → *"La hora exacta la confirma la dueña
+según su ruta, ella te escribe el martes para coordinarlo"*. Y "¿Tú no eres Whuilianny?" → *"No, soy
+Alejandra, la asesora de masvidaconsciente. Whuilianny es la dueña, ella es quien prepara todo y
+confirma la entrega"*. Su pregunta: *"¿por qué se confunde así? ¿es el prompt o qué? ¿qué estoy
+haciendo mal?"* Respuesta corta: nada; es el prompt, literal. El bot no se confundió: **copió**.
+
+**Autopsia (conversación de la BD + `llamadas_ia` + prompt EXACTO bajado del contenedor con
+`construir_partes_prompt` y `TOOL_SCHEMAS`):**
+1. **Cronología:** esos dos mensajes (20:34:02Z y 20:34:38Z) los contestó el worker VIEJO (`70b849c`).
+   El worker con el #44 arrancó a las 20:34:45Z y el bot a las 20:35:56Z. Esa prueba no vio el #44.
+2. **Pero el #44 tampoco alcanzaba:** borró la frase de 5 sitios y la dejó en 4 que el modelo SÍ lee:
+   el calendario (`_calendario_texto`, bloque dinámico), la descripción del parámetro `entrega` de
+   `registrar_pedido`, la descripción de `anotar_entrega` y el default de `msg_guia_confirmado`
+   (tapado en la BD de pruebas). Y encima la nombró 3 veces "en negativo" (*"no digas 'la hora te la
+   confirma la dueña'"*), que la hace MÁS presente, no menos — un test la exigía así, literal.
+   Conteo en el prompt vivo de `834ef86`: "dueña" **47 veces** (34 estable, 3 dinámico, 10 en las
+   herramientas); "confirma la dueña" 4.
+3. **"Whuilianny es la dueña"** salía de la voz, línea 7: *"nunca digas que eres Whuilianny (ella es
+   la dueña)"* — el paréntesis era una nota para el modelo y el modelo la recitó. R130 repetía lo
+   mismo: *"(ella es la dueña, no tú)"*. Con 47 menciones de "la dueña" como tercer personaje que
+   cocina, revisa el pago y pone la hora, el modelo describe el reparto que le pintamos.
+
+**Lección (con test esta vez):** arreglar "capa por capa" deja la frase viva en la capa que no se
+miró, y prohibir una frase NOMBRÁNDOLA la enseña. La regla queda en positivo y muda: *"de la hora
+exacta no digas nada: ni la prometes ni explicas quién la pone"*.
+
+**Dónde se arregló (PR `la-hora-es-muda`):** `system_prompt.py` (R115, R119, R130,
+`_lineas_entrega_pendiente`, `_calendario_texto`), `tools.py` (descripciones de `registrar_pedido.entrega`
+y `anotar_entrega`; notas de `proxima_fecha_entrega` y `anotar_entrega`), `services/mensajes.py`
+(`MENSAJES_DEFAULT`, `_frase_entrega`) y `BRIEF-personalidad-alejandra-2026-09-06.md` — que NO viaja en el repo (`BRIEF-*.md` está en
+.gitignore: el repo es público y la voz es de la clienta; vive en la máquina de Maired y su copia en
+`respaldos-masvida` quedó actualizada) — (línea 7: *"Soy
+Alejandra, la asesora de masvidaconsciente"* y nada más, sin explicar quién es quién; línea 53
+sincronizada con la BD de pruebas, que Maired ya había editado desde el panel). **Test nuevo
+`tests/test_la_hora_es_muda.py`:** recorre TODO lo que el modelo puede leer sin BD — `_REGLAS`, los
+esquemas de las herramientas, los string literales (por AST, sin comentarios ni docstrings) de los
+módulos que arman el prompt y las notas, la voz del BRIEF y las salidas de `_lineas_entrega_pendiente`
+y `_frase_entrega` — y exige CERO apariciones de "confirma la dueña", "según su ruta", "te la confirma",
+"le anuncies", "ella es la dueña". **Banco `probar_prompt_coherente`, bloque 8:** lo mismo EN VIVO, con
+la personalidad y las guías de la BD dentro del prompt exacto. `test_prompt_sin_contradicciones` dejó
+de exigir la negación. **Personalidad de PRUEBAS** actualizada por la puerta del panel
+(`scripts/promover_personalidad.py`); la anterior quedó respaldada fuera del repo.
+
+**Anotado, sin tocar (decisión de Maired):** las 47 menciones de "la dueña" en lo que lee el modelo.
+Es la causa de fondo de que narre el negocio en tercera persona; bajarlas es un PR aparte y pide
+leer el prompt entero otra vez.
+
+**Pendiente:** fusionar → redesplegar pruebas → Maired repite "a las 10" y "¿tú no eres Whuilianny?"
+(esperado: una línea y silencio; "Soy Alejandra, la asesora de masvidaconsciente" sin presentar a nadie)
+→ producción (ESTADO → Última verificación) con la voz de este PR (paso 5 usa este mismo BRIEF).
+
 ## 2026-09-07 (26) — 🔇 QUE MUERA LA CONVERSACIÓN: sin resumen final tras el pago, sin "la dueña te confirma la hora"
 
 **Lo vio Maired en vivo (pruebas, 16:22 VET):** al decir "a las 10" el bot guardó bien el momento

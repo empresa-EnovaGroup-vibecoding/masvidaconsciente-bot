@@ -12,6 +12,7 @@ No llama a OpenRouter, ni a Meta, ni a Redis, ni a la BD: el `llm` y el `ejecuta
 el prompt se sustituye por un texto fijo (mismo patrón que `probar_recibo_visible.py`). Que el
 prompt sea fijo AQUÍ es a propósito: así la lista blanca del dinero es la que dice este fichero
 y los casos son deterministas. El TEXTO real del prompt se comprueba aparte, en el bloque 7.
+El bloque 8 (7-sep) es la excepción: SÍ habla con la BD, porque mira el prompt EXACTO en vivo.
 """
 from __future__ import annotations
 
@@ -420,6 +421,39 @@ def bloque_7_el_texto_del_prompt_no_se_contradice() -> None:
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════
+async def bloque_8_lo_que_el_modelo_lee_no_dice_quien_pone_la_hora() -> None:
+    """7-sep (SESIONES (27)): "a las 10" → *"La hora exacta la confirma la dueña según su ruta"*.
+    No era confusión: la frase estaba ESCRITA en lo que lee el modelo (calendario, esquemas de dos
+    herramientas, guía del pago) y el #44 la nombró 3 veces "en negativo", que la hace MÁS presente.
+    El CI lo vigila sin BD (`tests/test_la_hora_es_muda.py`); aquí se mira EN VIVO: el prompt exacto
+    de ESTE entorno (con la PERSONALIDAD de la BD dentro), los esquemas de las herramientas y las
+    guías del pago que la dueña edita en el panel. Cero apariciones, en todas las capas."""
+    import json
+
+    from app.agent import system_prompt as sp
+    from app.agent.tools import TOOL_SCHEMAS
+    from app.services.mensajes import MENSAJES_DEFAULT, leer_guia
+
+    print("\n8) 🔇 LO QUE EL MODELO LEE NO DICE QUIÉN PONE LA HORA — EN VIVO (7-sep)")
+    prohibidas = (
+        "confirma la dueña", "según su ruta", "segun su ruta", "dueña te confirma",
+        "dueña la confirma", "dueña le confirma", "te la confirma", "le anuncies",
+        "lo anuncias", "ella es la dueña",
+    )
+    estable, dinamico = await sp.construir_partes_prompt("Enova", TEL)
+    capas = {
+        "prompt ESTABLE (personalidad de la BD + reglas + catálogo)": estable,
+        "prompt DINÁMICO (estado, calendario, ficha)": dinamico,
+        "esquemas de las herramientas": json.dumps(TOOL_SCHEMAS, ensure_ascii=False),
+    }
+    for clave in MENSAJES_DEFAULT:
+        capas[f"guía del panel `{clave}`"] = await leer_guia(clave)
+    for nombre, texto in capas.items():
+        bajo = (texto or "").lower()
+        halladas = [p for p in prohibidas if p in bajo]
+        check(f"{nombre}: sin quién confirma la hora", not halladas, ", ".join(halladas))
+
+
 async def main() -> int:
     print("\n🧩 EL PROMPT Y EL CÓDIGO NO SE PELEAN — bloque 5 de la auditoría 2026-08-02")
     # El prompt real habla con la BD (catálogo, zonas, calendario). Aquí se sustituye por un
@@ -444,6 +478,7 @@ async def main() -> int:
     bloque_5_el_relevo_ve_lo_que_el_prompt_empuja()
     bloque_6_cerrar_sin_mentir()
     bloque_7_el_texto_del_prompt_no_se_contradice()
+    await bloque_8_lo_que_el_modelo_lee_no_dice_quien_pone_la_hora()
     print()
     if _fallos:
         print(f"   🔴 {_fallos} CASO(S) MAL — el bot vuelve a pelearse con su prompt")
