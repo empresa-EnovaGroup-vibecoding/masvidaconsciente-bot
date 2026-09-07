@@ -4046,17 +4046,29 @@ async def pedir_ayuda(
     if ya_hay is None or agrava:
         await _avisar_intervencion(session, telefono, motivo, detalle, ultimo)
 
-    return {
-        "ok": True,
-        "nota": (
+    # 🔇 7-sep (SESIONES (29)): dos cierres distintos. Si el cliente PIDIÓ UNA PERSONA (o a
+    # Whuilianny por su nombre), lo natural es decirle que en un momento lo atienden — y puede
+    # nombrarla: "Whuilianny" es un nombre, no un cargo; lo que no existe es "la dueña". Para los
+    # demás motivos (precio del día, algo que no sabe), habla en primera persona del negocio
+    # ("te lo confirmo") sin mencionar a nadie: ahí es donde sonaba a call center.
+    if motivo == "pide_persona":
+        nota = (
+            "Listo: ya avisaste y una persona del negocio toma este chat. Dile al cliente, CON "
+            "TUS PROPIAS PALABRAS y con calidez, que en un momento lo atienden; si pidió a "
+            "Whuilianny por su nombre, dile que Whuilianny le escribe en un momento (su nombre "
+            "sí; 'la dueña', 'la propietaria' o 'la jefa', nunca). NO inventes datos ni des un "
+            "precio. Después de este mensaje NO sigas respondiendo en este chat."
+        )
+    else:
+        nota = (
             "Listo: ya avisaste y una persona del negocio toma este chat. Ahora dile al "
             "cliente, CON TUS PROPIAS PALABRAS (cálida, natural, distinta cada vez), que eso "
             "se lo confirmas enseguida. NO inventes el dato, NO des un precio, y NUNCA digas "
             "que consultas con nadie ni menciones a otra persona del negocio: tú "
             "hablas en primera persona del negocio ('te lo confirmo'). Después de este mensaje NO "
             "sigas respondiendo en este chat."
-        ),
-    }
+        )
+    return {"ok": True, "nota": nota}
 
 
 # La COPIA DE SEGURIDAD del teléfono de la dueña, fuera de Postgres. Se reescribe cada vez que
