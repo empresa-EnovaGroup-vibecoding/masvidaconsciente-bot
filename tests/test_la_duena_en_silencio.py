@@ -122,6 +122,8 @@ def test_la_red_frena_a_la_duena_como_personaje(frase):
     "Listo, ya recibí tu comprobante. Lo estoy revisando y en un momentito te confirmo.",
     "Eso te lo confirmo enseguida, dame un momentito.",
     "Ese día estamos en contacto contigo para coordinar la entrega.",
+    # Pidió a Whuilianny por su nombre: se la nombra (es un nombre, no un cargo) y se escala.
+    "Claro que sí, Whuilianny te atiende en un momento.",
 ])
 def test_la_red_deja_pasar_la_primera_persona_del_negocio(frase):
     assert frase_prohibida_siempre(frase) is None, f"frenó un mensaje correcto: {frase!r}"
