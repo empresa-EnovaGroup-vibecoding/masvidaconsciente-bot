@@ -28,6 +28,21 @@ Las **FASES 0 a 3 ya están hechas y desplegadas**:
 > sin tocar a la clienta. URLs y estado: `ESTADO.md` bloque 🏭 · historia: SESIONES 1-sep (14).
 > El panel de pruebas ya tiene su dominio propio: `panel-masvida.enovagroup.tech` (2-sep).
 
+### 🚀 AHORA MISMO (7-sep madrugada): PROMOVER A PRODUCCIÓN LO QUE YA ESTÁ VERDE EN PRUEBAS
+
+> **Pruebas está listo** (`f60c3f7` + panel `d8b94ab`, 27/27 bancos, cero PRs abiertos) con todo
+> lo del 6-sep: entrega con franja + referencia (038), opciones a la vista, prompt compacto, modo de
+> entrega sin repreguntar, foto antes de la pregunta, caché de 1 hora, personalidad nueva.
+> **Producción sigue en `42d37de` con la personalidad vieja.** Los pasos exactos (7) están en
+> `ESTADO.md` → "Última verificación". El gatillo lo aprieta Maired; antes, ella termina el guion en
+> pruebas (zona → referencia → pago → comprobante → "8 am" → franja → resumen) y da el OK.
+>
+> **Después de producción, en este orden:** (1) crear la cuenta propia de Whuilianny (rol dueña) —
+> ya existe en pruebas; (2) datos que le tocan a Whuilianny (info de las empanadas, coma en sabores
+> de la torta, "CHOCOLATE"); (3) humo con el número real con OK de horario; (4) abrir lista blanca →
+> ENTREGA; (5) adelgazar el prompt (24k tokens) midiendo antes/después; (6) medir modo DOS con el
+> mismo guion; (7) cerrar la carrera del lock 120s (`probar_vigilante` flaky tras deploy).
+
 ### 🐛 EL CATÁLOGO EN PDF NO LLEGA *(ARREGLADO EN PRUEBAS el 3-sep · falta producción + prueba por WhatsApp)*
 
 > 🎯 **ESTADO AL 3-sep (12:35 ET):** el **PR #18 está FUSIONADO** y el entorno de pruebas corre

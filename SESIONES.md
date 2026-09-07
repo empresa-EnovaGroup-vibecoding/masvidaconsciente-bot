@@ -24,6 +24,82 @@
 
 ---
 
+## 2026-09-06 (25) — 🧭 LA NOCHE DE LAS CUATRO CAPAS: del relleno mudo al prompt compacto, el caché de 1 hora y la voz nueva
+
+**Contexto:** Maired probó el mismo guion (galletas → pistacho → delivery → pago → "8 am") una y
+otra vez en pruebas, y cada corrida destapó una capa. Al final pidió dos cosas que quedan como
+doctrina: *"deja de arreglar capa por capa: baja el prompt entero y audítalo"* y *"cuestióname
+como un senior, no me des la razón"*. Este es el registro de lo que se fusionó (#32→#41) y de lo
+que se aprendió.
+
+**1. El relleno mudo, medido CUATRO veces con Sonnet 4.6 ("¿de cuál relleno te llevo?" sin nombrar
+ninguno).** Cada arreglo fue real y ninguno bastó solo:
+   · #33 la personalidad decía "no recites sabores" y el flujo pedía elegir → regla "una pregunta
+     de elección lleva sus opciones".
+   · #35 el DATO no existía: los rellenos estaban solo en `descripcion` y `sabores` del tamaño
+     vacío → rescate `_opciones_en_descripcion` + `sabores` cargados en pruebas (variantes 9/10/34).
+   · #39→#40 el rescate quedó DENTRO de "[SOLO PARA TI, NO lo digas]" y el modelo obedeció el
+     rótulo → las opciones van en la LÍNEA VISIBLE del producto.
+   · #40 la regla 5 del catálogo decía "sin soltar los rellenos" cuando calzan varios productos
+     ('galletas' calza New York y Mini) → era la orden que sobrevivía a todo lo anterior.
+   **Lección (test `test_opciones_a_la_vista`):** antes de tocar el prompt, bajar el prompt EXACTO
+   del contenedor y leerlo entero. Un dato ausente o un rótulo de silencio se disfrazan de "el
+   modelo no obedece".
+
+**2. La auditoría de las tres capas (#40, "prompt compacto")** — se bajó el prompt vivo (67 KB:
+personalidad + reglas + catálogo + zonas + dinámico + 14 herramientas) y se cerraron 6 choques de
+una vez: regla 5 del catálogo; R102 (el "pitch con de qué está hecho" que producía "harina de
+almendra y coco" sin que nadie preguntara); R107 (ejemplo que ponía la fecha a votación); R108
+(orden de venta con referencia y franja); R134/R135 (tras el pago: franjas + resumen final del
+**paso 11 de la plantilla de Maired** — ojo: la primera versión iba a BORRAR ese resumen por el
+"te cuadra así?" de GLM y el test viejo lo frenó: el resumen es requisito del negocio; lo que
+sobraba era reconfirmar el pago); schema `registrar_pedido.entrega`. Test `test_prompt_compacto`.
+
+**3. La personalidad nueva (auditoría personalidad vs código; la pegó Maired en pruebas, md5
+`6328efca0e2f`).** Sin perder un hecho del negocio: fuera "no recites sabores" (choque 1), fuera
+"ningún producto lleva lácteos" (FALSO: kéfir y yogurt de cabra), fuera "seguro para celíacos"
+(promesa de salud), fuera la lista de métodos de pago (la fuente es el panel), fuera el ejemplo
+literal de la bendición (los dos modelos lo copiaban), alulosa solo si la ficha la trae, y
+duplicados con el código (bot/persona, pedir ayuda, tip al cerrar). Nueva línea "al grano": el
+producto y sus opciones, sin ingredientes si no los piden. Decisión de Maired: saludo e info en
+DOS globos está bien (más real). Copia local gitignored `BRIEF-personalidad-alejandra-2026-09-06.md`.
+
+**4. Lo que el cliente ya eligió no se repregunta (#41).** "Me lo enviaras por delivery" → el bot
+ofreció "o retiras en La Mendera": la elección vivía solo en el chat (sin pedido no hay ESTADO)
+y la lista cerrada de zonas trae la de retiro como una más. `modo_de_entrega_en` destila
+delivery/retiro del chat del cliente y va como HECHO al dinámico; el bloque de zonas y la caja
+dejan de preguntar "retira o delivery" sin condición. **Cacería de la clase:** producto/masa/
+tamaño/sabor (hilo), cantidad/zona/fecha/método/franja/referencia (ESTADO), nombre (ficha) —
+faltaba UNA casilla, el modo de entrega antes del pedido. Las 11 decisiones de una venta la tienen.
+Respuesta a Maired ("¿casillas para todo?"): casilla SOLO para lo que no puede fallar ni una vez
+(dinero, fecha, entrega); el tono se deja respirar y se mide. La otra palanca real es adelgazar
+el prompt (24k tokens) — trabajo lento, con medición, después de producción.
+
+**5. Foto antes de la pregunta final (#36)** — si el último globo pregunta, la media sale antes de
+él (Erwin se conserva: nunca antes del saludo). **Fotos ya enviadas en el ESTADO (#37)** para que
+el modelo no llame a la foto que la memoria iba a frenar (3 vueltas botadas por venta).
+
+**6. 💾 COSTO (#37 + #38).** Telemetría real: pruebas $0,39/venta con Sonnet; producción 30 días,
+6 llamadas, **0% de caché** (TTL 5 min; un negocio chico no recibe mensajes cada 4 min). Cambios:
+`cache_control ttl 1h` en las 4 puertas (una constante); `redactar_mensaje` manda las mismas tools
+con `tool_choice: none` para pegar en el mismo prefijo (las herramientas viajan por **ContextVar**:
+el kwarg rompió 3 bancos cuyos dobles reciben `(messages, modelo)` y `probar_telemetria` vigila esa
+firma — #38). Medido: primera llamada de la hora $0,148 (escritura 2×), las siguientes **$0,011**.
+GLM-5.3-Flash quedó descartado para la voz ($0,022 pero 7 grietas y 12,6 s por respuesta).
+
+**7. Doctrina de PRs (lo pidió Maired):** un PR por TEMA (problema), no por síntoma ni por área;
+la prueba: "¿se explica en una frase sin 'y'?". Un PR es una entrega, no una carpeta: master es la
+casa. Y **diagnosticar completo antes de arreglar**.
+
+**Estado al cierre:** pruebas `f60c3f7` + panel `d8b94ab`, 27/27 bancos, cero PRs abiertos.
+Producción sigue en `42d37de` con la personalidad vieja. **Falta:** que Maired termine el guion
+en pruebas y dé el OK → liturgia de promoción (ESTADO, "Última verificación": 7 pasos, incluye
+`scripts/promover_personalidad.py` y `scripts/promover_sabores.py`). Anotado sin cerrar:
+`probar_vigilante` "el primero se lleva el turno" flaky tras deploy (carrera del lock 120s);
+deploys simultáneos bot+worker en Enova fallaron una vez en apt (relanzar solo el que faltó);
+datos para Whuilianny (info de las empanadas con plantilla sin llenar, coma final en sabores de
+la torta, "CHOCOLATE" en mayúsculas); adelgazar el prompt; medir modo DOS.
+
 ## 2026-09-06 (24) — 🚚 LA ENTREGA COMPLETA: franja + referencia con casilla (migración 038)
 
 **El caso (pruebas, 6-sep, el MISMO guion con dos modelos — GLM-5.3-Flash y Sonnet 4.6):** el

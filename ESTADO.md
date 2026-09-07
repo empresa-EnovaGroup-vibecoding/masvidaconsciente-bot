@@ -52,7 +52,7 @@ y salud, memoria que no se olvida a las 24h, y 8 migraciones nuevas (hasta la 03
 | | 🏭 PRUEBAS (Enova) |
 |---|---|
 | **Servidor** | VPS del socio de Enova `152.53.194.89` · Coolify propio `coolify.enovagroup.tech` (proyecto `masvida-pruebas`) |
-| **Qué corre** | bot + worker en `master f85f781` (PRs #21 y #22) + panel `c8bf95d` (PR #1) + PostgreSQL 16 + Redis 7 · **auto-deploy OFF** en las 3 apps — deploy SOLO manual |
+| **Qué corre** | bot + worker en `master f60c3f7` (hasta el PR #41, 7-sep madrugada) + panel `d8b94ab` (PR #4) + PostgreSQL 16 + Redis 7 · **auto-deploy OFF** en las 3 apps — deploy SOLO manual (API de Coolify con token temporal: ver `entorno-pruebas` en la memoria de Claude / SESIONES (23)) |
 | **Número** | **+57 313 2933806** (WABA "Enova Soporte", SEPARADA de la de la clienta) |
 | **Webhook** | re-apuntado por Graph API (`/{waba}/subscribed_apps` + `override_callback_uri`) → `https://jthc51nxqitd9opc8ywioocr.152.53.194.89.sslip.io/webhook/whatsapp` |
 | **BD** | dump FINAL del taller restaurado: 36 migraciones · 6 clientes · 32 productos · 10 conocimiento |
@@ -77,7 +77,55 @@ y salud, memoria que no se olvida a las 24h, y 8 migraciones nuevas (hasta la 03
 > sin tocar. Queda pedir un video real de Tortas keto: el archivo ya es compatible, pero su
 > contenido sigue siendo un solo cuadro con audio. ✅ **Producción alcanzó todo esto el 5-sep.**
 
-## Última verificación: **2026-09-06 (~09:10 VET) — LOS DOS ENTORNOS EN `42d37de` (contraseñas del panel, PR #29 + panel #3)**
+## Última verificación: **2026-09-07 (~00:30 VET) — PRUEBAS LISTO PARA PROMOVER (`f60c3f7` + panel `d8b94ab`) · PRODUCCIÓN sigue en `42d37de`**
+
+> 🎯 **DÓNDE ESTAMOS (léelo antes de tocar nada):** el 6-sep se fusionaron **11 PRs del bot
+> (#30-#38, #40, #41; el #39 se cerró dentro del #40) + el #4 del panel**, TODOS desplegados y
+> verificados en PRUEBAS: bot y worker en `f60c3f7`, **39 migraciones** (038 franja+referencia),
+> **14 herramientas** (`anotar_entrega` nueva, blindada), **27/27 bancos** en la última corrida
+> (`/root/bancos_pr41b.log`), `/salud` ok. Panel de pruebas `d8b94ab` (Horario → Franjas de
+> entrega; tarjeta del pedido con franja y referencia). **Producción NO se ha tocado desde la
+> mañana**: sigue en `42d37de` (bot y worker), panel `6d40b73`, personalidad VIEJA
+> (md5 `e9e1349b6a66`), sin `sabores` en Galletas/Mini/Chocolate. ⏳ **Falta que Maired termine el
+> guion en pruebas** (zona → referencia → pago → comprobante → "8 am" → franja → resumen) y dé el OK.
+>
+> **Lo que cambió hoy, en una línea cada uno** (detalle: SESIONES (24) y (25)):
+> · 038 franja + referencia: el cliente elige FRANJA (no hora), la hora la confirma Whuilianny; un
+>   delivery sin referencia NO se cobra (`generar_datos_pago`); tool `anotar_entrega`.
+> · Catálogo: las opciones para elegir (rellenos/sabores) van en la LÍNEA VISIBLE de cada producto
+>   (antes iban dentro de "SOLO PARA TI, NO lo digas" y el modelo obedecía el rótulo).
+> · Prompt compacto (#40): 6 choques cerrados leyendo el prompt ENTERO (67 KB) bajado del contenedor.
+> · Modo de entrega ya elegido no se repregunta (#41): `modo_de_entrega_en` → HECHO en el dinámico.
+> · Foto antes de la pregunta final (#36) · fotos ya enviadas en el ESTADO (#37).
+> · 💾 COSTO: caché de Anthropic a **1 hora** (producción llevaba 30 días con 0% de caché a 5 min);
+>   el carril del dinero pega en el mismo caché (tools + `tool_choice: none`). Medido en pruebas:
+>   primera llamada de la hora $0,148, las siguientes **$0,011** (antes $0,066 cada una).
+> · Personalidad NUEVA (auditoría de las 3 capas, sin perder hechos) VIVA EN PRUEBAS
+>   (md5 `6328efca0e2f`); copia local gitignored `BRIEF-personalidad-alejandra-2026-09-06.md` y en
+>   `C:\Developer\AI\Proyectos\respaldos-masvida\personalidad_alejandra_2026-09-06.txt`.
+> · Datos en pruebas: `sabores` cargados en Galletas New York / Mini New York / CHOCOLATE
+>   (`scripts/promover_sabores.py`, idempotente).
+>
+> 🚀 **LITURGIA DE PROMOCIÓN A PRODUCCIÓN (cuando Maired dé el OK; el gatillo lo aprieta ELLA):**
+> 1. Respaldo previo en netcup (`pg_dump` a `/root/respaldos-pre-promocion/` + personalidad vieja
+>    por `scripts/promover_personalidad.py --leer`).
+> 2. `gh workflow run deploy.yml -f destino=produccion` (desde `masvidaconsciente-bot`, master
+>    `f60c3f7`) → esperar bot `y20mosanb19cw8ukso56hv7e` y worker `hrkrh8f9buora7aqxt8rsbna` en
+>    `f60c3f7` → `/salud` ok · **39 migraciones** · lista blanca intacta (`[573005690062]`).
+> 3. 27 bancos en producción (`docker exec -w /app -e PYTHONPATH=/app <bot> python
+>    scripts/correr_bancos.py`) → 27/27 (si `probar_vigilante` cae en "el primero se lleva el
+>    turno", re-correrlo solo: es la carrera del lock, flaky tras deploy).
+> 4. Panel de producción `o1jo590exxeuco5s8j0arisy` → deploy por la API de Coolify de netcup
+>    (token en `~/.ssh/coolify_token.txt`) → login 200.
+> 5. Personalidad nueva: `docker exec -i <bot> python scripts/promover_personalidad.py <
+>    BRIEF-personalidad-alejandra-2026-09-06.md` → `coincide=True` (md5 `6328efca0e2f`).
+> 6. Sabores: `docker exec -i <bot> python scripts/promover_sabores.py` → `hechos=3`.
+> 7. Whuilianny en Horario del panel: revisar/ajustar las franjas (de fábrica: mañana 10-12 /
+>    tarde 2-6). Anotar en ESTADO y SESIONES.
+> ⚠️ Los deploys SIMULTÁNEOS de bot + worker en Enova fallaron una vez en `apt` (exit 255): si uno
+> queda atrás, relanzar SOLO ese. En netcup el workflow los hace en serie.
+
+## Verificación anterior: **2026-09-06 (~09:10 VET) — LOS DOS ENTORNOS EN `42d37de` (contraseñas del panel, PR #29 + panel #3)**
 
 > ✅ Pruebas de puerta (27/27) → producción por `workflow_dispatch` (verde) → bot y worker en
 > `42d37de` · 38 migraciones · lista blanca intacta · **27/27 bancos en producción** · panel
