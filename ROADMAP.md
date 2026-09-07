@@ -37,6 +37,12 @@ Las **FASES 0 a 3 ya están hechas y desplegadas**:
 > `ESTADO.md` → "Última verificación". El gatillo lo aprieta Maired; antes, ella termina el guion en
 > pruebas (zona → referencia → pago → comprobante → "8 am" → franja → resumen) y da el OK.
 >
+> **7-sep:** #43 y #44 fusionados y desplegados en pruebas (`834ef86` + panel `60f8b4d`). Segunda vuelta
+> de *"la hora exacta la confirma la dueña"* en el PR `la-hora-es-muda` (SESIONES (27)): la frase seguía
+> ESCRITA en 4 sitios que el modelo lee y la voz decía "(ella es la dueña)". Ahora hay test (CI) y bloque
+> 8 del banco que exigen cero apariciones. Tras fusionar y redesplegar: Maired repite "a las 10" y "¿tú
+> no eres Whuilianny?" → OK → producción.
+>
 > **Después de producción, en este orden:** (1) entregarle a Whuilianny su cuenta propia del panel
 > (Maired la creó en PRODUCCIÓN el 6-sep: `masvidaconsciente1@gmail.com`, rol dueña) y que ella
 > cambie su clave en "Mi contraseña"; (2) datos que le tocan a Whuilianny (info de las empanadas, coma en sabores

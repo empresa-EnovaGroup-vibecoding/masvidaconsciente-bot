@@ -155,7 +155,10 @@ def test_tras_el_pago_no_hay_resumen_final_y_la_conversacion_muere():
     assert "resumen final" not in linea, "volvió el resumen final que Maired tachó el 7-sep"
     assert "DEJA MORIR LA CONVERSACIÓN" in linea
     assert "NO le repitas el pedido" in linea
-    assert "la dueña te confirma la hora" in linea and "NO le anuncies" in linea
+    # 7-sep, 2ª vuelta (SESIONES (27)): la frase prohibida NO se nombra ni en negativo — nombrarla
+    # la hacía MÁS presente y el modelo la repitió tal cual. Solo la orden positiva, muda sobre quién.
+    assert "la dueña te confirma la hora" not in linea and "anuncies" not in linea
+    assert "quién la pone" in linea
     # El saldo pendiente, si lo hay, sí se dice (es dinero, no cortesía).
     assert "saldo pendiente" in linea
 
