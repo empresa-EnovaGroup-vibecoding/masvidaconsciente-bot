@@ -9,6 +9,7 @@ import logging
 import re
 import time
 import unicodedata
+from contextvars import ContextVar
 from datetime import UTC, datetime, timedelta
 
 import httpx
@@ -64,6 +65,11 @@ OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 # del segundo mensaje de la hora, en cualquier chat, se lee a 0,1×. El punto de equilibrio es
 # 1,4 llamadas por hora. Es UN diccionario para que las cuatro puertas al modelo usen el mismo.
 _CACHE_CONTROL = {"type": "ephemeral", "ttl": "1h"}
+
+# 💾 Las herramientas que `redactar_mensaje` quiere que `_pedir_redaccion` mande (con
+# `tool_choice: "none"`) para pegar en el mismo caché que el agente. ContextVar y no parámetro:
+# la firma `(messages, modelo)` es inyectable y un banco la vigila. None = cuerpo de siempre.
+_TOOLS_PARA_REDACCION: ContextVar[list | None] = ContextVar("tools_para_redaccion", default=None)
 RESPUESTA_SEGURA = "Dame un momentito y te confirmo 😊"
 
 
@@ -3746,21 +3752,25 @@ async def _responder_dos_agentes(
     return texto
 
 
-async def _pedir_redaccion(messages: list, modelo: str, tools: list | None = None) -> str:
-    # LA VOZ. Su firma tampoco cambia: es inyectable (`voz=`) y la usan el modo dos y los bancos.
+async def _pedir_redaccion(messages: list, modelo: str) -> str:
+    # LA VOZ. Su firma tampoco cambia: es inyectable (`voz=`) y la usan el modo dos y los bancos
+    # (`probar_telemetria` vigila que siga siendo exactamente `(messages, modelo)`).
     # Anotarla aparte del `agente` importa porque es la que puede llamarse DOS veces en el mismo
     # turno (el `for intento in (1, 2)` de `redactar_mensaje`, cuando la red del dinero tumba el
     # mensaje): con el `paso` separado, ese reintento se ve en vez de confundirse con el bucle.
     #
-    # 💾 `tools` (6-sep, opcional y SOLO lo pasa `redactar_mensaje`): el caché de Anthropic cubre
-    # el prefijo herramientas + system. El carril del dinero mandaba el MISMO system que el agente
-    # pero SIN herramientas → otro prefijo → cero caché: cada comprobante pagaba la escritura
-    # entera ($0,074, el 19% de una venta). Mandando las mismas herramientas con
-    # `tool_choice: "none"` el prefijo coincide y se lee a 0,1×; el modelo no puede llamarlas
-    # (sigue siendo pura redacción, temperatura 0.7). Los dobles de los bancos y la Voz del modo
-    # dos no pasan `tools` y no cambian ni un byte.
+    # 💾 LAS HERRAMIENTAS LLEGAN POR CONTEXTO, NO POR PARÁMETRO (6-sep; mismo truco que el
+    # `turno_id` de la telemetría, y por la misma razón: la firma es intocable). El caché de
+    # Anthropic cubre el prefijo herramientas + system. El carril del dinero mandaba el MISMO
+    # system que el agente pero SIN herramientas → otro prefijo → cero caché: cada comprobante
+    # pagaba la escritura entera ($0,074, el 19% de una venta). `redactar_mensaje` deja las
+    # herramientas del agente en `_TOOLS_PARA_REDACCION` y aquí se mandan con
+    # `tool_choice: "none"`: el prefijo coincide y se lee a 0,1×, y el modelo no puede llamarlas
+    # (sigue siendo pura redacción, temperatura 0.7). Fuera de ese carril el ContextVar está en
+    # None y el cuerpo es el de siempre: la Voz del modo dos y los dobles no cambian ni un byte.
     t0 = time.monotonic()
     cuerpo: dict = {"model": modelo, "messages": messages, "temperature": 0.7}
+    tools = _TOOLS_PARA_REDACCION.get()
     if tools:
         cuerpo["tools"] = tools
         cuerpo["tool_choice"] = "none"
@@ -3884,14 +3894,25 @@ async def redactar_mensaje(
             datos_ok |= _datos_sensibles(contenido_h)
 
     # 💾 Las mismas herramientas que ve el agente, para que el prefijo del caché coincida (ver
-    # `_pedir_redaccion`). Si leerlas falla, se redacta sin ellas, como siempre: el carril del
-    # dinero no se cae por un ahorro.
+    # `_pedir_redaccion`). Viajan por ContextVar porque la firma de `_pedir_redaccion` es
+    # intocable. Si leerlas falla, se redacta sin ellas, como siempre: el carril del dinero no se
+    # cae por un ahorro. El `reset` del `finally` deja el contexto limpio para el siguiente turno.
     try:
         tools_cache = schemas_para(await leer_tools_activas())
     except Exception:  # noqa: BLE001 — el ahorro nunca tumba el mensaje del pago
         tools_cache = None
+    _marca_tools = _TOOLS_PARA_REDACCION.set(tools_cache or None)
+    try:
+        return await _redactar_con_redes(messages, modelo, usd_ok, bs_ok, datos_ok)
+    finally:
+        _TOOLS_PARA_REDACCION.reset(_marca_tools)
+
+
+async def _redactar_con_redes(messages: list, modelo: str, usd_ok, bs_ok, datos_ok) -> str:
+    """El bucle de dos intentos de `redactar_mensaje`, tal cual estaba (solo se movió de sitio
+    para que el ContextVar de las herramientas se pueda limpiar en un `finally`)."""
     for intento in (1, 2):
-        texto = await _pedir_redaccion(messages, modelo, tools=tools_cache)
+        texto = await _pedir_redaccion(messages, modelo)
         if not texto:
             return ""
         prohibida = frase_prohibida_siempre(texto)

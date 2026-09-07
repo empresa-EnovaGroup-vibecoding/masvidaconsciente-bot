@@ -68,7 +68,11 @@ async def test_pedir_redaccion_con_tools_manda_tool_choice_none(monkeypatch):
     monkeypatch.setattr(agent, "registrar", _no_registra)
 
     herramientas = [{"type": "function", "function": {"name": "x", "parameters": {}}}]
-    assert await agent._pedir_redaccion([{"role": "user", "content": "hola"}], "m", tools=herramientas) == "listo"
+    marca = agent._TOOLS_PARA_REDACCION.set(herramientas)
+    try:
+        assert await agent._pedir_redaccion([{"role": "user", "content": "hola"}], "m") == "listo"
+    finally:
+        agent._TOOLS_PARA_REDACCION.reset(marca)
     assert capturado["tools"] == herramientas
     assert capturado["tool_choice"] == "none"
     assert capturado["provider"] == {"require_parameters": True}
@@ -112,12 +116,17 @@ async def test_pedir_redaccion_sin_tools_no_cambia_ni_un_byte(monkeypatch):
     assert set(capturado) == {"model", "messages", "temperature"}
 
 
-def test_redactar_mensaje_pasa_las_herramientas_activas():
+def test_redactar_mensaje_pasa_las_herramientas_activas_por_contexto():
+    """La firma de `_pedir_redaccion` sigue siendo (messages, modelo) — `probar_telemetria` la
+    vigila y media docena de bancos le pasan dobles con esos dos argumentos."""
+    assert list(inspect.signature(agent._pedir_redaccion).parameters) == ["messages", "modelo"]
     src = inspect.getsource(agent.redactar_mensaje)
     assert "schemas_para(await leer_tools_activas())" in src
-    assert "_pedir_redaccion(messages, modelo, tools=tools_cache)" in src
+    assert "_TOOLS_PARA_REDACCION.set(tools_cache or None)" in src
+    assert "_TOOLS_PARA_REDACCION.reset(" in src  # el contexto queda limpio para el turno siguiente
     # y si leerlas falla, redacta sin ellas (el ahorro nunca tumba el mensaje del pago)
     assert "tools_cache = None" in src
+    assert agent._TOOLS_PARA_REDACCION.get() is None  # fuera del carril, cuerpo de siempre
 
 
 # ══ 3) Las fotos ya enviadas se le DICEN al modelo, para que no llame ══
