@@ -24,6 +24,46 @@
 
 ---
 
+## 2026-09-07 (28) — 💵 EL DELIVERY SE COBRA TAMBIÉN EN DÓLARES: se cierra el flete gratis del 22-ago (regla de Whuilianny)
+
+**La regla, en palabras de Whuilianny (por Maired, 7-sep tarde):** *"el único descuento es el 20% si
+paga en dólares; el delivery sí lo tiene que pagar la persona"*. Hasta hoy el sistema regalaba el
+flete en dólares (decisión del 22-ago, ampliada el 24-ago a Zelle y Binance): Galletas $14 + envío $3
+se cobraban **$11.20** en divisas. Desde hoy: **$14.20** (20% sobre los productos + flete completo).
+Los bolívares siguen al precio completo, y el 20% sigue atado a la MONEDA, no a la vía (Maired,
+24-ago). Se conserva "sobre los productos": el flete ni se descuenta ni se regala.
+
+**Dónde estaba regado (Maired: "creo que los prompts están regados" — sí, y no solo los prompts):**
+- La CUENTA: `monto_en_efectivo` (tools.py), la única fuente que usan `generar_datos_pago` (lo que
+  se cobra) y `registrar_comprobante` (contra lo que se compara la captura). Un solo cambio arregla
+  las dos puertas; el worker (`_montos_cobrados`) lee lo que esa función guardó.
+- El PITCH del cobro: *"…con el 20% de descuento y el delivery corre por nuestra cuenta"* → ahora
+  *"…con el 20% de descuento sobre los productos (el delivery se paga igual)"*.
+- El DESGLOSE: *"Delivery: $0 (normalmente $3, va por nuestra cuenta)"* → *"Delivery: $3"*.
+- La VOZ (BRIEF línea PAGOS): *"…y el delivery corre por nuestra cuenta"* → *"…20% de descuento sobre
+  los productos; el delivery se paga completo siempre"*. Promovida a PRUEBAS por la puerta del panel.
+- Los comentarios del código que enseñaban la regla vieja (bloque del cálculo, `_MONEDA_POR_TIPO`).
+- Conocimiento (BD): la entrada "¿Hacen envíos?" ya decía "DELIVERY con costo adicional según la
+  zona" y la del descuento no habla del flete — consistentes, sin tocar. El panel no calcula nada.
+
+**Tests y bancos:** `tests/test_pago_en_efectivo.py` reescrito a la regla nueva (la cuenta, las
+dos cuentas que perdieron, las dos puertas iguales, el desglose que cuadra) **más 3 tests nuevos**
+que vigilan que NADA de lo que lee el modelo diga "por nuestra cuenta", "delivery gratis" ni
+"Delivery: $0" (cobro, reglas y voz — misma lección que "la hora es muda"). `probar_delivery`
+(bloque 4: $X×0,80 + $3, y el resumen ya NO nombra "nuestra cuenta") y `auditar_plantilla`
+($14+$3 → $14.20) actualizados. Suite: 983 en verde.
+
+**Lo que asumí y hay que confirmar con Whuilianny:** (1) el 20% sigue siendo sobre los PRODUCTOS
+(no sobre el total con flete); (2) el 20% sigue valiendo para las TRES vías del dólar (efectivo,
+Zelle, Binance) — ella dijo "Binance"; si quiso decir SOLO Binance, es otro cambio.
+
+**Colateral encontrado (no tocado):** hoy 16:41 VET alguien subió fotos nuevas de Galletas New York
+en el panel de PRODUCCIÓN (claves `fb6652…` y `992eaa…`) y el objeto viejo (`064f8ef8…`) se borró
+del balde R2 — que es COMPARTIDO con pruebas. En pruebas la fila 9 de `producto_media` sigue
+apuntando a ese objeto → la foto falló con 131053 en la prueba de las 17:48 y saltó el aviso
+"media_no_entregada". Es la mina del balde compartido (ROADMAP → cacería); Maired decide: separar
+baldes, o mientras tanto re-subir la foto en el panel de pruebas.
+
 ## 2026-09-07 (27) — 🔇 LA HORA ES MUDA, SEGUNDA VUELTA: la frase estaba ESCRITA en 4 sitios más, y la voz presentaba a la dueña
 
 **Lo vio Maired en vivo (pruebas, 16:34 VET):** "A las 10" → *"La hora exacta la confirma la dueña
