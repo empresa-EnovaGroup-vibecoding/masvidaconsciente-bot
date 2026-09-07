@@ -4463,6 +4463,52 @@ async def media_ya_mostrada(
         return si_falla
 
 
+_PIE_DE_MEDIA_RE = re.compile(r"^\((?:foto|video) de (.+?)\)$", re.I)
+
+
+async def productos_ya_mostrados(telefono: str, maximo: int = 8) -> list[str]:
+    """Los productos de los que este cliente YA recibió foto o video, del más reciente al más
+    viejo, sin repetir. Se lee del pie de la burbuja que deja `_guardar_media_saliente`
+    ("(foto de Pan Keto — base de yuca)" → "Pan Keto").
+
+    💾 POR QUÉ EXISTE (6-sep, el costo): la memoria de fotos ya frenaba el reenvío, pero el
+    modelo (Sonnet obedece "ÚSALA PROACTIVA") llamaba la herramienta IGUAL en cada turno sobre el
+    mismo producto — 4 intentos en 4 minutos, 3 frenados — y cada intento frenado es una vuelta
+    completa al modelo (~9% del costo de una venta). Decirle en el ESTADO qué fotos ya salieron
+    evita la llamada, no solo el envío. Fail-open: cualquier fallo devuelve [] y todo sigue igual.
+    """
+    if not (telefono or "").strip():
+        return []
+    try:
+        factory = get_session_factory()
+        async with factory() as session:
+            pies = (
+                await session.execute(
+                    select(Mensaje.contenido)
+                    .where(
+                        Mensaje.cliente_telefono == telefono,
+                        Mensaje.rol == "assistant",
+                        Mensaje.tipo.in_(("image", "video")),
+                    )
+                    .order_by(Mensaje.created_at.desc())
+                    .limit(60)
+                )
+            ).scalars().all()
+    except Exception:  # noqa: BLE001 — sin esta lista el bot sigue igual que antes
+        return []
+    vistos: list[str] = []
+    for pie in pies:
+        m = _PIE_DE_MEDIA_RE.match((pie or "").strip())
+        if not m:
+            continue
+        nombre = m.group(1).split(" — ")[0].strip()
+        if nombre and nombre not in vistos:
+            vistos.append(nombre)
+        if len(vistos) >= maximo:
+            break
+    return vistos
+
+
 async def _urls_de_media_ya_enviadas(session, telefono: str) -> set[str]:
     """Las URLs de TODAS las fotos/videos que este cliente ya recibió (tabla `mensajes`).
 
