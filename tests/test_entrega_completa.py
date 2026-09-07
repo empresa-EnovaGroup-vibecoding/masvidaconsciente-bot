@@ -274,7 +274,7 @@ def test_estado_muestra_lo_que_falta_de_un_delivery():
 
 def test_estado_muestra_lo_ya_guardado_y_no_repregunta():
     lineas = " ".join(_lineas_entrega_pendiente(_Pedido(franja=FRANJAS[0], referencia="frente al liceo")))
-    assert "YA ELEGIDA" in lineas and "YA GUARDADA" in lineas and "frente al liceo" in lineas
+    assert "YA ELEGIDO" in lineas and "YA GUARDADA" in lineas and "frente al liceo" in lineas
 
 
 def test_un_retiro_no_pide_direccion():

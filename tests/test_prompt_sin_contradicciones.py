@@ -142,16 +142,22 @@ def test_el_prompt_ya_no_ordena_coordinar_la_entrega_al_recibir_el_comprobante()
     )
 
 
-def test_el_resumen_final_antes_del_despacho_existe():
-    """Paso 11 de la plantilla: *"Enviar un resumen final de productos, modalidad, saldo pendiente
-    si existe, dirección o retiro y fecha/ventana de entrega; pedir confirmación antes del
-    despacho"*. Estaba en el ROADMAP como N5, **atado a N6** (que el bot espere el clic). N6 se
-    cerró el 22-ago, así que N5 quedó desbloqueado y cabe como regla."""
-    linea = next((ln for ln in UNO.split("\n") if "resumen final" in ln), "")
-    assert linea, "no existe la regla del resumen final (paso 11 de la plantilla)"
-    assert "UNA vez" in linea, "sin el freno, el resumen final se convierte en otra repetición"
-    for pieza in ("retiro", "fecha", "saldo pendiente"):
-        assert pieza in linea, f"el resumen final no menciona {pieza}"
+def test_tras_el_pago_no_hay_resumen_final_y_la_conversacion_muere():
+    """🔄 DECISIÓN REVERTIDA POR MAIRED (7-sep-2026). El paso 11 de su plantilla ("resumen final…
+    pedir confirmación antes del despacho") vivió como regla desde el 22-ago y este test la
+    defendía. Al verlo EN VIVO ("Listo! Tu pedido queda así: …" después de elegir la hora) lo
+    tachó: *"ya se lo dijo arriba, ¿para qué volver a decirlo? Quiero que muera la conversación"*.
+    El resumen se da UNA vez, al registrar (antes de cobrar, campo `resumen` de registrar_pedido);
+    tras el pago solo se confirma el momento de entrega en una línea y se cierra. Tampoco se le
+    anuncia "la dueña te confirma la hora": la regla interna (no prometer hora) se queda muda."""
+    linea = next((ln for ln in UNO.split("\n") if "CUANDO EL PAGO YA ESTÁ APROBADO" in ln), "")
+    assert linea, "falta la regla del cierre tras el pago"
+    assert "resumen final" not in linea, "volvió el resumen final que Maired tachó el 7-sep"
+    assert "DEJA MORIR LA CONVERSACIÓN" in linea
+    assert "NO le repitas el pedido" in linea
+    assert "la dueña te confirma la hora" in linea and "NO le anuncies" in linea
+    # El saldo pendiente, si lo hay, sí se dice (es dinero, no cortesía).
+    assert "saldo pendiente" in linea
 
 
 # ══════════════════════════════════════════════════════════════════════════════════
