@@ -127,15 +127,16 @@ def _frase_entrega(
     franja = " ".join((franja_elegida or "").split())
     if franja:
         texto += (
-            f" y recuérdale que la eligió {franja}: la hora exacta se la confirma la dueña "
-            "según su ruta (NO prometas una hora)."
+            f" — ya eligió recibirlo {franja}: NO lo repreguntes, NO le repitas el pedido y "
+            "cierra con calidez (NO prometas una hora exacta ni le anuncies que la dueña la "
+            "confirma)."
         )
     elif franjas:
         texto += (
             " y dile cuándo hay espacio para llevárselo, con tus palabras y sin la palabra "
             "'franja' — los momentos, tal cual están escritos: " + " · ".join(franjas)
-            + " (NO preguntes una hora exacta: esa la confirma la dueña según su ruta). Cuando "
-            "elija, guárdalo con anotar_entrega."
+            + " (NO preguntes ni prometas una hora exacta). Cuando elija, guárdalo con "
+            "anotar_entrega."
         )
     else:
         texto += " y pregúntale a qué hora le queda bien."

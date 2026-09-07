@@ -21,6 +21,7 @@ quedaban, y que este archivo deja clavados:
    de esta auditoría iba a BORRAR ese resumen por el "te cuadra así?" de GLM — y el test viejo
    (`test_el_resumen_final_antes_del_despacho_existe`) la frenó: el resumen es un requisito del
    negocio, no un tic del modelo. Lo que sobraba era reconfirmar el pago, no resumir la entrega.
+   (7-sep: Maired lo vio EN VIVO y tachó el resumen final tras el pago; ver test_5.)
 6. El schema de `registrar_pedido.entrega` aún decía "la hora la coordina la dueña después".
 """
 from app.agent import system_prompt as sp
@@ -64,15 +65,14 @@ def test_4_el_orden_de_la_venta_incluye_referencia_y_franja():
     assert orden.index("punto de referencia") < orden.index("cobrar") < orden.index("la franja")
 
 
-def test_5_despues_del_pago_franja_y_resumen_de_la_ENTREGA_no_del_pago():
+def test_5_despues_del_pago_momento_de_entrega_y_cierre_sin_resumen():
+    """(Actualizado 7-sep: Maired tachó el resumen final tras el pago — ver
+    test_prompt_sin_contradicciones.test_tras_el_pago_no_hay_resumen_final_y_la_conversacion_muere.)"""
     r = sp._REGLAS
     linea = next(ln for ln in r.split("\n") if "CUANDO EL PAGO YA ESTÁ APROBADO" in ln)
-    assert "ofrece las franjas y guarda la que elija (anotar_entrega)" in linea
-    # El paso 11 de la plantilla sigue vivo (lo vigila test_prompt_sin_contradicciones)…
-    assert "resumen final" in linea and "UNA vez" in linea and "saldo pendiente" in linea
-    # …y ahora nombra la franja y aclara qué se confirma.
-    assert "la fecha y la franja" in linea
-    assert "confirme la ENTREGA" in linea and "no lo reconfirmes" in linea
+    assert "ofrece los momentos de entrega y guarda el elegido (anotar_entrega)" in linea
+    assert "resumen final" not in linea
+    assert "NO reconfirmes el pago" in linea and "saldo pendiente" in linea
     assert "NO coordines la franja ni la hora" in r
 
 

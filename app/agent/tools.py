@@ -2539,9 +2539,9 @@ async def proxima_fecha_entrega(session, telefono, productos=None):
             "sí puedes y ofréceselo. La HORA exacta NO existe como opción: ni la preguntes ni la "
             "prometas. Lo que el cliente elige es uno de los momentos de `franjas_de_entrega` "
             "(díselos TAL CUAL están escritos, como disponibilidad, SIN la "
-            "palabra 'franja', que es nuestra; guarda el elegido con anotar_entrega); la hora "
-            "exacta la confirma "
-            "la dueña según su ruta. Si dice una hora ('a las 10'), pásasela igual a "
+            "palabra 'franja', que es nuestra; guarda el elegido con anotar_entrega). No prometas "
+            "una hora exacta, y tampoco le anuncies que 'la dueña la confirma': solo no la "
+            "prometas. Si dice una hora ('a las 10'), pásasela igual a "
             "anotar_entrega: si cae dentro de un momento, queda elegido; si no, te lo digo. "
             # 🔴 GUARDIA DE HILO (31-ago): re-consultar el calendario (por una duda o un
             # producto nuevo) traía 4 fechas frescas sin memoria de la ya acordada — y el
@@ -2611,7 +2611,7 @@ async def anotar_entrega(session, telefono, franja=None, referencia=None, pedido
                     "queda fuera de todas). Dile cuándo SÍ hay espacio, con tus palabras y SIN "
                     "usar la palabra 'franja', que es nuestra — los momentos, tal cual están "
                     "escritos: " + " · ".join(franjas) + " — y vuelve a llamarme con lo que elija. "
-                    "La hora exacta la confirma la dueña según su ruta."
+                    "No prometas una hora exacta (y no le anuncies que la dueña la confirma)."
                 ),
             }
         pedido.entrega_franja = elegida
@@ -2649,11 +2649,12 @@ async def anotar_entrega(session, telefono, franja=None, referencia=None, pedido
         nota += " Todavía falta " + " y ".join(falta) + ": pídelo con naturalidad, de a poco."
     else:
         nota += (
-            " La entrega quedó completa. Díselo con tus palabras (sin la palabra 'franja': di "
-            "'en la mañana' o 'en la tarde', con sus horas si hace falta) y aclárale que la hora "
-            "exacta se la confirma la dueña según su ruta. NO prometas una hora. Si el cliente "
-            "dijo una hora que cae dentro, confírmale el momento ('perfecto, en la mañana "
-            "entonces'), no lo corrijas."
+            " La entrega quedó completa. Confírmaselo en UNA línea con tus palabras (sin la "
+            "palabra 'franja': di 'en la mañana' o 'en la tarde') y deja morir la conversación "
+            "con calidez. NO le repitas el pedido (ya lo vio al cobrar), NO le anuncies que la "
+            "dueña le confirma la hora y NO prometas una hora exacta. Si el cliente dijo una hora "
+            "que cae dentro, confírmale el momento ('perfecto, en la mañana entonces'), no lo "
+            "corrijas."
         )
     # ⚠️ La referencia NO se devuelve aquí (texto libre del cliente): en el pedido y en el panel
     # está; al modelo le basta saber que quedó guardada.

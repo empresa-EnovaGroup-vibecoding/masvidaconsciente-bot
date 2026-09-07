@@ -24,6 +24,33 @@
 
 ---
 
+## 2026-09-07 (26) — 🔇 QUE MUERA LA CONVERSACIÓN: sin resumen final tras el pago, sin "la dueña te confirma la hora"
+
+**Lo vio Maired en vivo (pruebas, 16:22 VET):** al decir "a las 10" el bot guardó bien el momento
+(pedido #2926: `de 10 a 12 de la mañana`, referencia guardada) pero cerró con *"Listo! Tu pedido
+queda así: Galletas New York de chocolate · delivery en… · martes 8 · en la mañana (10 a 12). La
+hora exacta te la confirma la dueña según su ruta."* Su veredicto: *"ya se lo dijo arriba, ¿para
+qué volver a decirlo? Eso de 'la dueña te confirma' no va. Quiero que muera la conversación."*
+
+**Decisión de negocio REVERTIDA (era suya):** el paso 11 de su plantilla ("resumen final antes del
+despacho, pedir confirmación") vivía como regla R135 desde el 22-ago y un test lo defendía (esa
+misma noche frenó mi intento de borrarlo, con razón entonces). Hoy ella lo tacha: el resumen se da
+UNA vez, al registrar (antes de cobrar); tras el pago solo se confirma el momento de entrega en
+una línea y se cierra con calidez. Y "la hora exacta la confirma la dueña" es regla INTERNA (no
+prometer hora), no una frase para el cliente: se quitó de R119, R135, del ESTADO DEL CLIENTE, de
+las notas de `anotar_entrega` / `proxima_fecha_entrega` y de `_frase_entrega`.
+
+**Dónde se arregló (PR `que-muera-la-conversacion`):** `system_prompt.py` (R119, R135, `_lineas_entrega_pendiente`),
+`tools.py` (notas de `anotar_entrega` y `proxima_fecha_entrega`), `services/mensajes.py`
+(`_frase_entrega`). Tests reescritos: `test_prompt_sin_contradicciones.test_tras_el_pago_no_hay_resumen_final_y_la_conversacion_muere`
+(antes `test_el_resumen_final_antes_del_despacho_existe`) y `test_prompt_compacto.test_5`.
+**Colateral visto:** el modelo escribió "(10 a 12)" con paréntesis aunque el dato ya es "de 10 a 12
+de la mañana" — lo copió de su propio historial (mensajes viejos de la misma conversación); se
+disipa en conversaciones nuevas.
+
+**Pendiente:** Maired limpia la conversación; la pestaña nueva promueve a producción con TODO
+(ESTADO → Última verificación, 7 pasos) después de fusionar este PR y redesplegar pruebas.
+
 ## 2026-09-06 (25) — 🧭 LA NOCHE DE LAS CUATRO CAPAS: del relleno mudo al prompt compacto, el caché de 1 hora y la voz nueva
 
 **Contexto:** Maired probó el mismo guion (galletas → pistacho → delivery → pago → "8 am") una y
