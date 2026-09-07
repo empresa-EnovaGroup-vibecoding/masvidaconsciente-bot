@@ -24,6 +24,45 @@
 
 ---
 
+## 2026-09-07 (29) — 🚀 PRODUCCIÓN PROMOVIDA (`27f50ac`) · lista blanca con 3 clientes · "LA DUEÑA" EN SILENCIO
+
+**Promoción (18:40-19:05 VET), la liturgia de ESTADO paso a paso.** Maired dio la orden ("vamos a
+pasarlo todo a producción, que no quede nada") cuando Whuilianny dejó de editar el catálogo.
+Respaldo en netcup (dump 3,9 MB + personalidad vieja md5 `e9e1349b6a66`) → `workflow_dispatch`:
+**el primer intento se frenó en la puerta** — ruff 0.9.6 del CI marcó UP038 en
+`tests/test_la_hora_es_muda.py` (isinstance con tupla); localmente pasaba porque el venv tenía
+0.16.5. PR #47 de una línea, venv alineado a 0.9.6, segundo intento verde (run 34168204704) →
+bot+worker `27f50ac`, 39 migraciones, personalidad nueva (md5 `a9aaafe61353`, coincide=True; el
+bot viejo NO traía `scripts/promover_*.py`, llegan con el deploy), sabores hechos=3, **27/27
+bancos**, panel `60f8b4d` (login 200), prompt vivo limpio y $14+$3 → $14.20. Detalle en ESTADO.
+
+**Lista blanca:** Whuilianny dio 3 números y Maired decidió soltar gradual (3-4 clientes/día). La
+clave `numeros_permitidos_extra` (29-ago) NO estaba en `CLAVES_CONFIG` → no se podía por la API
+del panel → upsert directo en `configuracion` (leído antes: vacío; después: los 3). Este PR la
+agrega a `CLAVES_CONFIG` para que la próxima vez sea por el panel. Recomendación dada y aceptada:
+no abrir con `todos` todavía (prompt de 71k con "la dueña" 38 veces, balde compartido, $0,20-0,40
+por conversación).
+
+**"La dueña" en silencio (este PR, `la-duena-en-silencio`).** Maired: *"ayúdame a eliminar del
+prompt las 38 menciones"*. Se midieron con AST: **52 literales** con "dueña" en los 5 módulos que
+arman lo que lee el modelo; 45 los lee el modelo (reglas, catálogo, esquemas y notas de
+herramientas, hoja del modo dos, correcciones `[SISTEMA]` del agente) y 7 son `logger` (para
+nosotros; se quedan). Los 45 pasan a primera persona del negocio: "se revisa en el banco del
+negocio", "se coordina después", "una persona del negocio entra al chat", "el negocio la
+autorizó", "se prepara por encargo" (esta sola línea del catálogo eran 16 de las 38). Hallazgo
+colateral: la corrección `[SISTEMA]` de identidad decía *"eres la asistente virtual del negocio"*
+— contradecía a R130 (Alejandra, la asesora); corregida. **Red de código nueva** en
+`_PROHIBIDO_SIEMPRE`: `la/nuestra/mi/una dueña|propietaria|jefa` — el prompt sugiere, el código
+impide, en los dos carriles. **Test nuevo `tests/test_la_duena_en_silencio.py`:** `_REGLAS`,
+`TOOL_SCHEMAS`, literales por AST (sin docstrings ni `logger`), la red (6 frases que frena, 6 que
+deja pasar: "Titular: Whuiliany Zabala" incluida), la voz (se salta en CI) y `CLAVES_CONFIG`.
+Ajustados `test_dia_imposible` y `test_metodo_de_pago_elegido`, que fijaban la palabra. Lo único
+que sigue nombrando a Whuilianny: R130 (2 veces, para "¿eres Whuilianny?") y el titular del pago.
+
+**Pendientes:** fusionar → pruebas → Maired conversa → prod (con el próximo lote) · 3 fotos rotas
+en pruebas (balde compartido) · separar balde · Whuilianny: franjas + clave del panel · leer las
+conversaciones de los 3 clientes cada día · adelgazar el prompt (~71k chars).
+
 ## 2026-09-07 (28) — 💵 EL DELIVERY SE COBRA TAMBIÉN EN DÓLARES: se cierra el flete gratis del 22-ago (regla de Whuilianny)
 
 **La regla, en palabras de Whuilianny (por Maired, 7-sep tarde):** *"el único descuento es el 20% si

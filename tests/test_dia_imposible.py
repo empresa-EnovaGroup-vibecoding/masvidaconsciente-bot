@@ -161,7 +161,7 @@ def test_el_prompt_prohibe_conceder_la_excepcion_por_cuenta_propia():
     assert "el día esté flojo" in linea, (
         "falta el caso que la plantilla nombra explícitamente (inferir la excepción por pocas ventas)"
     )
-    assert "SOLO si la dueña la autorizó" in linea, "falta quién es el único que puede autorizarla"
+    assert "SOLO si el negocio la autorizó" in linea, "falta quién es el único que puede autorizarla"
     assert "una autorización no vuelve posible cualquier cosa" in linea, (
         "falta el segundo aviso de la plantilla: autorizar el delivery no habilita cualquier producto"
     )

@@ -30,6 +30,14 @@ Las **FASES 0 a 3 ya están hechas y desplegadas**:
 
 ### 🚀 AHORA MISMO (6-sep noche): PROMOVER A PRODUCCIÓN LO QUE YA ESTÁ VERDE EN PRUEBAS
 
+> ✅ **HECHO el 7-sep (~19:05 VET): PRODUCCIÓN PROMOVIDA** — bot+worker `27f50ac`, panel `60f8b4d`, voz
+> nueva, sabores, 27/27 bancos, lista blanca con los 3 primeros clientes de Whuilianny (detalle: ESTADO →
+> Última verificación; SESIONES (29)). **Lo siguiente, en orden:** (1) soltar gradual: leer cada día las
+> conversaciones de los 3 números (BD + `llamadas_ia`), corregir, sumar 3-4 números más; `todos` cuando
+> haya evidencia; (2) PR `la-duena-en-silencio` → pruebas → prod con el próximo lote; (3) separar el
+> balde R2 de pruebas (3 fotos ya rotas por el balde compartido); (4) Whuilianny: franjas en Horario +
+> su clave del panel; (5) adelgazar el prompt (~71k chars por turno) midiendo antes/después.
+
 > **Pruebas está listo** (`f60c3f7` + panel `d8b94ab`, 27/27 bancos, cero PRs de código abiertos — solo el #42, los docs de este cierre) con todo
 > lo del 6-sep: entrega con franja + referencia (038), opciones a la vista, prompt compacto, modo de
 > entrega sin repreguntar, foto antes de la pregunta, caché de 1 hora, personalidad nueva.

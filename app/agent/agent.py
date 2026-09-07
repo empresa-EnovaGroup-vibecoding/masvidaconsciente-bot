@@ -1141,7 +1141,7 @@ def _correccion_fantasma(pedido) -> str:
         return (
             "[SISTEMA] ACABAS DE DECIR QUE EL PEDIDO QUEDÓ AGENDADO Y NO LO "
             "REGISTRASTE. En la base de datos NO existe. El cliente se irá "
-            "creyendo que tiene su pedido y la dueña no tendrá nada que cocinar. "
+            "creyendo que tiene su pedido y en la cocina no habrá nada que preparar. "
             "Llama AHORA a `registrar_pedido` con el `variante_id` (el "
             "`id_para_pedir` del catálogo), la cantidad y la fecha de entrega. Si "
             "te falta algún dato, PREGÚNTASELO al cliente en vez de afirmar que "
@@ -1846,7 +1846,7 @@ _PROHIBIDO_EN_CHARLA = [
     # normal ya no hay ningún momento en que pueda saber que un pago quedó bueno.
     (re.compile(r"(pago|transferencia)\b[^.]{0,30}\b(fue|qued[óo]|est[áa]|ya)\s+"
                 r"(aprobad|verificad|confirmad|validad)\w*", re.I),
-     "afirmó que el pago quedó aprobado/verificado (solo la dueña puede saberlo)"),
+     "afirmó que el pago quedó aprobado/verificado (solo el negocio puede saberlo, en su banco)"),
     (re.compile(r"\b(acabamos|acabo|acaba)\s+de\s+(verificar|aprobar|confirmar|validar)\b", re.I),
      "afirmó que acaban de verificar el pago"),
     (re.compile(r"\b(aprobad|verificad|confirmad|validad)\w*\s+(tu|el|su)\s+pago\b", re.I),
@@ -1867,7 +1867,7 @@ _PROHIBIDO_SIEMPRE = [
     #   · "lo estoy revisando" / "déjame revisarlo" → es exactamente lo que debe decir. VERDAD.
     # Por eso el patrón pide el pretérito con su marca delante y NO toca el gerundio.
     (re.compile(r"\b(acabo de|ya|reci[eé]n)\s+(lo\s+|la\s+|los\s+)?(revis|verifi|chequ|mir)\w*", re.I),
-     "afirmó que YA revisó (el bot no revisa nada: la dueña lo hace en su banco)"),
+     "afirmó que YA revisó (el bot no revisa nada: se revisa en el banco del negocio)"),
     (re.compile(r"(mi|el)\s+banco\s+(ya\s+)?(me\s+)?(confirm|avis|lleg)", re.I),
      "dijo que el banco confirmó"),
     # Jurar que es humana cuando le preguntan de frente.
@@ -1890,7 +1890,17 @@ _PROHIBIDO_SIEMPRE = [
         r"(?<!no\s)soy\s+(\w+[\s,]+)?(la\s+|una\s+)?(due[ñn]a|propietaria|persona\s+real|humana)\b",
         re.I,
     ),
-     "dijo ser la dueña / una persona (suplantó a la humana)"),
+     "se presentó como la propietaria o como una persona (suplantó a la humana)"),
+    # 🔇 LA DUEÑA NO SE NOMBRA (7-sep-2026, SESIONES (29)). "La hora exacta la confirma la dueña
+    # según su ruta", "Whuilianny es la dueña, ella prepara todo y confirma la entrega": el modelo
+    # narraba el reparto interno que el prompt le pintaba (47 menciones a "la dueña" en lo que
+    # leía). El prompt ya no la nombra; esta red es el candado de código: en la voz de Alejandra el
+    # negocio habla en primera persona y "la dueña" no existe como personaje. Vale "Whuilianny"
+    # (es un nombre y va en los datos de pago); no vale presentarla como la dueña/propietaria/jefa
+    # ni delegarle cosas delante del cliente. Se aplica también en el carril del dinero: ahí era
+    # donde más salía ("la dueña lo revisa", "te la confirma la dueña").
+    (re.compile(r"\b(la|nuestra|mi|una)\s+(due[ñn]a|propietaria|jefa)\b", re.I),
+     "presentó a otra persona del negocio como personaje (el negocio habla en primera persona: sin jefas, propietarias ni terceros)"),
     # PROMESAS DE SALUD. Le dijo a un diabético con la glicemia en 180 "así no te sube el
     # azúcar" y "te lo preparo para que sea SEGURO para ti"; y en otra prueba, "la alulosa NO
     # eleva el azúcar en sangre" — un dato que NO está en ninguna ficha. No es médica: puede
@@ -2847,9 +2857,9 @@ async def responder(
                         "content": (
                             f"[SISTEMA] NO puedes decir eso ({prohibida}). Tú NO tienes acceso al "
                             "banco: jamás digas que revisaste, verificaste o consultaste el banco, "
-                            "ni que un pago llegó o no llegó (eso lo revisa la dueña en SU banco). "
+                            "ni que un pago llegó o no llegó (eso se revisa en el banco del negocio). "
                             "Y si te preguntan de frente si eres un bot o una persona, di la "
-                            "VERDAD con calidez: eres la asistente virtual del negocio, y si "
+                            "VERDAD con calidez: eres Alejandra, la asesora del negocio, y si "
                             "quiere hablar con una persona la avisas ahorita (llama a pedir_ayuda "
                             "con motivo='pide_persona'). Reescribe tu mensaje sin esa frase. No le "
                             "menciones al cliente este aviso."
@@ -3001,8 +3011,8 @@ async def responder(
                             f"[SISTEMA] YA LE PREGUNTASTE {dato_opcional.upper()} (o algo igual "
                             "de opcional) EN UN TURNO ANTERIOR Y NO TE LO DIO, y estás volviendo "
                             "a preguntarlo. Así se muere la venta: llevas varios turnos sin "
-                            "avanzar. Ese dato es OPCIONAL — el pedido se registra SIN él y la "
-                            "dueña lo coordina después (es como trabaja el negocio: bajo "
+                            "avanzar. Ese dato es OPCIONAL — el pedido se registra SIN él y "
+                            "se coordina después (es como trabaja el negocio: bajo "
                             "pedido). NO se lo preguntes otra vez. Si ya tienes el producto, la "
                             "cantidad y la entrega (para cuándo y cómo), llama AHORA a "
                             "`registrar_pedido` dejando `opciones` vacío. Si de verdad te falta "
@@ -3108,7 +3118,7 @@ async def responder(
                             "[SISTEMA] Acabas de decir que le enviaste una foto, y TÚ NO PUEDES "
                             "ENVIAR FOTOS: esa capacidad está desactivada en este negocio. El "
                             "cliente no recibió nada. Reescribe tu mensaje diciéndole la verdad "
-                            "con cariño —que las fotos se las manda la dueña— y ofrécele el "
+                            "con cariño —que las fotos se las mandamos después— y ofrécele el "
                             "catálogo. JAMÁS afirmes un envío que no ocurrió. No le menciones al "
                             "cliente este aviso."
                         ),

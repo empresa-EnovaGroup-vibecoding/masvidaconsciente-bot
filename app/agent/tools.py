@@ -139,7 +139,7 @@ TOOL_SCHEMAS = [
                                         "relleno, masa, sabor o mezcla (ej. '4 de pollo y 4 de "
                                         "carne mechada', 'masa de plátano'). NO cambia el precio. "
                                         "Si el cliente ya lo dijo, pásalo con SUS palabras; si no "
-                                        "lo dijo, DÉJALO VACÍO y registra igual — la dueña lo "
+                                        "lo dijo, DÉJALO VACÍO y registra igual — se "
                                         "coordina después (el negocio trabaja bajo pedido). "
                                         "NUNCA dejes de registrar un pedido por esto."
                                     ),
@@ -292,7 +292,7 @@ TOOL_SCHEMAS = [
             # por eso una fila de Conocimiento le ganaba la carrera a la ficha del producto. Y si
             # el bot sigue pidiendo datos de producto aquí, la dueña se los vuelve a cargar aquí
             # — la limpieza de la 030 se desharía sola. UN dato, UN sitio.
-            "description": "Busca lo que la dueña cargó SOBRE EL NEGOCIO: envíos y entrega, formas de pago y descuentos, ubicación, horarios, políticas e insumos compartidos (ej. la masa madre). Úsala para dudas GENERALES que no sean de precio/pedido (ej. '¿hacen envíos?', '¿hay descuento pagando en dólares?', '¿dónde están?'). 🔴 NO la uses para datos de UN producto —de qué está hecho, cuánto dura, si se congela, si es apto para diabéticos—: eso SIEMPRE sale de info_producto o del catálogo. Responde SOLO con lo que devuelva; si no trae nada, dilo con sinceridad y no inventes.",
+            "description": "Busca la información cargada SOBRE EL NEGOCIO: envíos y entrega, formas de pago y descuentos, ubicación, horarios, políticas e insumos compartidos (ej. la masa madre). Úsala para dudas GENERALES que no sean de precio/pedido (ej. '¿hacen envíos?', '¿hay descuento pagando en dólares?', '¿dónde están?'). 🔴 NO la uses para datos de UN producto —de qué está hecho, cuánto dura, si se congela, si es apto para diabéticos—: eso SIEMPRE sale de info_producto o del catálogo. Responde SOLO con lo que devuelva; si no trae nada, dilo con sinceridad y no inventes.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -432,17 +432,17 @@ TOOL_SCHEMAS = [
         "function": {
             "name": "pedir_ayuda",
             "description": (
-                "Le pasa la conversación a la DUEÑA (una persona real) y deja de responder en "
+                "Le pasa la conversación a una PERSONA REAL del negocio y deja de responder en "
                 "este chat. Es tu salida honesta cuando algo NO te toca resolver a ti. "
                 "LLÁMALA SIEMPRE que: (1) te pregunten el PRECIO de un producto cuyo precio dice "
-                "'PRECIO DEL DÍA' o 'a consultar' (ese precio cambia y solo lo sabe la dueña: "
+                "'PRECIO DEL DÍA' o 'a consultar' (ese precio cambia y solo se sabe ese día en el negocio: "
                 "está PROHIBIDO inventarlo o usar uno viejo); (2) te pregunten algo que NO SABES "
                 "y las herramientas no te lo dan (ej. envíos a otra ciudad, una política que no "
-                "tienes cargada); (3) el cliente pida hablar con una PERSONA o con la dueña; "
+                "tienes cargada); (3) el cliente pida hablar con una PERSONA, con la encargada o con quien lleva el negocio; "
                 "(4) el cliente RECLAME de verdad (algo llegó mal, no le llegó, quiere su dinero). "
                 "Después de llamarla, dile al cliente CON TUS PROPIAS PALABRAS, cálida y natural, "
-                "que le confirmas eso enseguida (nunca una plantilla, y NUNCA le digas que "
-                "'le preguntas a la dueña': hablas en primera persona del negocio, 'te lo "
+                "que le confirmas eso enseguida (nunca una plantilla; hablas en primera persona del negocio, "
+                "'te lo "
                 "confirmo')."
             ),
             "parameters": {
@@ -451,12 +451,12 @@ TOOL_SCHEMAS = [
                     "motivo": {
                         "type": "string",
                         "enum": ["precio_del_dia", "no_se", "pide_persona", "reclamo"],
-                        "description": "Por qué necesitas a la dueña.",
+                        "description": "Por qué necesitas a una persona del negocio.",
                     },
                     "detalle": {
                         "type": "string",
                         "description": (
-                            "En una línea, QUÉ necesita la dueña para poder responder. "
+                            "En una línea, QUÉ necesita saber quien atienda para poder responder. "
                             "Sé concreto: 'pregunta el precio de la Torta keto de 1kg' o "
                             "'pregunta si hacen envíos a Caracas'."
                         ),
@@ -2195,8 +2195,8 @@ async def info_producto(session, telefono, nombre):
         "nota": (
             "Responde sobre ESTE producto SOLO con estos datos. Si el cliente pregunta algo "
             "que aquí está vacío/None (ej. duración, si se congela), NO lo inventes ni copies "
-            "de otro producto: dile con calidez que lo confirmas con la dueña. "
-            "Las `fotos_etiquetadas` son los nombres que la dueña le puso a CADA FOTO: sirven "
+            "de otro producto: dile con calidez que eso lo confirmas enseguida (pedir_ayuda). "
+            "Las `fotos_etiquetadas` son los nombres que tiene CADA FOTO en el panel: sirven "
             "SOLO para escoger cuál mandarle (pásalo en `etiqueta` de enviar_fotos_producto). "
             "NO son la lista de opciones del producto: lo que se puede pedir está en "
             "`descripcion` y en los tamaños. NO ofrezcas una versión que no esté ahí. "
@@ -2445,7 +2445,7 @@ async def _validar_entrega(session, fecha: date, items_pedido) -> dict | None:
     elif fecha < hoy + timedelta(days=anticipacion):
         motivo = (
             f"ese pedido necesita {anticipacion} día(s) de anticipación "
-            f"(hay productos que la dueña prepara por encargo)"
+            f"(hay productos que se preparan por encargo)"
         )
     elif fecha == hoy and await _paso_la_hora_de_corte(session):
         # HOY ya no se puede: pasó la hora de corte. El próximo día empieza mañana.
@@ -2934,8 +2934,8 @@ async def registrar_pedido(
                 "estás confirmando la hora, la fecha o la entrega de ESE pedido, no hay nada "
                 "que registrar: confírmaselo y sigue. Y si el cliente dijo con todas sus letras "
                 "que quiere comprar OTRA tanda igual habiendo pagado ya, llama a `pedir_ayuda` "
-                "(motivo='pedido_repetido', detalle con lo que pidió) para que la dueña lo "
-                "maneje — esa venta no se registra sola."
+                "(motivo='pedido_repetido', detalle con lo que pidió) para que lo "
+                "maneje una persona del negocio — esa venta no se registra sola."
             ),
             "pedido_id": repetido.id,
         }
@@ -3008,7 +3008,7 @@ async def registrar_pedido(
             return {
                 "ok": False,
                 "nota": (
-                    f"El precio de '{cual}' CAMBIA y hoy la dueña todavía no lo ha dado. "
+                    f"El precio de '{cual}' CAMBIA y hoy todavía no está cargado. "
                     "NO lo inventes, NO uses uno viejo y NO lo registres. Llama a `pedir_ayuda` "
                     f"con motivo='precio_del_dia' y detalle='pregunta el precio de {cual}'."
                 ),
@@ -3329,7 +3329,7 @@ async def buscar_info(session, telefono, consulta):
             "resultados": [],
             "nota": (
                 f"no hay información cargada sobre '{q}'. Dilo con sinceridad y, si aplica, "
-                "ofrece consultarlo con la dueña; NO te lo inventes"
+                "ofrece averiguarlo con pedir_ayuda; NO te lo inventes"
             ),
         }
     return {
@@ -3504,7 +3504,7 @@ def _nota_cobro_metodo_elegido(titulo: str, tipo: str, otros: list[str]) -> str:
             "copiando EXACTO `resumen_cobro` (NO recalcules). Es EFECTIVO: no hay cuenta, "
             "teléfono, correo ni wallet que enviar, y NO debes pedir captura de comprobante. "
             "Confirma con naturalidad que ese es el monto que pagará en efectivo al recibir "
-            "o retirar su pedido; la dueña confirmará el pago cuando reciba el dinero. Si "
+            "o retirar su pedido; el pago se confirma cuando el negocio reciba el dinero. Si "
             "pregunta de dónde sale el monto, pásale `desglose_efectivo` una línea debajo "
             "de otra, copiado TAL CUAL."
             + cambio
@@ -4049,10 +4049,10 @@ async def pedir_ayuda(
     return {
         "ok": True,
         "nota": (
-            "Listo: la dueña ya fue avisada y este chat quedó en sus manos. Ahora dile al "
+            "Listo: ya avisaste y una persona del negocio toma este chat. Ahora dile al "
             "cliente, CON TUS PROPIAS PALABRAS (cálida, natural, distinta cada vez), que eso "
             "se lo confirmas enseguida. NO inventes el dato, NO des un precio, y NUNCA digas "
-            "que 'le preguntas a la dueña' ni la menciones como si fuera otra persona: tú "
+            "que consultas con nadie ni menciones a otra persona del negocio: tú "
             "hablas en primera persona del negocio ('te lo confirmo'). Después de este mensaje NO "
             "sigas respondiendo en este chat."
         ),
@@ -4744,7 +4744,7 @@ async def enviar_catalogo(session, telefono):
         return {
             "ok": False,
             "nota": (
-                "no se envió el catálogo (la dueña está atendiendo este chat). NO le digas al "
+                "no se envió el catálogo (una persona del negocio está atendiendo este chat). NO le digas al "
                 "cliente que se lo mandaste ni intentes mandarlo otra vez"
             ),
         }
@@ -5009,7 +5009,7 @@ async def enviar_fotos_producto(
         return {
             "enviadas": 0,
             "nota": (
-                "no se enviaron las fotos (la dueña está atendiendo este chat). NO le digas al "
+                "no se enviaron las fotos (una persona del negocio está atendiendo este chat). NO le digas al "
                 "cliente que se las mandaste ni intentes mandarlas otra vez"
             ),
         }

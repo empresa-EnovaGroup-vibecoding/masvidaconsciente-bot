@@ -122,9 +122,13 @@ CLAVES_CONFIG = [
     # permitir "hoy" y el bot ofrece el próximo día de entrega. Es un CANDADO.
     "hora_corte",
     # FRANJAS DE ENTREGA (6-sep, migración 038): una por línea o separadas por coma. El cliente
-    # elige UNA de estas (nunca una hora exacta: esa la confirma la dueña según su ruta) y el bot
-    # la guarda en el pedido con `anotar_entrega`. Vacío = las de fábrica (tools.py).
+    # elige UNA de estas (nunca una hora exacta) y el bot la guarda en el pedido con
+    # `anotar_entrega`. Vacío = las de fábrica (tools.py).
     "franjas_entrega",
+    # LISTA BLANCA "extra" (7-sep): números que el bot SÍ atiende además de NUMEROS_PERMITIDOS
+    # del entorno; separados por coma; `todos` abre a todo el mundo. Editable SIN redeploy: es la
+    # palanca para soltar el bot cliente a cliente (Maired, 7-sep) sin tocar Coolify.
+    "numeros_permitidos_extra",
     # Modelo de IA conversacional, lo elige la PROVEEDORA (no la clienta). El bot
     # lo lee con leer_modelo_ia(). La voz (transcripción) va aparte y fija.
     "modelo_ia",

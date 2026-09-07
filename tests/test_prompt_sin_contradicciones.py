@@ -137,7 +137,7 @@ def test_el_prompt_ya_no_ordena_coordinar_la_entrega_al_recibir_el_comprobante()
         "el prompt volvió a ordenar coordinar la entrega sin esperar a la dueña"
     )
     assert "revisando" in linea, "tiene que decir la verdad: que lo está revisando"
-    assert "Hasta que ella lo apruebe NO coordines" in linea, (
+    assert "Hasta que te llegue el aviso de que quedó aprobado NO coordines" in linea, (
         "falta la mitad que importa: que NO coordine hasta el clic"
     )
 

@@ -144,7 +144,7 @@ def test_el_efectivo_no_pide_un_comprobante_que_no_existe():
     assert "NO debes pedir captura" in nota
     assert "no hay cuenta" in nota
     assert "al recibir o retirar" in nota
-    assert "la dueña confirmará el pago" in nota
+    assert "se confirma cuando el negocio reciba el dinero" in nota
 
 
 def test_un_metodo_digital_sigue_pidiendo_el_comprobante():
