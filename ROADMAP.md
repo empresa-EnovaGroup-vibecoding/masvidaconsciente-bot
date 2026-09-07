@@ -43,6 +43,12 @@ Las **FASES 0 a 3 ya están hechas y desplegadas**:
 > 8 del banco que exigen cero apariciones. Tras fusionar y redesplegar: Maired repite "a las 10" y "¿tú
 > no eres Whuilianny?" → OK → producción.
 >
+> **7-sep tarde:** las dos pruebas salieron limpias (una línea y silencio; "Soy Alejandra, la asesora").
+> Regla nueva de Whuilianny → PR `delivery-se-cobra` (SESIONES (28)): el delivery se cobra completo
+> también en dólares; el 20% queda solo sobre los productos. Tras fusionar: redesplegar pruebas +
+> personalidad ya actualizada → Maired prueba un cobro con delivery en dólares ($14 + $3 → $14.20) →
+> producción con TODO (bot master, panel `60f8b4d`, voz nueva, sabores).
+>
 > **Después de producción, en este orden:** (1) entregarle a Whuilianny su cuenta propia del panel
 > (Maired la creó en PRODUCCIÓN el 6-sep: `masvidaconsciente1@gmail.com`, rol dueña) y que ella
 > cambie su clave en "Mi contraseña"; (2) datos que le tocan a Whuilianny (info de las empanadas, coma en sabores

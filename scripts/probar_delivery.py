@@ -15,7 +15,7 @@ Lo que se prueba:
   3. 🧾 EL RECIBO enseña la línea del envío (si no, el cliente no puede cantar una zona mal puesta).
   4. 🔒 SIN ZONA NO SE COBRA: `generar_datos_pago` lo rechaza y le da la lista de zonas al bot.
   5. 🚫 UNA ZONA INVENTADA se rechaza (lista CERRADA: el bot no puede escribir un id que no le dimos).
-  6. 💵 EL 20% DE DIVISAS **NO** TOCA EL FLETE (si no, la dueña paga el delivery de su bolsillo).
+  6. 💵 EL 20% DE DIVISAS ES SOBRE LOS PRODUCTOS Y EL FLETE SE COBRA COMPLETO (Whuilianny, 7-sep-2026).
   7. 🏠 EL RETIRO sale sin costo y no suma nada.
   8. 🩹 RE-REGISTRAR SIN LA ZONA NO BORRA EL FLETE (auditoría 2026-08-02, DIN-1).
 
@@ -169,19 +169,19 @@ async def main() -> None:
         cerca.costo = Decimal("3")
         await s.commit()
 
-        print("\n4) 💵 EFECTIVO EN DÓLARES: 20% A LOS PRODUCTOS **Y DELIVERY GRATIS**")
-        # 🔴 ESTE BANCO AFIRMABA LO CONTRARIO HASTA EL 2026-08-22, y con este motivo escrito:
-        # "si diera X, la dueña PAGA el flete". La plantilla de negocio de Maired decide que sí lo
-        # pague — es una palanca para cobrar en efectivo, y aparece en sus tres apartados de pago.
-        # Se deja anotado para que nadie "arregle" esto de vuelta creyendo que es un bug (L36).
+        print("\n4) 💵 EFECTIVO EN DÓLARES: 20% A LOS PRODUCTOS **Y EL DELIVERY COMPLETO**")
+        # 🔴 TERCERA VERSIÓN DE ESTE CHECK. Hasta el 22-ago cobraba el flete; del 22-ago al 7-sep
+        # la casa lo regalaba en dólares (palanca para cobrar en efectivo); el 7-sep Whuilianny,
+        # por Maired, lo cerró: "el único descuento es el 20%; el delivery lo paga la persona".
+        # Se deja la historia escrita para que nadie "arregle" esto de vuelta (L36).
         cobro = await generar_datos_pago(s, TEL, ped.id)
         check("el cobro se generó", cobro.get("ok") is True, str(cobro.get("nota"))[:90])
-        # productos × 0,80, SIN sumar el envío: el flete lo asume la casa
-        div_ok = float((precio * Decimal("0.80")).quantize(Decimal("0.01")))
-        div_viejo = float((precio * Decimal("0.80")).quantize(Decimal("0.01")) + Decimal("3"))
-        check(f"en efectivo: producto×0,80 sin flete = ${div_ok:g} (ya NO ${div_viejo:g})",
+        # productos × 0,80 MÁS el envío completo: el flete lo paga el cliente
+        div_ok = float((precio * Decimal("0.80")).quantize(Decimal("0.01")) + Decimal("3"))
+        div_regalado = float((precio * Decimal("0.80")).quantize(Decimal("0.01")))
+        check(f"en efectivo: producto×0,80 + flete $3 = ${div_ok:g} (ya NO ${div_regalado:g})",
               cobro.get("ok") and abs(cobro["monto_usd_divisas"] - div_ok) < 0.01,
-              f"dio {cobro.get('monto_usd_divisas')} — si diera {div_viejo:g}, el flete se está cobrando")
+              f"dio {cobro.get('monto_usd_divisas')} — si diera {div_regalado:g}, se está regalando el flete")
         # 🔴 Desde el 2026-08-24 el 20% se ata a la MONEDA: dólares por CUALQUIER vía
         # (efectivo, Zelle o Binance). El check de antes fijaba lo contrario ("Zelle/Binance
         # pagan completo") — decisión revertida por Maired; ver SESIONES 2026-08-24 (3).
@@ -189,8 +189,9 @@ async def main() -> None:
               "zelle" in (cobro.get("resumen_cobro") or "").lower()
               and "binance" in (cobro.get("resumen_cobro") or "").lower(),
               str(cobro.get("resumen_cobro"))[:120])
-        check("y nombra que el delivery va por cuenta de la casa",
-              "cuenta" in (cobro.get("resumen_cobro") or "").lower(),
+        check("y ya NO dice que el delivery va por cuenta de la casa (7-sep)",
+              "nuestra cuenta" not in (cobro.get("resumen_cobro") or "").lower()
+              and "gratis" not in (cobro.get("resumen_cobro") or "").lower(),
               str(cobro.get("resumen_cobro"))[:120])
 
         print("\n5) 🔒 SIN ZONA NO SE COBRA")
