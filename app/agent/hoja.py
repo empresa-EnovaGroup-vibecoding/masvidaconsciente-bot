@@ -258,7 +258,7 @@ def _renderizar(nombre: str, r: dict) -> str:
         return "\n  ".join(partes)
 
     if nombre == "registrar_comprobante":
-        return "Recibiste su comprobante. La dueña lo revisa en su banco." if r.get("ok") else ""
+        return "Recibiste su comprobante. Se revisa en el banco del negocio." if r.get("ok") else ""
 
     if nombre == "enviar_fotos_producto":
         n = int(r.get("enviadas") or 0)
@@ -280,7 +280,7 @@ def _renderizar(nombre: str, r: dict) -> str:
         return "Le ENVIASTE el catálogo en PDF por WhatsApp: ya lo tiene." if r.get("ok") else ""
 
     if nombre == "pedir_ayuda":
-        return "Avisaste a la dueña: ella entra al chat enseguida. Díselo con tus palabras."
+        return "Avisaste al negocio: una persona entra al chat enseguida. Díselo con tus palabras."
 
     if nombre == "buscar_info":
         temas = r.get("resultados") or r.get("temas") or []

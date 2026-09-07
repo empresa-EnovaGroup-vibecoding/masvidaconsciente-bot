@@ -79,11 +79,12 @@ PROHIBIDAS = [
     # Lo que SÍ puede decir (no debe bloquearse):
     ("Recibí tu comprobante 💚 Whuilianny lo revisa en su banco y te confirma", False),
     ("Soy la asistente virtual de masvidaconsciente 💚 ¿Quieres que te pase con Whuilianny?", False),
-    # Su NOMBRE sí es suyo (frenar esto le quitaría la voz); y hablar DE la dueña tampoco es mentir.
+    # Su NOMBRE sí es suyo (frenar esto le quitaría la voz). Hablar DE "la dueña" como personaje SÍ se
+    # frena desde el 7-sep (SESIONES (29)): el negocio habla en primera persona; "la dueña" no existe.
     ("Soy Whuilianny 💚 ¿En qué te ayudo?", False),
-    ("Te lo confirmo enseguida, que la dueña te atienda directamente", False),
-    ("Soy la asistente de la dueña, ya le aviso 💚", False),
-    ("Yo no soy la dueña, soy su asistente 💚 Ya le aviso para que te atienda", False),  # decir la VERDAD no se frena
+    ("Te lo confirmo enseguida, que la dueña te atienda directamente", True),
+    ("Soy la asistente de la dueña, ya le aviso 💚", True),
+    ("Yo no soy la dueña, soy su asistente 💚 Ya le aviso para que te atienda", True),  # 7-sep: ni "la dueña" ni "asistente"
     ("Cuando hagas el pago, me mandas la captura del comprobante", False),
     # Los datos REALES de la ficha SÍ se pueden decir:
     ("Las Empanadas son aptas para diabéticos 💚 Están endulzadas con azúcar de coco", False),

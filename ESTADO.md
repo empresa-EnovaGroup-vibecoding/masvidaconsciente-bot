@@ -77,7 +77,33 @@ y salud, memoria que no se olvida a las 24h, y 8 migraciones nuevas (hasta la 03
 > sin tocar. Queda pedir un video real de Tortas keto: el archivo ya es compatible, pero su
 > contenido sigue siendo un solo cuadro con audio. ✅ **Producción alcanzó todo esto el 5-sep.**
 
-## Última verificación: **2026-09-06 (~22:05 VET) — PRUEBAS LISTO PARA PROMOVER (`f60c3f7` + panel `d8b94ab`) · PRODUCCIÓN sigue en `42d37de`**
+## Última verificación: **2026-09-07 (~19:05 VET) — 🚀 PRODUCCIÓN PROMOVIDA: LOS DOS ENTORNOS EN master `27f50ac` + panel `60f8b4d` · voz nueva · sabores · lista blanca con 3 clientes**
+
+> ✅ **Liturgia completa (SESIONES (29)):** respaldo `pg_dump` en netcup
+> (`/root/respaldos-pre-promocion/db_20260907_224159.sql.gz`, 3,9 MB, 19 tablas) + personalidad
+> vieja (`personalidad_vieja_20260907_224317.txt`, md5 `e9e1349b6a66`; copia local en
+> `respaldos-masvida/personalidad_PRODUCCION_vieja_2026-09-07.txt`) → `workflow_dispatch
+> destino=produccion` (el primer intento se frenó en la puerta: ruff 0.9.6 del CI, UP038 → PR #47;
+> el segundo, run 34168204704, verde) → bot `y20mosanb19cw8ukso56hv7e` y worker
+> `hrkrh8f9buora7aqxt8rsbna` en `27f50ac` · `/salud` ok · **39 migraciones** → personalidad nueva
+> por `promover_personalidad.py` (md5 `a9aaafe61353`, coincide=True) → `promover_sabores.py`
+> hechos=3 → **27/27 bancos** (`/root/bancos_promocion_7sep.log`) → panel `o1jo590exxeuco5s8j0arisy`
+> en `60f8b4d` por la API de Coolify (login 200) → prompt vivo: 0 "confirma la dueña" / "según su
+> ruta" / "ella es la dueña" / "por nuestra cuenta"; $14 + $3 en dólares = **$14.20** (PR #46).
+>
+> 🔓 **Lista blanca de producción:** `NUMEROS_PERMITIDOS=573005690062` (entorno) +
+> `numeros_permitidos_extra` = los 3 primeros clientes de Whuilianny (upsert en `configuracion`,
+> porque la clave no estaba en `CLAVES_CONFIG`; el PR `la-duena-en-silencio` la agrega para
+> editarla por la API). **Decisión de Maired:** soltar gradual, 3-4 clientes al día, leyendo cada
+> conversación; `todos` cuando haya evidencia. A los demás números el bot les guarda el mensaje y
+> calla; Whuilianny los atiende desde su celular (coexistencia).
+>
+> ⏳ **Pendientes:** PR `la-duena-en-silencio` (45 menciones a "la dueña" en lo que lee el modelo →
+> primera persona del negocio + red de código) → pruebas → prod · 3 fotos rotas en PRUEBAS por el
+> balde R2 compartido (media 9, 33, 34: Galletas NY, Caldo de Huesos) → decidir separar el balde ·
+> paso 7: Whuilianny revisa franjas en Horario y recibe su clave del panel · adelgazar el prompt.
+
+## Verificación anterior: **2026-09-06 (~22:05 VET) — PRUEBAS LISTO PARA PROMOVER (`f60c3f7` + panel `d8b94ab`) · PRODUCCIÓN sigue en `42d37de`**
 
 > 🎯 **DÓNDE ESTAMOS (léelo antes de tocar nada):** el 6-sep se fusionaron **11 PRs del bot
 > (#30-#38, #40, #41; el #39 se cerró dentro del #40) + el #4 del panel**, TODOS desplegados y
