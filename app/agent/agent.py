@@ -177,6 +177,11 @@ _OFRECE_OPCIONES = re.compile(r"\bcual(es)?\b")
 # cuando el bot ofrece dos opciones, enseñar las dos ayuda a decidir — a puro texto no engancha.
 # Con TRES o más NO se manda nada (ni recortado a dos: elegir 2 de 5 es decidir por el cliente),
 # porque ahí sí es spam y quema la calidad del número con Meta, que es una regla dura.
+# 📷 HASTA DOS productos por turno — decisión MEDIDA de Erwin (R44/R45, test_asegurar_foto): "a
+# puro texto no engancha; con dos opciones, las dos fotos". El 6-sep se intentó bajarlo a 1 porque
+# R102 decía "UN producto a la vez" y el bot mandó New York + Mini seguidas; el test viejo frenó el
+# cambio. Se resolvió al revés: el PROMPT se alineó con lo medido (hasta dos si está eligiendo
+# entre dos; con tres o más, que elija primero). No bajar esto sin medir antes y después.
 _MAX_FOTOS_POR_TURNO = 2
 
 # La cantidad no la decide el modelo: es una política de negocio única para TODOS los caminos
@@ -1140,7 +1145,10 @@ def _correccion_fantasma(pedido) -> str:
             "Llama AHORA a `registrar_pedido` con el `variante_id` (el "
             "`id_para_pedir` del catálogo), la cantidad y la fecha de entrega. Si "
             "te falta algún dato, PREGÚNTASELO al cliente en vez de afirmar que "
-            "ya está. No le menciones al cliente este aviso."
+            "ya está — y cuando lo tengas, REGISTRA sin pedir permiso ('procedo?', "
+            "'lo registro?' no existen: asume el sí). No le menciones al cliente este "
+            "aviso ni le respondas como si él lo hubiera dicho: nada de 'tienes razón' "
+            "ni 'perdón' — escribe tu mensaje normal."
         )
     return (
         f"[SISTEMA] Usaste un verbo de registro (anotar/agendar/registrar) pero en ESTE "
@@ -1150,7 +1158,8 @@ def _correccion_fantasma(pedido) -> str:
         f"están en ese pedido, regístralos de verdad ANTES de afirmarlo. Si solo estás "
         f"confirmando un detalle (la hora, la dirección, una referencia, una preferencia), "
         f"reescribe tu mensaje diciéndolo con naturalidad, SIN afirmar que registraste un "
-        f"pedido. No le menciones al cliente este aviso."
+        f"pedido. No le menciones al cliente este aviso ni le respondas como si él lo hubiera "
+        f"dicho ('tienes razón', 'perdón'): escribe tu mensaje normal."
     )
 
 

@@ -2275,10 +2275,63 @@ async def _franjas_de_entrega(session) -> list[str]:
     return _parsear_franjas(valor)
 
 
+_RANGO_FRANJA_RE = re.compile(r"(\d{1,2})\s*(?:a|-|–|hasta)\s*(\d{1,2})")
+_HORA_SUELTA_RE = re.compile(
+    r"(?:a\s+las?\s+|las?\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|a\.m\.|pm|p\.m\.|de la manana|de la tarde|de la noche)?"
+)
+
+
+def _a_24h(hora: int, marca: str | None) -> int:
+    """'2' con 'pm' → 14; '2' sin marca → 14 (una entrega a las 2 es de la tarde, no de la
+    madrugada): las horas 1-6 sin marca se leen como tarde, 7-12 como mañana."""
+    m = (marca or "").replace(".", "")
+    if m in ("pm", "de la tarde", "de la noche") and hora < 12:
+        return hora + 12
+    if m in ("am", "de la manana"):
+        return hora
+    return hora + 12 if 1 <= hora <= 6 else hora
+
+
+def _rango_de_franja(franja: str) -> tuple[int, int] | None:
+    """'en la mañana (10 a 12)' → (10, 12) · 'en la tarde (2 a 6)' → (14, 18). None si no trae horas."""
+    m = _RANGO_FRANJA_RE.search(franja)
+    if not m:
+        return None
+    ini, fin = int(m.group(1)), int(m.group(2))
+    es_tarde = "tarde" in _sin_acentos(franja) or "noche" in _sin_acentos(franja)
+    ini24 = ini + 12 if (es_tarde and ini < 12) else ini
+    fin24 = fin + 12 if (es_tarde and fin < 12) or (fin < ini24 and fin < 12) else fin
+    return ini24, fin24
+
+
+def _hora_en_franja(texto: str, franjas: list[str]) -> str | None:
+    """🔴 EL CASO DEL 6-SEP 22:40: el cliente dijo "a las 10", que CAE DENTRO de "en la mañana
+    (10 a 12)", y el bot le volvió a recitar las franjas. Una persona dice "perfecto, en la mañana
+    entonces". Si la hora suelta cae dentro de exactamente UNA franja, esa franja queda elegida
+    (la hora exacta sigue confirmándola la dueña). Si no cae en ninguna, o el texto no trae hora,
+    None y quien llama ofrece las franjas."""
+    t = _sin_acentos(texto)
+    horas = []
+    for m in _HORA_SUELTA_RE.finditer(t):
+        h = int(m.group(1))
+        if 0 <= h <= 23:
+            horas.append(_a_24h(h, m.group(3)))
+    if len(set(horas)) != 1:
+        return None
+    h24 = horas[0]
+    calzan = []
+    for f in franjas:
+        rango = _rango_de_franja(f)
+        if rango and rango[0] <= h24 <= rango[1]:
+            calzan.append(f)
+    return calzan[0] if len(calzan) == 1 else None
+
+
 def _matchear_franja(texto: str | None, franjas: list[str]) -> str | None:
     """La franja que dijo el modelo contra la lista CERRADA. Vocabulario cerrado, como el método
-    de pago: exacta → contención → palabra clave (mañana/tarde/noche/mediodía). Ambigua o sin
-    calce ⇒ None, y quien llama enseña la lista completa. Jamás se guarda texto libre."""
+    de pago: exacta → contención → palabra clave (mañana/tarde/noche/mediodía) → una HORA que
+    caiga dentro de una franja. Ambigua o sin calce ⇒ None, y quien llama enseña la lista
+    completa. Jamás se guarda texto libre."""
     t = " ".join(_sin_acentos(texto or "").split())
     if not t:
         return None
@@ -2294,7 +2347,7 @@ def _matchear_franja(texto: str | None, franjas: list[str]) -> str | None:
         por_clave = [f for f, n in norm.items() if claves[0] in n]
         if len(por_clave) == 1:
             return por_clave[0]
-    return None
+    return _hora_en_franja(t, franjas)
 
 
 async def _falta_referencia(session, pedido) -> bool:
@@ -2484,9 +2537,11 @@ async def proxima_fecha_entrega(session, telefono, productos=None):
             "cuenta, no supongas que mañana se entrega, y no inventes una hora: si el cliente "
             "pide un día que no está en esta lista, dile con cariño cuál es el más cercano que "
             "sí puedes y ofréceselo. La HORA exacta NO existe como opción: ni la preguntes ni la "
-            "prometas. Lo que el cliente elige es una de las `franjas_de_entrega` (ofrécelas tal "
-            "cual y guarda la elegida con anotar_entrega); la hora exacta la confirma la dueña "
-            "según su ruta. Si dice una hora suelta ('a las 8'), respóndele con las franjas. "
+            "prometas. Lo que el cliente elige es uno de los momentos de `franjas_de_entrega` "
+            "(ofrécelos con naturalidad, 'en la mañana o en la tarde', SIN la palabra 'franja', "
+            "que es nuestra, y guarda el elegido con anotar_entrega); la hora exacta la confirma "
+            "la dueña según su ruta. Si dice una hora ('a las 10'), pásasela igual a "
+            "anotar_entrega: si cae dentro de un momento, queda elegido; si no, te lo digo. "
             # 🔴 GUARDIA DE HILO (31-ago): re-consultar el calendario (por una duda o un
             # producto nuevo) traía 4 fechas frescas sin memoria de la ya acordada — y el
             # modelo podía repreguntar "¿para cuándo?" con la fecha firme en la conversación.
@@ -2551,10 +2606,11 @@ async def anotar_entrega(session, telefono, franja=None, referencia=None, pedido
                 "ok": False,
                 "franjas_de_entrega": franjas,
                 "nota": (
-                    f"'{franja_txt}' no es una de las franjas del negocio (y una hora suelta "
-                    "tampoco lo es: la hora exacta la confirma la dueña según su ruta). Ofrécele "
-                    "al cliente SOLO estas franjas, tal cual, y vuelve a llamarme con la que "
-                    "elija: " + " · ".join(franjas)
+                    f"'{franja_txt}' no cae en ninguna franja del negocio (si dijo una hora, "
+                    "queda fuera de todas). Dile con naturalidad en qué momentos se entrega — "
+                    "SIN usar la palabra 'franja', que es nuestra: di 'en la mañana o en la "
+                    "tarde' — y vuelve a llamarme con la que elija: " + " · ".join(franjas)
+                    + ". La hora exacta la confirma la dueña según su ruta."
                 ),
             }
         pedido.entrega_franja = elegida
@@ -2589,8 +2645,10 @@ async def anotar_entrega(session, telefono, franja=None, referencia=None, pedido
         nota += " Todavía falta " + " y ".join(falta) + ": pídelo con naturalidad, de a poco."
     else:
         nota += (
-            " La entrega quedó completa. Díselo con tus palabras y aclárale que la hora exacta "
-            "se la confirma la dueña (según su ruta). NO prometas una hora."
+            " La entrega quedó completa. Díselo con tus palabras (sin la palabra 'franja': di "
+            "'en la mañana' o 'en la tarde') y aclárale que la hora exacta se la confirma la "
+            "dueña según su ruta. NO prometas una hora. Si el cliente dijo una hora que cae "
+            "dentro, confírmale el momento ('perfecto, en la mañana entonces'), no lo corrijas."
         )
     # ⚠️ La referencia NO se devuelve aquí (texto libre del cliente): en el pedido y en el panel
     # está; al modelo le basta saber que quedó guardada.
