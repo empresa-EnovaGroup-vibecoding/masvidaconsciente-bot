@@ -43,16 +43,23 @@ def test_sin_rellenos_en_la_descripcion_no_inventa_nada():
     assert _opciones_en_descripcion("   ") is None
 
 
-def test_la_ficha_del_catalogo_usa_el_rescate_cuando_sabores_esta_vacio():
-    """Contrato de fuente: la ficha inline pinta `v.sabores or rescate` en las DOS ramas (un
-    tamaño / varios tamaños), y la etiqueta le dice al modelo para qué es."""
+def test_la_ficha_del_catalogo_pone_las_opciones_en_la_linea_VISIBLE():
+    """Contrato de fuente — y la CUARTA medición del mismo bug lo exige: la primera versión metió
+    las opciones dentro de "[SOLO PARA TI, NO lo digas salvo que lo pregunten]" y el modelo obedeció
+    el rótulo: tenía los rellenos delante y no los dijo. Las opciones para ELEGIR van en la
+    cabecera visible del producto; la línea interna sigue siendo solo precio/ficha."""
     src = inspect.getsource(sp._catalogo_bloque)
     assert "_opciones_en_descripcion(p.descripcion)" in src
-    assert src.count("v.sabores or rescate") >= 3
-    assert "para elegir (nómbralos al preguntar)" in src
+    assert 'cab += f" — para elegir (nómbralas al preguntar): {opciones_visibles}"' in src
+    i_visible = src.index("para elegir (nómbralas al preguntar)")
+    i_interno = src.index("[SOLO PARA TI, NO lo digas salvo que lo pregunten]")
+    assert i_visible < i_interno, "las opciones se escriben ANTES (fuera) de la línea interna"
+    assert "sabores/rellenos para elegir" not in src, "ya no viven dentro de la línea interna"
+    # y sigue habiendo rescate desde la descripción cuando `sabores` está vacío
+    assert 'opciones_visibles = " / ".join(_sabores_vs) or rescate' in src
 
 
 def test_la_regla_del_prompt_manda_a_consultar_antes_de_preguntar_a_ciegas():
     reglas = sp._REGLAS
     assert "jamás preguntes \"de cuál\" a ciegas" in reglas
-    assert "sabores/rellenos para elegir" in reglas
+    assert "para elegir" in reglas
