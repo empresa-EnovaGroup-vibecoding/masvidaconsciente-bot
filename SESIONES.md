@@ -59,7 +59,16 @@ deja pasar: "Titular: Whuiliany Zabala" incluida), la voz (se salta en CI) y `CL
 Ajustados `test_dia_imposible` y `test_metodo_de_pago_elegido`, que fijaban la palabra. Lo único
 que sigue nombrando a Whuilianny: R130 (2 veces, para "¿eres Whuilianny?") y el titular del pago.
 
-**Pendientes:** fusionar → pruebas → Maired conversa → prod (con el próximo lote) · 3 fotos rotas
+**Cierre (20:05 VET):** #48, #49 (nota de `pedir_ayuda` por motivo: con `pide_persona` puede nombrar a
+Whuilianny — su nombre sí, ningún cargo) y #50 ("Restaurar original" del panel devolvía *"Eres
+Whuilianny Zabala… la asistente de Whuilianny"*: ahora Alejandra) fusionados; pruebas y PRODUCCIÓN en
+`b48d2e8`, 27/27 en ambos. Probado por el simulador y por Maired: a "¿qué pasó con Whuilianny?" el bot
+se presenta como Alejandra y sigue (no explica); a "¿puedo hablar con ella?" / "ya no atiende, yo
+siempre le compro a ella" → *"Whuilianny te escribe en un momento"* + relevo, y calla después. Maired
+lo dio por bueno; queda anotado que a la primera pregunta le saca el cuerpo (opción futura: una línea
+en la voz para "cliente que pregunta por Whuilianny").
+
+**Pendientes:** 3 fotos rotas
 en pruebas (balde compartido) · separar balde · Whuilianny: franjas + clave del panel · leer las
 conversaciones de los 3 clientes cada día · adelgazar el prompt (~71k chars).
 

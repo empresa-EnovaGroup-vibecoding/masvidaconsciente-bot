@@ -77,7 +77,17 @@ y salud, memoria que no se olvida a las 24h, y 8 migraciones nuevas (hasta la 03
 > sin tocar. Queda pedir un video real de Tortas keto: el archivo ya es compatible, pero su
 > contenido sigue siendo un solo cuadro con audio. ✅ **Producción alcanzó todo esto el 5-sep.**
 
-## Última verificación: **2026-09-07 (~19:05 VET) — 🚀 PRODUCCIÓN PROMOVIDA: LOS DOS ENTORNOS EN master `27f50ac` + panel `60f8b4d` · voz nueva · sabores · lista blanca con 3 clientes**
+## Última verificación: **2026-09-07 (~20:05 VET) — 🚀 SEGUNDO LOTE EN PRODUCCIÓN: LOS DOS ENTORNOS EN master `b48d2e8` (la dueña en silencio · relevo por nombre · "Restaurar original" = Alejandra)**
+
+> ✅ Tras el OK de Maired en pruebas ("¿Whuilianny ya no atiende? Yo siempre le compro a ella" →
+> *"Whuilianny te escribe en un momento"* + relevo, y el bot calló después): `workflow_dispatch
+> destino=produccion` (run 34171705956, verde) → bot y worker en `b48d2e8` · `/salud` ok · 39
+> migraciones · **27/27 bancos** (`/root/bancos_lote2_7sep.log`) · prompt vivo con **0 "dueña"** en
+> reglas, dinámico y herramientas · "Restaurar original" del panel = "Eres Alejandra, la asesora…".
+> Panel sin cambios (`60f8b4d`); personalidad (md5 `a9aaafe61353`) y sabores ya estaban.
+> PRUEBAS en el mismo `b48d2e8` (27/27). Detalle: SESIONES (29).
+
+## Verificación anterior: **2026-09-07 (~19:05 VET) — 🚀 PRODUCCIÓN PROMOVIDA: LOS DOS ENTORNOS EN master `27f50ac` + panel `60f8b4d` · voz nueva · sabores · lista blanca con 3 clientes**
 
 > ✅ **Liturgia completa (SESIONES (29)):** respaldo `pg_dump` en netcup
 > (`/root/respaldos-pre-promocion/db_20260907_224159.sql.gz`, 3,9 MB, 19 tablas) + personalidad
