@@ -12,7 +12,7 @@ import httpx
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, StringConstraints
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, exists, func, select, update
 from sqlalchemy.exc import IntegrityError
 
 from app.api.security import (
@@ -1839,7 +1839,18 @@ async def listar_conversaciones(
             .correlate(Cliente)
             .scalar_subquery()
         )
-        consulta = select(Cliente, ultimo_texto.label("ultimo_mensaje"))
+        # Un cliente puede seguir existiendo en el CRM aunque borres su chat. En
+        # Conversaciones debe aparecer solo si aún hay mensajes que leer; así "Borrar" lo
+        # quita realmente de esta pantalla sin borrar pedidos, pagos ni su ficha de cliente.
+        tiene_mensajes = exists(
+            select(Mensaje.id).where(Mensaje.cliente_telefono == Cliente.telefono)
+        )
+        consulta = select(Cliente, ultimo_texto.label("ultimo_mensaje")).where(
+            tiene_mensajes,
+            # El simulador se usa desde "Mi Bot" y no es una persona: nunca debe mezclarse
+            # con los clientes reales ni hacer parecer que el botón Borrar falló.
+            Cliente.telefono.not_like(SIMULADOR + "%"),
+        )
 
         termino = (q or "").strip()
         if termino:
@@ -1898,6 +1909,9 @@ async def resumen_conversaciones(_: str = Depends(usuario_actual)):
     PARA SIEMPRE y nadie se entera (la pausa no caduca, por decisión de Maired)."""
     factory = get_session_factory()
     async with factory() as session:
+        tiene_mensajes = exists(
+            select(Mensaje.id).where(Mensaje.cliente_telefono == Cliente.telefono)
+        )
         fila = (
             await session.execute(
                 select(
@@ -1917,7 +1931,12 @@ async def resumen_conversaciones(_: str = Depends(usuario_actual)):
                     .filter(Cliente.bot_pausado.is_(False), Cliente.privado.is_(False))
                     .label("bot"),
                     func.count().filter(Cliente.privado.is_(True)).label("privados"),
-                ).select_from(Cliente)
+                )
+                .select_from(Cliente)
+                .where(
+                    tiene_mensajes,
+                    Cliente.telefono.not_like(SIMULADOR + "%"),
+                )
             )
         ).one()
     return {
