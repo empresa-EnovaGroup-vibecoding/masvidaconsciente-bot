@@ -7,6 +7,7 @@ Patrón tomado del sistema de referencia (clínica), simplificado:
 - lock: que solo un worker procese el buffer de un cliente a la vez
 """
 import json
+import logging
 import time
 from datetime import UTC, datetime
 from functools import lru_cache
@@ -16,11 +17,50 @@ import redis.asyncio as redis
 from app.config import get_settings
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
+
+# Canal liviano que despierta al panel cuando cambia un chat. API y worker viven en
+# contenedores distintos, por eso un EventEmitter en memoria no alcanzaría: Redis ya es el bus
+# compartido del proyecto y evita que el navegador pregunte cada tres segundos aunque no pase nada.
+CANAL_CONVERSACIONES = "eventos:conversaciones"
 
 
 @lru_cache
 def _client() -> redis.Redis:
     return redis.from_url(settings.redis_url, decode_responses=True)
+
+
+async def notificar_conversacion(telefono: str, motivo: str = "actualizada") -> None:
+    """Despierta los paneles conectados sin poner en riesgo el flujo de WhatsApp.
+
+    La notificación es deliberadamente *best effort*: Postgres es la verdad. Si Redis está
+    reiniciando, el mensaje ya quedó guardado y el panel lo recupera al reconectarse o al volver
+    a enfocarse; nunca se debe deshacer una venta porque falló un refresco visual.
+    """
+    try:
+        await _client().publish(
+            CANAL_CONVERSACIONES,
+            json.dumps({"telefono": telefono, "motivo": motivo}, ensure_ascii=False),
+        )
+    except Exception:  # noqa: BLE001 — una notificación visual jamás tumba el flujo principal
+        logger.warning("No se pudo avisar al panel del cambio en %s", telefono, exc_info=True)
+
+
+async def escuchar_conversaciones():
+    """Entrega eventos Redis y un latido periódico para una conexión SSE.
+
+    `None` significa latido: mantiene vivas las conexiones de proxies sin obligar al navegador
+    a descargar otra vez la lista, el hilo y sus archivos.
+    """
+    pubsub = _client().pubsub()
+    await pubsub.subscribe(CANAL_CONVERSACIONES)
+    try:
+        while True:
+            mensaje = await pubsub.get_message(ignore_subscribe_messages=True, timeout=20.0)
+            yield mensaje["data"] if mensaje else None
+    finally:
+        await pubsub.unsubscribe(CANAL_CONVERSACIONES)
+        await pubsub.aclose()
 
 
 def _ahora() -> float:

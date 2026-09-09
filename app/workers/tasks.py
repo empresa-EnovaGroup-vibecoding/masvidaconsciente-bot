@@ -206,6 +206,7 @@ async def _guardar_en_panel(
             await session.commit()
 
     if await _escribir_en_panel(_escribir, telefono, "la conversación"):
+        await rc.notificar_conversacion(telefono, "mensajes")
         return True
     await _hueco_en_el_panel(telefono, texto_usuario, [p.get("texto") for p in partes])
     return False
@@ -596,6 +597,7 @@ async def _guardar_entrante(telefono: str, nombre: str | None, texto: str) -> bo
             await session.commit()
 
     if await _escribir_en_panel(_escribir, telefono, "el mensaje entrante"):
+        await rc.notificar_conversacion(telefono, "mensaje_entrante")
         return True
     await _hueco_en_el_panel(telefono, texto, [])
     return False
