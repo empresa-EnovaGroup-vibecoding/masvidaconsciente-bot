@@ -499,6 +499,7 @@ async def _procesar_eco(eco) -> str:
         await rc.set_cache(f"cache:eco:{wa_id}", "1", 86400)
     except Exception:  # noqa: BLE001 — sin candado se repite el trabajo, no el efecto
         logger.warning("No se pudo marcar el eco %s como procesado", wa_id)
+    await rc.notificar_conversacion(telefono, "atencion_humana")
     return "eco"
 
 

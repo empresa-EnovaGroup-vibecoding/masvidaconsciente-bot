@@ -9,7 +9,7 @@ from typing import Annotated
 from uuid import uuid4
 
 import httpx
-from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, StringConstraints
 from sqlalchemy import delete, func, select, update
@@ -44,6 +44,7 @@ from app.models import (
     inicio_dia_venezuela,
     now_utc,
 )
+from app.services import redis_client as rc
 from app.services.db import get_session_factory
 from app.services.redis_client import borrar_memoria
 
@@ -213,6 +214,10 @@ class BotEstadoIn(BaseModel):
 
 class PausaIn(BaseModel):
     pausado: bool
+
+
+class TelefonosIn(BaseModel):
+    telefonos: list[str]
 
 
 class PrivadoIn(BaseModel):
@@ -1810,45 +1815,80 @@ async def guardar_mensajes(datos: MensajesIn, _: str = Depends(usuario_actual)):
 # ─── Conversaciones ──────────────────────────────────────────────────
 
 @router.get("/conversaciones")
-async def listar_conversaciones(_: str = Depends(usuario_actual)):
-    """Lista de clientes con su último mensaje."""
+async def listar_conversaciones(
+    q: Annotated[str | None, Query(max_length=100)] = None,
+    filtro: Annotated[
+        str,
+        Query(pattern="^(todos|no_leidos|bot|mios|ayuda|privados)$"),
+    ] = "todos",
+    _: str = Depends(usuario_actual),
+):
+    """Busca conversaciones en toda la base y devuelve las 200 más recientes del resultado.
+
+    Antes el panel descargaba solo las últimas 100 y buscarlas en el navegador habría sido una
+    ilusión: un cliente antiguo nunca aparecía. La búsqueda vive aquí para encontrar de verdad
+    por nombre o teléfono, aunque el chat tenga meses.
+    """
     factory = get_session_factory()
     async with factory() as session:
-        clientes = (
+        ultimo_texto = (
+            select(Mensaje.contenido)
+            .where(Mensaje.cliente_telefono == Cliente.telefono)
+            .order_by(Mensaje.created_at.desc())
+            .limit(1)
+            .correlate(Cliente)
+            .scalar_subquery()
+        )
+        consulta = select(Cliente, ultimo_texto.label("ultimo_mensaje"))
+
+        termino = (q or "").strip()
+        if termino:
+            digitos = "".join(c for c in termino if c.isdigit())
+            condiciones = [Cliente.nombre.ilike(f"%{termino}%")]
+            if digitos:
+                condiciones.append(Cliente.telefono.contains(digitos))
+            from sqlalchemy import or_
+
+            consulta = consulta.where(or_(*condiciones))
+
+        if filtro == "no_leidos":
+            consulta = consulta.where(Cliente.no_leidos > 0)
+        elif filtro == "bot":
+            consulta = consulta.where(
+                Cliente.bot_pausado.is_(False), Cliente.privado.is_(False)
+            )
+        elif filtro == "mios":
+            consulta = consulta.where(
+                Cliente.bot_pausado.is_(True),
+                Cliente.pausado_por == "dueña",
+                Cliente.privado.is_(False),
+            )
+        elif filtro == "ayuda":
+            consulta = consulta.where(
+                Cliente.bot_pausado.is_(True), Cliente.pausado_por == "bot"
+            )
+        elif filtro == "privados":
+            consulta = consulta.where(Cliente.privado.is_(True))
+
+        filas = (
             await session.execute(
-                select(Cliente).order_by(Cliente.ultima_interaccion.desc()).limit(100)
+                consulta.order_by(Cliente.ultima_interaccion.desc()).limit(200)
             )
-        ).scalars().all()
-        resultado = []
-        for c in clientes:
-            ultimo = (
-                await session.execute(
-                    select(Mensaje)
-                    .where(Mensaje.cliente_telefono == c.telefono)
-                    .order_by(Mensaje.created_at.desc())
-                    .limit(1)
-                )
-            ).scalar_one_or_none()
-            resultado.append(
-                {
-                    "telefono": c.telefono,
-                    "nombre": c.nombre,
-                    # Un chat que la dueña ABRIÓ desde su celular todavía no tiene mensajes
-                    # nuestros: antes se descartaba (`continue`) y el chat NO APARECÍA en el
-                    # panel — ella no podía seguirlo desde aquí.
-                    "ultimo_mensaje": ultimo.contenido if ultimo else None,
-                    "ultima_interaccion": c.ultima_interaccion.isoformat(),
-                    "bot_pausado": c.bot_pausado,
-                    "pausado_por": c.pausado_por,  # 'dueña' = lo tomaste tú
-                    "no_leidos": c.no_leidos,
-                    # CONTACTO PRIVADO (031): el panel lo pinta con su etiqueta en la lista, para
-                    # que se vea de un vistazo cuáles NO son clientes. No se ocultan de la lista a
-                    # propósito: si se escondieran, un chat marcado por error sería IMPOSIBLE de
-                    # desmarcar desde el panel.
-                    "privado": c.privado,
-                }
-            )
-    return resultado
+        ).all()
+
+    return [
+        {
+            "telefono": c.telefono,
+            "nombre": c.nombre,
+            "ultimo_mensaje": ultimo,
+            "ultima_interaccion": c.ultima_interaccion.isoformat(),
+            "bot_pausado": c.bot_pausado,
+            "pausado_por": c.pausado_por,
+            "no_leidos": c.no_leidos,
+            "privado": c.privado,
+        }
+        for c, ultimo in filas
+    ]
 
 
 @router.get("/conversaciones-resumen")
@@ -1858,19 +1898,205 @@ async def resumen_conversaciones(_: str = Depends(usuario_actual)):
     PARA SIEMPRE y nadie se entera (la pausa no caduca, por decisión de Maired)."""
     factory = get_session_factory()
     async with factory() as session:
-        n = (
+        fila = (
             await session.execute(
-                select(func.count())
-                .select_from(Cliente)
-                .where(Cliente.bot_pausado.is_(True), Cliente.pausado_por == "dueña")
+                select(
+                    func.count().label("total"),
+                    func.count().filter(Cliente.no_leidos > 0).label("sin_leer"),
+                    func.count()
+                    .filter(
+                        Cliente.bot_pausado.is_(True),
+                        Cliente.pausado_por == "dueña",
+                        Cliente.privado.is_(False),
+                    )
+                    .label("tomados"),
+                    func.count()
+                    .filter(Cliente.bot_pausado.is_(True), Cliente.pausado_por == "bot")
+                    .label("ayuda"),
+                    func.count()
+                    .filter(Cliente.bot_pausado.is_(False), Cliente.privado.is_(False))
+                    .label("bot"),
+                    func.count().filter(Cliente.privado.is_(True)).label("privados"),
+                ).select_from(Cliente)
             )
-        ).scalar_one()
-        sin_leer = (
-            await session.execute(
-                select(func.count()).select_from(Cliente).where(Cliente.no_leidos > 0)
+        ).one()
+    return {
+        "chats_total": int(fila.total),
+        "chats_tomados": int(fila.tomados),
+        "chats_sin_leer": int(fila.sin_leer),
+        "bot_activo": int(fila.bot),
+        "bot_pide_ayuda": int(fila.ayuda),
+        "privados": int(fila.privados),
+    }
+
+
+@router.get("/conversaciones-eventos")
+async def eventos_conversaciones(request: Request, _: str = Depends(usuario_actual)):
+    """Una conexión SSE reemplaza las cuatro peticiones que el panel hacía cada tres segundos."""
+
+    async def _eventos():
+        yield "event: listo\ndata: {}\n\n"
+        async for dato in rc.escuchar_conversaciones():
+            if await request.is_disconnected():
+                break
+            if dato is None:
+                yield ": latido\n\n"
+            else:
+                yield f"event: cambio\ndata: {dato}\n\n"
+
+    return StreamingResponse(
+        _eventos(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+def _normalizar_numero_lista(valor: str) -> str:
+    """La lista acepta formato humano, pero guarda solo dígitos y exige un número completo."""
+    digitos = "".join(c for c in (valor or "") if c.isdigit())
+    if not 10 <= len(digitos) <= 15:
+        raise ValueError(f"{valor!r} no parece un WhatsApp completo (10 a 15 dígitos)")
+    return digitos
+
+
+def _cola_numero(valor: str) -> str:
+    digitos = "".join(c for c in (valor or "") if c.isdigit())
+    return digitos[-10:]
+
+
+def _estado_numero_lista(cliente: Cliente | None) -> str:
+    if cliente is None:
+        return "esperando_primer_mensaje"
+    if cliente.privado:
+        return "privado"
+    if cliente.bot_pausado and cliente.pausado_por == "bot":
+        return "bot_pide_ayuda"
+    if cliente.bot_pausado:
+        return "atendido_por_ti"
+    return "bot_listo"
+
+
+async def _respuesta_lista_blanca(session) -> dict:
+    settings = get_settings()
+    fila = await session.get(Configuracion, "numeros_permitidos_extra")
+    extra_crudo = (fila.valor if fila else "") or ""
+    abierta = extra_crudo.strip().lower() == "todos"
+
+    def _partes(crudo: str) -> list[str]:
+        return [p.strip() for p in crudo.replace("\n", ",").split(",") if p.strip()]
+
+    fijos = _partes(settings.numeros_permitidos or "")
+    extras = [] if abierta else _partes(extra_crudo)
+    unicos: dict[str, tuple[str, str]] = {}
+    for origen, numeros in (("fijo", fijos), ("extra", extras)):
+        for numero in numeros:
+            try:
+                limpio = _normalizar_numero_lista(numero)
+            except ValueError:
+                continue
+            unicos.setdefault(_cola_numero(limpio), (limpio, origen))
+
+    clientes: dict[str, Cliente] = {}
+    if unicos:
+        condiciones = [Cliente.telefono.endswith(cola) for cola in unicos]
+        from sqlalchemy import or_
+
+        encontrados = (
+            await session.execute(select(Cliente).where(or_(*condiciones)))
+        ).scalars().all()
+        clientes = {_cola_numero(c.telefono): c for c in encontrados}
+
+    return {
+        "abierta_a_todos": abierta,
+        "numeros_fijos": fijos,
+        "numeros_extra": extras,
+        "clientes": [
+            {
+                "telefono": (clientes.get(cola).telefono if clientes.get(cola) else numero),
+                "nombre": clientes.get(cola).nombre if clientes.get(cola) else None,
+                "origen": origen,
+                "estado": _estado_numero_lista(clientes.get(cola)),
+            }
+            for cola, (numero, origen) in unicos.items()
+        ],
+    }
+
+
+@router.get("/lista-blanca")
+async def obtener_lista_blanca(_: str = Depends(usuario_actual)):
+    factory = get_session_factory()
+    async with factory() as session:
+        return await _respuesta_lista_blanca(session)
+
+
+@router.put("/lista-blanca")
+async def guardar_lista_blanca(datos: TelefonosIn, _: str = Depends(usuario_actual)):
+    """Reemplaza solo la parte editable; la lista fija del servidor queda intacta."""
+    if len(datos.telefonos) > 100:
+        raise HTTPException(status_code=400, detail="La lista admite hasta 100 números")
+    try:
+        numeros = [_normalizar_numero_lista(n) for n in datos.telefonos if n.strip()]
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    # El matcher real trabaja por los últimos 10 dígitos; deduplicar con la misma regla evita
+    # guardar dos veces +58 412… y 0412… como si fueran personas distintas.
+    unicos: dict[str, str] = {}
+    for numero in numeros:
+        unicos.setdefault(_cola_numero(numero), numero)
+
+    factory = get_session_factory()
+    async with factory() as session:
+        fila = await session.get(Configuracion, "numeros_permitidos_extra")
+        valor = ",".join(unicos.values())
+        if fila is None:
+            session.add(
+                Configuracion(
+                    clave="numeros_permitidos_extra", valor=valor, updated_at=now_utc()
+                )
             )
-        ).scalar_one()
-    return {"chats_tomados": int(n), "chats_sin_leer": int(sin_leer)}
+        else:
+            fila.valor = valor
+            fila.updated_at = now_utc()
+        await session.commit()
+        respuesta = await _respuesta_lista_blanca(session)
+    await rc.notificar_conversacion("", "lista_blanca")
+    return respuesta
+
+
+@router.put("/clientes-pausa-lote")
+async def devolver_clientes_al_bot(datos: TelefonosIn, _: str = Depends(usuario_actual)):
+    """Devuelve únicamente los chats elegidos; jamás toca todos los chats en bloque."""
+    telefonos = list(dict.fromkeys(t.strip() for t in datos.telefonos if t.strip()))
+    if not telefonos or len(telefonos) > 100:
+        raise HTTPException(status_code=400, detail="Elige entre 1 y 100 chats")
+
+    factory = get_session_factory()
+    async with factory() as session:
+        clientes = (
+            await session.execute(select(Cliente).where(Cliente.telefono.in_(telefonos)))
+        ).scalars().all()
+        reactivados: list[tuple[str, str | None, str | None]] = []
+        for cliente in clientes:
+            if cliente.privado or not cliente.bot_pausado or cliente.pausado_por != "dueña":
+                continue
+            reactivados.append((cliente.telefono, cliente.nombre, cliente.pausado_por))
+            cliente.bot_pausado = False
+            cliente.pausado_por = None
+        await session.commit()
+
+    for telefono, nombre, firma in reactivados:
+        await rc.notificar_conversacion(telefono, "devuelto_al_bot")
+        _disparar_retomar(telefono, nombre, firma)
+    return {
+        "ok": True,
+        "reactivados": [telefono for telefono, _, _ in reactivados],
+        "omitidos": [t for t in telefonos if t not in {r[0] for r in reactivados}],
+    }
 
 
 @router.get("/conversaciones/{telefono}")
@@ -1996,6 +2222,7 @@ async def marcar_leido(telefono: str, _: str = Depends(usuario_actual)):
             raise HTTPException(status_code=404, detail="Cliente no encontrado")
         cliente.no_leidos = 0
         await session.commit()
+    await rc.notificar_conversacion(telefono, "leido")
     return {"ok": True}
 
 
@@ -2107,6 +2334,7 @@ async def responder_como_dueña(
                 tipo="text", estado="fallido", error=str(exc)[:400],
             ))
             await session.commit()
+            await rc.notificar_conversacion(telefono, "envio_fallido")
             raise HTTPException(
                 status_code=502, detail=f"WhatsApp no aceptó el mensaje: {exc}"
             ) from exc
@@ -2173,6 +2401,8 @@ async def responder_como_dueña(
 
         await session.commit()
 
+    await rc.notificar_conversacion(telefono, "atencion_humana")
+
     # 5) El bot hereda lo que ella prometió (si falla Redis, el mensaje YA se envió: no se
     #    revierte nada, solo se avisa en el log).
     try:
@@ -2197,6 +2427,7 @@ async def borrar_conversacion(telefono: str, _: str = Depends(usuario_actual)):
         )
         await session.commit()
     await borrar_memoria(telefono)
+    await rc.notificar_conversacion(telefono, "borrada")
     return {"ok": True}
 
 
@@ -2371,6 +2602,7 @@ async def pausar_bot_cliente(telefono: str, datos: PausaIn, _: str = Depends(usu
         cliente.pausado_por = "dueña" if datos.pausado else None
         nombre = cliente.nombre
         await session.commit()
+    await rc.notificar_conversacion(telefono, "pausa")
     if not datos.pausado:
         _disparar_retomar(telefono, nombre, firma_previa)
     return {"ok": True, "pausado": datos.pausado}
@@ -2409,6 +2641,7 @@ async def marcar_contacto_privado(
             raise HTTPException(status_code=404, detail="Cliente no encontrado")
         cliente.privado = datos.privado
         await session.commit()
+    await rc.notificar_conversacion(telefono, "privado")
     return {"ok": True, "privado": datos.privado}
 
 
