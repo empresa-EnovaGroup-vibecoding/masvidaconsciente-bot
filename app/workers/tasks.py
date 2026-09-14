@@ -883,13 +883,100 @@ _INSTRUCCION_RETOMAR = (
     "escribió y quedó SIN RESPONDER —puede ser más de un mensaje— y contéstale lo que pidió, "
     "retomando donde quedó. Incluye lo que pidió ANTES de que la dueña entrara si todavía está sin "
     "resolver: el cliente sigue esperando eso. "
-    "SIGUES SIENDO LA MISMA DE SIEMPRE: la asistente virtual del negocio. NO eres la dueña ni una "
-    "persona; si el cliente pide hablar con una persona, llama a `pedir_ayuda` (motivo "
-    "'pide_persona') como siempre. "
+    "SIGUES SIENDO LA MISMA DE SIEMPRE: Alejandra, la asesora del negocio. NO eres una persona; "
+    "si el cliente pide hablar con una persona, llama a `pedir_ayuda` (motivo 'pide_persona') "
+    "como siempre. "
     "No repitas lo que ya se dijo, no vuelvas a saludar ni a presentarte, y no menciones este "
     "aviso ni que estuviste ausente. Si te falta un dato, pídeselo al cliente o llama a la "
-    "herramienta que lo dé: jamás inventes un precio ni un monto."
+    "herramienta que lo dé: jamás inventes un precio ni un monto. "
+    "Y SI EN ESTE CHAT LA VENTA YA SE CERRÓ A MANO —alguien del negocio le dio un total, recibió "
+    "su comprobante o le confirmó la entrega— NO registres pedido, NO generes datos de pago y NO "
+    "vuelvas a cobrar: como máximo saluda y pregunta si necesita algo más."
 )
+
+
+# 🔇 QUÉ ES "PENDIENTE" Y QUÉ NO (13-sep-2026, el caso de Amanda — SESIONES (30)).
+# La regla vieja era "el último turno es del cliente ⇒ hay algo pendiente". Amanda escribió "Amén"
+# después de que la dueña, a mano, le diera el total ($64) y recibiera su comprobante. Maired devolvió
+# los chats en lote, el bot leyó "Amén" como pendiente, REABRIÓ la venta (registró otro producto, otro
+# total) y le pidió pagar de nuevo. La clienta: "creo que estás confundida de persona".
+#
+# Un acuse de recibo no es una pregunta. Aquí se decide en CÓDIGO (el prompt sugiere, el código
+# impide): el bloque final de mensajes del cliente se lee entero, y solo hay algo que retomar si
+# (a) el bot había escalado (su "te confirmo" es un pagaré), o (b) el último turno de la casa terminó
+# en pregunta (lo que el cliente contestó es la respuesta que esperábamos), o (c) algún mensaje del
+# bloque pide o pregunta algo. Puros "ok", "gracias", "amén", "listo", stickers ⇒ no hay nada.
+_ACUSES = frozenset({
+    "ok", "okay", "okey", "oki", "vale", "dale", "listo", "lista", "gracias", "grasias", "amen",
+    "bendiciones", "bueno", "buenisimo", "perfecto", "excelente", "genial", "super", "si", "sii",
+    "va", "entendido", "de", "acuerdo", "esta", "bien", "mi", "reina", "cielo", "amor", "corazon",
+    "linda", "hermosa", "querida", "senora", "sra", "seno", "ya", "claro", "chevere", "fino",
+    "muchas", "mil", "gracia", "ah", "aja", "jeje", "jaja", "ojala", "dios", "te", "bendiga",
+    "igualmente", "feliz", "dia", "dias", "tarde", "tardes", "noche", "noches", "buenas", "buenos",
+    "hola", "saludos", "abrazo", "besos", "cuidate", "chao", "adios", "hasta", "luego",
+})
+_PIDE_ALGO = (
+    "quiero", "quisiera", "dame", "mandame", "envia", "cuanto", "cuando", "donde", "como", "precio",
+    "tienes", "tiene", "hay", "puedo", "puede", "pedido", "pedir", "encarg", "necesito", "falta",
+    "pago", "pague", "transfer", "zelle", "binance", "efectivo", "deliver", "envio", "retir",
+    "hora", "fecha", "manana", "lunes", "martes", "miercoles", "jueves", "viernes", "sabado",
+    "domingo", "que", "porque", "por que", "no entiendo", "confund",
+)
+
+
+def _normalizar_acuse(texto: str) -> str:
+    import unicodedata
+
+    t = unicodedata.normalize("NFKD", (texto or "").lower())
+    t = "".join(c for c in t if not unicodedata.combining(c))
+    return "".join(c if c.isalnum() or c.isspace() else " " for c in t)
+
+
+def _es_acuse(texto: str) -> bool:
+    """True si el mensaje es SOLO un acuse de recibo (o un sticker/imagen sin texto): nada que
+    contestar. Cualquier signo de pregunta, cualquier verbo de pedir, o más de 5 palabras ⇒ False."""
+    crudo = texto or ""
+    if "?" in crudo or "¿" in crudo:
+        return False
+    if crudo.strip().startswith("(") and crudo.strip().endswith(")"):
+        return True  # "(comprobante)", "(sticker)", "(el cliente envió su ubicación…)" → no es pregunta
+    t = _normalizar_acuse(crudo)
+    palabras = t.split()
+    if not palabras:
+        return True
+    if len(palabras) > 5:
+        return False
+    if any(p in t for p in _PIDE_ALGO):
+        return False
+    return all(p in _ACUSES or p.isdigit() for p in palabras)
+
+
+def _hay_pendiente(historial: list, pausado_por: str | None) -> bool:
+    """¿Quedó el cliente ESPERANDO algo? Decide si `_retomar` puede abrir la boca.
+
+    - El bot había escalado (`pausado_por == 'bot'`) ⇒ True: su "te lo confirmo" es un pagaré.
+    - Historial vacío o el último turno no es del cliente ⇒ False (la casa habló última).
+    - El último turno de la casa terminó en pregunta ⇒ True (la respuesta del cliente es lo que
+      esperábamos, aunque sea "más al centro").
+    - Algún mensaje del bloque final del cliente pide o pregunta algo ⇒ True.
+    - El bloque final son solo acuses ("ok", "gracias", "amén", una foto) ⇒ False. Aquí cae el caso
+      de Amanda: la dueña cerró la venta a mano y el cliente solo dijo "Amén".
+    """
+    if pausado_por == "bot":
+        return True
+    if not historial or historial[-1].get("role") != "user":
+        return False
+    bloque: list[str] = []
+    ultimo_de_la_casa = ""
+    for turno in reversed(historial):
+        if turno.get("role") == "user":
+            bloque.append(str(turno.get("content") or ""))
+            continue
+        ultimo_de_la_casa = str(turno.get("content") or "")
+        break
+    if ultimo_de_la_casa.rstrip().endswith("?"):
+        return True
+    return not all(_es_acuse(m) for m in bloque)
 
 # El caso ESTRELLA: el bot escaló (no sabía el precio del día), la dueña lo cargó y le devolvió el
 # chat. Lo que le faltaba YA ESTÁ en el sistema — pero solo lo verá si vuelve a preguntárselo a la
@@ -1044,9 +1131,13 @@ async def _retomar(telefono: str, nombre: str | None, pausado_por: str | None = 
         # —lo que Meta prohíbe sin aprobación humana— y encima le hablaría encima.
         if not historial:
             return
-        if historial[-1].get("role") != "user" and not venia_de_escalada:
+        # 13-sep-2026 (Amanda): "pendiente" ya no es "el último turno es del cliente". Un "Amén"
+        # después de que la dueña cerró la venta a mano NO es una pregunta, y retomar ahí reabría la
+        # venta y volvía a cobrar. Ver `_hay_pendiente`.
+        if not _hay_pendiente(historial, pausado_por):
             logger.info(
-                "Retomar %s: no hay nada pendiente (el último turno no es del cliente)", telefono
+                "Retomar %s: no hay nada pendiente (la casa habló última, o el cliente solo acusó "
+                "recibo)", telefono,
             )
             return
 
