@@ -24,6 +24,65 @@
 
 ---
 
+## 2026-09-13 (30) — 🔇 RETOMAR NO REABRE VENTAS CERRADAS · el 402 que dejó producción en GPT-4.1 · el plan "modelo más barato sin adivinar"
+
+**Lo que encontró la revisión del 12-sep (Maired: "hice cambios con ChatGPT, revisa dónde estamos"):**
+producción corría `176d0de` (PRs #52/#53 desplegados directo a prod el 9-sep, sin pasar por pruebas —
+pruebas se puso al día a `176d0de` el 12-sep). Y **el bot llevaba 5 días sin contestar a NADIE en
+producción**: 0 mensajes `assistant`, 0 pedidos. No era un bug: 308 de 322 clientes estaban
+`bot_pausado=true, pausado_por='dueña'` porque Whuilianny sigue contestando desde su celular
+(coexistencia → eco → pausa que no caduca), incluidos los números piloto. La lista blanca se corrigió
+(Rosi era `584128633913`, no `…363931`) y se amplió a 7 por `PUT /api/lista-blanca`. Detalle en la
+memoria de la sesión y en ESTADO.
+
+**13-sep 07:51 VET — el 402.** Con $1.59 de saldo, OpenRouter rechazó a Sonnet (402: no alcanza para
+una llamada de 25k tokens) y `_llamar_con_fallback` cayó EN SILENCIO a `OPENROUTER_MODEL_FALLBACK =
+openai/gpt-4.1`: sin caché Anthropic, $0.040/turno (3× Sonnet cacheado) durante toda la mañana.
+Además el id configurado `~anthropic/claude-sonnet-latest` es un ALIAS que se mueve: el 12 resolvía
+a sonnet-4.6, el 13 a sonnet-5. **Etapa 1 hecha (solo configuración):** `modelo_ia` =
+`anthropic/claude-sonnet-4.6` exacto (puente mientras se mide); `OPENROUTER_MODEL_FALLBACK` =
+`anthropic/claude-haiku-4.5` en Coolify (bot+worker prod; misma familia, mismo caché; entra con este
+deploy); umbral de `/salud` $2 → $5 (aquí). Pendiente de Maired: llave de OpenRouter aparte para
+pruebas con tope $15.
+
+**El caso de Amanda (`584125198777`, 13-sep 07:52).** Maired devolvió chats al bot en lote. La dueña
+había cerrado esa venta A MANO la noche anterior ($64, comprobante recibido, "Dios te multiplique";
+la clienta: "Amén"). `_retomar` leyó "Amén" como pendiente ("el último turno es del cliente"),
+REABRIÓ la venta con GPT-4.1: registró Caldo de Huesos (era Caldo de Carne), $62 (eran $64), pidió
+referencia y volvió a cobrar. Clienta: *"Yo creo que estás confundida de persona"*. Whuilianny tuvo
+que pedir disculpas.
+
+**Qué cambia (este PR):**
+- `tasks.py`: `_hay_pendiente(historial, pausado_por)` decide en CÓDIGO si hay algo que retomar: el
+  bot escaló ⇒ sí; la casa habló última ⇒ no; la casa terminó preguntando ⇒ sí (la respuesta corta
+  del cliente es lo que esperábamos); algún mensaje del bloque final pide/pregunta ⇒ sí; el bloque
+  final son solo acuses ("ok", "gracias", "amén", "(comprobante)") ⇒ **no**. `_es_acuse` con listas
+  ADITIVAS (`_ACUSES`, `_PIDE_ALGO`), sin acentos.
+- `_INSTRUCCION_RETOMAR`: "Alejandra, la asesora" (decía "asistente virtual", contra R130) + "si la
+  venta ya se cerró a mano, NO registres, NO generes datos de pago, NO vuelvas a cobrar".
+- `router.py` `PUT /clientes-pausa-lote`: **silencioso** — despausa y avisa al panel, NO dispara
+  `_disparar_retomar`. El botón individual sigue retomando (la dueña acaba de leer ESE chat: su clic
+  es la aprobación humana que exige Meta). El lote es limpieza de bandeja sobre chats no releídos.
+- `salud.py`: `UMBRAL_SALDO_USD = 5.0`.
+- Tests: `tests/test_retomar_pendiente.py` (acuses vs pedidos; Amanda ⇒ `_pensar_y_enviar` no se
+  llama; pregunta pendiente ⇒ sí; pagaré del bot ⇒ sí; lote sin retomar y botón con retomar por
+  fuente; instrucción; umbral). Suite: 1.051 en verde, ruff 0.9.6.
+
+**El plan aprobado (13-sep) — "Alejandra igual, modelo más barato, sin adivinar"**
+(`~/.claude/plans/okay-pero-entonces-dime-crystalline-sprout.md`): 1) frenar la sangría (hecho);
+2) este PR; 3) MEDIR con `scripts/ensayo_closer.py` 6 modelos × 5 escenarios × 3 repeticiones en el
+contenedor de pruebas con la llave nueva (+ escenario "la dueña cerró a mano", + `tokens_cache`, juez
+fuera del set), regla escrita: 0 fallos duros, juez ≥ Sonnet − 0,5, ≤ 12 s/turno, más barato que
+Sonnet cacheado; 4) SOLO si ninguno barato pasa: modo DOS (Voz barata sin catálogo ni banco) y, al
+final y medido, adelgazar el prompt; 5) pruebas → UNA conversación de Maired → producción. Lo que dijo
+su amigo ("tool calling + prompt caching") ya está construido: 14 tools y caché 1h; lo que falta es
+que el caché vale solo para Anthropic (Gemini cachea solo; OpenAI casi nunca) y que 24k tokens de
+prompt hunden a los modelos baratos.
+
+**Pendientes:** Maired crea la llave de pruebas ($15) → etapa 3. Whuilianny: zona Este en prod, regla
+del delivery con Zelle (contradijo el #46 con María Luisa), devolver los 7 chats piloto. Datos:
+sabores de Empanadas de yuca/plátano faltan en prod.
+
 ## 2026-09-07 (29) — 🚀 PRODUCCIÓN PROMOVIDA (`27f50ac`) · lista blanca con 3 clientes · "LA DUEÑA" EN SILENCIO
 
 **Promoción (18:40-19:05 VET), la liturgia de ESTADO paso a paso.** Maired dio la orden ("vamos a

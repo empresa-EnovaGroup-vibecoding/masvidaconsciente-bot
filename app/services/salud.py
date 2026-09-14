@@ -95,7 +95,9 @@ _EXTERNO_SEGUNDOS = 300.0
 # holgadamente varios días de aviso — tiempo de sobra para que alguien entre a openrouter.ai y
 # recargue ANTES de que el primer cliente se quede sin respuesta. Bajarlo mucho sería llegar tarde;
 # subirlo mucho, cansar. Si algún día el gasto sube, sube este número.
-UMBRAL_SALDO_USD = 2.0
+# 13-sep-2026: con $1.59 de saldo OpenRouter devolvió 402 a Sonnet (25k tokens por turno) y el
+# bot cayó en silencio al respaldo durante toda una mañana. $2 avisaba tarde: ahora $5.
+UMBRAL_SALDO_USD = 5.0
 
 # 🔴 EL TESTIGO DEL 402, ESCRITO POR QUIEN LO SUFRE (2026-08-03).
 #

@@ -2089,7 +2089,17 @@ async def guardar_lista_blanca(datos: TelefonosIn, _: str = Depends(usuario_actu
 
 @router.put("/clientes-pausa-lote")
 async def devolver_clientes_al_bot(datos: TelefonosIn, _: str = Depends(usuario_actual)):
-    """Devuelve únicamente los chats elegidos; jamás toca todos los chats en bloque."""
+    """Devuelve únicamente los chats elegidos; jamás toca todos los chats en bloque.
+
+    🔇 EN SILENCIO (13-sep-2026, el caso de Amanda — SESIONES (30)). El botón individual retoma
+    (`pausar_bot_cliente` → `_disparar_retomar`): la dueña acaba de LEER ese chat y su clic es la
+    aprobación humana que exige Meta para un envío proactivo. El lote es otra cosa: limpieza de
+    bandeja sobre chats que ella no releyó uno por uno. El 13-sep devolvió varios de golpe y el
+    bot retomó una venta que ella había cerrado a mano la noche anterior: registró otro producto,
+    otro total, y le pidió pagar de nuevo a una clienta que ya había pagado. Por eso aquí SOLO se
+    despausa: Alejandra vuelve a hablar cuando la clienta escriba algo nuevo. El panel lo dice así:
+    "devolver varios de golpe no hace que el bot hable; lo deja listo para cuando la clienta
+    escriba"."""
     telefonos = list(dict.fromkeys(t.strip() for t in datos.telefonos if t.strip()))
     if not telefonos or len(telefonos) > 100:
         raise HTTPException(status_code=400, detail="Elige entre 1 y 100 chats")
@@ -2099,22 +2109,23 @@ async def devolver_clientes_al_bot(datos: TelefonosIn, _: str = Depends(usuario_
         clientes = (
             await session.execute(select(Cliente).where(Cliente.telefono.in_(telefonos)))
         ).scalars().all()
-        reactivados: list[tuple[str, str | None, str | None]] = []
+        reactivados: list[str] = []
         for cliente in clientes:
             if cliente.privado or not cliente.bot_pausado or cliente.pausado_por != "dueña":
                 continue
-            reactivados.append((cliente.telefono, cliente.nombre, cliente.pausado_por))
+            reactivados.append(cliente.telefono)
             cliente.bot_pausado = False
             cliente.pausado_por = None
         await session.commit()
 
-    for telefono, nombre, firma in reactivados:
+    for telefono in reactivados:
         await rc.notificar_conversacion(telefono, "devuelto_al_bot")
-        _disparar_retomar(telefono, nombre, firma)
+        # A propósito NO se llama a `_disparar_retomar` aquí (ver el docstring).
     return {
         "ok": True,
-        "reactivados": [telefono for telefono, _, _ in reactivados],
-        "omitidos": [t for t in telefonos if t not in {r[0] for r in reactivados}],
+        "silencioso": True,
+        "reactivados": reactivados,
+        "omitidos": [t for t in telefonos if t not in set(reactivados)],
     }
 
 

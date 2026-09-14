@@ -30,6 +30,12 @@ Las **FASES 0 a 3 ya están hechas y desplegadas**:
 
 ### 🚀 AHORA MISMO (6-sep noche): PROMOVER A PRODUCCIÓN LO QUE YA ESTÁ VERDE EN PRUEBAS
 
+> 🎯 **13-sep — PLAN VIGENTE: "Alejandra igual, modelo más barato, sin adivinar"** (SESIONES (30)).
+> Etapa 1 hecha (modelo exacto, respaldo Haiku, umbral $5). Etapa 2 = PR `retomar-no-reabre-ventas`.
+> Etapa 3 = medir 6 modelos con `scripts/ensayo_closer.py` en pruebas con llave propia (la crea Maired).
+> Etapa 4 solo si ninguno barato pasa (modo DOS → adelgazar prompt, medido). Etapa 5 = pruebas → una
+> conversación de Maired → prod. **No se toca el prompt ni el modelo de producción fuera de este plan.**
+
 > ✅ **HECHO el 7-sep (~19:05 VET): PRODUCCIÓN PROMOVIDA** — bot+worker `27f50ac`, panel `60f8b4d`, voz
 > nueva, sabores, 27/27 bancos, lista blanca con los 3 primeros clientes de Whuilianny (detalle: ESTADO →
 > Última verificación; SESIONES (29)). **Lo siguiente, en orden:** (1) soltar gradual: leer cada día las
