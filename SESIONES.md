@@ -24,6 +24,31 @@
 
 ---
 
+## 2026-09-15 (31) — AUTORÍA HUMANA · EVENTOS EN SILENCIO · AUDIO CON RELEVO
+
+**Por qué:** el levantamiento de conversaciones mostró tres fallos concretos. El historial guardaba
+los mensajes de Whuilianny como si los hubiera dicho Alejandra, por lo que el bot podía apropiarse
+de frases personales o reconstruir acuerdos manuales. Además respondía a `reaction`, `edit` y
+`revoke` como si fueran nuevas intenciones de compra. Por último, una avería de descarga o
+transcripción de audio terminaba diciendo repetidamente que la nota no se escuchó bien, sin separar
+un fallo técnico de un audio vacío.
+
+**Qué cambia:**
+- Los ecos humanos siguen usando el rol estándar `assistant` que exige el proveedor, pero llevan
+  una marca interna neutra (`MENSAJE HUMANO DEL NEGOCIO`) tanto en Redis como al rescatar desde
+  Postgres. La regla blindada conserva los acuerdos y prohíbe apropiarse de relaciones personales,
+  acciones físicas o cambiar/cobrar nuevamente una transacción humana si falta estado estructurado.
+- `reaction`, `edit` y `revoke` se guardan en el hilo con idempotencia y no muestran
+  “escribiendo…”, no llaman al modelo y no generan una respuesta que reabra la conversación.
+- Los fallos consecutivos de audio se cuentan durante 15 minutos. Una avería técnica avisa desde el
+  primer fallo; dos audios vacíos seguidos también abren relevo. El aviso queda en la bandeja y la
+  dueña recibe un WhatsApp con candado anti-repetición. Un audio entendido limpia la racha.
+- Pruebas nuevas en `tests/test_eventos_y_autoria.py` y ajuste de la regresión del respaldo de
+  memoria. Suite completa, ruff, `compileall` y `git diff --check`: verdes.
+
+**No cambia:** precios, descuentos, delivery, aprobación de pagos, catálogo ni despliegues. Queda
+pendiente que Maired/Whuilianny confirmen la regla comercial del envío antes de tocar el cobro.
+
 ## 2026-09-13 (30) — 🔇 RETOMAR NO REABRE VENTAS CERRADAS · el 402 que dejó producción en GPT-4.1 · el plan "modelo más barato sin adivinar"
 
 **Lo que encontró la revisión del 12-sep (Maired: "hice cambios con ChatGPT, revisa dónde estamos"):**

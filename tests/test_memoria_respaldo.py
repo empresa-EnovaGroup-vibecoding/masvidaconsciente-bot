@@ -136,12 +136,19 @@ async def test_sembrar_deja_lo_rescatado_en_redis(monkeypatch):
 
 async def test_el_eco_de_la_duena_entra_como_assistant(monkeypatch):
     """En Postgres el eco de la dueña es rol 'owner'; en Redis el bot lo HEREDA como 'assistant'
-    (una sola voz ante el cliente). El rescate tiene que hacer lo mismo: mandar 'owner' al LLM
-    sería un rol que no conoce, y omitirlo dejaría un hueco donde alguien sí habló."""
+    porque el proveedor no conoce `owner`, pero conserva una marca explícita de autoría. Sin esa
+    marca Alejandra puede asumir como propias la vida personal y las promesas de Whuilianny."""
     _falsear_postgres(monkeypatch, [("owner", "Te lo confirmo yo en un rato")])
     _falsear_redis(monkeypatch, [])
     hist = await mem.historial_con_respaldo(TEL)
-    assert hist == [{"role": "assistant", "content": "Te lo confirmo yo en un rato"}]
+    assert hist == [{
+        "role": "assistant",
+        "content": (
+            "[MENSAJE HUMANO DEL NEGOCIO AL CLIENTE]\n"
+            "Te lo confirmo yo en un rato\n"
+            "[FIN DEL MENSAJE HUMANO DEL NEGOCIO]"
+        ),
+    }]
 
 
 async def test_trae_los_ULTIMOS_no_los_primeros(monkeypatch):
