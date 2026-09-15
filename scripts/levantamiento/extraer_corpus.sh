@@ -18,11 +18,13 @@ SSH="ssh -i $HOME/.ssh/masvida_vps -o StrictHostKeyChecking=no -o ConnectTimeout
 PSQL="docker exec -i $PG psql -U postgres -d postgres -qtA"
 
 echo "→ mensajes.jsonl"
-$SSH "$PSQL" <<'SQL' > "$LEV/crudo/mensajes.jsonl"
--- SELECT plano, no COPY: COPY escapa barras y rompe el JSON al leerlo.
-SELECT row_to_json(m)::text FROM (SELECT id, cliente_telefono, rol, tipo, contenido, media_id, media_mime, created_at, wa_message_id FROM mensajes ORDER BY cliente_telefono, created_at, id) m;
-SQL
-echo "   $(wc -l < "$LEV/crudo/mensajes.jsonl") mensajes"
+# 15-sep-2026, dos lecciones: (1) SELECT plano, no COPY — COPY escapa barras y rompe el JSON al leerlo;
+# (2) NO se trae por la tubería de ssh: desde Git Bash en Windows perdió 341 filas en silencio. Se
+# exporta a un archivo en el servidor, se compara con count(*), se trae por scp y se borra allá.
+$SSH "docker exec -i $PG psql -U postgres -d postgres -qtAc \"SELECT row_to_json(m)::text FROM (SELECT id, cliente_telefono, rol, tipo, contenido, media_id, media_mime, created_at, wa_message_id FROM mensajes ORDER BY cliente_telefono, created_at, id) m\" > /root/lev_mensajes.jsonl; echo \"   servidor: \$(wc -l < /root/lev_mensajes.jsonl) líneas · count(*)=\$(docker exec $PG psql -U postgres -d postgres -qtAc 'select count(*) from mensajes') · md5 \$(md5sum /root/lev_mensajes.jsonl | cut -c1-12)\""
+scp -q -i "$HOME/.ssh/masvida_vps" -o StrictHostKeyChecking=no "$HOST:/root/lev_mensajes.jsonl" "$LEV/crudo/mensajes.jsonl"
+$SSH "rm -f /root/lev_mensajes.jsonl"
+echo "   local:    $(wc -l < "$LEV/crudo/mensajes.jsonl") líneas · md5 $(md5sum "$LEV/crudo/mensajes.jsonl" | cut -c1-12)  (deben coincidir con el servidor)"
 
 FECHA="$(date +%F)"
 echo "→ sistema_snapshot_$FECHA.json"
