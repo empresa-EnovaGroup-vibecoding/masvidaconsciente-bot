@@ -9,18 +9,39 @@
 
 ## ⏳ Pendientes importantes (no olvidar)
 
-> **⚠️ LEER ESTO PRIMERO (actualizado 2026-07-23):** las notas viejas de abajo que dicen
-> *"Pendiente: redeploy"* o describen el estado del 14-jul son HISTÓRICAS. La fuente actual es
-> `ROADMAP.md` → **ESTADO REAL A 2026-07-23** + la entrada de esta fecha.
+- 💵 **Delivery:** regla confirmada por Whuilianny el 16-sep: productos + delivery y después 20% al
+  total cuando se paga en dólares. Cambio en preparación; los cobros ya cotizados conservan su monto.
+- 🧠 **Costo del bot:** terminar la comparación con conversaciones reales y medir modelos más baratos
+  antes de sustituir Sonnet. La documentación ordenada ayuda a trabajar; no reduce por sí sola los
+  tokens del WhatsApp.
+- 📚 **Levantamiento:** el primer barrido de 42 agentes clasificó las 313 conversaciones; la auditoría
+  detallada continúa desde los artefactos locales ya producidos, sin repetir esa corrida costosa.
 
-- 🧪 **Taller:** unificación completa, arquitectura de **UN agente**, 17 bancos verdes. 🔴 Lo de
-  "modelo Claude Haiku, bot encendido para todos los números" de esta línea **ya NO es cierto**:
-  ver la entrada 2026-08-20 de abajo (modelo cambiado a GPT-4o-mini + lista blanca SÍ activa).
-- 🏪 **Producción real (netcup):** no se ha tocado; sigue en la versión anterior y con lista blanca.
-- 🟡 **Modo DOS (Operador + Voz):** los **tres bloqueadores están cerrados** (2026-08-06: el hueco del
-  reintento del dinero, el `precio_texto` de `info_producto` y la prueba de regresión). Sigue en
-  `agente_modo='uno'` a propósito: falta probarlo con **tráfico real**, y hay que decidirlo sabiendo
-  que **añade una llamada al LLM por turno** — es palanca de calidad, no de ahorro.
+---
+
+## 2026-09-16 (32) — REGLA OFICIAL DEL DELIVERY · REVISIÓN DEL MÉTODO DEL MENTOR
+
+**Decisión del negocio:** ante la pregunta con las tres fórmulas posibles, Whuilianny respondió:
+*"total de la cuenta con el delivery y descuento del 20%"*. La operación oficial queda así:
+productos + delivery = subtotal; después se descuenta 20% a ese subtotal. Ejemplo: $18 + $2 = $20;
+menos 20% = **$16**. Esto corrige la interpretación del 7-sep ($16.40 en ese mismo ejemplo).
+
+**Cambio preparado:** `monto_en_efectivo` aplica el 20% al total completo; el desglose muestra
+productos, delivery, subtotal, descuento y total. `generar_datos_pago` y `registrar_comprobante`
+siguen usando una sola función. Si una clienta ya recibió una cotización anterior, su
+`cotizado_usd_divisas` congelado se respeta al revisar el comprobante. La regla blindada del agente
+explica la fórmula y le ordena copiar la cuenta hecha por código. Suite completa, ruff, compileall y
+`git diff --check`: verdes localmente.
+
+**Método del mentor y las dos copias:** la opción documental elegida fue correcta y el PR #56 ya
+dejó `FUNCIONES.md`, `ONBOARDING.md` y la poda sin tocar código ni prompt. La corrida de 42 agentes
+terminó W1 (313 conversaciones, 166 respuestas del bot, precios y top-20) con 2.517.386 tokens de
+Claude y cero gasto de OpenRouter; W2 no corrió porque se alcanzó el límite y Maired cambió a
+documentación. Las carpetas locales de `C:\Mis_Proyectos_IA` y `C:\Developer\AI\Proyectos` son dos
+clones del mismo GitHub; ambas quedaron en `master` `c1506d8`, sin trabajo único perdido.
+
+**Pendiente de esta entrada:** PR, fusión y despliegue manual de la regla del delivery; después,
+actualizar aquí y en `ESTADO.md` con los identificadores reales.
 
 ---
 
