@@ -4,7 +4,7 @@
 > Léelas SIEMPRE antes de tocar nada.
 
 ## 0. Antes de empezar (OBLIGATORIO)
-1. Lee, EN ESTE ORDEN: **`ESTADO.md`** (qué corre en cada servidor — si contradice a otro documento, manda este) → el bloque "EN QUÉ ESTAMOS AHORA" de **`ROADMAP.md`** → la **ÚLTIMA entrada** de `SESIONES.md` (solo la última; el resto es historial).
+1. Lee, EN ESTE ORDEN: **`ESTADO.md`** (qué corre en cada servidor — si contradice a otro documento, manda este) → el bloque "EN QUÉ ESTAMOS AHORA" de **`ROADMAP.md`** → la **ÚLTIMA entrada** de `SESIONES.md` (solo la última; el resto es historial). Para entender **qué HACE el sistema** (no qué falta ni qué pasó), el mapa es **`FUNCIONES.md`** (F-01…F-15).
 2. **Mapea el código real** antes de cambiar nada. NUNCA hables de memoria vieja ni inventes (alucinar). Si no lo verificaste leyendo, dilo.
 3. Al terminar un cambio, **regístralo en `SESIONES.md`** y súbelo a GitHub.
 
@@ -38,7 +38,11 @@ Antes de tocar datos reales, probar el cambio dentro de una transacción y hacer
 - Cobro: Pago Móvil manual; tasa BCV automática (dolarapi oficial) con **margen %** + **candado manual**; manejo de **pago parcial / sobrepago**.
 - Ver la lista completa de "lo que NO se construye" en `ROADMAP.md`.
 
-## 6. Dónde está cada cosa — 9 DOCUMENTOS EN LA RAÍZ (no crear más)
+## 6. Dónde está cada cosa — 11 DOCUMENTOS EN LA RAÍZ (no crear más)
+
+**El mapa del sistema:** **`FUNCIONES.md`** → qué HACE el sistema hoy, numerado F-01…F-15 (una función
+por herramienta/sección, con qué NUNCA puede pasar y dónde vive). Léelo para entender el bot; NO es plan
+ni bitácora. **`ONBOARDING.md`** → cómo montar un cliente nuevo (el método Enova, replicable).
 
 **Los 4 del día a día** (en orden de lectura):
 1. **`ESTADO.md`** → qué corre en cada servidor. **Si contradice a otro documento, manda este.**
@@ -50,8 +54,10 @@ Antes de tocar datos reales, probar el cambio dentro de una transacción y hacer
 
 > Nota: el material del Tech Provider (modelo de negocio "ENOVA_BLUEPRINT", montar un cliente nuevo, onboarding de datos) ya NO vive aquí — es de Enova, no de másvida. Vive en su proyecto propio y está disponible como skill `/meta-tech-provider` en cualquier proyecto.
 
-**`archivo/`** → todo documento CUMPLIDO se mueve ahí (su `LEEME.md` dice qué es cada cosa).
-**Regla dura: un documento nuevo en la raíz solo si reemplaza a otro. Lo cumplido baja a `archivo/`.**
+**`archivo/`** → todo documento CUMPLIDO se mueve ahí (su `LEEME.md` dice qué es cada cosa). La HISTORIA
+vieja de ROADMAP/ESTADO/SESIONES también baja ahí (`*-historia.md`), para que los vivos se lean rápido.
+**Regla dura: un documento nuevo en la raíz solo si responde una pregunta que ningún otro responde.**
+(`FUNCIONES.md` = "qué hace el sistema"; `ONBOARDING.md` = "cómo se monta un cliente": ninguno la respondía.)
 
 - ⚠️ `BRIEF-*` y `PRP-*` son **LOCALES (gitignored)**: tienen estrategia/datos sensibles, **NO se suben** a GitHub.
 - 🟢 **SÍ EXISTEN en la máquina de Maired** (verificado 2026-08-21): `BRIEF-personalidad-whuilianny.md` (histórico), `BRIEF-personalidad-alejandra-2026-09-06.md` (la voz vigente, auditada el 6-sep; copia también en `C:\Developer\AI\Proyectos\respaldos-masvida\`), `BRIEF-closer-masvida.md`, `PRP-cobro.md` en la raíz + 9 más en `archivo/`. *(Nota histórica: el 2026-08-03 se anotó aquí que "no existía ni uno" — cierto desde el servidor/GitHub, donde por ser gitignored NUNCA aparecen; pero la copia local de Maired los conserva. NO se perdieron.)* Aun así, **la voz VIVA manda y vive en la BD** (tabla `configuracion`, clave `personalidad`): léela de ahí antes de tocar la personalidad.
