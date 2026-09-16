@@ -7,6 +7,19 @@
 
 ---
 
+## ✅ 2026-09-15 — AUTORÍA HUMANA, EVENTOS SILENCIOSOS Y RELEVO DE AUDIO EN PRODUCCIÓN
+
+PR #55 fusionado en `master` `ee4f7af` y desplegado manualmente por Actions (run
+`35038049114`). Bot y worker corren la imagen completa `ee4f7afd5053ae52b18bb94640ffa9ddb6d4ad43`.
+La puerta salió verde (`ruff`, `compileall`, suite completa) y los dos detectores de esquema
+pasaron dentro del contenedor nuevo. `/salud`: `ok`, fallos `[]`, Postgres y Redis `ok`, 39
+migraciones, Meta `GREEN`.
+
+El cambio conserva la autoría de los mensajes humanos en la memoria, guarda sin contestar
+`reaction`/`edit`/`revoke`, y abre relevo ante una avería técnica o dos fallos consecutivos de
+audio. No cambió precios, descuentos, delivery, catálogo ni aprobación de pagos. No se enviaron
+mensajes de prueba al número de producción.
+
 ## ✅ RESUELTO EL 2026-08-21 — el código de agosto está en GitHub
 
 Del 2 al 21 de agosto, Erwin trabajó desplegando por `docker cp` con Coolify **desconectado a

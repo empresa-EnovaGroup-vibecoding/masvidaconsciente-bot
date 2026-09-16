@@ -46,8 +46,12 @@ un fallo técnico de un audio vacío.
 - Pruebas nuevas en `tests/test_eventos_y_autoria.py` y ajuste de la regresión del respaldo de
   memoria. Suite completa, ruff, `compileall` y `git diff --check`: verdes.
 
-**No cambia:** precios, descuentos, delivery, aprobación de pagos, catálogo ni despliegues. Queda
-pendiente que Maired/Whuilianny confirmen la regla comercial del envío antes de tocar el cobro.
+**Despliegue:** PR #55 fusionado en `master` `ee4f7af` y promovido manualmente a producción por
+Actions (run `35038049114`). Bot y worker en la imagen completa del commit, detectores de esquema
+verdes; `/salud` `ok`, Meta `GREEN`, 39 migraciones. No se mandaron mensajes de prueba.
+
+**No cambia:** precios, descuentos, delivery, aprobación de pagos ni catálogo. Queda pendiente que
+Maired/Whuilianny confirmen la regla comercial del envío antes de tocar el cobro.
 
 ## 2026-09-13 (30) — 🔇 RETOMAR NO REABRE VENTAS CERRADAS · el 402 que dejó producción en GPT-4.1 · el plan "modelo más barato sin adivinar"
 
