@@ -41,6 +41,21 @@ from app.services.redis_client import (
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
+_INICIO_OWNER = "[MENSAJE HUMANO DEL NEGOCIO AL CLIENTE]"
+_FIN_OWNER = "[FIN DEL MENSAJE HUMANO DEL NEGOCIO]"
+
+
+def mensaje_owner_para_historial(contenido: str) -> str:
+    """Conserva la autoría humana aunque el proveedor solo acepte roles estándar.
+
+    Sin esta marca Alejandra podía asumir como propias frases personales, promesas o acuerdos
+    escritos por Whuilianny. Es contexto de conversación, no una orden del sistema.
+    """
+    texto = str(contenido or "").strip()
+    if texto.startswith(_INICIO_OWNER):
+        return texto
+    return f"{_INICIO_OWNER}\n{texto}\n{_FIN_OWNER}"
+
 
 def _hay_conversacion(historial: list[dict]) -> bool:
     """True si en Redis hay una CONVERSACIÓN, no solo mensajes del cliente apilados.
@@ -161,6 +176,11 @@ async def historial_desde_postgres(telefono: str) -> list[dict]:
         logger.exception("No se pudo rescatar de Postgres el historial de %s", telefono)
         return []
     return [
-        {"role": ("assistant" if rol == "owner" else rol), "content": contenido}
+        {
+            "role": ("assistant" if rol == "owner" else rol),
+            "content": (
+                mensaje_owner_para_historial(contenido) if rol == "owner" else contenido
+            ),
+        }
         for rol, contenido in reversed(filas)
     ]

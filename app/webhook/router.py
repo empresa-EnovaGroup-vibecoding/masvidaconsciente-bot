@@ -197,6 +197,10 @@ async def _procesar_entrante(mensaje) -> str:
     #     Un troll con 500 mensajes son 500 llamadas a la API contra este número, gratis para él.
     # Ahora va después de todos los frenos. El único que queda por delante es el modelo (que puede
     # caerse), y ese caso ya tiene su propia red (`_avisar_turno_perdido`).
+    if tipo in {"reaction", "edit", "revoke"}:
+        await _guardar_sin_responder(mensaje)
+        return "evento_silencioso"
+
     await _marcar_leido_si_vamos_a_responder(mensaje)
 
     if tipo == "text":
@@ -487,7 +491,12 @@ async def _procesar_eco(eco) -> str:
     #    NUEVA: si no, un reintento de Meta duplicaría el mensaje en la memoria del agente.
     if nueva:
         try:
-            await rc.guardar_historial(telefono, "assistant", texto)
+            # La API del modelo no conoce el rol `owner`; la marca conserva quién habló.
+            from app.services.memoria import mensaje_owner_para_historial
+
+            await rc.guardar_historial(
+                telefono, "assistant", mensaje_owner_para_historial(texto)
+            )
         except Exception:  # noqa: BLE001
             logger.exception("No se pudo meter el eco en la memoria del bot (%s)", telefono)
 
@@ -910,7 +919,7 @@ async def _excede_tope(telefono: str, nombre: str | None) -> bool:
 
 
 async def _guardar_sin_responder(mensaje) -> None:
-    """Mete en el hilo un mensaje que el bot NO va a contestar (tope del día alcanzado).
+    """Mete en el hilo un mensaje que el bot NO va a contestar.
 
     Va con `message_id` (UNIQUE desde la 001) de candado, igual que la burbuja del eco: una
     reentrega de Meta no puede duplicarlo. Y de la nota de voz se guarda el `media_id`: el panel
@@ -943,7 +952,7 @@ async def _guardar_sin_responder(mensaje) -> None:
             await session.commit()
     except Exception:  # noqa: BLE001 — guardar jamás puede tumbar el webhook
         logger.exception(
-            "No se pudo guardar el mensaje frenado por el tope de %s", mensaje["telefono"]
+            "No se pudo guardar el mensaje sin respuesta de %s", mensaje["telefono"]
         )
 
 

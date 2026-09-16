@@ -2103,17 +2103,57 @@ async def _procesar_audio(telefono, media_id, nombre, mime_type) -> None:
     # nota de voz cuesta las dos cosas, y medirlas por separado no diría lo que cuesta atenderla.
     abrir_turno(telefono, "audio")
     transcripcion = ""
+    fallo_tecnico = False
     try:
         contenido, mime = await descargar_media(media_id)
         transcripcion = await transcribir_audio(contenido, mime or mime_type or "audio/ogg")
     except Exception:  # noqa: BLE001 — escuchar el audio nunca debe tumbar al worker
+        fallo_tecnico = True
         logger.exception("No se pudo escuchar la nota de voz de %s", telefono)
     if transcripcion.strip():
+        try:
+            await rc.limpiar_audio_fallido(telefono)
+        except Exception:  # noqa: BLE001 — el contador no puede tumbar un audio entendido
+            logger.warning("No se pudo limpiar el contador de audio de %s", telefono)
         await _responder_y_enviar(telefono, transcripcion, nombre)
     else:
-        # No se pudo entender el audio: el agente responde con naturalidad.
+        try:
+            fallos = await rc.contar_audio_fallido(telefono)
+        except Exception:  # noqa: BLE001 — sin contador se atiende igual
+            fallos = 1
+            logger.warning("No se pudo contar el fallo de audio de %s", telefono)
+
+        # Una avería nuestra se avisa desde el primer intento. Si solo vino vacío/inaudible,
+        # el segundo intento consecutivo basta para dejar de pedirle al cliente que repita.
+        relevo = fallo_tecnico or fallos >= 2
+        if relevo:
+            quien = nombre or telefono
+            causa = "falló la descarga o transcripción" if fallo_tecnico else "dos audios seguidos no se pudieron transcribir"
+            await _avisar_a_la_duena(
+                telefono,
+                motivo="audio_sin_procesar",
+                detalle=(
+                    f"La nota de voz de {quien} necesita atención humana: {causa}. "
+                    "El bot intentará avisarle; entra al chat y escucha el audio desde el panel."
+                ),
+                mensaje_cliente="(nota de voz sin procesar)",
+                whatsapp=(
+                    f"🎤 No pude procesar la nota de voz de {quien}. Entra al chat y escúchala "
+                    "desde el panel; el bot intentará avisarle."
+                ),
+                candado=(f"audio_sin_procesar:{telefono}", 900),
+            )
+
+        # El agente redacta el aviso con naturalidad. Cuando ya hubo relevo se le dice la verdad
+        # y se prohíbe pedir otra nota, para cortar el bucle observado en producción.
+        entrada = (
+            "(la nota de voz no se pudo procesar por un problema técnico nuestro; una persona "
+            "del negocio ya fue avisada. Díselo breve y NO le pidas que mande otra nota)"
+            if relevo else
+            "(el cliente envio una nota de voz que no se pudo escuchar bien)"
+        )
         await _responder_y_enviar(
-            telefono, "(el cliente envio una nota de voz que no se pudo escuchar bien)", nombre
+            telefono, entrada, nombre
         )
 
 

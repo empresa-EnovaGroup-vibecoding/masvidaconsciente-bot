@@ -242,6 +242,20 @@ async def set_cache(clave: str, valor: str, ttl: int) -> None:
     await _client().set(clave, valor, ex=ttl)
 
 
+async def contar_audio_fallido(telefono: str, ttl: int = 900) -> int:
+    """Cuenta fallos consecutivos de audio durante una ventana corta."""
+    clave = f"audio_fallido:{telefono}"
+    n = await _client().incr(clave)
+    if n == 1:
+        await _client().expire(clave, ttl)
+    return int(n)
+
+
+async def limpiar_audio_fallido(telefono: str) -> None:
+    """Un audio entendido rompe la racha de fallos del cliente."""
+    await _client().delete(f"audio_fallido:{telefono}")
+
+
 # ─── Idempotencia del carril de comprobantes (dinero) ────────────────
 # Clave separada del carril de texto (msg:). Se marca SOLO tras procesar el
 # comprobante con exito, para que un fallo transitorio de descarga no haga que
