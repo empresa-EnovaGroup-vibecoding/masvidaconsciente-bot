@@ -15,7 +15,7 @@ Lo que se prueba:
   3. 🧾 EL RECIBO enseña la línea del envío (si no, el cliente no puede cantar una zona mal puesta).
   4. 🔒 SIN ZONA NO SE COBRA: `generar_datos_pago` lo rechaza y le da la lista de zonas al bot.
   5. 🚫 UNA ZONA INVENTADA se rechaza (lista CERRADA: el bot no puede escribir un id que no le dimos).
-  6. 💵 EL 20% DE DIVISAS ES SOBRE LOS PRODUCTOS Y EL FLETE SE COBRA COMPLETO (Whuilianny, 7-sep-2026).
+  6. 💵 EN DIVISAS SE SUMA PRODUCTO + DELIVERY Y LUEGO SE DESCUENTA 20% (Whuilianny, 16-sep-2026).
   7. 🏠 EL RETIRO sale sin costo y no suma nada.
   8. 🩹 RE-REGISTRAR SIN LA ZONA NO BORRA EL FLETE (auditoría 2026-08-02, DIN-1).
 
@@ -169,17 +169,16 @@ async def main() -> None:
         cerca.costo = Decimal("3")
         await s.commit()
 
-        print("\n4) 💵 EFECTIVO EN DÓLARES: 20% A LOS PRODUCTOS **Y EL DELIVERY COMPLETO**")
-        # 🔴 TERCERA VERSIÓN DE ESTE CHECK. Hasta el 22-ago cobraba el flete; del 22-ago al 7-sep
-        # la casa lo regalaba en dólares (palanca para cobrar en efectivo); el 7-sep Whuilianny,
-        # por Maired, lo cerró: "el único descuento es el 20%; el delivery lo paga la persona".
-        # Se deja la historia escrita para que nadie "arregle" esto de vuelta (L36).
+        print("\n4) 💵 EFECTIVO EN DÓLARES: CUENTA CON DELIVERY, DESPUÉS 20%")
+        # 🔴 CUARTA VERSIÓN DE ESTE CHECK. El 16-sep Whuilianny aclaró la operación: "total de
+        # la cuenta con el delivery y descuento del 20%". Se deja la historia en SESIONES para
+        # que nadie vuelva a escoger una fórmula por interpretación.
         cobro = await generar_datos_pago(s, TEL, ped.id)
         check("el cobro se generó", cobro.get("ok") is True, str(cobro.get("nota"))[:90])
-        # productos × 0,80 MÁS el envío completo: el flete lo paga el cliente
-        div_ok = float((precio * Decimal("0.80")).quantize(Decimal("0.01")) + Decimal("3"))
+        # primero producto + envío; después 20% a la cuenta completa
+        div_ok = float(((precio + Decimal("3")) * Decimal("0.80")).quantize(Decimal("0.01")))
         div_regalado = float((precio * Decimal("0.80")).quantize(Decimal("0.01")))
-        check(f"en efectivo: producto×0,80 + flete $3 = ${div_ok:g} (ya NO ${div_regalado:g})",
+        check(f"en efectivo: (producto + flete $3)×0,80 = ${div_ok:g} (ya NO ${div_regalado:g})",
               cobro.get("ok") and abs(cobro["monto_usd_divisas"] - div_ok) < 0.01,
               f"dio {cobro.get('monto_usd_divisas')} — si diera {div_regalado:g}, se está regalando el flete")
         # 🔴 Desde el 2026-08-24 el 20% se ata a la MONEDA: dólares por CUALQUIER vía
@@ -189,7 +188,7 @@ async def main() -> None:
               "zelle" in (cobro.get("resumen_cobro") or "").lower()
               and "binance" in (cobro.get("resumen_cobro") or "").lower(),
               str(cobro.get("resumen_cobro"))[:120])
-        check("y ya NO dice que el delivery va por cuenta de la casa (7-sep)",
+        check("y ya NO dice que el delivery va por cuenta de la casa",
               "nuestra cuenta" not in (cobro.get("resumen_cobro") or "").lower()
               and "gratis" not in (cobro.get("resumen_cobro") or "").lower(),
               str(cobro.get("resumen_cobro"))[:120])

@@ -65,8 +65,9 @@
 
 ### F-06 · Cobrar
 - **Para qué:** darle a la clienta el total correcto y los datos de pago del método que elija.
-- **Qué hace:** calcula el total en bolívares a la tasa BCV del día, o en dólares con el descuento, y
-  devuelve el cobro listo para copiar (`generar_datos_pago`).
+- **Qué hace:** calcula el total en bolívares a la tasa BCV del día; en dólares suma productos +
+  delivery y después descuenta 20% a esa cuenta completa. Devuelve el cobro listo para copiar
+  (`generar_datos_pago`).
 - **Qué NUNCA:** dar datos de pago de memoria, inventar una cuenta, ni cobrar sin fecha de entrega acordada.
 - **Cómo se ve:** el cobro muestra el desglose (productos, descuento, delivery, total) y los datos del
   método elegido, copiados tal cual.

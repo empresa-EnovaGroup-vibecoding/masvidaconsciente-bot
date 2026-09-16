@@ -28,47 +28,23 @@ Las **FASES 0 a 3 ya están hechas y desplegadas**:
 > sin tocar a la clienta. URLs y estado: `ESTADO.md` bloque 🏭 · historia: SESIONES 1-sep (14).
 > El panel de pruebas ya tiene su dominio propio: `panel-masvida.enovagroup.tech` (2-sep).
 
-### 🚀 AHORA MISMO (6-sep noche): PROMOVER A PRODUCCIÓN LO QUE YA ESTÁ VERDE EN PRUEBAS
+### 🚀 AHORA MISMO (16-sep): REGLA DEL DELIVERY Y MODELO MÁS ECONÓMICO
 
-> 🎯 **13-sep — PLAN VIGENTE: "Alejandra igual, modelo más barato, sin adivinar"** (SESIONES (30)).
-> Etapa 1 hecha (modelo exacto, respaldo Haiku, umbral $5). Etapa 2 = PR `retomar-no-reabre-ventas`.
-> Etapa 3 = medir 6 modelos con `scripts/ensayo_closer.py` en pruebas con llave propia (la crea Maired).
-> Etapa 4 solo si ninguno barato pasa (modo DOS → adelgazar prompt, medido). Etapa 5 = pruebas → una
-> conversación de Maired → prod. **No se toca el prompt ni el modelo de producción fuera de este plan.**
+1. **Cerrar la regla del delivery.** Whuilianny confirmó la fórmula: productos + delivery y después
+   20% de descuento al total cuando se paga en dólares. El cambio de código conserva las cotizaciones
+   que ya se dieron a clientas y debe pasar por PR, CI y despliegue manual.
+2. **Terminar la auditoría de atención real.** El corpus local ya contiene 313 conversaciones y las
+   notas de voz recuperables. No se repite la corrida de 42 agentes: se continúa desde los resultados
+   y la auditoría ya escrita, separando clientas de proveedores, familia y repartidores.
+3. **Bajar el costo sin empeorar a Alejandra.** Primero se construye la evaluación con casos reales y
+   fallos duros; después se prueban pocos modelos finalistas con un presupuesto pequeño y controlado.
+   No se cambia Sonnet por intuición ni se gasta el saldo de producción en una barrida masiva.
+4. **Abrir gradualmente.** Mantener lista blanca, leer las conversaciones piloto y ampliar solo cuando
+   el cobro, la entrega y el relevo humano estén estables.
 
-> ✅ **HECHO el 7-sep (~19:05 VET): PRODUCCIÓN PROMOVIDA** — bot+worker `27f50ac`, panel `60f8b4d`, voz
-> nueva, sabores, 27/27 bancos, lista blanca con los 3 primeros clientes de Whuilianny (detalle: ESTADO →
-> Última verificación; SESIONES (29)). **Lo siguiente, en orden:** (1) soltar gradual: leer cada día las
-> conversaciones de los 3 números (BD + `llamadas_ia`), corregir, sumar 3-4 números más; `todos` cuando
-> haya evidencia; (2) PR `la-duena-en-silencio` → pruebas → prod con el próximo lote; (3) separar el
-> balde R2 de pruebas (3 fotos ya rotas por el balde compartido); (4) Whuilianny: franjas en Horario +
-> su clave del panel; (5) adelgazar el prompt (~71k chars por turno) midiendo antes/después.
-
-> **Pruebas está listo** (`f60c3f7` + panel `d8b94ab`, 27/27 bancos, cero PRs de código abiertos — solo el #42, los docs de este cierre) con todo
-> lo del 6-sep: entrega con franja + referencia (038), opciones a la vista, prompt compacto, modo de
-> entrega sin repreguntar, foto antes de la pregunta, caché de 1 hora, personalidad nueva.
-> **Producción sigue en `42d37de` con la personalidad vieja.** Los pasos exactos (7) están en
-> `ESTADO.md` → "Última verificación". El gatillo lo aprieta Maired; antes, ella termina el guion en
-> pruebas (zona → referencia → pago → comprobante → "8 am" → franja → resumen) y da el OK.
->
-> **7-sep:** #43 y #44 fusionados y desplegados en pruebas (`834ef86` + panel `60f8b4d`). Segunda vuelta
-> de *"la hora exacta la confirma la dueña"* en el PR `la-hora-es-muda` (SESIONES (27)): la frase seguía
-> ESCRITA en 4 sitios que el modelo lee y la voz decía "(ella es la dueña)". Ahora hay test (CI) y bloque
-> 8 del banco que exigen cero apariciones. Tras fusionar y redesplegar: Maired repite "a las 10" y "¿tú
-> no eres Whuilianny?" → OK → producción.
->
-> **7-sep tarde:** las dos pruebas salieron limpias (una línea y silencio; "Soy Alejandra, la asesora").
-> Regla nueva de Whuilianny → PR `delivery-se-cobra` (SESIONES (28)): el delivery se cobra completo
-> también en dólares; el 20% queda solo sobre los productos. Tras fusionar: redesplegar pruebas +
-> personalidad ya actualizada → Maired prueba un cobro con delivery en dólares ($14 + $3 → $14.20) →
-> producción con TODO (bot master, panel `60f8b4d`, voz nueva, sabores).
->
-> **Después de producción, en este orden:** (1) entregarle a Whuilianny su cuenta propia del panel
-> (Maired la creó en PRODUCCIÓN el 6-sep: `masvidaconsciente1@gmail.com`, rol dueña) y que ella
-> cambie su clave en "Mi contraseña"; (2) datos que le tocan a Whuilianny (info de las empanadas, coma en sabores
-> de la torta, "CHOCOLATE"); (3) humo con el número real con OK de horario; (4) abrir lista blanca →
-> ENTREGA; (5) adelgazar el prompt (24k tokens) midiendo antes/después; (6) medir modo DOS con el
-> mismo guion; (7) cerrar la carrera del lock 120s (`probar_vigilante` flaky tras deploy).
+La organización documental del mentor ya quedó aplicada en el PR #56: `FUNCIONES.md`,
+`ONBOARDING.md` y la poda de historia. Eso permite entender el sistema y reduce contexto de trabajo;
+no reduce directamente los tokens que consume el bot de WhatsApp.
 
 ### 🧵 EL TRABAJO EN CURSO: "que no repregunte lo que la clienta YA dijo" (abierto el 2026-08-31)
 
