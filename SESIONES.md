@@ -9,8 +9,6 @@
 
 ## ⏳ Pendientes importantes (no olvidar)
 
-- 💵 **Delivery:** regla confirmada por Whuilianny el 16-sep: productos + delivery y después 20% al
-  total cuando se paga en dólares. Cambio en preparación; los cobros ya cotizados conservan su monto.
 - 🧠 **Costo del bot:** terminar la comparación con conversaciones reales y medir modelos más baratos
   antes de sustituir Sonnet. La documentación ordenada ayuda a trabajar; no reduce por sí sola los
   tokens del WhatsApp.
@@ -26,7 +24,7 @@
 productos + delivery = subtotal; después se descuenta 20% a ese subtotal. Ejemplo: $18 + $2 = $20;
 menos 20% = **$16**. Esto corrige la interpretación del 7-sep ($16.40 en ese mismo ejemplo).
 
-**Cambio preparado:** `monto_en_efectivo` aplica el 20% al total completo; el desglose muestra
+**Cambio desplegado:** `monto_en_efectivo` aplica el 20% al total completo; el desglose muestra
 productos, delivery, subtotal, descuento y total. `generar_datos_pago` y `registrar_comprobante`
 siguen usando una sola función. Si una clienta ya recibió una cotización anterior, su
 `cotizado_usd_divisas` congelado se respeta al revisar el comprobante. La regla blindada del agente
@@ -40,8 +38,11 @@ Claude y cero gasto de OpenRouter; W2 no corrió porque se alcanzó el límite y
 documentación. Las carpetas locales de `C:\Mis_Proyectos_IA` y `C:\Developer\AI\Proyectos` son dos
 clones del mismo GitHub; ambas quedaron en `master` `c1506d8`, sin trabajo único perdido.
 
-**Pendiente de esta entrada:** PR, fusión y despliegue manual de la regla del delivery; después,
-actualizar aquí y en `ESTADO.md` con los identificadores reales.
+**Despliegue:** PR #57 fusionado en `master` `b6d755d`; CI `35095767955` verde y promoción manual
+`35095865528` verde, incluidos los dos detectores de esquema. `/salud` `ok`, fallos `[]`, Postgres y
+Redis `ok`, Meta `GREEN`. La personalidad viva se actualizó por la API después de un ensayo con
+`ROLLBACK`: md5 `a9aaafe61353` → `4e2eab0b5710`, coincide. La frase vieja quedó ausente. No se mandó
+ningún mensaje de prueba a producción.
 
 ---
 
