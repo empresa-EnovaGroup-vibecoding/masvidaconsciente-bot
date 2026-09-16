@@ -7,6 +7,23 @@
 
 ---
 
+## ✅ 2026-09-16 — REGLA OFICIAL DEL DELIVERY EN PRODUCCIÓN
+
+PR #57 fusionado en `master` `b6d755d` y desplegado manualmente por Actions (run
+`35095865528`). Bot y worker corren la imagen completa del commit. La puerta salió verde (`ruff`,
+`compileall`, suite completa) y los dos detectores de esquema pasaron dentro del contenedor nuevo.
+`/salud`: `ok`, fallos `[]`, Postgres y Redis `ok`, Meta `GREEN`, 39 migraciones.
+
+Whuilianny aclaró la fórmula: al pagar en dólares se suman productos + delivery y después se
+descuenta 20% a la cuenta completa. Ejemplo oficial de la revisión: $18 + $2 = $20; menos 20% =
+**$16**. El código, el desglose, la revisión del comprobante y las pruebas usan la misma regla. Las
+cotizaciones ya entregadas conservan su monto congelado para no cambiarle la cuenta a una clienta
+que esté por pagar.
+
+La personalidad viva de producción se cambió por la puerta de la API después de ensayar la misma
+operación con `ROLLBACK`: md5 `a9aaafe61353` → `4e2eab0b5710`, `coincide=True`. Verificación final:
+regla nueva presente, frase vieja ausente. No se enviaron mensajes de prueba al número real.
+
 ## ✅ 2026-09-15 — AUTORÍA HUMANA, EVENTOS SILENCIOSOS Y RELEVO DE AUDIO EN PRODUCCIÓN
 
 PR #55 fusionado en `master` `ee4f7af` y desplegado manualmente por Actions (run
