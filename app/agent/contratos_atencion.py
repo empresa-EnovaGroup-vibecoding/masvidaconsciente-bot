@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 Tema = Literal[
     "precio", "duracion", "se_congela", "apto_diabeticos", "descripcion",
@@ -114,9 +114,25 @@ TipoEventoDuena = Literal[
 ]
 
 
+def _numero_como_texto(v):
+    """Un modelo barato escribe `"cantidad_literal": 2` en vez de `"2"`. En modo estricto eso
+    tumbaría el contrato entero por una comilla; aquí el número pasa a texto ANTES de validar.
+    Nada más se coacciona (los booleanos y las listas siguen siendo un error)."""
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, int | float):
+        return str(v)
+    return v
+
+
 class ItemDuena(Cerrado):
     nombre_literal: str = Field(default="", max_length=120)
     cantidad_literal: str = Field(default="", max_length=40)
+
+    @field_validator("nombre_literal", "cantidad_literal", mode="before")
+    @classmethod
+    def _texto(cls, v):
+        return _numero_como_texto(v)
 
 
 class EventoDuena(Cerrado):
@@ -132,6 +148,14 @@ class EventoDuena(Cerrado):
     contenido: str = Field(default="", max_length=400)
     # Copia LITERAL del trozo de la dueña que sostiene el evento. Si no consta, se descarta.
     evidencia: str = Field(default="", max_length=300)
+
+    @field_validator(
+        "total_literal", "monto_literal", "metodo", "fecha_texto", "momento_texto",
+        "lugar_texto", "tema", "contenido", "evidencia", mode="before",
+    )
+    @classmethod
+    def _texto(cls, v):
+        return _numero_como_texto(v)
 
 
 class ExtraccionDuena(Cerrado):

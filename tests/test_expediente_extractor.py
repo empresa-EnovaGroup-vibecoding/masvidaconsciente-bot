@@ -119,8 +119,63 @@ async def test_interpretar_rechaza_sin_llamada_o_con_claves_de_mas(contexto):
     with pytest.raises(ValueError):
         await ex.interpretar_duena(v, contexto, sin_llamada, "m")
     con_extra = _llm_con({"eventos": [{"tipo": "pago_confirmado", "evidencia": "recibido", "monto": 99}]})
-    with pytest.raises(Exception):  # noqa: B017 — ValidationError: `monto` no existe en el contrato
+    with pytest.raises(ValueError):  # `monto` no existe en el contrato → sin respaldo, se lanza
         await ex.interpretar_duena(v, contexto, con_extra, "m")
+
+
+# ── Lo que pasó la primera noche en pruebas (22-sep) y cómo se cubre ──
+
+def test_el_esquema_de_la_herramienta_va_sin_referencias_internas():
+    """Flash-Lite se perdió con `$ref`/`$defs` y devolvió palabras sueltas. El esquema va inline."""
+    esquema = ex.esquema_sin_refs(ex.ExtraccionDuena.model_json_schema())
+    assert "$defs" not in json.dumps(esquema) and "$ref" not in json.dumps(esquema)
+    evento = esquema["properties"]["eventos"]["items"]
+    assert evento["type"] == "object" and "tipo" in evento["properties"]
+    assert evento["properties"]["items"]["items"]["properties"]["nombre_literal"]["type"] == "string"
+
+
+async def test_palabras_sueltas_se_reintentan_con_el_respaldo_una_sola_vez(contexto):
+    """`{"eventos": ["pedido_tomado"]}` (lo que devolvió Flash-Lite) NO se traga como vacío: se
+    reintenta UNA vez con el modelo de respaldo, y si ese responde bien, vale."""
+    v = ex.Ventana(owner=[_msg(3, "owner", "Te anoté 2 quesillos son 16$")])
+    bueno = {"eventos": [{"tipo": "pedido_tomado", "items": [{"nombre_literal": "quesillos", "cantidad_literal": "2"}],
+                          "total_literal": "16$", "evidencia": "Te anoté 2 quesillos son 16$"}]}
+    llm = AsyncMock(side_effect=[
+        _llm_con({"eventos": ["pedido_tomado"]}).return_value,
+        _llm_con(bueno).return_value,
+    ])
+    r = await ex.interpretar_duena(v, contexto, llm, "barato", modelo_respaldo="respaldo")
+    assert r.eventos[0].tipo == "pedido_tomado" and r.eventos[0].items[0].cantidad_literal == "2"
+    assert llm.await_count == 2
+    assert [c.args[2] for c in llm.await_args_list] == ["barato", "respaldo"]
+    # Si el respaldo también falla, se lanza (y `procesar_ventana` descarta la ventana sin escribir).
+    llm2 = AsyncMock(return_value=_llm_con({"eventos": ["pedido_tomado"]}).return_value)
+    with pytest.raises(ValueError, match="palabras sueltas"):
+        await ex.interpretar_duena(v, contexto, llm2, "barato", modelo_respaldo="respaldo")
+    assert llm2.await_count == 2
+
+
+async def test_sin_respaldo_o_con_el_mismo_modelo_no_se_reintenta(contexto):
+    v = ex.Ventana(owner=[_msg(3, "owner", "recibido")])
+    llm = AsyncMock(return_value=_llm_con({"eventos": ["pago_confirmado"]}).return_value)
+    with pytest.raises(ValueError):
+        await ex.interpretar_duena(v, contexto, llm, "barato", modelo_respaldo="barato")
+    assert llm.await_count == 1
+
+
+async def test_numeros_donde_iba_texto_y_textos_largos_se_normalizan(contexto):
+    """`"cantidad_literal": 2` y `"total_literal": 16` (sin comillas) pasan a texto; una evidencia
+    desbordada se recorta a su tope y sigue constando (es un prefijo literal)."""
+    larga = "Te anoté 2 quesillos son 36 " + "y muchas gracias mi reina " * 20  # 2 × $18 del catálogo de prueba
+    v = ex.Ventana(owner=[_msg(3, "owner", larga)])
+    llm = _llm_con({"eventos": [{"tipo": "pedido_tomado", "items": [{"nombre_literal": "quesillos", "cantidad_literal": 2}],
+                                 "total_literal": 36, "evidencia": larga}]})
+    r = await ex.interpretar_duena(v, contexto, llm, "m")
+    ev = r.eventos[0]
+    assert ev.items[0].cantidad_literal == "2" and ev.total_literal == "36"
+    assert len(ev.evidencia) == 300 and larga.startswith(ev.evidencia)
+    veredicto = _validar(ev, larga, contexto)
+    assert veredicto.accion == "escribe" and veredicto.propuesta.total == 36.0
 
 
 # ══════════════════════════════════════════════════════════════════════════════════

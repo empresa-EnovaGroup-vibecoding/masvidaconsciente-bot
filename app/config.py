@@ -57,6 +57,10 @@ class Settings(BaseSettings):
     # eventos tipados que el código valida. Decisión de Maired (22-sep): el más barato, medido por
     # el replay; se sube por la config `modelo_extractor` sin tocar código. Nunca decide dinero.
     openrouter_model_extractor: str = "google/gemini-2.5-flash-lite"
+    # Si el barato devuelve un contrato inválido (la primera noche devolvió ["pedido_tomado"] en
+    # vez de objetos), UN reintento con el escalón siguiente antes de rendirse. Queda medido en
+    # `llamadas_ia`: si el respaldo trabaja mucho, el barato no sirve y se sube el default.
+    openrouter_model_extractor_respaldo: str = "google/gemini-2.5-flash"
     # Modelo de EMBEDDINGS (búsqueda por significado del Conocimiento). Va por la
     # misma API/llave de OpenRouter (endpoint /embeddings). Multilingüe y barato.
     # Es una MEJORA: si falla, el bot cae a la búsqueda léxica (pg_trgm) y sigue.
