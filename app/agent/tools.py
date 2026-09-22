@@ -439,7 +439,11 @@ TOOL_SCHEMAS = [
                 "está PROHIBIDO inventarlo o usar uno viejo); (2) te pregunten algo que NO SABES "
                 "y las herramientas no te lo dan (ej. envíos a otra ciudad, una política que no "
                 "tienes cargada); (3) el cliente pida hablar con una PERSONA, con la encargada o con quien lleva el negocio; "
-                "(4) el cliente RECLAME de verdad (algo llegó mal, no le llegó, quiere su dinero). "
+                "(4) el cliente RECLAME de verdad (algo llegó mal, no le llegó, quiere su dinero); "
+                "(5) haya un ACUERDO ESPECIAL que solo resuelve Whuilianny: devolución de envases, "
+                "abono o saldo a favor, delivery fuera de las zonas, cambio o personalización de "
+                "un producto, sustitución o entrega parcial. En ese caso usa motivo "
+                "'acuerdo_especial': el chat queda pausado para que ella lo resuelva. "
                 "Después de llamarla, dile al cliente CON TUS PROPIAS PALABRAS, cálida y natural, "
                 "que le confirmas eso enseguida (nunca una plantilla; hablas en primera persona del negocio, "
                 "'te lo "
@@ -450,7 +454,7 @@ TOOL_SCHEMAS = [
                 "properties": {
                     "motivo": {
                         "type": "string",
-                        "enum": ["precio_del_dia", "no_se", "pide_persona", "reclamo"],
+                        "enum": ["precio_del_dia", "no_se", "pide_persona", "reclamo", "acuerdo_especial"],
                         "description": "Por qué necesitas a una persona del negocio.",
                     },
                     "detalle": {
@@ -3920,19 +3924,21 @@ _MOTIVO_TITULO = {
     "no_se": "❓ El bot no sabe algo",
     "pide_persona": "🙋 El cliente pide hablar con una persona",
     "reclamo": "⚠️ El cliente está RECLAMANDO",
+    "acuerdo_especial": "🤝 Hace falta resolver un acuerdo especial",
 }
 
 
 # Motivos por los que el bot SÍ se calla y espera a la dueña: el cliente pide una persona o
 # reclama. Los otros (`precio_del_dia`, `no_se`) dejan aviso pero NO callan al bot: sigue vendiendo.
-_MOTIVOS_DE_PAUSA = {"pide_persona", "reclamo"}
+_MOTIVOS_DE_PAUSA = {"pide_persona", "reclamo", "acuerdo_especial"}
 
 
 async def pedir_ayuda(
     session, telefono, motivo: str, detalle: str = "", mensaje_cliente: str | None = None
 ):
     """RELEVO A LA HUMANA. El bot se topó con algo que NO le toca resolver (un precio que
-    cambia, algo que no sabe, un cliente que pide una persona, un reclamo). En vez de
+    cambia, algo que no sabe, un cliente que pide una persona, un reclamo o un acuerdo
+    especial). En vez de
     inventar: PAUSA este chat, deja el aviso en la bandeja del panel, y le manda un
     WhatsApp a la dueña. Ella entra al chat del negocio y responde.
 
@@ -3951,7 +3957,8 @@ async def pedir_ayuda(
         cliente = Cliente(telefono=telefono)
         session.add(cliente)
     # 🔴 SOLO PAUSA (calla al bot) cuando el cliente necesita de VERDAD a una persona: pide hablar
-    # con alguien (`pide_persona`) o reclama (`reclamo`). Para un PRECIO DEL DÍA que el bot no sabe,
+    # con alguien (`pide_persona`), reclama (`reclamo`) o hay un acuerdo especial que solo la
+    # humana puede decidir. Para un PRECIO DEL DÍA que el bot no sabe,
     # o un dato puntual (`no_se`), deja el aviso en la bandeja pero el bot SIGUE VENDIENDO: muestra
     # la foto, ofrece otros productos, toma el pedido. Quedarse MUDO por no saber UN precio mata la
     # venta (caso real: pidieron "y la torta qué tal", el bot escaló el precio, se pausó, y ya no
