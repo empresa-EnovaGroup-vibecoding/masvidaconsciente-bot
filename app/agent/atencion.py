@@ -7,8 +7,15 @@ from pydantic import ValidationError
 from app.agent.contratos_atencion import MensajeConfirmado, SolicitudTurno
 from app.agent.fuentes_atencion import cargar_contexto, fuentes_vigentes, guardar_borrador
 from app.agent.resolver_atencion import (
-    cantidad_verificada, consta, consultar, elegir_frase, fecha_del_cliente,
-    identificar_producto, normalizar, pregunta, relevo,
+    cantidad_verificada,
+    consta,
+    consultar,
+    elegir_frase,
+    fecha_del_cliente,
+    identificar_producto,
+    normalizar,
+    pregunta,
+    relevo,
 )
 
 logger = logging.getLogger(__name__)

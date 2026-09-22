@@ -1,4 +1,3 @@
-# Regresión del motor anterior, conservado solo para comparar sus protecciones.
 """LA RED DEL TAMAÑO ADIVINADO — el bot elige el tamaño (o sea, el PRECIO) que nadie pidió.
 
 EL CASO MEDIDO (2026-08-22, contra el bot real del taller):
@@ -171,7 +170,7 @@ async def _correr(respuestas: list[dict], mensaje: str, historial: list):
             return {"ok": True, "pedido_id": 1300, "resumen": "Torta 1kg x1"}
         return {"ok": True}
 
-    texto = await ag._responder_legacy(
+    texto = await ag.responder(
         "584120000000", mensaje, list(historial), "Rosa", llm=llm, ejecutar=ejecutar,
     )
     return texto, ejecutadas
@@ -224,7 +223,7 @@ async def test_el_modelo_recibe_el_porque_y_puede_corregir_en_el_MISMO_turno(cat
         ejecutadas.append(nombre)
         return {"ok": True}
 
-    texto = await ag._responder_legacy(
+    texto = await ag.responder(
         "584120000000", "ok esa quiero, 1", list(HIST_SIN_TAMANO), "Rosa",
         llm=llm, ejecutar=ejecutar,
     )

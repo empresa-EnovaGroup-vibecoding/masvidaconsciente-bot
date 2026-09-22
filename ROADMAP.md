@@ -30,6 +30,15 @@ Las **FASES 0 a 3 ya están hechas y desplegadas**:
 
 ### 🚀 AHORA MISMO (16-sep): REGLA DEL DELIVERY Y MODELO MÁS ECONÓMICO
 
+> 🧭 **22-sep — PLAN VIGENTE: "atención confirmada + Voz" (modo `confirmado`)** — SESIONES (33) y
+> `~/.claude/plans/…crystalline-sprout.md`. El código decide QUÉ (capa de hechos de Codex), la Voz decide CÓMO
+> (modo DOS de agosto), el código verifica. Absorbe el punto 3 de abajo: los modelos baratos entran donde el
+> peor caso es un reintento, nunca una mentira. **E0 hecho** (rama `atencion-confirmada-voz`): modo cableado y
+> APAGADO, suite 1105/0, producción sigue en `uno`. Siguen E1 (Voz sobre la hoja de hechos) → E2 (redes de
+> nombres/fechas) → E3 (pagos) → E4 (medir con el arnés, jueces Claude, puertas G1-G5) → E5 (pruebas + una
+> conversación de Maired) → E6 (prod por config). Dos preguntas de negocio pendientes en SESIONES (33):
+> sobrepago = ¿saldo a favor?; BD caída = ¿callar o seguir?
+
 1. **Cerrar la regla del delivery.** Whuilianny confirmó la fórmula: productos + delivery y después
    20% de descuento al total cuando se paga en dólares. El cambio de código conserva las cotizaciones
    que ya se dieron a clientas y debe pasar por PR, CI y despliegue manual.

@@ -1,4 +1,3 @@
-# Regresión del motor anterior, conservado solo para comparar sus protecciones.
 """LOS GUARDIAS MIRAN AL CLIENTE — ningún guardia corta una RESPUESTA a lo que el cliente pidió.
 
 🔴 EL CASO REAL (taller, 31-ago 21:08, verificado en los logs del worker y en Redis). La clienta
@@ -145,7 +144,7 @@ async def _correr(mensaje_cliente: str, respuestas: list[dict]):
     async def ejecutar(nombre, args, telefono, *a, **kw):
         return {"ok": True}
 
-    texto = await ag._responder_legacy(
+    texto = await ag.responder(
         "584120000000", mensaje_cliente, list(HISTORIAL_DEL_CASO), "Rosa",
         llm=llm, ejecutar=ejecutar,
     )

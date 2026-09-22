@@ -1,4 +1,3 @@
-# Regresión del motor anterior, conservado solo para comparar sus protecciones.
 """LA MEMORIA DE LA HERRAMIENTA: un producto ya mostrado NO se reenvía — llame quien llame.
 
 🔴 EL CASO REAL (Omaira Mendez, 2026-08-29, 4:39-4:50pm — la primera venta con el bot ABIERTO):
@@ -441,7 +440,7 @@ async def test_puerta_real_el_turno_de_omaira_ya_no_reenvia(monkeypatch):
     llm, _ = _llm_que_llama_la_tool(["El Quesillo es cremosito, mi amor 💚 te animas?"])
     ejecutar, llamadas = _ejecutar_real(monkeypatch, ya_mostrada=True)
     cola_media.abrir()
-    salida = await ag._responder_legacy(
+    salida = await ag.responder(
         TEL, "cuanto salen las empanadas?", list(HISTORIAL), "Omaira",
         llm=llm, ejecutar=ejecutar,
     )
@@ -456,7 +455,7 @@ async def test_puerta_real_si_lo_pide_otra_vez_las_fotos_salen(monkeypatch):
     llm, _ = _llm_que_llama_la_tool(["Claro mi amor, por aqui te las dejo de nuevo 💚"])
     ejecutar, llamadas = _ejecutar_real(monkeypatch, ya_mostrada=True)
     cola_media.abrir()
-    salida = await ag._responder_legacy(
+    salida = await ag.responder(
         TEL, "mandame la foto del quesillo otra vez", list(HISTORIAL), "Omaira",
         llm=llm, ejecutar=ejecutar,
     )
@@ -474,7 +473,7 @@ async def test_puerta_real_referirse_a_la_historia_NO_es_envio_fantasma(monkeypa
     )
     ejecutar, _ = _ejecutar_real(monkeypatch, ya_mostrada=True)
     cola_media.abrir()
-    salida = await ag._responder_legacy(
+    salida = await ag.responder(
         TEL, "cuanto sale el quesillo?", list(HISTORIAL), "Omaira",
         llm=llm, ejecutar=ejecutar,
     )
@@ -497,7 +496,7 @@ async def test_puerta_real_la_red_fantasma_sigue_viva_para_la_mentira_de_verdad(
         return {"enviadas": 0, "nota": "no se pudieron enviar las fotos de 'Quesillo' ahora"}
 
     cola_media.abrir()
-    salida = await ag._responder_legacy(
+    salida = await ag.responder(
         TEL, "cuanto sale el quesillo?", list(HISTORIAL), "Omaira",
         llm=llm, ejecutar=ejecutar,
     )

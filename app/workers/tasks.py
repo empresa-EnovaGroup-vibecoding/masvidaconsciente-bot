@@ -512,8 +512,12 @@ async def _cliente_pausado(telefono: str) -> bool:
     try:
         return (await _estado_pausa(telefono))[0]
     except Exception:  # noqa: BLE001
-        logger.exception("No se pudo leer la pausa de %s (se detiene)", telefono)
-        return True
+        # E0 (22-sep): Codex lo había puesto fail-CLOSED (si la BD falla, el bot se calla). Es una
+        # decisión de producto que cambia `uno` en producción y rompía 6 tests; se restaura el
+        # fail-open de master (regla de la casa: primero pruebas, nada cambia en prod sin medir).
+        # Queda como PREGUNTA para Maired: ¿ante una BD caída, callar (Meta) o seguir vendiendo?
+        logger.exception("No se pudo leer la pausa de %s (sigue respondiendo)", telefono)
+        return False
 
 
 async def _lo_paso_una_persona(telefono: str) -> bool:
@@ -1704,7 +1708,7 @@ async def _procesar_comprobante(
                 "plantilla): dile con cariño que ahí no ves el comprobante y pídele que te reenvíe "
                 "la captura clara del pago (donde se vea el monto y la referencia)."
             )
-        await _responder_situacion(telefono, {"tipo": "captura"}, nombre)
+        await _responder_situacion(telefono, situacion, nombre)
         return "no_es_comprobante"
 
     # ¿El MONTO del comprobante cuadra con lo cobrado? Comparamos contra el monto en
@@ -1895,7 +1899,7 @@ async def _procesar_comprobante(
             ),
             candado=(f"comprobante_sin_pedido:{telefono}", 900),
         )
-    partes = await _responder_situacion(telefono, {"tipo": "revision", "pago_id": resultado.get("pago_id")}, nombre)
+    partes = await _responder_situacion(telefono, situacion, nombre)
 
     # 🔴 EL CARRIL DEL DINERO NUNCA ES SILENCIOSO.
     # Si la dueña tiene ese chat tomado, el bot se calla (correcto) — pero el cliente ACABA DE

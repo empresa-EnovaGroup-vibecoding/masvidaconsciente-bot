@@ -1,4 +1,3 @@
-# Regresión del motor anterior, conservado solo para comparar sus protecciones.
 """LO QUE EL CLIENTE YA ELIGIÓ NO SE REPREGUNTA: el MODO DE ENTREGA (6-sep, lo cazó Maired).
 
 EL CASO (pruebas, 21:22): "Me gustaría que me lo enviaras por delivery" → el bot: "En qué zona
@@ -90,7 +89,7 @@ def test_no_confunde_al_bot_con_el_cliente():
 # ══ El cableado: la elección llega como HECHO, y las tres frases que repreguntaban ya no ══
 
 def test_responder_inyecta_el_modo_en_la_parte_dinamica():
-    src = inspect.getsource(agent._responder_legacy)
+    src = inspect.getsource(agent.responder)
     i_modo = src.index("MODO DE ENTREGA YA ELEGIDO por el cliente: DELIVERY")
     i_msgs = src.index('"role": "system"', i_modo)
     assert i_modo < i_msgs, "va en `dinamico`, antes de armar los messages (la estable es la cacheada)"

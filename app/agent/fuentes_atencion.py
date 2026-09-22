@@ -6,8 +6,16 @@ from sqlalchemy import select, text
 
 from app.agent.contratos_atencion import Contexto, Hecho
 from app.models import (
-    Cliente, Conocimiento, Configuracion, Intervencion, MetodoPago, Pedido, Producto, ProductoVariante,
-    ZonaEntrega, hoy_venezuela,
+    Cliente,
+    Configuracion,
+    Conocimiento,
+    Intervencion,
+    MetodoPago,
+    Pedido,
+    Producto,
+    ProductoVariante,
+    ZonaEntrega,
+    hoy_venezuela,
 )
 from app.services.db import get_session_factory
 

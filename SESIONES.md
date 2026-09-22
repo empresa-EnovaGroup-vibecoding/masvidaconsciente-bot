@@ -17,6 +17,55 @@
 
 ---
 
+## 2026-09-22 (33) — 🧭 CODEX + LA VOZ: nace el modo `confirmado` (E0: cableado, APAGADO, suite verde)
+
+**De dónde viene.** Maired trabajó con ChatGPT Codex en OTRA copia del repo (`C:/Mis_Proyectos_IA/...`) y se
+le acabaron los tokens con 26 archivos sin commitear. Rescatado tal cual a la rama `control-datos-confirmados`
+(98be60f). Lo que construyó: una capa de "atención confirmada" donde el modelo solo PROPONE intenciones tipadas
+y el CÓDIGO decide los hechos desde fuentes confirmadas (`atencion.py`, `contratos_atencion.py`,
+`fuentes_atencion.py`, `resolver_atencion.py`, `eventos_atencion.py`, migración 039). Muy bueno en el QUÉ; pero
+reemplazó el CÓMO por frases fijas ("Tu pago está aprobado. Gracias por tu compra"), lo cableó como reemplazo
+total del motor (sin interruptor), y su suite no pasaba (un candado de red en los tests bloqueaba también la BD
+local).
+
+**La tesis (plan aprobado por Maired el 22-sep):** no hay que elegir entre "seguro" y "humano". El CÓDIGO decide
+QUÉ se dice (la capa de Codex), un MODELO sin catálogo ni cuentas decide CÓMO (la Voz del modo DOS de agosto,
+apagada desde entonces), y el CÓDIGO verifica que el CÓMO no agregó nada (las redes que ya existen + dos nuevas:
+nombres de producto y fechas). Codex reconstruyó la mitad de algo que ya existía; se casan las dos mitades.
+Plantillas solo como ÚLTIMO recurso, nunca la respuesta normal. Etapas E0…E6 y puertas G1-G5 (0 fallos duros ·
+empata o gana a Sonnet-`uno` en A/B ciego · fallback ≤ 5% · costo ≤ 50% · p95 ≤ actual + 3 s).
+
+**E0 (rama `atencion-confirmada-voz`, este PR):** `agente_modo='confirmado'` es un MODO junto a `uno` y `dos`,
+no un reemplazo. `responder` de master recupera su nombre y despacha las tres ramas (`_responder_confirmado` =
+el `atender` de Codex; intérprete = `modelo_operador`); `redactar_mensaje` vuelve a ser la voz natural de los
+pagos y el wrapper de Codex queda como `redactar_evento_confirmado` (sin cablear hasta E3). **Devueltos a
+master**, porque E0 NO cambia el comportamiento de `uno`: los 13 tests que Codex había apuntado a
+`_responder_legacy`, el retomar del botón individual "Devolver al bot" (`_disparar_retomar`; el #54 ya evita
+reabrir ventas cerradas), `reactivar=True` en resolver intervención, las situaciones naturales de los 3 endpoints
+de pago y de los 2 llamados del comprobante, y el fail-open de `_cliente_pausado`. **Conservado de Codex:** todos
+los motivos pausan, puerta de pausa en las herramientas, `bloquear_cliente`, `tomar_acuse`, revalidación de
+fuentes al enviar (`fuentes_vigentes`), migración 039, Conocimiento "confirmado" en el panel.
+`conftest.sin_red_externa` exime 127.0.0.1/::1/localhost. Test adaptado:
+`test_modo_confirmado_no_usa_motor_anterior` + nuevo `test_modo_uno_no_pasa_por_atender`.
+**Suite: 1105 tests, 0 fallos** (ruff 0.9.6 limpio). Producción intacta en `uno`; no hay cambio de config.
+
+**Dos PREGUNTAS de negocio que destapó Codex (para Maired → Whuilianny; E0 conservó lo de master):**
+1. `verificar_monto`: cuando el cliente paga DE MÁS, master le dice "le queda ese saldo a favor para su próxima
+   compra". Codex lo quitó a propósito: es una política comercial nacida de una frase del sistema, no de la dueña.
+   ¿El sobrepago es saldo a favor, se devuelve, o se le pregunta al cliente?
+2. `_cliente_pausado` con la BD caída: master sigue respondiendo (fail-open); Codex prefería callar (fail-closed:
+   mejor mudo que atropellar a la dueña en un chat que ella tomó). ¿Cuál?
+(Y una tercera, de medición, para E5: con Codex cada "ya te confirmo" pausa el chat hasta que ella lo resuelva;
+se cuentan intervenciones/día en pruebas antes de decidir.)
+
+**Lecciones:** dos copias del repo en la misma máquina = trabajo huérfano (consolidar en una); `git update-ref`
+para adelantar master deja índice y árbol a medias (usar `reset --hard origin/master`); un candado de red en
+tests debe eximir loopback o mata los tests de BD local.
+
+**Sigue:** E1 — `Encargo` tipado en `contratos_atencion.py`, `_emitir(redactar=None)` en `atencion.py` (camino
+de Codex byte a byte igual), `HojaDeHechos.desde_encargo`, `_responder_confirmado` → `_dar_voz` + redes +
+un reintento + fallback al texto fijo SIN pausar. Tests `test_hoja_confirmada.py`, `test_atencion_con_voz.py`.
+
 ## 2026-09-16 (32) — REGLA OFICIAL DEL DELIVERY · REVISIÓN DEL MÉTODO DEL MENTOR
 
 **Decisión del negocio:** ante la pregunta con las tres fórmulas posibles, Whuilianny respondió:

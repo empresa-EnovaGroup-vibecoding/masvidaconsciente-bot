@@ -1,4 +1,3 @@
-# Regresión del motor anterior, conservado solo para comparar sus protecciones.
 """MENOS TOKENS, MISMA VOZ (6-sep, "no quiero pagar tanto" — Maired).
 
 Tres palancas de COSTO que no tocan ni una regla de la voz. Medidas con la telemetría real
@@ -121,7 +120,7 @@ def test_redactar_mensaje_pasa_las_herramientas_activas_por_contexto():
     """La firma de `_pedir_redaccion` sigue siendo (messages, modelo) — `probar_telemetria` la
     vigila y media docena de bancos le pasan dobles con esos dos argumentos."""
     assert list(inspect.signature(agent._pedir_redaccion).parameters) == ["messages", "modelo"]
-    src = inspect.getsource(agent._redactar_mensaje_legacy)
+    src = inspect.getsource(agent.redactar_mensaje)
     assert "schemas_para(await leer_tools_activas())" in src
     assert "_TOOLS_PARA_REDACCION.set(tools_cache or None)" in src
     assert "_TOOLS_PARA_REDACCION.reset(" in src  # el contexto queda limpio para el turno siguiente
@@ -187,7 +186,7 @@ async def test_productos_ya_mostrados_falla_abierto(monkeypatch):
 def test_el_estado_le_dice_al_modelo_que_fotos_ya_salieron_en_la_parte_dinamica():
     """Contrato de fuente: la línea va en `dinamico` (la estable es la cacheada) y solo si la
     herramienta de fotos está activa."""
-    src = inspect.getsource(agent._responder_legacy)
+    src = inspect.getsource(agent.responder)
     i_partes = src.index("construir_partes_prompt(nombre_cliente, telefono, activas=activas)")
     i_fotos = src.index("FOTOS YA ENVIADAS a este cliente")
     i_msgs = src.index('"role": "system"', i_partes)

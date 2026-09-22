@@ -1,4 +1,3 @@
-# Regresión del motor anterior, conservado solo para comparar sus protecciones.
 """EL VIGILANTE PREGUNTA-vs-ESTADO (rama D) — lo que IMPIDE, no lo que sugiere.
 
 La última pieza del plan "que no repregunte": las ramas #6 y C INYECTAN lo ya elegido como
@@ -178,7 +177,7 @@ async def _correr(respuestas: list[dict], mensaje="para el sábado"):
     async def ejecutar(nombre, args, telefono, *a, **kw):
         return {"ok": True}
 
-    texto = await ag._responder_legacy("584120000000", mensaje, list(HIST), "Rosa", llm=llm, ejecutar=ejecutar)
+    texto = await ag.responder("584120000000", mensaje, list(HIST), "Rosa", llm=llm, ejecutar=ejecutar)
     return texto, avisos
 
 

@@ -1,4 +1,3 @@
-# Regresión del motor anterior, conservado solo para comparar sus protecciones.
 """EL HILO, EXTENDIDO A TAMAÑO Y SABOR (rama C) — lo ya elegido no se repregunta.
 
 🔴 LA MISMA CLASE QUE EL #6 (la masa de yuca), en las otras dos elecciones pre-registro. El #6
@@ -241,7 +240,7 @@ async def _correr(mensaje: str, historial: list):
     async def ejecutar(nombre, args, telefono, *a, **kw):
         return {"ok": True}
 
-    await ag._responder_legacy("584120000000", mensaje, list(historial), "Rosa", llm=llm, ejecutar=ejecutar)
+    await ag.responder("584120000000", mensaje, list(historial), "Rosa", llm=llm, ejecutar=ejecutar)
     return visto.get("dinamico", "")
 
 

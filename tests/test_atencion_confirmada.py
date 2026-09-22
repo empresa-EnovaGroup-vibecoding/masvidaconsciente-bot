@@ -234,16 +234,34 @@ async def test_pausa_mientras_interpreta_no_ejecuta(contexto):
     assert not e.acciones
 
 
-async def test_unica_entrada_publica_no_usa_motor_anterior(monkeypatch):
+async def test_modo_confirmado_no_usa_motor_anterior(monkeypatch):
+    """E0 (22-sep-2026): `confirmado` es un MODO junto a `uno` y `dos`, no un reemplazo. Con
+    `agente_modo='confirmado'`, `responder` va a `atender` y NO toca el motor `uno` (que llama
+    a `_llamar_con_fallback`) ni el `dos`. Producción sigue en `uno`."""
     from app.agent import atencion
 
-    monkeypatch.setattr(agent, "leer_modelo_ia", AsyncMock(return_value="simulado"))
-    monkeypatch.setattr(agent, "_responder_legacy", AsyncMock(side_effect=AssertionError("bypass")))
-    monkeypatch.setattr(agent, "_responder_dos_agentes", AsyncMock(side_effect=AssertionError("bypass")))
+    monkeypatch.setattr(
+        agent, "leer_config_agente", AsyncMock(return_value=("confirmado", "simulado", "simulado"))
+    )
+    monkeypatch.setattr(agent, "_llamar_con_fallback", AsyncMock(side_effect=AssertionError("motor uno")))
+    monkeypatch.setattr(agent, "_responder_dos_agentes", AsyncMock(side_effect=AssertionError("modo dos")))
     atender_mock = AsyncMock(return_value=MensajeConfirmado("Hola"))
     monkeypatch.setattr(atencion, "atender", atender_mock)
     assert await agent.responder("__test__", "hola") == "Hola"
     atender_mock.assert_awaited_once()
+    assert atender_mock.await_args.kwargs["modelo"] == "simulado"
+
+
+async def test_modo_uno_no_pasa_por_atender(monkeypatch):
+    """Y al revés: en `uno` (producción hoy) `atender` ni se importa como camino. Si esto falla,
+    el modo nuevo se coló en producción sin pasar las puertas."""
+    from app.agent import atencion
+
+    monkeypatch.setattr(agent, "leer_config_agente", AsyncMock(return_value=("uno", "m", "m")))
+    monkeypatch.setattr(atencion, "atender", AsyncMock(side_effect=AssertionError("atender en modo uno")))
+    monkeypatch.setattr(agent, "leer_tools_activas", AsyncMock(side_effect=RuntimeError("corte a propósito")))
+    with pytest.raises(RuntimeError, match="corte a propósito"):
+        await agent.responder("__test__", "hola")
 
 
 @pytest.mark.parametrize("tool", ["registrar_pedido", "generar_datos_pago", "anotar_entrega", "enviar_fotos_producto"])
