@@ -24,8 +24,8 @@ def elegir_frase(opciones, historial=(), calido=False):
     return opciones[0] + (" 💚" if calido else "")
 
 
-def relevo(detalle, motivo="no_se"):
-    return DecisionTurno("relevo", motivo=motivo, pendiente=detalle)
+def relevo(detalle, motivo="no_se", producto=""):
+    return DecisionTurno("relevo", motivo=motivo, pendiente=detalle, producto=producto)
 
 
 def pregunta(texto):
@@ -77,15 +77,19 @@ def consultar(ctx: Contexto, q: Consulta, texto: str) -> DecisionTurno:
     if tema in {"ingredientes", "alergenos", "conservacion", "envio_nacional", "politica"}:
         k = ctx.conocimiento.get(q.conocimiento_id, {})
         if not k.get("confirmado") or k.get("tema") != tema or k.get("producto_id") != q.producto_id:
-            return relevo(f"Falta respuesta confirmada para {tema}; producto {q.producto_id or 'negocio'}")
+            producto = ctx.productos.get(q.producto_id, {}).get("nombre", "")
+            return relevo(
+                f"Falta respuesta confirmada para {tema}; producto {q.producto_id or 'negocio'}",
+                producto=producto,
+            )
         if q.producto_id and not identificar_producto(ctx, q.producto_id, q.evidencia, texto):
             return pregunta("Cuál producto quieres consultar?")
         if not k.get("contenido"):
-            return relevo(f"Respuesta vacía: {tema}")
+            return relevo(f"Respuesta vacía: {tema}", producto=k.get("titulo", ""))
         # Dos entradas aprobadas distintas para el mismo tema/alcance son una contradicción.
         pares = [x for x in ctx.conocimiento.values() if x.get("confirmado") and x.get("tema") == tema and x.get("producto_id") == q.producto_id]
         if len({normalizar(x.get("contenido")) for x in pares}) != 1:
-            return relevo(f"Respuestas contradictorias: {tema}")
+            return relevo(f"Respuestas contradictorias: {tema}", producto=k.get("titulo", ""))
         return DecisionTurno("responder", k["contenido"], [hecho("conocimiento", k["id"], "contenido", k["contenido"])])
     if tema == "desconocido":
         return relevo("Pregunta sin una fuente confirmada")
@@ -107,7 +111,11 @@ def consultar(ctx: Contexto, q: Consulta, texto: str) -> DecisionTurno:
             return DecisionTurno("responder", "", hs)
         valor = v.get(tema)
         if valor is None or (isinstance(valor, str) and not valor.strip()):
-            return relevo(f"Falta {tema} de {p['nombre']} / {v['presentacion']}", "precio_del_dia" if tema == "precio" else "no_se")
+            return relevo(
+                f"Falta {tema} de {p['nombre']} / {v['presentacion']}",
+                "precio_del_dia" if tema == "precio" else "no_se",
+                p["nombre"],
+            )
         hs.append(hecho("variante", v["id"], tema, valor))
         if tema == "precio":
             from app.agent.tools import _fmt_usd
@@ -118,7 +126,7 @@ def consultar(ctx: Contexto, q: Consulta, texto: str) -> DecisionTurno:
         return DecisionTurno("responder", f"{p['nombre']} {'está disponible' if valor else 'no está disponible ahora'}.", hs + [hecho("producto", p["id"], tema, valor)])
     valor = p.get(tema)
     if valor is None or not str(valor).strip():
-        return relevo(f"Falta {tema} de {p['nombre']}")
+        return relevo(f"Falta {tema} de {p['nombre']}", producto=p["nombre"])
     hs.append(hecho("producto", p["id"], tema, valor))
     etiquetas = {"duracion": "Duración", "se_congela": "Para congelarlo", "apto_diabeticos": "Información de la ficha", "descripcion": p["nombre"]}
     return DecisionTurno("responder", f"{etiquetas.get(tema, tema)}: {valor}", hs)

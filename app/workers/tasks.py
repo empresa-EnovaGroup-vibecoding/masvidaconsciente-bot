@@ -9,7 +9,7 @@ from celery.exceptions import MaxRetriesExceededError
 
 from app.agent.agent import (
     leer_comprobante,
-    redactar_mensaje,
+    redactar_pago,
     responder,
     transcribir_audio,
 )
@@ -508,17 +508,14 @@ async def _bot_activo() -> bool:
 
 async def _cliente_pausado(telefono: str) -> bool:
     """True si el bot está pausado en ESE chat (lo pausara quien lo pausara).
-    Si la BD falla, devuelve False: un error de lectura no puede dejar MUDO al bot entero."""
+    Si la BD falla, devuelve True: sin poder comprobar quién atiende, el bot se detiene."""
     try:
         return (await _estado_pausa(telefono))[0]
     except Exception:  # noqa: BLE001
-        # E0 (22-sep): Codex lo había puesto fail-CLOSED (si la BD falla, el bot se calla: en ese
-        # instante no puede ni leer si la dueña tomó el chat). Aquí queda el fail-open de master
-        # SOLO porque E0 no cambia nada de producción. 🔴 MAIRED DECIDIÓ (22-sep): callar, como
-        # Codex — se aplica en E1 con su test (SESIONES (33)). No es lo mismo que "no sabe algo":
-        # eso va a "ya te confirmo" + aviso + pausa (modo `confirmado`).
-        logger.exception("No se pudo leer la pausa de %s (sigue respondiendo)", telefono)
-        return False
+        # No es lo mismo que "no sabe algo": eso va a "ya te confirmo" + aviso + pausa. Aquí la
+        # avería impide incluso saber si una persona tomó el chat, así que hablar sería atropellarla.
+        logger.exception("No se pudo leer la pausa de %s (el bot se detiene)", telefono)
+        return True
 
 
 async def _lo_paso_una_persona(telefono: str) -> bool:
@@ -534,9 +531,8 @@ async def _lo_paso_una_persona(telefono: str) -> bool:
 
     Ante cualquier duda o error, devuelve True (el bot se CALLA): es el lado seguro. Callarse
     de más cuesta un mensaje; hablarle encima a la dueña delante de un cliente, en medio de un
-    cobro, cuesta la venta y la confianza. OJO: esto es lo CONTRARIO de `_cliente_pausado`, que
-    ante un error deja hablar al bot — son dos preguntas distintas con dos lados seguros
-    distintos, y por eso NO comparten el except.
+    cobro, cuesta la venta y la confianza. `_cliente_pausado` toma el mismo lado seguro: ante
+    una avería que impide comprobar el estado, ninguno de los dos autoriza una respuesta.
     """
     try:
         pausado, por = await _estado_pausa(telefono)
@@ -551,9 +547,8 @@ async def _lo_paso_una_persona(telefono: str) -> bool:
 async def _estado_pausa(telefono: str) -> tuple[bool, str | None]:
     """(¿pausado?, ¿quién lo pausó?) — 'dueña' | 'bot' | 'privado' | None.
 
-    PROPAGA la excepción a propósito: cada quien tiene su lado seguro (el bot sigue hablando
-    si no sabemos si está pausado; el bot se CALLA si no sabemos QUIÉN lo pausó). Tragarse el
-    error aquí obligaba a los dos a compartir el mismo, y uno de los dos quedaba mal.
+    PROPAGA la excepción a propósito: sus llamadores registran el contexto concreto del fallo y
+    ambos se detienen. Tragarse el error aquí ocultaría una avería que impide autorizar el envío.
 
     🔴 'privado' ES EL **SEGUNDO CINTURÓN** DE LOS CONTACTOS PRIVADOS (migración 031). El freno de
     verdad está en el webhook (`_es_contacto_privado`), que corta antes de guardar nada y antes de
@@ -1309,8 +1304,18 @@ async def _leer_comprobante_seguro(telefono, contenido, base_mime) -> dict:
         return {"es_comprobante": None, "leido": False}
 
 
+def _evento_comprobante(resultado: dict, monto_cuadra: bool) -> dict:
+    """Describe el resultado del carril sin copiar montos ni afirmar estados por texto libre."""
+    if not resultado.get("ok"):
+        return {"tipo": "sin_pedido"}
+    return {
+        "tipo": "revision" if monto_cuadra else "revision_importe",
+        "pago_id": resultado.get("pago_id"),
+    }
+
+
 async def _responder_situacion(
-    telefono: str, situacion: str, nombre: str | None
+    telefono: str, situacion: str, nombre: str | None, evento: dict | None = None,
 ) -> list[dict]:
     """Whuilianny REDACTA un mensaje para el cliente según la situación (no plantilla),
     lo protege contra afirmaciones de pago, lo envía en partes y lo guarda en historial.
@@ -1328,8 +1333,9 @@ async def _responder_situacion(
         # más no toca el camino del dinero; sembrar sin lock sí podría duplicar.
         historial = await historial_con_respaldo(telefono)
         _usd, _bs = await _montos_decibles(telefono)
-        mensaje = await redactar_mensaje(
-            situacion, historial, nombre, telefono, montos_usd=_usd, montos_bs=_bs
+        mensaje = await redactar_pago(
+            situacion, historial, nombre, telefono,
+            montos_usd=_usd, montos_bs=_bs, evento=evento,
         )
     except Exception:  # noqa: BLE001
         logger.exception("No se pudo redactar el mensaje al cliente %s", telefono)
@@ -1709,7 +1715,7 @@ async def _procesar_comprobante(
                 "plantilla): dile con cariño que ahí no ves el comprobante y pídele que te reenvíe "
                 "la captura clara del pago (donde se vea el monto y la referencia)."
             )
-        await _responder_situacion(telefono, situacion, nombre)
+        await _responder_situacion(telefono, situacion, nombre, {"tipo": "captura"})
         return "no_es_comprobante"
 
     # ¿El MONTO del comprobante cuadra con lo cobrado? Comparamos contra el monto en
@@ -1900,7 +1906,9 @@ async def _procesar_comprobante(
             ),
             candado=(f"comprobante_sin_pedido:{telefono}", 900),
         )
-    partes = await _responder_situacion(telefono, situacion, nombre)
+    partes = await _responder_situacion(
+        telefono, situacion, nombre, _evento_comprobante(resultado, monto_cuadra)
+    )
 
     # 🔴 EL CARRIL DEL DINERO NUNCA ES SILENCIOSO.
     # Si la dueña tiene ese chat tomado, el bot se calla (correcto) — pero el cliente ACABA DE
@@ -2212,10 +2220,10 @@ async def _procesar_evento(telefono, tipo, nombre, texto, message_id) -> None:
 
 
 @celery_app.task(name="notificar_cliente_pago")
-def notificar_cliente_pago(telefono, situacion):
+def notificar_cliente_pago(telefono, situacion, evento=None):
     """Tarea: avisa al cliente (pago confirmado/rechazado) con un mensaje redactado
     al momento por Whuilianny, en su voz y con contexto — no una plantilla."""
-    _run(_notificar_cliente_pago(telefono, situacion))
+    _run(_notificar_cliente_pago(telefono, situacion, evento))
 
 
 async def _avisar_a_la_duena(
@@ -2405,7 +2413,7 @@ async def _avisar_pago_sin_confirmar(telefono: str, mensaje: str, *, tomado: boo
     )
 
 
-async def _notificar_cliente_pago(telefono, situacion) -> None:
+async def _notificar_cliente_pago(telefono, situacion, evento=None) -> None:
     """La dueña confirmó o rechazó un pago desde el panel: hay que decírselo al cliente.
 
     🔴 ES EL ÚNICO CAMINO QUE LE HABLA AL CLIENTE **DÍAS DESPUÉS** (auditoría 2026-07-13). Todos
@@ -2479,8 +2487,9 @@ async def _notificar_cliente_pago(telefono, situacion) -> None:
         # Con respaldo, `sembrar=False` por el mismo motivo que el carril del comprobante.
         historial = await historial_con_respaldo(telefono)
         _usd, _bs = await _montos_decibles(telefono)
-        mensaje = await redactar_mensaje(
-            situacion, historial, None, telefono, montos_usd=_usd, montos_bs=_bs
+        mensaje = await redactar_pago(
+            situacion, historial, None, telefono,
+            montos_usd=_usd, montos_bs=_bs, evento=evento,
         )
     except Exception:  # noqa: BLE001
         logger.exception("No se pudo redactar el aviso de pago para %s", telefono)

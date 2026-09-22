@@ -89,6 +89,7 @@ class DecisionTurno:
     hechos: list[Hecho] = field(default_factory=list)
     motivo: str = "no_se"
     pendiente: str = ""
+    producto: str = ""
 
 
 class MensajeConfirmado(str):

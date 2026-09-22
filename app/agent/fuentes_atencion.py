@@ -11,6 +11,7 @@ from app.models import (
     Conocimiento,
     Intervencion,
     MetodoPago,
+    Pago,
     Pedido,
     Producto,
     ProductoVariante,
@@ -87,11 +88,16 @@ async def cargar_contexto(telefono: str) -> Contexto:
             .order_by(Pedido.created_at.desc()).limit(1)
         )).scalar_one_or_none()
         if pedido:
+            pago_pendiente = (await session.execute(
+                select(Pago.estado).where(Pago.pedido_id == pedido.id)
+                .order_by(Pago.created_at.desc()).limit(1)
+            )).scalar_one_or_none()
             ctx.pedido = {
                 "id": pedido.id, "estado": pedido.estado, "items": pedido.items,
                 "fecha": pedido.entrega_fecha.isoformat() if pedido.entrega_fecha else None,
                 "zona_id": pedido.zona_id, "referencia": pedido.entrega_referencia,
                 "metodo": pedido.metodo_elegido, "total": pedido.total,
+                "pago_pendiente": pago_pendiente,
             }
         return ctx
 

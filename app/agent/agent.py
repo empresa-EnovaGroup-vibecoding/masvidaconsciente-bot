@@ -2446,8 +2446,11 @@ async def _responder_confirmado(
     `modelo` = el intérprete (`modelo_operador`; cae a `modelo_ia` si no está)."""
     from app.agent.atencion import atender
 
-    return await atender(telefono, pregunta_cliente or mensaje_usuario, historial,
-                         llm=llm, modelo=modelo or await leer_modelo_ia(), ejecutar=ejecutar)
+    return await atender(
+        telefono, pregunta_cliente or mensaje_usuario, historial,
+        llm=llm, modelo=modelo or await leer_modelo_ia(), ejecutar=ejecutar,
+        nombre=nombre_cliente,
+    )
 
 
 async def responder(
@@ -3857,13 +3860,49 @@ async def _pedir_redaccion(messages: list, modelo: str) -> str:
 
 async def redactar_evento_confirmado(situacion, historial=None, nombre=None, telefono=None, *,
                                      montos_usd=None, montos_bs=None) -> str:
-    """MODO `confirmado` (E0): mensaje de pago desde un EVENTO tipado y la fila real del pago
-    (`eventos_atencion.redactar_evento`, Codex). Todavía NO está cableado a los llamadores: en
-    E3 `redactar_mensaje` despachará por modo y este texto fijo quedará solo como FALLBACK de la
-    Voz. Hoy `uno` y `dos` siguen usando `redactar_mensaje` (la voz natural con lista cerrada)."""
+    """Mensaje de pago desde un evento tipado y la fila real del pago."""
     from app.agent.eventos_atencion import redactar_evento
 
     return await redactar_evento(situacion, telefono, historial)
+
+
+async def redactar_pago(
+    situacion: str,
+    historial: list | None = None,
+    nombre: str | None = None,
+    telefono: str | None = None,
+    *,
+    montos_usd: set[float] | None = None,
+    montos_bs: set[float] | None = None,
+    evento: dict | None = None,
+) -> str:
+    """Elige el redactor del pago sin cambiar los modos que ya funcionan.
+
+    `uno` y `dos` conservan exactamente el redactor natural. El modo `confirmado` acepta solo un
+    evento tipado y vuelve a consultar la fila del pago antes de afirmar su estado.
+    """
+    modo, _, _ = await leer_config_agente()
+    if modo == "confirmado" and evento is not None:
+        texto = await redactar_evento_confirmado(
+            evento, historial, nombre, telefono,
+            montos_usd=montos_usd, montos_bs=montos_bs,
+        )
+        if not texto:
+            logger.error(
+                "PAGO CONFIRMADO: el evento no coincide con una fila autorizada para %s: %r",
+                telefono, evento,
+            )
+        return texto
+    if modo == "confirmado":
+        logger.error(
+            "PAGO CONFIRMADO: llegó una situación sin evento tipado para %s; respuesta bloqueada",
+            telefono,
+        )
+        return ""
+    return await redactar_mensaje(
+        situacion, historial, nombre, telefono,
+        montos_usd=montos_usd, montos_bs=montos_bs,
+    )
 
 
 async def redactar_mensaje(

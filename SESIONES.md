@@ -17,6 +17,34 @@
 
 ---
 
+## 2026-09-22 (34) — 🛡️ EL CEREBRO SE CIERRA ANTES DE DARLE VOZ (E1, APAGADO)
+
+**Decisión de Maired:** primero terminar la seguridad del modo `confirmado`; la Voz natural se conecta
+después. Se trabajó sobre la rama de Claude `atencion-confirmada-voz`, conservando E0 y sin tocar la
+configuración de ningún servidor.
+
+**Qué quedó hecho:**
+- Si no se puede consultar la pausa del chat, el bot se calla. No arriesga responder encima de
+  Whuilianny.
+- Los pagos y comprobantes del modo `confirmado` salen de un evento cerrado y de la fila real del pago.
+  Un llamado sin evento se bloquea; no vuelve al redactor libre. Los modos `uno` y `dos` conservan su
+  camino actual.
+- El sobrepago confirmado muestra el saldo a favor y el abono parcial calcula recibido, total y faltante
+  desde la base de datos.
+- "Ya pagué" distingue entre cobro abierto sin captura, comprobante ya reportado y ausencia de un pedido
+  cobrable. El comprobante entrante sigue pudiéndose guardar aunque el chat esté pausado.
+- Los avisos humanos incluyen pedido, producto y dato pendiente cuando esa información existe. El saludo
+  puede usar el primer nombre, pero omite URLs, emojis solos y nombres de perfil extraños.
+- Las fuentes se vuelven a revisar **antes** de guardar, registrar o cobrar. Si el borrador no se puede
+  guardar, no se ejecuta ninguna acción.
+
+**Comprobación local:** ruff, `compileall`, 100 pruebas dirigidas y la suite completa en verde. Las pruebas
+usan respuestas simuladas: no llamaron a OpenRouter, no consumieron tokens del bot y no enviaron WhatsApps.
+
+**Estado:** código solo en la rama/PR #59. El modo `confirmado` sigue apagado y producción continúa en
+`uno`. No hubo despliegue. **Sigue:** conectar la Voz sobre esta salida cerrada, probarla sin red y después
+llevar el modo al entorno de pruebas de Enova. Activación en producción queda para una decisión posterior.
+
 ## 2026-09-22 (33) — 🧭 CODEX + LA VOZ: nace el modo `confirmado` (E0: cableado, APAGADO, suite verde)
 
 **De dónde viene.** Maired trabajó con ChatGPT Codex en OTRA copia del repo (`C:/Mis_Proyectos_IA/...`) y se

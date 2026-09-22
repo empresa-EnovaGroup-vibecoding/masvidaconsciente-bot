@@ -33,11 +33,11 @@ Las **FASES 0 a 3 ya están hechas y desplegadas**:
 > 🧭 **22-sep — PLAN VIGENTE: "atención confirmada + Voz" (modo `confirmado`)** — SESIONES (33) y
 > `~/.claude/plans/…crystalline-sprout.md`. El código decide QUÉ (capa de hechos de Codex), la Voz decide CÓMO
 > (modo DOS de agosto), el código verifica. Absorbe el punto 3 de abajo: los modelos baratos entran donde el
-> peor caso es un reintento, nunca una mentira. **E0 hecho** (rama `atencion-confirmada-voz`): modo cableado y
-> APAGADO, suite 1105/0, producción sigue en `uno`. Siguen E1 (Voz sobre la hoja de hechos) → E2 (redes de
-> nombres/fechas) → E3 (pagos) → E4 (medir con el arnés, jueces Claude, puertas G1-G5) → E5 (pruebas + una
-> conversación de Maired) → E6 (prod por config). Dos preguntas de negocio pendientes en SESIONES (33):
-> sobrepago = ¿saldo a favor?; BD caída = ¿callar o seguir?
+> peor caso es un reintento, nunca una mentira. **E0 y E1 hechos en la rama `atencion-confirmada-voz`**:
+> el modo está cableado y el cerebro ya cierra datos, pagos, pausa, avisos y acciones; sigue APAGADO y
+> producción continúa en `uno`. Las dos decisiones pendientes ya fueron resueltas por Maired: sobrepago =
+> saldo a favor; si falla la lectura de la pausa, el bot calla. Sigue: Voz sobre la salida cerrada → pruebas
+> sin red → entorno de pruebas de Enova → medición y puertas G1-G5 → activación gradual por configuración.
 
 1. **Cerrar la regla del delivery.** Whuilianny confirmó la fórmula: productos + delivery y después
    20% de descuento al total cuando se paga en dólares. El cambio de código conserva las cotizaciones

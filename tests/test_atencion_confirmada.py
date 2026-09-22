@@ -87,10 +87,10 @@ class Entorno:
             return {"ok": True, "primera_fecha": {"fecha": "2026-09-23", "cuando": "miércoles 23 de septiembre"}}
         raise AssertionError(nombre)
 
-    async def turno(self, mensaje, historial=None):
+    async def turno(self, mensaje, historial=None, *, nombre=None):
         return await atender("__prueba__", mensaje, historial, llm=self.llm, modelo="simulado",
                              ejecutar=self.ejecutar, cargar=self.cargar, guardar=self.guardar,
-                             verificar=self.verificar)
+                             verificar=self.verificar, nombre=nombre)
 
 
 def consulta(tema, **kw):
@@ -175,6 +175,17 @@ async def test_dato_del_cliente_faltante_se_pregunta_sin_aviso(contexto, falta, 
     assert texto in r and not e.avisos and not e.cobros and not e.registros
 
 
+async def test_cantidad_faltante_se_pregunta_sin_aviso(contexto):
+    contexto.borrador = borrador_completo()
+    contexto.borrador["items"][0]["cantidad"] = None
+    e = Entorno(contexto, {"intencion": "cobrar", "evidencia_accion": "dame los datos"})
+
+    r = await e.turno("dame los datos")
+
+    assert "Cuántas unidades" in r
+    assert not e.avisos and not e.cobros and not e.registros
+
+
 async def test_cobro_completo_copia_calculo_y_cuenta_sin_redactor(contexto):
     contexto.borrador = borrador_completo()
     e = Entorno(contexto, {"intencion": "cobrar", "evidencia_accion": "dame los datos"})
@@ -205,10 +216,45 @@ async def test_zona_no_confirmada_impide_avanzar(contexto):
 
 
 async def test_precio_cambia_durante_redaccion_no_sale(contexto):
-    e = Entorno(contexto, consulta("precio"))
+    contexto.borrador = borrador_completo()
+    solicitud = consulta("precio")
+    solicitud.update(intencion="cobrar", evidencia_accion="dame los datos")
+    e = Entorno(contexto, solicitud)
     e.vigente = False
-    r = await e.turno("precio del quesillo")
+    r = await e.turno("dime el precio del quesillo y dame los datos")
     assert r.relevo and "$18" not in r
+    assert not e.cobros and not e.registros
+
+
+async def test_si_no_se_guarda_el_borrador_no_se_ejecuta_ninguna_accion(contexto):
+    e = Entorno(contexto, {
+        "intencion": "registrar",
+        "seleccion": [{
+            "producto_id": 1, "variante_id": 11, "cantidad": 1,
+            "evidencia_producto": "quesillo", "evidencia_cantidad": "uno",
+        }],
+        "evidencia_accion": "anótalo",
+    })
+    e.guardar = AsyncMock(return_value=False)
+
+    r = await e.turno("quiero uno de quesillo, anótalo")
+
+    assert r == ""
+    assert not e.acciones and not e.registros and not e.cobros
+
+
+async def test_aviso_identifica_pedido_y_producto(contexto):
+    contexto.pedido = {
+        "id": 47, "estado": "pendiente", "fecha": "2026-09-23", "zona_id": 2,
+        "referencia": "frente a la plaza", "metodo": "Zelle", "items": [],
+    }
+    e = Entorno(contexto, consulta("duracion"))
+
+    r = await e.turno("cuánto dura el quesillo?")
+
+    assert r.relevo
+    assert "Pedido #47" in e.avisos[0]["detalle"]
+    assert "Producto: Quesillo" in e.avisos[0]["detalle"]
 
 
 async def test_aviso_fallido_no_promete_confirmacion(contexto, monkeypatch):
@@ -232,6 +278,42 @@ async def test_pausa_mientras_interpreta_no_ejecuta(contexto):
     e.llm = pausar
     assert await e.turno("quesillo precio") == ""
     assert not e.acciones
+
+
+@pytest.mark.parametrize("nombre,esperado", [
+    ("María Fernanda", "María"),
+    ("https://ejemplo.test/perfil", None),
+    ("💚✨", None),
+])
+async def test_saludo_solo_usa_un_nombre_humano(contexto, nombre, esperado):
+    e = Entorno(contexto, {"intencion": "saludo"})
+
+    r = await e.turno("hola", nombre=nombre)
+
+    assert (esperado in r) if esperado else nombre not in r
+
+
+@pytest.mark.parametrize("pedido,pago_pendiente,texto,relevo", [
+    (True, None, "Envíame la captura", False),
+    (True, "reportado", "Ya tengo tu comprobante", False),
+    (False, None, "confirmo", True),
+])
+async def test_ya_pague_depende_del_pedido_y_del_comprobante(
+    contexto, pedido, pago_pendiente, texto, relevo,
+):
+    if pedido:
+        contexto.pedido = {
+            "id": 47, "estado": "esperando_pago", "fecha": "2026-09-23", "zona_id": 2,
+            "referencia": "frente a la plaza", "metodo": "Zelle", "items": [],
+            "pago_pendiente": pago_pendiente,
+        }
+    e = Entorno(contexto, {"intencion": "comprobante"})
+
+    r = await e.turno("ya pagué")
+
+    assert texto in r
+    assert r.relevo is relevo
+    assert bool(e.avisos) is relevo
 
 
 async def test_modo_confirmado_no_usa_motor_anterior(monkeypatch):
