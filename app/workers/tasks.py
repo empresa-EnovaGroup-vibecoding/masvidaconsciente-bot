@@ -2124,6 +2124,107 @@ async def _responder_y_enviar(telefono: str, texto: str, nombre: str | None) -> 
     return "ok"
 
 
+@celery_app.task(name="transcribir_eco")
+def transcribir_eco(telefono, message_id, media_id, mime_type=None):
+    """Tarea: la NOTA DE VOZ DE LA DUEÑA se transcribe y reemplaza al «[nota de voz]»."""
+    _run(_transcribir_eco(telefono, message_id, media_id, mime_type))
+
+
+def _media_caducada(error: Exception) -> bool:
+    """Meta borra la media a los pocos días y la URL de descarga dura ~5 min: un 400/404 no es
+    una avería nuestra, es un audio que ya no existe. Misma lectura que hace el script del
+    levantamiento (`scripts/levantamiento/transcribir_audios_duena.py`)."""
+    msg = str(error)
+    return "400" in msg or "404" in msg or "does not exist" in msg
+
+
+async def _transcribir_eco(telefono, message_id, media_id, mime_type) -> str:
+    """🎤 EL EXPEDIENTE, PR2 (SESIONES (36)): lo que la dueña dijo por nota de voz pasa a ser texto.
+
+    Hasta hoy el bot veía "[nota de voz]" en el 100% de sus audios (877 en el corpus real, y en
+    ellos coordina las entregas): por eso contradecía cosas que ella ya había dicho. Aquí se
+    descarga, se transcribe con el MISMO `transcribir_audio` del cliente, y se reemplaza el
+    placeholder EN SU SITIO: en `mensajes` (solo si sigue siendo el placeholder — idempotente
+    frente a reintentos) y en la memoria Redis (misma posición: no se apila al final, o la frase
+    de ella quedaría después de lo que el cliente dijo mientras tanto). Devuelve una palabra para
+    el log y los tests.
+
+    🔒 PRIVADOS: se vuelve a preguntar AQUÍ, y fallando CERRADO. `_es_contacto_privado` (webhook)
+    falla abierto a propósito —para atender—; pero mandar la voz de un familiar a Gemini por un
+    hipo de la base no se deshace, así que ante la duda NO se transcribe. Un audio caducado o un
+    fallo no avisan a nadie: queda el placeholder, como hasta hoy, y se anota en el log.
+    """
+    from sqlalchemy import select, update
+
+    from app.models import Cliente, Mensaje
+    from app.services.memoria import mensaje_owner_para_historial
+    from app.webhook.parser import PLACEHOLDER_AUDIO
+
+    try:
+        # Dentro del `try` A PROPÓSITO: si la base ni siquiera da conexión, la respuesta es la
+        # misma que si dijera "privado" — no se transcribe. Fallar cerrado es también esto.
+        factory = get_session_factory()
+        async with factory() as session:
+            privado = (
+                await session.execute(select(Cliente.privado).where(Cliente.telefono == telefono))
+            ).scalar_one_or_none()
+    except Exception:  # noqa: BLE001 — ante la duda, la voz de la dueña no sale de casa
+        logger.exception("No pude saber si %s es privado: su nota de voz NO se transcribe", telefono)
+        return "sin_verificar"
+    if privado:
+        return "privado"
+
+    # 📊 Carril propio en `llamadas_ia`: así se ve cuánto cuesta escucharla A ELLA, aparte del
+    # cliente (la columna `carril` es texto libre; ver migración 032).
+    abrir_turno(telefono, "eco_audio")
+    try:
+        contenido, mime = await descargar_media(media_id)
+    except Exception as e:  # noqa: BLE001 — Meta ya lo borró, o falló la red
+        if _media_caducada(e):
+            logger.info(
+                "La nota de voz de la dueña para %s ya no está en Meta (%s)", telefono, str(e)[:80]
+            )
+            return "caducado"
+        logger.exception("No se pudo descargar la nota de voz de la dueña para %s", telefono)
+        return "error_descarga"
+    try:
+        texto = (await transcribir_audio(contenido, mime or mime_type or "audio/ogg")).strip()
+    except Exception:  # noqa: BLE001
+        logger.exception("No se pudo transcribir la nota de voz de la dueña para %s", telefono)
+        return "error_transcripcion"
+    if not texto:
+        return "vacio"
+
+    nuevo = f"🎤 {texto}"
+    try:
+        async with factory() as session:
+            res = await session.execute(
+                update(Mensaje)
+                .where(
+                    Mensaje.message_id == message_id,
+                    Mensaje.rol == "owner",
+                    Mensaje.contenido == PLACEHOLDER_AUDIO,
+                )
+                .values(contenido=nuevo)
+            )
+            await session.commit()
+    except Exception:  # noqa: BLE001
+        logger.exception("No se pudo guardar la transcripción del eco %s", message_id)
+        return "error_guardado"
+    if not res.rowcount:
+        return "ya_transcrito"
+    try:
+        await rc.reemplazar_en_historial(
+            telefono,
+            mensaje_owner_para_historial(PLACEHOLDER_AUDIO),
+            mensaje_owner_para_historial(nuevo),
+        )
+        await rc.notificar_conversacion(telefono, "actualizada")
+    except Exception:  # noqa: BLE001 — Postgres ya tiene la verdad; el respaldo la trae
+        logger.warning("La transcripción del eco %s quedó en Postgres pero no en Redis", message_id)
+    return "ok"
+
+
 @celery_app.task(name="procesar_audio")
 def procesar_audio(telefono, message_id, media_id, nombre=None, mime_type=None):
     """Tarea: descarga la nota de voz, la transcribe y responde como a un texto."""

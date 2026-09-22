@@ -62,9 +62,13 @@ _TIPOS = {
 }
 
 # `mensajes.contenido` es NOT NULL: una foto sin pie de foto NO puede guardarse con None.
+# El de la nota de voz tiene nombre propio: `transcribir_eco` (workers/tasks.py) lo busca en
+# `mensajes` y en la memoria del bot para reemplazarlo por la transcripción de la dueña. Si cambia
+# aquí, cambia allá solo (expediente, PR2 — SESIONES (36)).
+PLACEHOLDER_AUDIO = "[nota de voz]"
 _PLACEHOLDER = {
     "image": "[foto]",
-    "audio": "[nota de voz]",
+    "audio": PLACEHOLDER_AUDIO,
     "document": "[documento]",
     "sticker": "[sticker]",
     "video": "[video]",

@@ -27,7 +27,7 @@ Postgres; lo que faltaba era leerlo.
 import logging
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import or_, select
+from sqlalchemy import and_, or_, select
 
 from app.config import get_settings
 from app.models import Mensaje
@@ -138,8 +138,11 @@ async def historial_desde_postgres(telefono: str) -> list[dict]:
        historial bueno.
     2. `tipo = 'text'` — la media NUNCA entró al historial de Redis (decisión del 08-08). Meter
        aquí las filas "(foto de X)" / "(catálogo en PDF)" le enseñaría al bot un formato que no
-       existe en su memoria viva. Las notas de voz NO se pierden: se guardan ya transcritas y con
-       tipo 'text' (`_responder_y_enviar`).
+       existe en su memoria viva. Las notas de voz del CLIENTE no se pierden: se guardan ya
+       transcritas y con tipo 'text' (`_responder_y_enviar`). 🎤 La única excepción es la nota de
+       voz de la DUEÑA ya transcrita (expediente, PR2): conserva `tipo='audio'` para que el panel
+       siga mostrando el reproductor, y se reconoce porque su contenido empieza por 🎤 — la marca
+       que le pone `transcribir_eco`. El placeholder "[nota de voz]" sin transcribir sigue fuera.
     3. `rol owner → assistant` — es lo que hace Redis con el eco de la dueña ("el bot HEREDA lo que
        ella dijo, una sola voz ante el cliente", `webhook/router.py`). Mandarlo como 'owner' metería
        un rol que el LLM no conoce; omitirlo dejaría un hueco donde alguien SÍ habló.
@@ -161,7 +164,14 @@ async def historial_desde_postgres(telefono: str) -> list[dict]:
                     select(Mensaje.rol, Mensaje.contenido)
                     .where(
                         Mensaje.cliente_telefono == telefono,
-                        Mensaje.tipo == "text",
+                        or_(
+                            Mensaje.tipo == "text",
+                            and_(
+                                Mensaje.rol == "owner",
+                                Mensaje.tipo == "audio",
+                                Mensaje.contenido.like("🎤%"),
+                            ),
+                        ),
                         Mensaje.contenido != "",
                         Mensaje.created_at >= desde,
                         or_(Mensaje.estado.is_(None), Mensaje.estado != "fallido"),

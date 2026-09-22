@@ -510,6 +510,21 @@ async def _procesar_eco(eco) -> str:
         await rc.set_cache(f"cache:eco:{wa_id}", "1", 86400)
     except Exception:  # noqa: BLE001 — sin candado se repite el trabajo, no el efecto
         logger.warning("No se pudo marcar el eco %s como procesado", wa_id)
+
+    # 7) 🎤 LA NOTA DE VOZ DE LA DUEÑA SE TRANSCRIBE (expediente, PR2 — SESIONES (36)). Hasta hoy
+    #    el bot veía "[nota de voz]" en el 100% de sus audios (877 en el corpus real, y en ellos
+    #    ella coordina las entregas): por eso contradecía cosas que ella ya había dicho. Aquí SOLO
+    #    se encola, y solo si la burbuja es NUEVA (un reintento de Meta no transcribe dos veces).
+    #    El worker vuelve a preguntar si el contacto es privado ANTES de mandar un byte a Gemini
+    #    —fallando cerrado— y reemplaza el placeholder en `mensajes` y en la memoria del bot, en su
+    #    misma posición. Si esto falla, el eco ya hizo lo suyo: la pausa y la burbuja están.
+    if nueva and eco["tipo"] == "audio" and eco.get("media_id"):
+        try:
+            from app.workers.tasks import transcribir_eco
+
+            transcribir_eco.apply_async((telefono, wa_id, eco["media_id"], eco.get("mime_type")))
+        except Exception:  # noqa: BLE001 — sin transcripción queda el placeholder, como hasta hoy
+            logger.exception("No se pudo encolar la transcripción de la nota de voz de %s", telefono)
     await rc.notificar_conversacion(telefono, "atencion_humana")
     return "eco"
 
