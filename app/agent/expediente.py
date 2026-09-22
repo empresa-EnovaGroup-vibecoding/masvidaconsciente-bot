@@ -67,7 +67,20 @@ cantidad_literal se copian tal cual están (no deduzcas cantidades ni completes 
 catálogo). total_literal y monto_literal se copian con su moneda si la dijo. fecha_texto copia
 "mañana", "el sábado" o la fecha tal cual; nunca calcules. momento_texto copia "en la tarde", "a las
 10". Si ella se corrige dentro de la ventana, vale SOLO lo último. No inventes nada que no esté
-escrito. Si dudas, usa nada. Sin texto, cifras ni explicaciones fuera del contrato."""
+escrito. Si dudas, usa nada. Sin texto, cifras ni explicaciones fuera del contrato.
+FORMATO EXACTO de la llamada (cada elemento de eventos es un OBJETO con sus campos, nunca una palabra
+sola; todos los valores van entre comillas): {"eventos": [{"tipo": "pedido_tomado", "items":
+[{"nombre_literal": "quesillos", "cantidad_literal": "2"}], "total_literal": "16$", "evidencia":
+"Te anoté 2 quesillos son 16$"}, {"tipo": "entrega_acordada", "fecha_texto": "mañana",
+"momento_texto": "en la tarde", "evidencia": "te lo llevo mañana en la tarde"}]}"""
+
+# Los campos de texto y su tope: un modelo barato puede desbordarlos; se recortan ANTES de validar
+# (una evidencia recortada sigue constando: es un prefijo literal).
+_TOPES = {
+    "nombre_literal": 120, "cantidad_literal": 40, "total_literal": 40, "monto_literal": 40,
+    "metodo": 60, "fecha_texto": 60, "momento_texto": 60, "lugar_texto": 200, "tema": 40,
+    "contenido": 400, "evidencia": 300,
+}
 
 
 # ══════════════════════════════════════════════════════════════════════════════════
@@ -170,18 +183,84 @@ def _mensajes_para_modelo(ventana: Ventana, ctx: Contexto) -> list[dict]:
     ]
 
 
-async def interpretar_duena(ventana: Ventana, ctx: Contexto, llm, modelo: str) -> ExtraccionDuena:
-    herramienta = {"type": "function", "function": {
-        "name": "proponer_eventos_duena",
-        "description": "Eventos de la venta que la dueña hizo a mano. Propuesta sin efectos.",
-        "parameters": ExtraccionDuena.model_json_schema(),
-    }}
-    datos = await llm(_mensajes_para_modelo(ventana, ctx), [herramienta], modelo)
+def esquema_sin_refs(esquema: dict) -> dict:
+    """El esquema de la herramienta, con cada `$ref` sustituido por su definición (sin `$defs`).
+
+    La primera noche en pruebas (22-sep) Flash-Lite devolvió `{"eventos": ["pedido_tomado"]}` —
+    una lista de PALABRAS en vez de objetos—: se perdió con las referencias internas que genera
+    pydantic para los modelos anidados. Inline, el esquema se lee de arriba abajo."""
+    defs = esquema.get("$defs", {})
+
+    def _resolver(nodo):
+        if isinstance(nodo, dict):
+            if "$ref" in nodo:
+                return _resolver(defs[nodo["$ref"].rsplit("/", 1)[-1]])
+            return {k: _resolver(v) for k, v in nodo.items() if k != "$defs"}
+        if isinstance(nodo, list):
+            return [_resolver(x) for x in nodo]
+        return nodo
+
+    return _resolver(esquema)
+
+
+def _recortar(d: dict) -> dict:
+    return {k: (v[: _TOPES[k]] if k in _TOPES and isinstance(v, str) else v) for k, v in d.items()}
+
+
+def normalizar_argumentos(texto_json: str) -> dict:
+    """Lo que devolvió el modelo, listo para el contrato: strings recortadas a su tope. Una lista
+    de eventos con PALABRAS SUELTAS (el fallo de Flash-Lite) se rechaza aquí, con nombre, para que
+    el llamador reintente con el respaldo en vez de tragarse una extracción vacía."""
+    datos = json.loads(texto_json)
+    if not isinstance(datos, dict):
+        raise ValueError("la propuesta no es un objeto")
+    eventos = datos.get("eventos", [])
+    if not isinstance(eventos, list):
+        raise ValueError("eventos no es una lista")
+    if any(not isinstance(e, dict) for e in eventos):
+        raise ValueError("eventos trae palabras sueltas en vez de objetos")
+    limpios = []
+    for e in eventos:
+        e = _recortar(e)
+        if isinstance(e.get("items"), list):
+            e["items"] = [_recortar(i) if isinstance(i, dict) else i for i in e["items"]]
+        limpios.append(e)
+    return {**datos, "eventos": limpios}
+
+
+def _leer_extraccion(datos: dict) -> ExtraccionDuena:
     salida = datos["choices"][0]["message"]
     llamadas = salida.get("tool_calls") or []
     if len(llamadas) != 1 or llamadas[0]["function"]["name"] != "proponer_eventos_duena":
         raise ValueError("El extractor no devolvió una única propuesta")
-    return ExtraccionDuena.model_validate_json(llamadas[0]["function"]["arguments"])
+    normalizado = normalizar_argumentos(llamadas[0]["function"]["arguments"])
+    return ExtraccionDuena.model_validate_json(json.dumps(normalizado, ensure_ascii=False))
+
+
+async def interpretar_duena(
+    ventana: Ventana, ctx: Contexto, llm, modelo: str, *, modelo_respaldo: str | None = None,
+) -> ExtraccionDuena:
+    """Una llamada con el modelo barato; si su respuesta no cumple el contrato, UNA más con el
+    respaldo. Si tampoco, ValueError (el llamador descarta la ventana sin escribir nada)."""
+    herramienta = {"type": "function", "function": {
+        "name": "proponer_eventos_duena",
+        "description": "Eventos de la venta que la dueña hizo a mano. Propuesta sin efectos.",
+        "parameters": esquema_sin_refs(ExtraccionDuena.model_json_schema()),
+    }}
+    mensajes = _mensajes_para_modelo(ventana, ctx)
+    intentos = [modelo] + ([modelo_respaldo] if modelo_respaldo and modelo_respaldo != modelo else [])
+    ultimo: Exception | None = None
+    for n, m in enumerate(intentos):
+        datos = await llm(mensajes, [herramienta], m)
+        try:
+            return _leer_extraccion(datos)
+        except (ValidationError, ValueError, KeyError, TypeError) as e:
+            ultimo = e
+            logger.warning(
+                "Expediente: %s no devolvió un contrato válido (%s)%s", m, str(e)[:160],
+                " — se reintenta con el respaldo" if n + 1 < len(intentos) else "",
+            )
+    raise ValueError(f"El extractor no devolvió un contrato válido: {str(ultimo)[:200]}")
 
 
 # ══════════════════════════════════════════════════════════════════════════════════
@@ -445,12 +524,12 @@ async def _propuesta_repetida(session, telefono: str, p: PropuestaExpediente) ->
 
 async def procesar_ventana(
     factory, telefono: str, ventana: Ventana, ctx: Contexto, *, llm, modelo: str,
-    escritura: str, franjas: list[str], hoy: date,
+    escritura: str, franjas: list[str], hoy: date, modelo_respaldo: str | None = None,
 ) -> list[tuple[str, str]]:
     """Interpreta una ventana y deja propuestas (o escribe, solo en `auto`). Devuelve
     [(tipo, accion)] para el log y los tests. Nunca lanza: un fallo aquí no puede tumbar al worker."""
     try:
-        extraccion = await interpretar_duena(ventana, ctx, llm, modelo)
+        extraccion = await interpretar_duena(ventana, ctx, llm, modelo, modelo_respaldo=modelo_respaldo)
     except (ValidationError, ValueError, KeyError, TypeError) as e:
         logger.warning("Expediente: el extractor no devolvió un contrato válido para %s: %s", telefono, e)
         return []

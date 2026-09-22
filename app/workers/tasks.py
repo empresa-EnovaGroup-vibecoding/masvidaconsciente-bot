@@ -2302,6 +2302,7 @@ async def _extraer_expediente(telefono, hasta_id=None) -> str:
         resultados = await ex.procesar_ventana(
             factory, telefono, v, ctx, llm=_llamar_openrouter, modelo=modelo,
             escritura=escritura, franjas=franjas, hoy=hoy,
+            modelo_respaldo=settings.openrouter_model_extractor_respaldo,
         )
         anotados += sum(1 for _, accion in resultados if accion in ("propuesta", "escribe"))
     await _marcar_expediente(clave_marca, ultimo_id)
