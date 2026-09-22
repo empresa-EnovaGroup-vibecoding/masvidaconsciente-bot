@@ -512,10 +512,11 @@ async def _cliente_pausado(telefono: str) -> bool:
     try:
         return (await _estado_pausa(telefono))[0]
     except Exception:  # noqa: BLE001
-        # E0 (22-sep): Codex lo había puesto fail-CLOSED (si la BD falla, el bot se calla). Es una
-        # decisión de producto que cambia `uno` en producción y rompía 6 tests; se restaura el
-        # fail-open de master (regla de la casa: primero pruebas, nada cambia en prod sin medir).
-        # Queda como PREGUNTA para Maired: ¿ante una BD caída, callar (Meta) o seguir vendiendo?
+        # E0 (22-sep): Codex lo había puesto fail-CLOSED (si la BD falla, el bot se calla: en ese
+        # instante no puede ni leer si la dueña tomó el chat). Aquí queda el fail-open de master
+        # SOLO porque E0 no cambia nada de producción. 🔴 MAIRED DECIDIÓ (22-sep): callar, como
+        # Codex — se aplica en E1 con su test (SESIONES (33)). No es lo mismo que "no sabe algo":
+        # eso va a "ya te confirmo" + aviso + pausa (modo `confirmado`).
         logger.exception("No se pudo leer la pausa de %s (sigue respondiendo)", telefono)
         return False
 

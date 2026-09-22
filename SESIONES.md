@@ -49,14 +49,25 @@ fuentes al enviar (`fuentes_vigentes`), migración 039, Conocimiento "confirmado
 `test_modo_confirmado_no_usa_motor_anterior` + nuevo `test_modo_uno_no_pasa_por_atender`.
 **Suite: 1105 tests, 0 fallos** (ruff 0.9.6 limpio). Producción intacta en `uno`; no hay cambio de config.
 
-**Dos PREGUNTAS de negocio que destapó Codex (para Maired → Whuilianny; E0 conservó lo de master):**
-1. `verificar_monto`: cuando el cliente paga DE MÁS, master le dice "le queda ese saldo a favor para su próxima
-   compra". Codex lo quitó a propósito: es una política comercial nacida de una frase del sistema, no de la dueña.
-   ¿El sobrepago es saldo a favor, se devuelve, o se le pregunta al cliente?
-2. `_cliente_pausado` con la BD caída: master sigue respondiendo (fail-open); Codex prefería callar (fail-closed:
-   mejor mudo que atropellar a la dueña en un chat que ella tomó). ¿Cuál?
-(Y una tercera, de medición, para E5: con Codex cada "ya te confirmo" pausa el chat hasta que ella lo resuelva;
-se cuentan intervenciones/día en pruebas antes de decidir.)
+**Dos líneas sueltas que Codex tocó FUERA de su plan — RESUELTAS por Maired el mismo 22-sep** (no eran el
+corazón del diseño; mal presentadas por Claude como "preguntas de negocio"):
+1. `verificar_monto`: cuando el cliente paga DE MÁS, master dice "le queda ese saldo a favor para su próxima
+   compra". Codex lo había quitado porque nadie lo había confirmado. **Maired lo confirmó: el sobrepago ES saldo
+   a favor para la próxima compra.** Queda como está (ahora es regla del negocio confirmada, no una frase suelta).
+2. `_cliente_pausado` con la BD caída (falla técnica de un instante en la que el bot NI PUEDE LEER si la dueña
+   tomó el chat, ni anotar un aviso — distinto de "no sabe algo", que va a "ya te confirmo"): Codex prefería
+   callar (fail-closed). **Maired: coherente con la prioridad de no atropellar a Whuilianny → se ADOPTA en E1**
+   con su test (en E0 quedó lo de master solo porque la regla del paso era "no cambiar nada de producción").
+(Y una de medición, para E5: con Codex cada "ya te confirmo" pausa el chat hasta que ella lo resuelva; se cuentan
+intervenciones/día en pruebas antes de decidir.)
+
+**Lo que Codex diseñó y quedó INTACTO en el modo `confirmado`** (para no volver a explicarlo): sin dato
+confirmado el código decide `relevo` (`resolver_atencion.py` L80-91: falta respuesta, vacía, contradictoria);
+el cliente recibe "Ya te confirmo" / "Déjame revisarlo" / "Eso te lo confirmo enseguida" variando
+(`atencion.py` L86); UN solo aviso a la dueña con pregunta + producto + dato faltante (`tomar_acuse`); el chat
+queda pausado hasta que ella lo devuelva (`bloquear_cliente`); si lo que falta es del cliente (dirección,
+cantidad) se le pregunta, no se escala. Nuestro plan solo cambia QUIÉN PONE LAS PALABRAS (la Voz de Alejandra
+en vez de una lista fija); la decisión de parar sigue siendo del código, como la diseñó Codex.
 
 **Lecciones:** dos copias del repo en la misma máquina = trabajo huérfano (consolidar en una); `git update-ref`
 para adelantar master deja índice y árbol a medias (usar `reset --hard origin/master`); un candado de red en
