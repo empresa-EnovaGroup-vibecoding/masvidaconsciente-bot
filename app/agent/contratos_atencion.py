@@ -100,3 +100,79 @@ class MensajeConfirmado(str):
         obj.hechos = tuple(hechos)
         obj.relevo = relevo
         return obj
+
+
+# ══ EL EXPEDIENTE DE LA VENTA (PR3, SESIONES (37)): lo que la DUEÑA dijo a mano ══
+#
+# El modelo lee SOLO los mensajes de Whuilianny (texto o 🎤) y PROPONE eventos tipados copiando
+# literales; el CÓDIGO los resuelve contra el catálogo (`app/agent/expediente.py`). Aquí no viaja
+# ni un id ni un precio: los pone el programa.
+
+TipoEventoDuena = Literal[
+    "pedido_tomado", "pago_confirmado", "entrega_acordada", "precio_especial",
+    "cancelado", "respuesta_general", "nada",
+]
+
+
+class ItemDuena(Cerrado):
+    nombre_literal: str = Field(default="", max_length=120)
+    cantidad_literal: str = Field(default="", max_length=40)
+
+
+class EventoDuena(Cerrado):
+    tipo: TipoEventoDuena
+    items: list[ItemDuena] = Field(default_factory=list, max_length=10)
+    total_literal: str = Field(default="", max_length=40)
+    monto_literal: str = Field(default="", max_length=40)
+    metodo: str = Field(default="", max_length=60)
+    fecha_texto: str = Field(default="", max_length=60)
+    momento_texto: str = Field(default="", max_length=60)
+    lugar_texto: str = Field(default="", max_length=200)
+    tema: str = Field(default="", max_length=40)
+    contenido: str = Field(default="", max_length=400)
+    # Copia LITERAL del trozo de la dueña que sostiene el evento. Si no consta, se descarta.
+    evidencia: str = Field(default="", max_length=300)
+
+
+class ExtraccionDuena(Cerrado):
+    eventos: list[EventoDuena] = Field(default_factory=list, max_length=6)
+
+
+class ItemPropuesto(BaseModel):
+    """Un ítem YA RESUELTO por el código contra el catálogo (ids reales, precio de hoy)."""
+
+    model_config = ConfigDict(extra="forbid")
+    producto_id: int
+    variante_id: int
+    nombre: str
+    presentacion: str = ""
+    cantidad: int = Field(default=1, ge=1, le=100)
+    precio_unitario: float | None = None
+
+
+class PropuestaExpediente(BaseModel):
+    """Lo que viaja en `intervenciones.propuesta` (JSONB) y lo que `aplicar_propuesta` ejecuta.
+
+    No es estricta a propósito (viene de JSON: enteros y flotantes ya normalizados), pero SÍ cerrada:
+    una clave que no esté aquí no se aplica. `resultado` se llena al aplicar o descartar.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    tipo: TipoEventoDuena
+    telefono: str
+    items: list[ItemPropuesto] = Field(default_factory=list)
+    total: float | None = None
+    monto: float | None = None
+    moneda: str = ""
+    metodo: str = ""
+    fecha: str | None = None
+    franja: str = ""
+    lugar: str = ""
+    tema: str = ""
+    contenido: str = ""
+    evidencia: str = ""
+    evidencia_mensaje_id: int | None = None
+    confianza: float = 0.0
+    pedido_id: int | None = None
+    resumen: str = ""
+    resultado: str = ""
