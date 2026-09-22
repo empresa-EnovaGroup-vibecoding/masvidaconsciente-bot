@@ -200,6 +200,9 @@ class ConocimientoIn(BaseModel):
     categoria: str | None = None
     titulo: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
     contenido: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+    tema_confirmado: str | None = None
+    producto_id: int | None = None
+    confirmado: bool = False
 
 
 class ConocimientoActivoIn(BaseModel):
@@ -2739,6 +2742,7 @@ class PrecioDiaIn(BaseModel):
 
 
 _MOTIVO_TEXTO = {
+    "acuerdo_especial": "Hay un acuerdo que debes revisar",
     "precio_del_dia": "Te piden un precio del día",
     "no_se": "El bot no sabe algo",
     "pide_persona": "El cliente pide hablar con una persona",
@@ -2982,6 +2986,9 @@ async def listar_conocimiento(_: str = Depends(usuario_actual)):
             # Las RETIRADAS se listan igual que las activas: el panel las pinta en gris y ella
             # las reenciende con un clic. Esconderlas sería un DELETE con otro nombre.
             "activo": c.activo,
+            "tema_confirmado": c.tema_confirmado,
+            "producto_id": c.producto_id,
+            "confirmado": c.confirmado,
         }
         for c in filas
     ]
@@ -2993,16 +3000,31 @@ async def crear_conocimiento(datos: ConocimientoIn, _: str = Depends(usuario_act
 
     factory = get_session_factory()
     async with factory() as session:
+        await _validar_conocimiento_confirmado(session, datos)
         c = Conocimiento(
             categoria=(datos.categoria or "").strip() or None,
             titulo=datos.titulo,
             contenido=datos.contenido,
             embedding=await obtener_embedding(f"{datos.titulo}. {datos.contenido}"),
+            tema_confirmado=datos.tema_confirmado,
+            producto_id=datos.producto_id,
+            confirmado=datos.confirmado,
         )
         session.add(c)
         await session.commit()
         await session.refresh(c)
     return {"id": c.id}
+
+
+async def _validar_conocimiento_confirmado(session, datos):
+    from app.agent.contratos_atencion import TEMAS_CONFIRMABLES
+
+    if datos.confirmado and datos.tema_confirmado not in TEMAS_CONFIRMABLES:
+        raise HTTPException(422, "Elige el tema de la respuesta antes de confirmarla")
+    if datos.producto_id is not None and await session.get(Producto, datos.producto_id) is None:
+        raise HTTPException(422, "El producto de esta respuesta no existe")
+    if datos.confirmado and datos.tema_confirmado in {"ingredientes", "alergenos", "conservacion"} and datos.producto_id is None:
+        raise HTTPException(422, "Esta respuesta necesita un producto concreto")
 
 
 @router.patch("/conocimiento/{cid}")
@@ -3011,12 +3033,16 @@ async def editar_conocimiento(cid: int, datos: ConocimientoIn, _: str = Depends(
 
     factory = get_session_factory()
     async with factory() as session:
+        await _validar_conocimiento_confirmado(session, datos)
         c = await session.get(Conocimiento, cid)
         if c is None:
             raise HTTPException(status_code=404, detail="Entrada no encontrada")
         c.categoria = (datos.categoria or "").strip() or None
         c.titulo = datos.titulo
         c.contenido = datos.contenido
+        c.tema_confirmado = datos.tema_confirmado
+        c.producto_id = datos.producto_id
+        c.confirmado = datos.confirmado
         # El contenido cambió → recalcula el embedding (búsqueda semántica al día).
         c.embedding = await obtener_embedding(f"{datos.titulo}. {datos.contenido}")
         c.updated_at = now_utc()
@@ -3482,7 +3508,10 @@ async def confirmar_pago(pago_id: int, usuario: str = Depends(usuario_actual)):
         # Y no lleva NI UN MONTO: lo que entra en la situación queda decible ese turno
         # (`autorizados_por_moneda(situacion)` en `redactar_mensaje`). Ver `contexto_entrega`.
         situacion = await leer_guia("msg_guia_confirmado") + await contexto_entrega(pedido)
-        encolada = _encolar_notificacion(notificar_cliente_pago, (telefono, situacion))
+        encolada = _encolar_notificacion(
+            notificar_cliente_pago,
+            (telefono, situacion, {"tipo": "confirmado", "pago_id": pago_id}),
+        )
     return {
         "ok": True, "pago_id": pago_id, "estado": "confirmado",
         "notificacion_encolada": encolada,
@@ -3532,7 +3561,12 @@ async def rechazar_pago(
         from app.workers.tasks import notificar_cliente_pago
 
         encolada = _encolar_notificacion(
-            notificar_cliente_pago, (telefono, await leer_guia("msg_guia_rechazado"))
+            notificar_cliente_pago,
+            (
+                telefono,
+                await leer_guia("msg_guia_rechazado"),
+                {"tipo": "rechazado", "pago_id": pago_id},
+            ),
         )
     return {
         "ok": True, "pago_id": pago_id, "estado": "rechazado",
@@ -3618,7 +3652,17 @@ async def verificar_monto(pago_id: int, datos: MontoIn, usuario: str = Depends(u
                 f"asi que faltan {moneda} {(total - recibido):.2f}. Pidele con suavidad y sin "
                 f"reclamar que complete ese monto restante para poder despachar su pedido"
             )
-        encolada = _encolar_notificacion(notificar_cliente_pago, (telefono, situacion))
+        encolada = _encolar_notificacion(
+            notificar_cliente_pago,
+            (
+                telefono,
+                situacion,
+                {
+                    "tipo": "confirmado" if estado_final == "confirmado" else "parcial",
+                    "pago_id": pago_id,
+                },
+            ),
+        )
     else:
         encolada = True
     # `moneda` viaja al panel para que muestre la etiqueta correcta al pedir el monto recibido:

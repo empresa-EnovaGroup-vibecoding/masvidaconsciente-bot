@@ -17,6 +17,109 @@
 
 ---
 
+## 2026-09-22 (34) — 🛡️ EL CEREBRO SE CIERRA ANTES DE DARLE VOZ (E1, APAGADO)
+
+**Decisión de Maired:** primero terminar la seguridad del modo `confirmado`; la Voz natural se conecta
+después. Se trabajó sobre la rama de Claude `atencion-confirmada-voz`, conservando E0 y sin tocar la
+configuración de ningún servidor.
+
+**Qué quedó hecho:**
+- Si no se puede consultar la pausa del chat, el bot se calla. No arriesga responder encima de
+  Whuilianny.
+- Los pagos y comprobantes del modo `confirmado` salen de un evento cerrado y de la fila real del pago.
+  Un llamado sin evento se bloquea; no vuelve al redactor libre. Los modos `uno` y `dos` conservan su
+  camino actual.
+- El sobrepago confirmado muestra el saldo a favor y el abono parcial calcula recibido, total y faltante
+  desde la base de datos.
+- "Ya pagué" distingue entre cobro abierto sin captura, comprobante ya reportado y ausencia de un pedido
+  cobrable. El comprobante entrante sigue pudiéndose guardar aunque el chat esté pausado.
+- Los avisos humanos incluyen pedido, producto y dato pendiente cuando esa información existe. El saludo
+  puede usar el primer nombre, pero omite URLs, emojis solos y nombres de perfil extraños.
+- Las fuentes se vuelven a revisar **antes** de guardar, registrar o cobrar. Si el borrador no se puede
+  guardar, no se ejecuta ninguna acción.
+
+**Comprobación local:** ruff, `compileall`, 100 pruebas dirigidas y la suite completa en verde. Las pruebas
+usan respuestas simuladas: no llamaron a OpenRouter, no consumieron tokens del bot y no enviaron WhatsApps.
+
+**Estado:** código solo en la rama/PR #59. El modo `confirmado` sigue apagado y producción continúa en
+`uno`. No hubo despliegue.
+
+**Revisión de Claude (misma tarde):** bajada la rama, suite completa **1126 tests / 0 fallos**, ruff limpio.
+Verificado leyendo: `uno`/`dos` no cambian (test por modo); las frases fijas de pago pasan la red
+`_proteger_afirmacion_de_pago`; la verificación de fuentes movida ANTES de cobrar conserva el segundo cinturón
+del envío (`_enviar_en_partes` re-verifica). Se agregaron los 2 tests que faltaban: los 3 endpoints del panel
+(aprobar / rechazar / verificar monto) mandan el evento tipado junto a la situación natural; y dos mensajes
+entrelazados del mismo cliente producen UN solo aviso y UN solo acuse. Paso 0 del plan también hecho: el panel
+de Codex que estaba SIN COMMITEAR en su clon quedó en el PR borrador #10 del dashboard (Conocimiento
+confirmado + botones de la Bandeja; los botones son decisión de UX de Maired, por eso borrador).
+
+**Sigue (orden decidido por Maired, 22-sep tarde: CEREBRO PRIMERO, VOZ DESPUÉS — no al revés):** E2 = opción
+`confirmado` en Configuración del panel, prenderlo SOLO en pruebas (VPS de Enova) y que Maired lo oiga 20 min
+sabiendo que sonará plano (este modo NO usa la Personalidad del panel; se comprueba el cerebro: que no invente,
+pregunte lo del cliente, avise y pause), más 48 h leyendo `intervenciones`/día y `llamadas_ia`/turno. E3 =
+conectar la Voz de Alejandra (la Personalidad) sobre esta salida cerrada. Producción: decisión posterior, tras
+las puertas G1-G5 (`~/.claude/plans/…crystalline-sprout.md`).
+
+## 2026-09-22 (33) — 🧭 CODEX + LA VOZ: nace el modo `confirmado` (E0: cableado, APAGADO, suite verde)
+
+**De dónde viene.** Maired trabajó con ChatGPT Codex en OTRA copia del repo (`C:/Mis_Proyectos_IA/...`) y se
+le acabaron los tokens con 26 archivos sin commitear. Rescatado tal cual a la rama `control-datos-confirmados`
+(98be60f). Lo que construyó: una capa de "atención confirmada" donde el modelo solo PROPONE intenciones tipadas
+y el CÓDIGO decide los hechos desde fuentes confirmadas (`atencion.py`, `contratos_atencion.py`,
+`fuentes_atencion.py`, `resolver_atencion.py`, `eventos_atencion.py`, migración 039). Muy bueno en el QUÉ; pero
+reemplazó el CÓMO por frases fijas ("Tu pago está aprobado. Gracias por tu compra"), lo cableó como reemplazo
+total del motor (sin interruptor), y su suite no pasaba (un candado de red en los tests bloqueaba también la BD
+local).
+
+**La tesis (plan aprobado por Maired el 22-sep):** no hay que elegir entre "seguro" y "humano". El CÓDIGO decide
+QUÉ se dice (la capa de Codex), un MODELO sin catálogo ni cuentas decide CÓMO (la Voz del modo DOS de agosto,
+apagada desde entonces), y el CÓDIGO verifica que el CÓMO no agregó nada (las redes que ya existen + dos nuevas:
+nombres de producto y fechas). Codex reconstruyó la mitad de algo que ya existía; se casan las dos mitades.
+Plantillas solo como ÚLTIMO recurso, nunca la respuesta normal. Etapas E0…E6 y puertas G1-G5 (0 fallos duros ·
+empata o gana a Sonnet-`uno` en A/B ciego · fallback ≤ 5% · costo ≤ 50% · p95 ≤ actual + 3 s).
+
+**E0 (rama `atencion-confirmada-voz`, este PR):** `agente_modo='confirmado'` es un MODO junto a `uno` y `dos`,
+no un reemplazo. `responder` de master recupera su nombre y despacha las tres ramas (`_responder_confirmado` =
+el `atender` de Codex; intérprete = `modelo_operador`); `redactar_mensaje` vuelve a ser la voz natural de los
+pagos y el wrapper de Codex queda como `redactar_evento_confirmado` (sin cablear hasta E3). **Devueltos a
+master**, porque E0 NO cambia el comportamiento de `uno`: los 13 tests que Codex había apuntado a
+`_responder_legacy`, el retomar del botón individual "Devolver al bot" (`_disparar_retomar`; el #54 ya evita
+reabrir ventas cerradas), `reactivar=True` en resolver intervención, las situaciones naturales de los 3 endpoints
+de pago y de los 2 llamados del comprobante, y el fail-open de `_cliente_pausado`. **Conservado de Codex:** todos
+los motivos pausan, puerta de pausa en las herramientas, `bloquear_cliente`, `tomar_acuse`, revalidación de
+fuentes al enviar (`fuentes_vigentes`), migración 039, Conocimiento "confirmado" en el panel.
+`conftest.sin_red_externa` exime 127.0.0.1/::1/localhost. Test adaptado:
+`test_modo_confirmado_no_usa_motor_anterior` + nuevo `test_modo_uno_no_pasa_por_atender`.
+**Suite: 1105 tests, 0 fallos** (ruff 0.9.6 limpio). Producción intacta en `uno`; no hay cambio de config.
+
+**Dos líneas sueltas que Codex tocó FUERA de su plan — RESUELTAS por Maired el mismo 22-sep** (no eran el
+corazón del diseño; mal presentadas por Claude como "preguntas de negocio"):
+1. `verificar_monto`: cuando el cliente paga DE MÁS, master dice "le queda ese saldo a favor para su próxima
+   compra". Codex lo había quitado porque nadie lo había confirmado. **Maired lo confirmó: el sobrepago ES saldo
+   a favor para la próxima compra.** Queda como está (ahora es regla del negocio confirmada, no una frase suelta).
+2. `_cliente_pausado` con la BD caída (falla técnica de un instante en la que el bot NI PUEDE LEER si la dueña
+   tomó el chat, ni anotar un aviso — distinto de "no sabe algo", que va a "ya te confirmo"): Codex prefería
+   callar (fail-closed). **Maired: coherente con la prioridad de no atropellar a Whuilianny → se ADOPTA en E1**
+   con su test (en E0 quedó lo de master solo porque la regla del paso era "no cambiar nada de producción").
+(Y una de medición, para E5: con Codex cada "ya te confirmo" pausa el chat hasta que ella lo resuelva; se cuentan
+intervenciones/día en pruebas antes de decidir.)
+
+**Lo que Codex diseñó y quedó INTACTO en el modo `confirmado`** (para no volver a explicarlo): sin dato
+confirmado el código decide `relevo` (`resolver_atencion.py` L80-91: falta respuesta, vacía, contradictoria);
+el cliente recibe "Ya te confirmo" / "Déjame revisarlo" / "Eso te lo confirmo enseguida" variando
+(`atencion.py` L86); UN solo aviso a la dueña con pregunta + producto + dato faltante (`tomar_acuse`); el chat
+queda pausado hasta que ella lo devuelva (`bloquear_cliente`); si lo que falta es del cliente (dirección,
+cantidad) se le pregunta, no se escala. Nuestro plan solo cambia QUIÉN PONE LAS PALABRAS (la Voz de Alejandra
+en vez de una lista fija); la decisión de parar sigue siendo del código, como la diseñó Codex.
+
+**Lecciones:** dos copias del repo en la misma máquina = trabajo huérfano (consolidar en una); `git update-ref`
+para adelantar master deja índice y árbol a medias (usar `reset --hard origin/master`); un candado de red en
+tests debe eximir loopback o mata los tests de BD local.
+
+**Sigue:** E1 — `Encargo` tipado en `contratos_atencion.py`, `_emitir(redactar=None)` en `atencion.py` (camino
+de Codex byte a byte igual), `HojaDeHechos.desde_encargo`, `_responder_confirmado` → `_dar_voz` + redes +
+un reintento + fallback al texto fijo SIN pausar. Tests `test_hoja_confirmada.py`, `test_atencion_con_voz.py`.
+
 ## 2026-09-16 (32) — REGLA OFICIAL DEL DELIVERY · REVISIÓN DEL MÉTODO DEL MENTOR
 
 **Decisión del negocio:** ante la pregunta con las tres fórmulas posibles, Whuilianny respondió:

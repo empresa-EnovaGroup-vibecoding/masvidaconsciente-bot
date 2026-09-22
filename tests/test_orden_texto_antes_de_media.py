@@ -155,6 +155,7 @@ def carril(monkeypatch):
 
     monkeypatch.setattr(tasks, "enviar_texto", _enviar_texto)
     monkeypatch.setattr(tasks, "marcar_mensaje_propio", _nada)
+    monkeypatch.setattr(tasks, "_cliente_pausado", _no_lo_tomo)
     monkeypatch.setattr(tasks, "_lo_paso_una_persona", _no_lo_tomo)
     monkeypatch.setattr(tasks, "_proteger_afirmacion_de_pago", lambda r: r)
     return linea

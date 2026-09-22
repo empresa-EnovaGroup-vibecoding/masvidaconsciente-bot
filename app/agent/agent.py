@@ -2432,6 +2432,27 @@ def _pregunta_repetida(texto: str, historial: list | None, veces: int = 2) -> bo
 # — a propósito: es la señal que mide si el modelo alcanza. NO reintroducir sin medir.
 
 
+async def _responder_confirmado(
+    telefono: str, mensaje_usuario: str, historial: list | None = None,
+    nombre_cliente: str | None = None, *, pregunta_cliente: str | None = None,
+    llm=_llamar_openrouter, ejecutar=ejecutar_tool, modelo: str | None = None,
+) -> str:
+    """MODO `confirmado` (E0, 22-sep-2026): la capa de "atención confirmada" que construyó Codex —
+    el modelo solo PROPONE intenciones tipadas y el CÓDIGO decide los hechos desde fuentes
+    confirmadas (`atencion.atender`). Es UN MODO MÁS junto a `uno` y `dos` (se elige en la config
+    `agente_modo`), NO un reemplazo del motor: producción sigue en `uno` hasta que este modo pase
+    las puertas del plan (SESIONES (32)). En E1 el texto lo redactará la Voz sobre la hoja de
+    hechos; hoy sale el texto determinista de `atender`. `abrir_turno` ya lo hizo `responder`.
+    `modelo` = el intérprete (`modelo_operador`; cae a `modelo_ia` si no está)."""
+    from app.agent.atencion import atender
+
+    return await atender(
+        telefono, pregunta_cliente or mensaje_usuario, historial,
+        llm=llm, modelo=modelo or await leer_modelo_ia(), ejecutar=ejecutar,
+        nombre=nombre_cliente,
+    )
+
+
 async def responder(
     telefono: str,
     mensaje_usuario: str,
@@ -2480,6 +2501,12 @@ async def responder(
             pregunta_cliente=pregunta_cliente,
             llm=llm, voz=voz or _pedir_redaccion, ejecutar=ejecutar,
             modelo_operador=modelo_operador, modelo_voz=modelo_voz,
+        )
+    if modo == "confirmado":
+        return await _responder_confirmado(
+            telefono, mensaje_usuario, historial, nombre_cliente,
+            pregunta_cliente=pregunta_cliente, llm=llm, ejecutar=ejecutar,
+            modelo=modelo_operador,
         )
     # QUÉ SABE HACER EL BOT HOY (fase 4). Se lee UNA vez por turno y baja a los dos sitios que la
     # necesitan: el prompt (para que no ORDENE usar una herramienta apagada) y la lista que ve el
@@ -3829,6 +3856,53 @@ async def _pedir_redaccion(messages: list, modelo: str) -> str:
     # HTTP mientras se escribía en Postgres.
     await registrar(paso="voz", modelo_pedido=modelo, t0=t0, datos=data)
     return (data["choices"][0]["message"].get("content") or "").strip()
+
+
+async def redactar_evento_confirmado(situacion, historial=None, nombre=None, telefono=None, *,
+                                     montos_usd=None, montos_bs=None) -> str:
+    """Mensaje de pago desde un evento tipado y la fila real del pago."""
+    from app.agent.eventos_atencion import redactar_evento
+
+    return await redactar_evento(situacion, telefono, historial)
+
+
+async def redactar_pago(
+    situacion: str,
+    historial: list | None = None,
+    nombre: str | None = None,
+    telefono: str | None = None,
+    *,
+    montos_usd: set[float] | None = None,
+    montos_bs: set[float] | None = None,
+    evento: dict | None = None,
+) -> str:
+    """Elige el redactor del pago sin cambiar los modos que ya funcionan.
+
+    `uno` y `dos` conservan exactamente el redactor natural. El modo `confirmado` acepta solo un
+    evento tipado y vuelve a consultar la fila del pago antes de afirmar su estado.
+    """
+    modo, _, _ = await leer_config_agente()
+    if modo == "confirmado" and evento is not None:
+        texto = await redactar_evento_confirmado(
+            evento, historial, nombre, telefono,
+            montos_usd=montos_usd, montos_bs=montos_bs,
+        )
+        if not texto:
+            logger.error(
+                "PAGO CONFIRMADO: el evento no coincide con una fila autorizada para %s: %r",
+                telefono, evento,
+            )
+        return texto
+    if modo == "confirmado":
+        logger.error(
+            "PAGO CONFIRMADO: llegó una situación sin evento tipado para %s; respuesta bloqueada",
+            telefono,
+        )
+        return ""
+    return await redactar_mensaje(
+        situacion, historial, nombre, telefono,
+        montos_usd=montos_usd, montos_bs=montos_bs,
+    )
 
 
 async def redactar_mensaje(

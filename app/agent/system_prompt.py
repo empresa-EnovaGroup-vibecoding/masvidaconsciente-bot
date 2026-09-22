@@ -330,7 +330,7 @@ async def leer_config_agente() -> tuple[str, str, str]:
     base = (filas.get("modelo_ia") or "").strip() or settings.openrouter_model
     modo = (filas.get("agente_modo") or "uno").strip().lower()
     return (
-        modo if modo in ("uno", "dos") else "uno",
+        modo if modo in ("uno", "dos", "confirmado") else "uno",
         (filas.get("modelo_operador") or "").strip() or base,
         (filas.get("modelo_voz") or "").strip() or base,
     )

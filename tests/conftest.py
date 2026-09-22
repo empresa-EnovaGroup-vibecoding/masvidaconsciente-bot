@@ -16,8 +16,11 @@ rápido — lo que puede correr en el CI ANTES de desplegar.
 """
 
 import os
+import socket
 import sys
 from pathlib import Path
+
+import pytest
 
 RAIZ = Path(__file__).resolve().parent.parent
 
@@ -37,3 +40,25 @@ os.environ.setdefault("OPENROUTER_API_KEY", "sk-or-v1-de-mentira-para-pytest")
 # `config.py` gritaría un `logger.error` en CADA corrida de tests. El test que prueba la
 # DEGRADACIÓN pone la suya (vacía) por su cuenta. Ver `tests/test_catalogo_url_publica.py`.
 os.environ.setdefault("PUBLIC_BASE_URL", "https://pruebas.example.test")
+
+
+# Direcciones de ESTA máquina: los tests hablan con un Postgres/Redis locales (bancos, fixtures
+# de BD). Bloquearlas también (como hizo la primera versión de este candado, 22-sep) rompía
+# decenas de tests que no gastan ni contactan a nadie. Lo prohibido es SALIR de la máquina.
+_LOCALES = {"127.0.0.1", "::1", "localhost", "0.0.0.0"}
+
+
+@pytest.fixture(autouse=True)
+def sin_red_externa(monkeypatch):
+    """La suite no puede gastar saldo ni contactar clientes, incluso por una llamada accidental.
+    Solo se prohíbe la red EXTERNA: la máquina local (Postgres/Redis de pruebas) sigue abierta."""
+    conectar = socket.socket.connect
+
+    def bloqueada(sock, direccion):
+        if sock.family in (socket.AF_INET, socket.AF_INET6):
+            host = str(direccion[0]) if isinstance(direccion, tuple) and direccion else ""
+            if host not in _LOCALES:
+                raise AssertionError(f"Conexión de red prohibida en pruebas: {direccion!r}")
+        return conectar(sock, direccion)
+
+    monkeypatch.setattr(socket.socket, "connect", bloqueada)

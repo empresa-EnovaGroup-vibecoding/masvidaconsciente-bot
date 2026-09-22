@@ -138,6 +138,7 @@ class Cliente(Base):
     nombre: Mapped[str | None] = mapped_column(Text, nullable=True)
     notas: Mapped[str | None] = mapped_column(Text, nullable=True)
     bot_pausado: Mapped[bool] = mapped_column(Boolean, default=False)
+    borrador_confirmado: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     # QUIÉN apretó el freno: 'dueña' (una persona tomó el chat) | 'bot' (se pausó él solo al
     # escalar con pedir_ayuda) | None (no está pausado). Son casos OPUESTOS: si fue la dueña,
     # el bot se CALLA; si fue él mismo, su último mensaje ("dame un momentito, te confirmo")
@@ -175,6 +176,7 @@ class Intervencion(Base):
     detalle: Mapped[str | None] = mapped_column(Text, nullable=True)
     mensaje_cliente: Mapped[str | None] = mapped_column(Text, nullable=True)
     estado: Mapped[str] = mapped_column(Text, default="pendiente")  # pendiente|resuelta
+    acuse_intentado: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
     resuelta_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
@@ -374,6 +376,9 @@ class Conocimiento(Base):
     categoria: Mapped[str | None] = mapped_column(Text, nullable=True)
     titulo: Mapped[str] = mapped_column(Text)
     contenido: Mapped[str] = mapped_column(Text)
+    tema_confirmado: Mapped[str | None] = mapped_column(Text, nullable=True)
+    producto_id: Mapped[int | None] = mapped_column(ForeignKey("productos.id"), nullable=True)
+    confirmado: Mapped[bool] = mapped_column(Boolean, default=False)
     # Embedding (vector de significado) para la búsqueda semántica. Lista de floats en
     # JSONB. Nullable: si no se pudo calcular, la entrada igual sirve por búsqueda léxica.
     embedding: Mapped[list | None] = mapped_column(JSONB, nullable=True)
