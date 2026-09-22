@@ -37,7 +37,7 @@ Las **FASES 0 a 3 ya están hechas y desplegadas**:
 > **un cerebro (código = capa de Codex, modo `confirmado`, fusionado en #59 y APAGADO) + una voz (IA = la Voz del
 > modo dos, reutilizada) + un EXPEDIENTE (pedido/pago/entrega con procedencia, evidencia y fecha, alimentado
 > también por los mensajes y notas de voz de la dueña vía un extractor tipado que el código valida; lo dudoso se
-> PROPONE, nunca se escribe)**. Orden: P1 migración 040 (PR1, hecho) + transcripción de ecos (PR2) → P2 extractor
+> PROPONE, nunca se escribe)**. Orden: P1 migración 040 (PR1 #60) + transcripción de ecos de audio (PR2) HECHOS → P2 extractor
 > + propuestas con un toque + lectores (producción `uno` mejora aquí) + replay sobre las 305 conversaciones →
 > P3 el cerebro lee el expediente y Maired lo oye en pruebas → P4 la Voz → P5 Conocimiento del corpus → P6
 > puertas G1-G6 y producción por configuración. Decisiones: retorno automático CON condiciones (flag apagado,

@@ -164,6 +164,30 @@ async def obtener_historial(telefono: str) -> list[dict]:
     return [json.loads(f) for f in filas]
 
 
+async def reemplazar_en_historial(telefono: str, viejo: str, nuevo: str) -> bool:
+    """Cambia EN SU SITIO la última entrada del historial cuyo `content` sea exactamente `viejo`.
+
+    Nació para la nota de voz de la dueña (expediente, PR2 — SESIONES (36)): el eco entra a la
+    memoria como "[nota de voz]" en el instante, y la transcripción llega segundos después desde
+    el worker. Si se AÑADIERA al final, la frase de ella quedaría fuera de orden —después de lo que
+    el cliente dijo mientras tanto—; por eso se reemplaza la entrada, no se apila otra. Se busca
+    desde el final porque la que se quiere es la más reciente. Devuelve False si ya no está (el
+    `ltrim` la sacó): entonces Postgres es la única verdad y el respaldo la trae cuando haga falta.
+    """
+    c = _client()
+    clave = f"hist:{telefono}"
+    filas = await c.lrange(clave, 0, -1)
+    for i in range(len(filas) - 1, -1, -1):
+        try:
+            m = json.loads(filas[i])
+        except (TypeError, ValueError):
+            continue
+        if m.get("content") == viejo:
+            await c.lset(clave, i, json.dumps({**m, "content": nuevo}))
+            return True
+    return False
+
+
 async def sembrar_historial(
     telefono: str, mensajes: list[dict], *, reemplazar: bool = False
 ) -> None:

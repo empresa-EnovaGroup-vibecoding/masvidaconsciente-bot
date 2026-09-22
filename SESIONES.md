@@ -17,6 +17,38 @@
 
 ---
 
+## 2026-09-22 (36) — 🎤 LA NOTA DE VOZ DE LA DUEÑA SE TRANSCRIBE EN VIVO (expediente, PR2)
+
+**El hueco:** en el corpus real la dueña mandó **877 notas de voz** y el bot vio "[nota de voz]" en TODAS
+(`parser.py` guarda el placeholder; `_procesar_audio` solo transcribe al CLIENTE; y el respaldo de Postgres
+filtraba `tipo='text'`, así que su audio ni volvía). En sus notas de voz ella **coordina las entregas** (38%
+de las transcritas): de ahí salían choques como cobrar un envío que ella había regalado por voz.
+
+**Qué quedó hecho (rama `expediente-eco-audio`, cero cambio en lo que el bot DICE):**
+- `_procesar_eco` (webhook) **encola** `transcribir_eco` al final —tras el candado— solo si la burbuja es
+  NUEVA (un reintento de Meta no transcribe dos veces) y el eco es audio con `media_id`. Si encolar falla,
+  el eco termina igual: la pausa y la burbuja ya están.
+- `transcribir_eco` / `_transcribir_eco` (worker, junto a `procesar_audio`): **pregunta si el contacto es
+  PRIVADO fallando CERRADO** (sin respuesta de la base → no se transcribe; la voz de un familiar no sale de
+  casa por un hipo), abre un turno propio `eco_audio` en `llamadas_ia` (para medir cuánto cuesta escucharla
+  a ella), descarga con `descargar_media`, transcribe con el MISMO `transcribir_audio` del cliente, y
+  reemplaza el placeholder **en su sitio**: `UPDATE mensajes … WHERE message_id AND contenido='[nota de voz]'`
+  (idempotente; conserva `tipo='audio'` y `media_id`, el panel sigue mostrando el reproductor) y en Redis
+  `reemplazar_en_historial` (LSET de la entrada heredada por el eco, misma posición — apilarla al final
+  dejaría su frase después de lo que el cliente dijo mientras tanto). Audio caducado (400/404: Meta lo
+  borró) → queda el placeholder, log, **sin aviso** a nadie.
+- `historial_desde_postgres` acepta también `rol='owner' AND tipo='audio' AND contenido LIKE '🎤%'`.
+- `PLACEHOLDER_AUDIO` con nombre propio en `parser.py` (lo buscan el webhook, el worker y los tests).
+- Tests `tests/test_expediente_eco_audio.py` (15): encola / no encola texto / reintento no duplica / fallo al
+  encolar no rompe el eco; privado; sin verificar; caducado sin aviso; vacío; ya transcrito; reemplazo exacto
+  y orden en Redis; la más reciente de dos; placeholder único; el respaldo devuelve 🎤.
+
+**Costo:** ~$0,002 por nota (audio-in de Gemini 2.5 Flash), ≈390 notas/mes al ritmo del corpus → **<$1/mes**.
+Se verifica en `llamadas_ia` con `carril='eco_audio'` tras desplegar a pruebas.
+
+**Sigue:** PR3 — el extractor (`app/agent/expediente.py`): de sus mensajes (texto y 🎤) a eventos tipados que
+el código valida; lo dudoso → propuesta en la Bandeja.
+
 ## 2026-09-22 (35) — 🗂️ EL EXPEDIENTE DE LA VENTA: el bot tiene que saber en qué punto entra (PR1: cimientos)
 
 **La pregunta de Maired que lo cambió todo:** *"¿la infraestructura que estamos creando es la mejor para el
