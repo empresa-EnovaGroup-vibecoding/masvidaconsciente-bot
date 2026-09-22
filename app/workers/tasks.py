@@ -2225,6 +2225,101 @@ async def _transcribir_eco(telefono, message_id, media_id, mime_type) -> str:
     return "ok"
 
 
+@celery_app.task(name="extraer_expediente")
+def extraer_expediente(telefono, hasta_id=None):
+    """Tarea: lee lo que la dueña dijo a mano desde la última vez y lo vuelve dato o propuesta."""
+    _run(_extraer_expediente(telefono, hasta_id))
+
+
+async def _extraer_expediente(telefono, hasta_id=None) -> str:
+    """🗂️ EL EXTRACTOR DEL EXPEDIENTE (PR3, SESIONES (37)).
+
+    Se encola 90 s después de cada mensaje de la dueña (eco del celular o panel): tiempo de que la
+    transcripción aterrice y de que ella termine de escribir. Lee sus mensajes desde la última marca
+    (`cache:expediente_hasta:{tel}`; sin marca, las últimas 6 h), los agrupa en ventanas, y por cada
+    ventana `expediente.procesar_ventana` deja PROPUESTAS en la Bandeja (o escribe lo inequívoco, solo
+    con `expediente_escritura=auto`). No le habla a nadie. Devuelve una palabra para el log y los tests.
+
+    🔒 Privados: fallando CERRADO, igual que la transcripción — sin respuesta de la base, no se lee.
+    """
+    from datetime import timedelta
+
+    from sqlalchemy import select
+
+    from app.agent import expediente as ex
+    from app.agent.agent import _llamar_openrouter
+    from app.agent.fuentes_atencion import cargar_contexto
+    from app.agent.tools import _franjas_de_entrega
+    from app.models import Cliente, Mensaje, hoy_venezuela, now_utc
+
+    if (telefono or "").startswith("__"):
+        return "interno"
+    escritura, modelo = await ex.leer_config_expediente()
+    if escritura == "off":
+        return "apagado"
+    clave_marca = f"cache:expediente_hasta:{telefono}"
+    try:
+        factory = get_session_factory()
+        async with factory() as session:
+            privado = (
+                await session.execute(select(Cliente.privado).where(Cliente.telefono == telefono))
+            ).scalar_one_or_none()
+            if privado:
+                return "privado"
+            marca = await rc.get_cache(clave_marca)
+            q = select(
+                Mensaje.id, Mensaje.rol, Mensaje.tipo, Mensaje.contenido, Mensaje.created_at
+            ).where(Mensaje.cliente_telefono == telefono)
+            if marca and str(marca).strip().isdigit():
+                q = q.where(Mensaje.id > int(str(marca).strip()))
+            else:
+                q = q.where(Mensaje.created_at >= now_utc() - timedelta(hours=6))
+            if hasta_id:
+                q = q.where(Mensaje.id <= int(hasta_id))
+            filas = (await session.execute(q.order_by(Mensaje.id))).all()
+            franjas = await _franjas_de_entrega(session)
+    except Exception:  # noqa: BLE001 — sin lectura no se propone nada; se reintenta con el próximo eco
+        logger.exception("Expediente: no se pudieron leer los mensajes de %s", telefono)
+        return "sin_lectura"
+    if not filas:
+        return "sin_mensajes"
+    mensajes = [
+        {"id": f.id, "rol": f.rol, "tipo": f.tipo, "contenido": f.contenido, "created_at": f.created_at}
+        for f in filas
+    ]
+    ventanas = ex.ventanas_owner(mensajes)
+    ultimo_id = max(m["id"] for m in mensajes)
+    if not ventanas:
+        await _marcar_expediente(clave_marca, ultimo_id)
+        return "sin_ventanas"
+
+    ctx = await cargar_contexto(telefono)
+    abrir_turno(telefono, "expediente")  # 📊 su costo, aparte, en `llamadas_ia`
+    anotados = 0
+    for v in ventanas:
+        ultimo = v.owner[-1].get("created_at")
+        hoy = (ultimo - timedelta(hours=4)).date() if ultimo else hoy_venezuela()
+        resultados = await ex.procesar_ventana(
+            factory, telefono, v, ctx, llm=_llamar_openrouter, modelo=modelo,
+            escritura=escritura, franjas=franjas, hoy=hoy,
+        )
+        anotados += sum(1 for _, accion in resultados if accion in ("propuesta", "escribe"))
+    await _marcar_expediente(clave_marca, ultimo_id)
+    if anotados:
+        try:
+            await rc.notificar_conversacion(telefono, "actualizada")
+        except Exception:  # noqa: BLE001
+            pass
+    return "ok"
+
+
+async def _marcar_expediente(clave: str, ultimo_id: int) -> None:
+    try:
+        await rc.set_cache(clave, str(ultimo_id), 7 * 86400)
+    except Exception:  # noqa: BLE001 — sin marca se releen 6 h; la propuesta repetida se filtra
+        logger.warning("Expediente: no se pudo guardar la marca %s", clave)
+
+
 @celery_app.task(name="procesar_audio")
 def procesar_audio(telefono, message_id, media_id, nombre=None, mime_type=None):
     """Tarea: descarga la nota de voz, la transcribe y responde como a un texto."""

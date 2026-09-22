@@ -134,6 +134,12 @@ CLAVES_CONFIG = [
     # Modelo de IA conversacional, lo elige la PROVEEDORA (no la clienta). El bot
     # lo lee con leer_modelo_ia(). La voz (transcripción) va aparte y fija.
     "modelo_ia",
+    # 🗂️ EL EXPEDIENTE (PR3, SESIONES (37)) — palancas de la PROVEEDORA: `modelo_extractor` (el modelo
+    # barato que lee lo que la dueña dijo a mano; default en config.py, decisión de Maired 22-sep) y
+    # `expediente_escritura` (off | propuestas | auto; default `propuestas` = TODO a la Bandeja;
+    # `auto` solo cuando el replay sobre las conversaciones reales pase la puerta ≥0,98).
+    "modelo_extractor",
+    "expediente_escritura",
     # SINÓNIMOS DEL BUSCADOR: lo que el cliente DICE no siempre es lo que está ESCRITO en el
     # catálogo. Pide "bebidas" y en la base pone "Kombucha", "Kéfir", "Yogurt Kéfirado" —
     # ninguna contiene esa palabra, así que el buscador devolvía CERO y el bot decía "de eso no
@@ -1208,7 +1214,10 @@ async def servir_catalogo_pdf():
 # clienta; cuando la clienta tenga su propio rol/login se le esconde"*. Ese rol ya existe
 # (migración 024), así que aquí se esconde de verdad — hasta hoy la whitelist era plana y la
 # dueña podía cambiarle el modelo al bot desde la pantalla de Configuración.
-CLAVES_PROVEEDORA = {"modelo_ia", "agente_modo", "modelo_operador", "modelo_voz"}
+CLAVES_PROVEEDORA = {
+    "modelo_ia", "agente_modo", "modelo_operador", "modelo_voz",
+    "modelo_extractor", "expediente_escritura",
+}
 
 
 @router.get("/configuracion")
@@ -2446,6 +2455,15 @@ async def responder_como_dueña(
     except Exception:  # noqa: BLE001
         logger.exception("No se pudo meter en la memoria del bot el mensaje de la dueña")
 
+    # 6) 🗂️ EL EXPEDIENTE (PR3): lo que ella escribe desde el panel también se lee 90 s después y
+    #    se vuelve dato o propuesta — misma puerta que el eco del celular.
+    try:
+        from app.workers.tasks import extraer_expediente
+
+        extraer_expediente.apply_async((telefono, None), countdown=90)
+    except Exception:  # noqa: BLE001 — el mensaje ya salió; el extractor es una mejora
+        logger.exception("No se pudo encolar el extractor del expediente para %s", telefono)
+
     return {"ok": True, "wa_message_id": wa_id, "bot_pausado": True}
 
 
@@ -2826,9 +2844,79 @@ async def listar_intervenciones(estado: str = "pendiente", _: str = Depends(usua
             "mensaje_cliente": i.mensaje_cliente,
             "estado": i.estado,
             "fecha": i.created_at.isoformat(),
+            # 🗂️ La propuesta del expediente (040): el panel pinta "Sí, es correcto / No" cuando viene.
+            "propuesta": i.propuesta,
         }
         for i in filas
     ]
+
+
+@router.post("/intervenciones/{intervencion_id}/aplicar")
+async def aplicar_propuesta_expediente(
+    intervencion_id: int, usuario: str = Depends(usuario_actual)
+):
+    """🗂️ EL TOQUE HUMANO DEL EXPEDIENTE (PR3, SESIONES (37)): "Sí, es correcto".
+
+    Convierte la PROPUESTA (lo que el extractor leyó en un mensaje de la dueña) en DATO por la única
+    puerta de escritura (`expediente.aplicar_propuesta`): pedido con `origen='dueña'`, pago
+    confirmado firmado por quien tocó, entrega, precio especial, cancelación o respuesta confirmada.
+    Sirve a la dueña y a la proveedora. NO manda WhatsApp a nadie, NO despausa ni retoma: la
+    propuesta nunca fue un chat tomado. Si no se puede aplicar, 409 con el motivo legible y la
+    propuesta sigue pendiente.
+    """
+    from app.agent.expediente import MOTIVO_PROPUESTA, aplicar_propuesta
+
+    factory = get_session_factory()
+    async with factory() as session:
+        inter = await session.get(Intervencion, intervencion_id)
+        if inter is None:
+            raise HTTPException(status_code=404, detail="Aviso no encontrado")
+        if inter.motivo != MOTIVO_PROPUESTA or not inter.propuesta:
+            raise HTTPException(status_code=409, detail="Este aviso no es una propuesta del expediente")
+        if inter.estado != "pendiente":
+            raise HTTPException(status_code=409, detail="Esta propuesta ya se atendió")
+        telefono = inter.cliente_telefono
+        try:
+            resultado = await aplicar_propuesta(session, inter.propuesta, usuario=usuario)
+        except ValueError as e:  # ValidationError de pydantic también es ValueError
+            await session.rollback()
+            raise HTTPException(status_code=409, detail=f"No se pudo aplicar: {e}") from e
+        ahora = now_utc()
+        inter.estado = "resuelta"
+        inter.resuelta_at = ahora
+        inter.aplicada_por = usuario
+        inter.aplicada_at = ahora
+        inter.propuesta = {**inter.propuesta, "resultado": "aplicada"}
+        await session.commit()
+    await rc.notificar_conversacion(telefono, "actualizada")
+    return {"ok": True, "bot_reactivado": False, **resultado}
+
+
+@router.post("/intervenciones/{intervencion_id}/descartar")
+async def descartar_propuesta_expediente(
+    intervencion_id: int, usuario: str = Depends(usuario_actual)
+):
+    """🗂️ "No": la propuesta se cierra sin escribir NADA. Queda firmado quién la descartó (sirve para
+    medir cuánto se equivoca el extractor). No despausa, no retoma, no avisa a nadie."""
+    from app.agent.expediente import MOTIVO_PROPUESTA
+
+    factory = get_session_factory()
+    async with factory() as session:
+        inter = await session.get(Intervencion, intervencion_id)
+        if inter is None:
+            raise HTTPException(status_code=404, detail="Aviso no encontrado")
+        if inter.motivo != MOTIVO_PROPUESTA:
+            raise HTTPException(status_code=409, detail="Este aviso no es una propuesta del expediente")
+        if inter.estado != "pendiente":
+            raise HTTPException(status_code=409, detail="Esta propuesta ya se atendió")
+        ahora = now_utc()
+        inter.estado = "resuelta"
+        inter.resuelta_at = ahora
+        inter.aplicada_por = usuario
+        inter.aplicada_at = ahora
+        inter.propuesta = {**(inter.propuesta or {}), "resultado": "descartada"}
+        await session.commit()
+    return {"ok": True, "bot_reactivado": False, "resultado": "descartada"}
 
 
 @router.post("/intervenciones/{intervencion_id}/resolver")

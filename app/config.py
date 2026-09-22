@@ -53,6 +53,10 @@ class Settings(BaseSettings):
     # entrada de audio (Gemini) sirven aquí; Claude/GPT no aceptan audio. El
     # selector del panel cambia solo el conversacional, NUNCA este.
     openrouter_model_audio: str = "google/gemini-2.5-flash"
+    # 🗂️ Modelo del EXTRACTOR del expediente (PR3): lee solo los mensajes de la dueña y PROPONE
+    # eventos tipados que el código valida. Decisión de Maired (22-sep): el más barato, medido por
+    # el replay; se sube por la config `modelo_extractor` sin tocar código. Nunca decide dinero.
+    openrouter_model_extractor: str = "google/gemini-2.5-flash-lite"
     # Modelo de EMBEDDINGS (búsqueda por significado del Conocimiento). Va por la
     # misma API/llave de OpenRouter (endpoint /embeddings). Multilingüe y barato.
     # Es una MEJORA: si falla, el bot cae a la búsqueda léxica (pg_trgm) y sigue.

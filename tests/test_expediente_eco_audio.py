@@ -102,38 +102,57 @@ def eco_montado(monkeypatch):
     monkeypatch.setattr(
         tasks.transcribir_eco, "apply_async", lambda args, **kw: encolado.append(tuple(args))
     )
-    return encolado, resultados
+    # 🗂️ El extractor del expediente (PR3) también se encola desde el eco. Sin este doble, Celery
+    # intenta hablar con un broker real y cada test tarda 108 s en rendirse (lo pasó el 22-sep).
+    extractor: list = []
+    monkeypatch.setattr(
+        tasks.extraer_expediente, "apply_async",
+        lambda args, **kw: extractor.append((tuple(args), kw.get("countdown"))),
+    )
+    return encolado, resultados, extractor
 
 
-async def test_el_eco_de_audio_de_la_duena_encola_la_transcripcion(eco_montado):
-    encolado, _ = eco_montado
+async def test_el_eco_de_audio_de_la_duena_encola_la_transcripcion_y_el_extractor(eco_montado):
+    encolado, _, extractor = eco_montado
     assert await webhook._procesar_eco(_eco()) == "eco"
     assert encolado == [(TEL, WA, "MEDIA1", "audio/ogg")]
+    assert extractor == [((TEL, None), 90)]  # 90 s: que la transcripción aterrice y ella termine
 
 
-async def test_el_eco_de_texto_no_encola_nada(eco_montado):
-    encolado, _ = eco_montado
+async def test_el_eco_de_texto_no_transcribe_pero_si_va_al_extractor(eco_montado):
+    encolado, _, extractor = eco_montado
     eco = _eco(tipo="text", media_id=None)
     eco["texto"] = "listo mi reina, ya me llegó"
     assert await webhook._procesar_eco(eco) == "eco"
     assert encolado == []
+    assert extractor == [((TEL, None), 90)]
+
+
+async def test_un_eco_de_foto_o_sticker_no_encola_nada(eco_montado):
+    encolado, _, extractor = eco_montado
+    eco = _eco(tipo="image", media_id="IMG1")
+    assert await webhook._procesar_eco(eco) == "eco"
+    assert encolado == [] and extractor == []
 
 
 async def test_un_reintento_de_meta_no_transcribe_dos_veces(eco_montado):
-    """La burbuja ya existía (`on_conflict_do_nothing` → rowcount 0): ni memoria ni transcripción."""
-    encolado, resultados = eco_montado
+    """La burbuja ya existía (`on_conflict_do_nothing` → rowcount 0): ni memoria, ni transcripción,
+    ni extractor."""
+    encolado, resultados, extractor = eco_montado
     resultados.extend([_Res(), _Res(), _Res(), _Res(rowcount=0)])  # mio, pausa, avisos, burbuja
     assert await webhook._procesar_eco(_eco()) == "eco"
-    assert encolado == []
+    assert encolado == [] and extractor == []
     rc.guardar_historial.assert_not_awaited()
 
 
 async def test_si_encolar_falla_el_eco_igual_termina(eco_montado, monkeypatch):
-    """La pausa y la burbuja son lo que no se puede perder; la transcripción es una mejora."""
+    """La pausa y la burbuja son lo que no se puede perder; la transcripción y el extractor son
+    mejoras: si el broker está caído, el eco termina igual."""
     def _revienta(*a, **kw):
         raise RuntimeError("broker caído")
 
     monkeypatch.setattr(tasks.transcribir_eco, "apply_async", _revienta)
+    monkeypatch.setattr(tasks.extraer_expediente, "apply_async", _revienta)
     assert await webhook._procesar_eco(_eco()) == "eco"
     rc.set_cache.assert_awaited()  # el candado del eco se puso igual
 

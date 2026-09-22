@@ -17,6 +17,54 @@
 
 ---
 
+## 2026-09-22 (37) — 🗂️ EL EXTRACTOR: lo que la dueña dice a mano se vuelve dato o propuesta (expediente, PR3)
+
+**Antes de PR3, la verificación en pruebas (P1-check):** Maired fusionó #60 y #61; pruebas quedó en `944c51d`
+(deploy por API de Coolify, `/root/deploy_pr61.sh`; al arrancar aplicó la 039 y la 040; `probar_migraciones.py`
+todo OK). Ella mandó una nota de voz desde el teléfono de la agencia a su número y quedó **"🎤 Sí, sí tenemos
+empanadas. Te lo puedo llevar el día de mañana."** en `mensajes` (tipo audio, media conservada), en la memoria
+Redis (misma posición, cero placeholders) y en `llamadas_ia` con carril `eco_audio`: gemini-2.5-flash, 154+17
+tokens, **$0,00018**, 1 s. La capa VER quedó probada de punta a punta.
+
+**Decisión de Maired — el modelo del extractor:** el MÁS BARATO (`google/gemini-2.5-flash-lite`, default en
+`config.py`), medido por el replay; se sube por la config `modelo_extractor` sin tocar código. Razón que ella
+aceptó: el extractor solo propone y el código valida → lo peor de un modelo barato es una propuesta de más,
+nunca una mentira. (Y la pregunta que había detrás: con qué modelo trabaja Claude → Fable 5.1 para lo que toca
+dinero, datos o el cerebro; Sonnet para lo mecánico.)
+
+**Qué quedó hecho (rama `expediente-extractor`):**
+- `app/agent/expediente.py` — el módulo: `ventanas_owner` (pura: agrupa sus mensajes consecutivos hasta que
+  habla el cliente o pasan 5 min; salta placeholders); `interpretar_duena` (una llamada con la tool
+  `proponer_eventos_duena`, contrato cerrado `ExtraccionDuena`; el modelo ve SOLO nombres del catálogo, sin ids
+  ni precios); `validar` (pura: resuelve nombre → producto → presentación → precio de hoy, cantidad y total; dicta
+  `escribe` / `propuesta` / `descarta`); `procesar_ventana` (deja la propuesta en la Bandeja o, SOLO con
+  `expediente_escritura=auto`, aplica lo inequívoco; no duplica propuestas pendientes; nunca lanza);
+  `aplicar_propuesta` (la ÚNICA puerta de escritura, la usan el toque humano y `auto`: pedido nace
+  `confirmado` con `origen='dueña'`, pago `confirmado` firmado por quien tocó + pedido `pagado`, entrega, precio
+  especial, cancelación, respuesta → Conocimiento confirmado); `leer_config_expediente`.
+- Contratos en `contratos_atencion.py`: `ItemDuena`, `EventoDuena`, `ExtraccionDuena` (cerrados, estrictos) y
+  `PropuestaExpediente`/`ItemPropuesto` (lo que viaja en `intervenciones.propuesta`, cerrado).
+- Reglas duras cableadas: **un pago es SIEMPRE propuesta**; evidencia que no consta literalmente → descarta;
+  nombre ambiguo, presentación sin decir, total que no cuadra (se conserva el que ELLA dijo, para que una
+  persona lo confirme), precio del día sin cargar → propuesta; entrega "mañana en la tarde" sobre el pedido
+  abierto → fecha + franja de la lista cerrada; el extractor no le habla a nadie.
+- Tarea `extraer_expediente` (worker): se encola **90 s después** de cada mensaje de la dueña (eco del celular
+  —texto o audio— y mensaje desde el panel), lee desde la marca `cache:expediente_hasta:{tel}` (sin marca, 6 h),
+  privado fail-closed, turno propio `expediente` en `llamadas_ia`.
+- Panel (bot): `listar_intervenciones` devuelve `propuesta`; `POST /intervenciones/{id}/aplicar` ("Sí, es
+  correcto": aplica por la única puerta, 409 legible si no se puede, cierra firmado) y `/descartar` ("No":
+  cierra sin escribir, firmado — sirve para medir cuánto se equivoca el extractor). Ninguno despausa ni retoma.
+- Palancas de la PROVEEDORA en `CLAVES_CONFIG`/`CLAVES_PROVEEDORA`: `modelo_extractor`, `expediente_escritura`
+  (off | **propuestas** | auto).
+- Tests: `test_expediente_extractor.py` (43) + `test_expediente_propuestas.py` (10). Suite **1210 / 0**.
+
+**Lo que falta del PR3 (PR hermano del dashboard):** la tarjeta de la Bandeja para `motivo='propuesta_expediente'`
+con los botones "Sí, es correcto" / "No" sobre la rama `control-atencion-panel` (PR #10). Mientras no esté, las
+propuestas se ven en la Bandeja con su texto pero se aplican por API.
+
+**Sigue:** PR3b (dashboard) → PR4 los lectores (`_estado_cliente_texto` → producción `uno` mejora;
+`cargar_contexto` → `humano_sin_acuerdo` real; `_retomar`) → PR5 el replay sobre las 305 conversaciones.
+
 ## 2026-09-22 (36) — 🎤 LA NOTA DE VOZ DE LA DUEÑA SE TRANSCRIBE EN VIVO (expediente, PR2)
 
 **El hueco:** en el corpus real la dueña mandó **877 notas de voz** y el bot vio "[nota de voz]" en TODAS

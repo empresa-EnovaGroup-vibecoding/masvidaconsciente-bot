@@ -525,6 +525,17 @@ async def _procesar_eco(eco) -> str:
             transcribir_eco.apply_async((telefono, wa_id, eco["media_id"], eco.get("mime_type")))
         except Exception:  # noqa: BLE001 — sin transcripción queda el placeholder, como hasta hoy
             logger.exception("No se pudo encolar la transcripción de la nota de voz de %s", telefono)
+
+    # 8) 🗂️ EL EXPEDIENTE (PR3 — SESIONES (37)): lo que ella acaba de decir se lee 90 s después
+    #    (tiempo de que la transcripción aterrice y de que termine de escribir) y se vuelve dato o
+    #    PROPUESTA en la Bandeja. Solo texto y audio: una foto o un sticker no dicen nada de la venta.
+    if nueva and eco["tipo"] in ("text", "audio"):
+        try:
+            from app.workers.tasks import extraer_expediente
+
+            extraer_expediente.apply_async((telefono, None), countdown=90)
+        except Exception:  # noqa: BLE001 — sin extractor, el eco ya hizo lo suyo
+            logger.exception("No se pudo encolar el extractor del expediente para %s", telefono)
     await rc.notificar_conversacion(telefono, "atencion_humana")
     return "eco"
 
