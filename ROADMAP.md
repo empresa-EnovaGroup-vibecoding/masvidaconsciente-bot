@@ -33,11 +33,12 @@ Las **FASES 0 a 3 ya están hechas y desplegadas**:
 > 🧭 **22-sep — PLAN VIGENTE: "atención confirmada + Voz" (modo `confirmado`)** — SESIONES (33) y
 > `~/.claude/plans/…crystalline-sprout.md`. El código decide QUÉ (capa de hechos de Codex), la Voz decide CÓMO
 > (modo DOS de agosto), el código verifica. Absorbe el punto 3 de abajo: los modelos baratos entran donde el
-> peor caso es un reintento, nunca una mentira. **E0 y E1 hechos en la rama `atencion-confirmada-voz`**:
-> el modo está cableado y el cerebro ya cierra datos, pagos, pausa, avisos y acciones; sigue APAGADO y
-> producción continúa en `uno`. Las dos decisiones pendientes ya fueron resueltas por Maired: sobrepago =
-> saldo a favor; si falla la lectura de la pausa, el bot calla. Sigue: Voz sobre la salida cerrada → pruebas
-> sin red → entorno de pruebas de Enova → medición y puertas G1-G5 → activación gradual por configuración.
+> peor caso es un reintento, nunca una mentira. **E0 y E1 hechos en la rama `atencion-confirmada-voz` (PR #59,
+> revisado por Claude: 1126 tests/0)**: el modo está cableado y el cerebro ya cierra datos, pagos, pausa, avisos
+> y acciones; sigue APAGADO y producción continúa en `uno`. Decisiones de Maired: sobrepago = saldo a favor; si
+> falla la lectura de la pausa, el bot calla. **Orden decidido por Maired: CEREBRO PRIMERO, VOZ DESPUÉS** →
+> E2 prenderlo SOLO en pruebas y que Maired lo oiga (sonará plano: este modo no usa la Personalidad) + 48 h de
+> medición → E3 conectar la Voz sobre la salida cerrada → puertas G1-G5 → producción por configuración.
 
 1. **Cerrar la regla del delivery.** Whuilianny confirmó la fórmula: productos + delivery y después
    20% de descuento al total cuando se paga en dólares. El cambio de código conserva las cotizaciones

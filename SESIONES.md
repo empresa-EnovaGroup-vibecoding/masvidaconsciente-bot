@@ -42,8 +42,23 @@ configuración de ningún servidor.
 usan respuestas simuladas: no llamaron a OpenRouter, no consumieron tokens del bot y no enviaron WhatsApps.
 
 **Estado:** código solo en la rama/PR #59. El modo `confirmado` sigue apagado y producción continúa en
-`uno`. No hubo despliegue. **Sigue:** conectar la Voz sobre esta salida cerrada, probarla sin red y después
-llevar el modo al entorno de pruebas de Enova. Activación en producción queda para una decisión posterior.
+`uno`. No hubo despliegue.
+
+**Revisión de Claude (misma tarde):** bajada la rama, suite completa **1126 tests / 0 fallos**, ruff limpio.
+Verificado leyendo: `uno`/`dos` no cambian (test por modo); las frases fijas de pago pasan la red
+`_proteger_afirmacion_de_pago`; la verificación de fuentes movida ANTES de cobrar conserva el segundo cinturón
+del envío (`_enviar_en_partes` re-verifica). Se agregaron los 2 tests que faltaban: los 3 endpoints del panel
+(aprobar / rechazar / verificar monto) mandan el evento tipado junto a la situación natural; y dos mensajes
+entrelazados del mismo cliente producen UN solo aviso y UN solo acuse. Paso 0 del plan también hecho: el panel
+de Codex que estaba SIN COMMITEAR en su clon quedó en el PR borrador #10 del dashboard (Conocimiento
+confirmado + botones de la Bandeja; los botones son decisión de UX de Maired, por eso borrador).
+
+**Sigue (orden decidido por Maired, 22-sep tarde: CEREBRO PRIMERO, VOZ DESPUÉS — no al revés):** E2 = opción
+`confirmado` en Configuración del panel, prenderlo SOLO en pruebas (VPS de Enova) y que Maired lo oiga 20 min
+sabiendo que sonará plano (este modo NO usa la Personalidad del panel; se comprueba el cerebro: que no invente,
+pregunte lo del cliente, avise y pause), más 48 h leyendo `intervenciones`/día y `llamadas_ia`/turno. E3 =
+conectar la Voz de Alejandra (la Personalidad) sobre esta salida cerrada. Producción: decisión posterior, tras
+las puertas G1-G5 (`~/.claude/plans/…crystalline-sprout.md`).
 
 ## 2026-09-22 (33) — 🧭 CODEX + LA VOZ: nace el modo `confirmado` (E0: cableado, APAGADO, suite verde)
 

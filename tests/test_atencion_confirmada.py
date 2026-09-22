@@ -1,4 +1,5 @@
 """Turnos completos sin proveedor IA, WhatsApp ni red; se observan respuestas y escrituras."""
+import asyncio
 import copy
 import json
 from datetime import date
@@ -426,3 +427,46 @@ async def test_dos_llamadas_una_para_cobrar_son_rechazadas(contexto):
     ]}}]})
     with pytest.raises(ValueError):
         await interpretar(contexto, "hola", [], llm, "simulado")
+
+
+async def test_dos_mensajes_a_la_vez_un_solo_aviso_y_un_solo_acuse(contexto, monkeypatch):
+    """El caso de la lista de Codex que faltaba, de punta a punta.
+
+    Dos mensajes del MISMO cliente entrelazados: los dos pasan la primera mirada a la pausa y los
+    dos llaman al intérprete (ahí es donde un turno real se demora). Solo UNO pide ayuda y pausa;
+    el otro muere en la SEGUNDA mirada (`atender` recarga el contexto después de interpretar) y
+    sale vacío. Y al ENVIAR, el acuse "Ya te confirmo" sale una sola vez: `tomar_acuse` reserva el
+    turno en la intervención y el segundo intento devuelve [] sin tocar WhatsApp."""
+    class Lento(Entorno):
+        async def llm(self, *a, **kw):
+            await asyncio.sleep(0)  # cede el turno: aquí se cruzan los dos mensajes
+            return await super().llm(*a, **kw)
+
+    e = Lento(contexto, consulta("duracion"))  # duración vacía ⇒ relevo
+    r1, r2 = await asyncio.gather(
+        e.turno("cuánto dura el quesillo?"), e.turno("y el quesillo se congela?")
+    )
+    assert sorted([bool(r1.relevo), bool(r2.relevo)]) == [False, True], "uno acusa, el otro calla"
+    assert "" in (r1, r2)
+    assert [n for n, _ in e.acciones if n == "pedir_ayuda"] == ["pedir_ayuda"], "un solo aviso"
+    assert e.ctx.pausado and e.llamadas_ia == 2  # el costo honesto de la carrera: dos interpretaciones
+
+    # El envío del acuse, con la reserva de `tomar_acuse` simulada: primero sí, segundo no.
+    from app.agent import fuentes_atencion
+    from app.workers import tasks
+
+    enviados = []
+
+    async def _enviar_texto(telefono, parte, **kw):
+        enviados.append(parte)
+        return {"messages": [{"id": "wamid.1"}]}
+
+    monkeypatch.setattr(fuentes_atencion, "fuentes_vigentes", AsyncMock(return_value=True))
+    monkeypatch.setattr(fuentes_atencion, "tomar_acuse", AsyncMock(side_effect=[True, False]))
+    monkeypatch.setattr(tasks, "_lo_paso_una_persona", AsyncMock(return_value=False))
+    monkeypatch.setattr(tasks, "marcar_mensaje_propio", AsyncMock())
+    monkeypatch.setattr(tasks, "enviar_texto", _enviar_texto)
+    acuse = MensajeConfirmado("Ya te confirmo", relevo=True)
+    assert len(await tasks._enviar_en_partes("__prueba__", acuse)) == 1
+    assert await tasks._enviar_en_partes("__prueba__", acuse) == []
+    assert enviados == ["Ya te confirmo"]
