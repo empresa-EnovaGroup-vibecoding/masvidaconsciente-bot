@@ -338,11 +338,16 @@ async def cerrar_avisos_ya_atendidos(session) -> int:
     provoca, así que este UPDATE lo cerraría a los 5 minutos de crearse: el aviso desaparecería de
     "Te esperan", nadie apretaría nada, y el cliente se quedaría con el bot MUDO PARA SIEMPRE.
     Justo el desastre que ese aviso vino a evitar, reintroducido por el barredor.
+
+    🗂️ Tampoco `propuesta_expediente` (migración 040). Que la dueña haya escrito DESPUÉS no confirma
+    la propuesta ("¿ese 'Listo' fue un pago?"): eso lo decide un toque en el panel. Si el barredor la
+    cerrara, el dato se perdería en silencio. Es el mismo conjunto `MOTIVOS_INFORMATIVOS` de
+    models.py, escrito aquí a mano porque esto es SQL crudo (un test lo vigila).
     """
     res = await session.execute(text(
         "UPDATE intervenciones i SET estado = 'resuelta', resuelta_at = now() "
         " WHERE i.estado = 'pendiente' "
-        "   AND i.motivo <> 'chat_tomado' "
+        "   AND i.motivo NOT IN ('chat_tomado', 'propuesta_expediente') "
         "   AND EXISTS (SELECT 1 FROM mensajes m "
         "                WHERE m.cliente_telefono = i.cliente_telefono "
         "                  AND m.rol = 'owner' AND m.created_at > i.created_at)"

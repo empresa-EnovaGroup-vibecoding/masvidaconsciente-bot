@@ -46,12 +46,17 @@ COLUMNAS = [
     ("producto_media", "etiqueta", "029 · cada foto dice qué es"),
     ("conocimiento", "activo", "030 · retirar sin borrar"),
     ("producto_media", "es_principal", "036 · la foto principal del producto"),
+    ("pedidos", "origen", "040 · el expediente: QUIÉN puso el dato (bot, Whuilianny o el panel)"),
+    ("pagos", "origen", "040 · el expediente: un pago dicho a mano también tiene dueño"),
+    ("intervenciones", "propuesta", "040 · el expediente: lo dudoso se PROPONE, no se escribe"),
 ]
 
 # Índices que TIENEN que estar… y el que NO puede estar.
 INDICES_VIVOS = [
     ("ux_precio_dia_variante_fecha", "022 · un precio por TAMAÑO y día"),
     ("ux_media_principal_por_producto", "036 · UNA principal por producto (lo impide Postgres)"),
+    ("idx_intervenciones_propuestas", "040 · las propuestas pendientes de un chat, de un golpe"),
+    ("idx_mensajes_owner_por_id", "040 · los mensajes de la dueña por orden, para el extractor"),
 ]
 INDICES_MUERTOS = [
     # 🔴 EL DELATOR. Si este vuelve a aparecer, es que la 022 NO corrió: alguna migración anterior

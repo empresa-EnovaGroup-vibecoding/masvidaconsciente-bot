@@ -17,6 +17,63 @@
 
 ---
 
+## 2026-09-22 (35) — 🗂️ EL EXPEDIENTE DE LA VENTA: el bot tiene que saber en qué punto entra (PR1: cimientos)
+
+**La pregunta de Maired que lo cambió todo:** *"¿la infraestructura que estamos creando es la mejor para el
+objetivo final? Si Whuilianny ya le cobró, el bot tiene que saberlo. No puede seguir una conversación si no
+sabe lo que la persona ya hizo, cuándo, si pagó o no. Matemos de raíz."* Se paró todo y se re-evaluó la
+arquitectura con evidencia, no de memoria.
+
+**Lo que se verificó (código + corpus anónimo de 313 conversaciones reales):**
+- Los ecos de la dueña quedan como `Mensaje(rol='owner')` y le llegan al modelo como texto envuelto en
+  `[MENSAJE HUMANO DEL NEGOCIO…]`. **Sus notas de voz NO se transcriben en vivo**: el bot ve "[nota de voz]" en
+  el 100% de ellas (`parser.py`, `webhook/router.py`; y `memoria.py:164` filtra `tipo='text'`).
+- **Ninguna función lee sus mensajes para deducir estado.** `pedidos` solo los crea el bot; `pagos` solo
+  `registrar_comprobante`; no hay pedido manual ni "cobré sin comprobante" en el panel; no hay línea de
+  tiempo ni procedencia. `Contexto.humano_sin_acuerdo` (Codex) está declarado y **nunca se calcula**.
+- Corpus: **305 de 313 conversaciones las atiende Whuilianny; 10.555 mensajes de ella vs 55 del bot; 877
+  notas de voz suyas (166 transcritas offline; 38% = coordinar entregas)**; el pago se confirma casi siempre
+  implícito ("Listo", emoji, voz; acuse mediana 0,9 h tras el comprobante); **el bot chocó con ella en 6 de las 7
+  conversaciones donde entró** (piloto 12-15 sep): total $62 vs $64 de ella y pidió un pago ya hecho; cobró $2
+  de envío que ella había regalado; "¿te recuerdo lo que pediste?" con pedido tomado; re-saludó a mitad; 150
+  mensajes de ella con correcciones; 50 clientes recurrentes (uno con 19 compras).
+
+**Diagnóstico de raíz:** no es qué cerebro decide ni qué voz habla: **no existe un registro compartido de la
+venta entre Whuilianny y el bot.** Cualquier cerebro entra ciego después de ella.
+
+**Arquitectura final (aprobada por Maired):** un cerebro (código: la capa de Codex, modo `confirmado`) + una
+voz (IA: la Voz del modo dos, reutilizada) + **un EXPEDIENTE** (memoria compartida con procedencia y fecha,
+alimentada por el bot, el panel y **los mensajes de la dueña —texto y notas de voz transcritas en vivo— pasados
+por un extractor**: modelo barato → JSON tipado → **el código valida**; lo dudoso queda como PROPUESTA que una
+persona confirma con un toque; jamás se escribe un dato dudoso). Sin Operador-IA. Orden: **P1** migración 040 +
+transcripción de ecos → **P2** extractor + propuestas + lectores (`_estado_cliente_texto` → producción `uno`
+mejora ya) + replay sobre las 305 conversaciones (puerta ≥0,98) + gancho de retorno apagado → **P3** el cerebro
+`confirmado` lee el expediente y Maired lo oye en pruebas → **P4** la Voz → **P5** Conocimiento desde el corpus →
+**P6** puertas G1-G6 y producción por configuración. ≈10 sesiones; costo estimado $1-3/mes en tokens. Plan
+completo: `~/.claude/plans/…crystalline-sprout.md`.
+
+**Decisiones de Maired (22-sep noche):** (1) **el bot PUEDE volver solo tras Whuilianny, con condiciones** —
+cliente escribe de nuevo + N horas sin respuesta de ella + expediente resuelto; flag `retomar_auto_horas`
+APAGADO por defecto; se prueba en pruebas; ella fija N (la regla "pausado_por='dueña' no expira" sigue hasta
+entonces). (2) **Lo dudoso lo confirma Maired por ahora desde la Bandeja**; Whuilianny cuando use el panel
+(~4 propuestas de pago al día = el mismo botón "Pago aprobado", pre-señalado). (3) Un `pago_confirmado`
+extraído es SIEMPRE propuesta: `pagado` solo nace de un clic humano (CLAUDE.md §3).
+
+**PR1 (esta rama, `expediente-cimientos`) — cero conducta:** migración `040_expediente.sql` (`pedidos`/`pagos`
++ `origen` bot|dueña|panel, `evidencia_mensaje_id`, `confianza`, `extraido_at`; `intervenciones` + `propuesta`
+JSONB, `aplicada_por`, `aplicada_at`; 2 índices), modelos, `probar_migraciones.py`, la constante
+`MOTIVOS_INFORMATIVOS` (models.py) y las **6 guardas** para que una propuesta NUNCA se confunda con un chat
+tomado: el eco no la cierra (`_procesar_eco`), el mensaje desde el panel no la cierra, el barredor no la cierra
+(`NOT IN`), resolverla no reactiva al bot, `pedir_ayuda` no la enriquece ni le pisa el motivo, `tomar_acuse` no
+se la lleva. Etiqueta en la bandeja: "Whuilianny dijo algo a mano: ¿lo confirmas?". Tests en
+`tests/test_expediente_cimientos.py`. **Nadie escribe todavía en estas columnas.**
+
+**Lecciones:** (a) antes de decidir arquitectura, medir la operación real: aquí el bot era el 0,5% de los
+mensajes; (b) Codex y Claude comparten rama desde dos clones → `git fetch` antes de cada paso (hoy casi se
+duplicó E1); (c) el ritmo con Maired es un OK por paso y cada mensaje empieza con "Estamos en / Falta".
+
+**Sigue:** PR2 — transcribir en vivo las notas de voz de la dueña (`transcribir_eco`).
+
 ## 2026-09-22 (34) — 🛡️ EL CEREBRO SE CIERRA ANTES DE DARLE VOZ (E1, APAGADO)
 
 **Decisión de Maired:** primero terminar la seguridad del modo `confirmado`; la Voz natural se conecta

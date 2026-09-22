@@ -331,7 +331,7 @@ async def _procesar_eco(eco) -> str:
     from sqlalchemy import select
     from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-    from app.models import Cliente, Intervencion, Mensaje, now_utc
+    from app.models import MOTIVOS_INFORMATIVOS, Cliente, Intervencion, Mensaje, now_utc
     from app.services import redis_client as rc
     from app.services.db import get_session_factory
     from app.services.meta_client import es_mensaje_propio
@@ -440,7 +440,9 @@ async def _procesar_eco(eco) -> str:
             ).scalars().all()
             ya_tomado = any(i.motivo == "chat_tomado" for i in pendientes)
             for aviso in pendientes:
-                if aviso.motivo != "chat_tomado":
+                # 🗂️ Una PROPUESTA del expediente (040) tampoco se cierra aquí: que ella escriba de
+                # nuevo no confirma que su "Listo" fue un pago. Eso lo decide un toque en el panel.
+                if aviso.motivo != "chat_tomado" and aviso.motivo not in MOTIVOS_INFORMATIVOS:
                     aviso.estado = "resuelta"
                     aviso.resuelta_at = ahora
             if not ya_tomado:

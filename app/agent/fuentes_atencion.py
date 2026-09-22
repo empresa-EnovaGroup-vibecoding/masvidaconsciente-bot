@@ -6,6 +6,7 @@ from sqlalchemy import select, text
 
 from app.agent.contratos_atencion import Contexto, Hecho
 from app.models import (
+    MOTIVOS_INFORMATIVOS,
     Cliente,
     Configuracion,
     Conocimiento,
@@ -142,8 +143,11 @@ async def tomar_acuse(telefono):
         c = await bloquear_cliente(session, telefono)
         if not c or c.privado or not c.bot_pausado or c.pausado_por != "bot":
             return False
+        # 🗂️ El acuse va a la intervención del RELEVO, no a una propuesta del expediente (040) que
+        # casualmente sea la más nueva: esa no pausó nada ni promete respuesta.
         i = (await session.execute(select(Intervencion).where(
             Intervencion.cliente_telefono == telefono, Intervencion.estado == "pendiente",
+            Intervencion.motivo.not_in(list(MOTIVOS_INFORMATIVOS)),
         ).order_by(Intervencion.id.desc()).limit(1).with_for_update())).scalar_one_or_none()
         if i is None or i.acuse_intentado:
             return False

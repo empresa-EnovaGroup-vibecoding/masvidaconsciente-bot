@@ -17,6 +17,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.config import get_settings, url_publica_utilizable
 from app.models import (
+    MOTIVOS_INFORMATIVOS,
     CatalogoPdf,
     Cliente,
     Configuracion,
@@ -4011,6 +4012,9 @@ async def pedir_ayuda(
             .where(
                 Intervencion.cliente_telefono == telefono,
                 Intervencion.estado == "pendiente",
+                # 🗂️ Una PROPUESTA del expediente (040) no cuenta como "aviso vivo": la escalada
+                # real crea el suyo, y la propuesta conserva su motivo y su pregunta intactos.
+                Intervencion.motivo.not_in(list(MOTIVOS_INFORMATIVOS)),
             )
             .order_by(Intervencion.created_at.desc())
             .limit(1)

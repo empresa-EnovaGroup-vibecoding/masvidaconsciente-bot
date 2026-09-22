@@ -24,6 +24,7 @@ from app.api.security import (
 )
 from app.config import get_settings
 from app.models import (
+    MOTIVOS_INFORMATIVOS,
     CatalogoPdf,
     Cliente,
     Configuracion,
@@ -2414,7 +2415,9 @@ async def responder_como_dueña(
         ).scalars().all()
         ya_tomado = any(i.motivo == "chat_tomado" for i in pendientes)
         for aviso in pendientes:
-            if aviso.motivo != "chat_tomado":
+            # 🗂️ Una PROPUESTA del expediente (040) tampoco se cierra aquí: la confirma un toque,
+            # no el hecho de que ella escriba. Ver `MOTIVOS_INFORMATIVOS`.
+            if aviso.motivo != "chat_tomado" and aviso.motivo not in MOTIVOS_INFORMATIVOS:
                 aviso.estado = "resuelta"
                 aviso.resuelta_at = now_utc()
         if not ya_tomado:
@@ -2781,6 +2784,11 @@ _MOTIVO_TEXTO = {
     # que salir por su teléfono. Sin estas entradas la bandeja pintaría el motivo crudo.
     "pago_en_chat_tomado": "Confirmaste un pago y el chat lo tienes tú: avísale",
     "pago_no_entregado": "El aviso de su pago NO le llegó al cliente",
+    # 🗂️ EL EXPEDIENTE (migración 040). El extractor leyó en un mensaje de Whuilianny —texto o nota
+    # de voz— algo que parece un dato de la venta (un pago, un pedido, una entrega) y lo PROPONE. No
+    # pausa nada ni es un problema: es una pregunta con dos botones ("Sí, es correcto" / "No").
+    # Hasta que alguien lo confirme, ese dato NO existe para el bot. Ver `MOTIVOS_INFORMATIVOS`.
+    "propuesta_expediente": "Whuilianny dijo algo a mano: ¿lo confirmas?",
 }
 
 
@@ -2850,7 +2858,13 @@ async def resolver_intervencion(
         # anulado con un clic.
         #
         # `tasa_congelada` (cuando llegue) es un aviso del SISTEMA, no del chat de nadie.
-        reactivar = reactivar and inter.motivo not in ("tope_diario", "tasa_congelada")
+        # 🗂️ Y `propuesta_expediente` (040): "resolver" una propuesta es descartarla, no devolver un
+        # chat — la propuesta nunca pausó nada. Ver `MOTIVOS_INFORMATIVOS`.
+        reactivar = (
+            reactivar
+            and inter.motivo not in ("tope_diario", "tasa_congelada")
+            and inter.motivo not in MOTIVOS_INFORMATIVOS
+        )
         if reactivar:
             cliente = (
                 await session.execute(

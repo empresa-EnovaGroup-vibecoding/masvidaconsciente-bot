@@ -163,6 +163,15 @@ class Cliente(Base):
     privado: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
+# ── Avisos que NO son "un chat pausado que espera a la dueña" ──
+# `propuesta_expediente` (migración 040, SESIONES (35)): el extractor cree haber leído en un mensaje
+# de la dueña —texto o nota de voz— un dato de la venta (un pago, un pedido, una entrega) y lo
+# PROPONE para que una persona lo confirme con un toque desde el panel. No pausa nada; no lo cierra
+# un eco ni el barredor; `pedir_ayuda` no lo enriquece; `tomar_acuse` no se lo lleva; "resolverlo"
+# no reactiva al bot. Hasta que alguien lo confirme, ese dato NO existe para el bot.
+MOTIVOS_INFORMATIVOS: frozenset[str] = frozenset({"propuesta_expediente"})
+
+
 class Intervencion(Base):
     """'El bot te necesita': el bot se topó con algo que NO le toca resolver
     (un precio que cambia, algo que no sabe, un cliente que pide una persona, un
@@ -172,7 +181,9 @@ class Intervencion(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     cliente_telefono: Mapped[str] = mapped_column(Text)
-    motivo: Mapped[str] = mapped_column(Text)  # precio_del_dia|no_se|pide_persona|reclamo
+    # precio_del_dia|no_se|pide_persona|reclamo|acuerdo_especial (los del bot) · chat_tomado (el
+    # botón de devolver) · propuesta_expediente (ver MOTIVOS_INFORMATIVOS) · y los del sistema.
+    motivo: Mapped[str] = mapped_column(Text)
     detalle: Mapped[str | None] = mapped_column(Text, nullable=True)
     mensaje_cliente: Mapped[str | None] = mapped_column(Text, nullable=True)
     estado: Mapped[str] = mapped_column(Text, default="pendiente")  # pendiente|resuelta
@@ -181,6 +192,13 @@ class Intervencion(Base):
     resuelta_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # ── EL EXPEDIENTE (migración 040): la propuesta con un toque ──
+    # Cuando `motivo == 'propuesta_expediente'`, aquí viaja el dato TIPADO que el extractor leyó
+    # (qué es, ítems ya resueltos contra el catálogo, montos, el mensaje de evidencia, la
+    # confianza). Se aplica o se descarta desde el panel; quién y cuándo quedan firmados.
+    propuesta: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    aplicada_por: Mapped[str | None] = mapped_column(Text, nullable=True)
+    aplicada_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class PrecioDia(Base):
@@ -251,6 +269,7 @@ class Pedido(Base):
             "'cancelado','esperando_pago','pagado')",
             name="ck_pedido_estado",
         ),
+        CheckConstraint("origen IN ('bot','dueña','panel')", name="ck_pedido_origen"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -301,6 +320,19 @@ class Pedido(Base):
     # (decisión de Maired, 1-sep: quien dice pago móvil no recibe la cuenta del banco).
     metodo_elegido: Mapped[str | None] = mapped_column(Text, nullable=True)
     metodo_elegido_tipo: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # ── EL EXPEDIENTE DE LA VENTA (migración 040): QUIÉN puso este dato ──
+    # `origen`: 'bot' (lo registró `registrar_pedido`), 'dueña' (lo dijo Whuilianny a mano, por
+    # texto o nota de voz, y el extractor lo leyó) o 'panel' (un clic). `evidencia_mensaje_id`
+    # apunta al mensaje EXACTO de la dueña que lo respalda: de ahí sale "según Whuilianny, nota de
+    # voz del 21-sep 10:32". `confianza` y `extraido_at` solo se llenan cuando el origen es
+    # 'dueña'. Un pedido de la dueña nace 'confirmado', jamás 'esperando_pago' (eso dispararía el
+    # cobro del bot sobre una venta que ella ya cerró). Ver SESIONES (35).
+    origen: Mapped[str] = mapped_column(Text, default="bot")
+    evidencia_mensaje_id: Mapped[int | None] = mapped_column(
+        ForeignKey("mensajes.id", ondelete="SET NULL"), nullable=True
+    )
+    confianza: Mapped[Decimal | None] = mapped_column(Numeric(3, 2), nullable=True)
+    extraido_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 
@@ -430,6 +462,7 @@ class Pago(Base):
             "estado IN ('reportado','confirmado','rechazado','parcial')",
             name="ck_pago_estado",
         ),
+        CheckConstraint("origen IN ('bot','dueña','panel')", name="ck_pago_origen"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -445,6 +478,18 @@ class Pago(Base):
     estado: Mapped[str] = mapped_column(Text, default="reportado")
     confirmado_por: Mapped[str | None] = mapped_column(Text, nullable=True)
     motivo_rechazo: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # ── EL EXPEDIENTE DE LA VENTA (migración 040): QUIÉN puso este dato ──
+    # 'bot' = nació de un comprobante (`registrar_comprobante`); 'dueña' = Whuilianny dijo a mano
+    # que el pago llegó (sin comprobante: `comprobante_media_id` queda vacío) y una PERSONA lo
+    # confirmó con un toque en el panel — el estado 'confirmado' sigue naciendo SOLO de un clic
+    # humano (CLAUDE.md §3); 'panel' = un clic directo. `evidencia_mensaje_id`, `confianza` y
+    # `extraido_at`: igual que en `pedidos`. Ver SESIONES (35).
+    origen: Mapped[str] = mapped_column(Text, default="bot")
+    evidencia_mensaje_id: Mapped[int | None] = mapped_column(
+        ForeignKey("mensajes.id", ondelete="SET NULL"), nullable=True
+    )
+    confianza: Mapped[Decimal | None] = mapped_column(Numeric(3, 2), nullable=True)
+    extraido_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 
