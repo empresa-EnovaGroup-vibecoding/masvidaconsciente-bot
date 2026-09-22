@@ -30,15 +30,19 @@ Las **FASES 0 a 3 ya están hechas y desplegadas**:
 
 ### 🚀 AHORA MISMO (16-sep): REGLA DEL DELIVERY Y MODELO MÁS ECONÓMICO
 
-> 🧭 **22-sep — PLAN VIGENTE: "atención confirmada + Voz" (modo `confirmado`)** — SESIONES (33) y
-> `~/.claude/plans/…crystalline-sprout.md`. El código decide QUÉ (capa de hechos de Codex), la Voz decide CÓMO
-> (modo DOS de agosto), el código verifica. Absorbe el punto 3 de abajo: los modelos baratos entran donde el
-> peor caso es un reintento, nunca una mentira. **E0 y E1 hechos en la rama `atencion-confirmada-voz` (PR #59,
-> revisado por Claude: 1126 tests/0)**: el modo está cableado y el cerebro ya cierra datos, pagos, pausa, avisos
-> y acciones; sigue APAGADO y producción continúa en `uno`. Decisiones de Maired: sobrepago = saldo a favor; si
-> falla la lectura de la pausa, el bot calla. **Orden decidido por Maired: CEREBRO PRIMERO, VOZ DESPUÉS** →
-> E2 prenderlo SOLO en pruebas y que Maired lo oiga (sonará plano: este modo no usa la Personalidad) + 48 h de
-> medición → E3 conectar la Voz sobre la salida cerrada → puertas G1-G5 → producción por configuración.
+> 🗂️ **22-sep noche — PLAN VIGENTE: "EL EXPEDIENTE DE LA VENTA"** — SESIONES (35) y
+> `~/.claude/plans/…crystalline-sprout.md`. Diagnóstico de raíz: **no existe un registro compartido de la venta
+> entre Whuilianny y el bot** (sus notas de voz ni se transcriben; nada lee sus mensajes para deducir estado; el
+> bot chocó con ella en 6 de las 7 conversaciones reales donde entró). Arquitectura final aprobada por Maired:
+> **un cerebro (código = capa de Codex, modo `confirmado`, fusionado en #59 y APAGADO) + una voz (IA = la Voz del
+> modo dos, reutilizada) + un EXPEDIENTE (pedido/pago/entrega con procedencia, evidencia y fecha, alimentado
+> también por los mensajes y notas de voz de la dueña vía un extractor tipado que el código valida; lo dudoso se
+> PROPONE, nunca se escribe)**. Orden: P1 migración 040 (PR1, hecho) + transcripción de ecos (PR2) → P2 extractor
+> + propuestas con un toque + lectores (producción `uno` mejora aquí) + replay sobre las 305 conversaciones →
+> P3 el cerebro lee el expediente y Maired lo oye en pruebas → P4 la Voz → P5 Conocimiento del corpus → P6
+> puertas G1-G6 y producción por configuración. Decisiones: retorno automático CON condiciones (flag apagado,
+> Maired fija N); lo dudoso lo confirma Maired en la Bandeja; `pago_confirmado` siempre propuesta. Producción
+> sigue en `uno` hasta P6.
 
 1. **Cerrar la regla del delivery.** Whuilianny confirmó la fórmula: productos + delivery y después
    20% de descuento al total cuando se paga en dólares. El cambio de código conserva las cotizaciones
