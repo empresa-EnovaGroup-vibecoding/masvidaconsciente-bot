@@ -2433,6 +2433,20 @@ def _pregunta_repetida(texto: str, historial: list | None, veces: int = 2) -> bo
 
 
 async def responder(
+    telefono: str, mensaje_usuario: str, historial: list | None = None,
+    nombre_cliente: str | None = None, *, pregunta_cliente: str | None = None,
+    llm=_llamar_openrouter, voz=None, ejecutar=ejecutar_tool,
+) -> str:
+    """Única entrada productiva: ningún modo puede saltarse la autorización de hechos."""
+    from app.agent.atencion import atender
+
+    abrir_turno(telefono, "charla")
+    modelo = await leer_modelo_ia()
+    return await atender(telefono, pregunta_cliente or mensaje_usuario, historial,
+                         llm=llm, modelo=modelo, ejecutar=ejecutar)
+
+
+async def _responder_legacy(
     telefono: str,
     mensaje_usuario: str,
     historial: list | None = None,
@@ -3831,7 +3845,15 @@ async def _pedir_redaccion(messages: list, modelo: str) -> str:
     return (data["choices"][0]["message"].get("content") or "").strip()
 
 
-async def redactar_mensaje(
+async def redactar_mensaje(situacion, historial=None, nombre=None, telefono=None, *,
+                           montos_usd=None, montos_bs=None) -> str:
+    """Los eventos de pago se validan contra su fila; ninguna guía libre autoriza hechos."""
+    from app.agent.eventos_atencion import redactar_evento
+
+    return await redactar_evento(situacion, telefono, historial)
+
+
+async def _redactar_mensaje_legacy(
     situacion: str,
     historial: list | None = None,
     nombre: str | None = None,

@@ -16,8 +16,11 @@ rápido — lo que puede correr en el CI ANTES de desplegar.
 """
 
 import os
+import socket
 import sys
 from pathlib import Path
+
+import pytest
 
 RAIZ = Path(__file__).resolve().parent.parent
 
@@ -37,3 +40,16 @@ os.environ.setdefault("OPENROUTER_API_KEY", "sk-or-v1-de-mentira-para-pytest")
 # `config.py` gritaría un `logger.error` en CADA corrida de tests. El test que prueba la
 # DEGRADACIÓN pone la suya (vacía) por su cuenta. Ver `tests/test_catalogo_url_publica.py`.
 os.environ.setdefault("PUBLIC_BASE_URL", "https://pruebas.example.test")
+
+
+@pytest.fixture(autouse=True)
+def sin_red_externa(monkeypatch):
+    """La suite no puede gastar saldo ni contactar clientes, incluso por una llamada accidental."""
+    conectar = socket.socket.connect
+
+    def bloqueada(sock, direccion):
+        if sock.family in (socket.AF_INET, socket.AF_INET6):
+            raise AssertionError(f"Conexión de red prohibida en pruebas: {direccion!r}")
+        return conectar(sock, direccion)
+
+    monkeypatch.setattr(socket.socket, "connect", bloqueada)

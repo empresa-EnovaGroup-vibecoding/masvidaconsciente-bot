@@ -1,3 +1,4 @@
+# Regresión del motor anterior, conservado solo para comparar sus protecciones.
 """EL SALUDO SE DEVUELVE TAMBIÉN AL VOLVER — el caso que reportó Maired el 2026-08-21.
 
 Ella escribió *"Buenas tardes, ¿cómo estás? Me gustaría saber si tienen empanadas de plátano"* UN
@@ -73,7 +74,7 @@ async def _turno(monkeypatch, *, horas, historial, texto=SIN_SALUDO, mensaje=MSG
     async def ejecutar(nombre, args, telefono):
         return {"ok": True}
 
-    return await ag.responder(
+    return await ag._responder_legacy(
         "584264399792", mensaje, list(historial), "Enova", llm=llm, ejecutar=ejecutar
     )
 

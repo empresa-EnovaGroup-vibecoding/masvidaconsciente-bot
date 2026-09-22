@@ -1,3 +1,4 @@
+# Regresión del motor anterior, conservado solo para comparar sus protecciones.
 """LA RED DE LA FOTO — ver vende, y el modelo describe en vez de mostrar.
 
 EL CASO REAL (smoke de 7 turnos contra el bot real, 2026-08-08, corrido DOS veces): CERO fotos
@@ -605,7 +606,7 @@ async def _correr_turno(
         llamadas.append((nombre, args))
         return {"enviadas": 2, "producto": "Quesillo"}
 
-    salida = await ag.responder(
+    salida = await ag._responder_legacy(
         "584240000000", mensaje, list(HISTORIAL), "Ana",
         llm=llm, ejecutar=ejecutar,
     )

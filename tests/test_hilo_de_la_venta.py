@@ -1,3 +1,4 @@
+# Regresión del motor anterior, conservado solo para comparar sus protecciones.
 """EL HILO DE LA VENTA: lo que el cliente YA eligió viaja al prompt como ESTADO, cada turno.
 
 🔴 EL CASO REAL (cazado por Maired, 2026-08-31 3:50-3:54pm, taller, chat "Enova"):
@@ -239,7 +240,7 @@ async def _correr_turno(monkeypatch, elecciones):
     async def ejecutar(nombre, args, telefono):
         return {"ok": True}
 
-    salida = await ag.responder(
+    salida = await ag._responder_legacy(
         TEL, MENSAJE_352, list(HISTORIAL_ENOVA), "Enova", llm=llm, ejecutar=ejecutar,
     )
     return salida, prompts, TEXTO

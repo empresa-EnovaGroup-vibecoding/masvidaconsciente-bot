@@ -1,3 +1,4 @@
+# Regresión del motor anterior, conservado solo para comparar sus protecciones.
 """LA RED DEL CIERRE — el bot se traba pidiendo un dato OPCIONAL y la venta se pierde.
 
 EL CASO MEDIDO (2026-08-21, smoke de 5 turnos contra el bot REAL del taller, reproducido):
@@ -270,7 +271,7 @@ async def _correr(respuestas: list[dict]):
             return {"ok": True, "pedido_id": 1200, "resumen": "Mini New York x1 = $14\nTotal: $14"}
         return {"ok": True}
 
-    texto = await ag.responder(
+    texto = await ag._responder_legacy(
         "584120000000", "para el domingo, retiro yo", list(HISTORIAL_EN_BUCLE), "Rosa",
         llm=llm, ejecutar=ejecutar,
     )
@@ -345,7 +346,7 @@ async def test_preguntar_el_sabor_la_PRIMERA_vez_no_se_toca():
     async def ejecutar(nombre, args, telefono, *a, **kw):
         return {"ok": True}
 
-    texto = await ag.responder(
+    texto = await ag._responder_legacy(
         "584120000000", "quiero 1 paquete de mini new york", historial_limpio, "Rosa",
         llm=llm, ejecutar=ejecutar,
     )

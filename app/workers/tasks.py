@@ -284,6 +284,23 @@ async def _enviar_en_partes(telefono: str, texto: str) -> list[dict]:
     if not texto or not texto.strip():
         return []
 
+    from app.agent.contratos_atencion import MensajeConfirmado
+    from app.agent.fuentes_atencion import fuentes_vigentes, tomar_acuse
+
+    es_acuse = isinstance(texto, MensajeConfirmado) and texto.relevo
+    try:
+        if isinstance(texto, MensajeConfirmado) and not await fuentes_vigentes(telefono, texto.hechos):
+            await _avisar_mensaje_frenado(telefono, None)
+            return []
+        if es_acuse:
+            if not await tomar_acuse(telefono):
+                return []
+        elif await _cliente_pausado(telefono):
+            return []
+    except Exception:  # noqa: BLE001 — sin verificación no hay envío
+        logger.exception("No se pudo autorizar el envío de %s", telefono)
+        return []
+
     # ÚLTIMA MIRADA AL FRENO, ya con la respuesta en la mano.
     # El bot tarda ~20s en contestar (15s de buffer + lo que piensa). En ese rato la dueña
     # pudo haber tomado el chat desde el panel. Si solo se mirara la pausa AL EMPEZAR, el bot
@@ -311,6 +328,9 @@ async def _enviar_en_partes(telefono: str, texto: str) -> list[dict]:
     for i, parte in enumerate(partes):
         if i:
             await asyncio.sleep(1.0)  # pausa breve entre globos, como una persona
+        if not es_acuse and await _cliente_pausado(telefono):
+            cola_media.descartar("chat pausado durante el envío")
+            break
         # 📷 LA PREGUNTA VA ÚLTIMA, LA FOTO ANTES (lo vio Maired el 6-sep en pruebas): el bot
         # decía "te dejo la foto… de cuál te provoca?" y la foto caía DESPUÉS de la pregunta,
         # enterrándola. Una persona anuncia, manda la foto y remata con la pregunta. Por eso, si
@@ -492,8 +512,8 @@ async def _cliente_pausado(telefono: str) -> bool:
     try:
         return (await _estado_pausa(telefono))[0]
     except Exception:  # noqa: BLE001
-        logger.exception("No se pudo leer la pausa de %s (sigue respondiendo)", telefono)
-        return False
+        logger.exception("No se pudo leer la pausa de %s (se detiene)", telefono)
+        return True
 
 
 async def _lo_paso_una_persona(telefono: str) -> bool:
@@ -1684,7 +1704,7 @@ async def _procesar_comprobante(
                 "plantilla): dile con cariño que ahí no ves el comprobante y pídele que te reenvíe "
                 "la captura clara del pago (donde se vea el monto y la referencia)."
             )
-        await _responder_situacion(telefono, situacion, nombre)
+        await _responder_situacion(telefono, {"tipo": "captura"}, nombre)
         return "no_es_comprobante"
 
     # ¿El MONTO del comprobante cuadra con lo cobrado? Comparamos contra el monto en
@@ -1875,7 +1895,7 @@ async def _procesar_comprobante(
             ),
             candado=(f"comprobante_sin_pedido:{telefono}", 900),
         )
-    partes = await _responder_situacion(telefono, situacion, nombre)
+    partes = await _responder_situacion(telefono, {"tipo": "revision", "pago_id": resultado.get("pago_id")}, nombre)
 
     # 🔴 EL CARRIL DEL DINERO NUNCA ES SILENCIOSO.
     # Si la dueña tiene ese chat tomado, el bot se calla (correcto) — pero el cliente ACABA DE

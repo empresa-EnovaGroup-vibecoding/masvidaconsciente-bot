@@ -200,6 +200,9 @@ class ConocimientoIn(BaseModel):
     categoria: str | None = None
     titulo: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
     contenido: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+    tema_confirmado: str | None = None
+    producto_id: int | None = None
+    confirmado: bool = False
 
 
 class ConocimientoActivoIn(BaseModel):
@@ -2625,16 +2628,13 @@ async def pausar_bot_cliente(telefono: str, datos: PausaIn, _: str = Depends(usu
             raise HTTPException(status_code=404, detail="Cliente no encontrado")
         # La FIRMA de quién había apretado el freno, ANTES de borrarla: decide si el cliente
         # todavía está esperando una respuesta que el bot le prometió. Ver `_retomar`.
-        firma_previa = cliente.pausado_por
         cliente.bot_pausado = datos.pausado
         # Este botón lo aprieta UNA PERSONA: queda firmado como 'dueña' para que el bot se
         # calle del todo. Al devolver el chat, la firma se borra. Ver migración 020.
         cliente.pausado_por = "dueña" if datos.pausado else None
-        nombre = cliente.nombre
         await session.commit()
     await rc.notificar_conversacion(telefono, "pausa")
-    if not datos.pausado:
-        _disparar_retomar(telefono, nombre, firma_previa)
+    # Devolver el chat habilita el siguiente mensaje; no repite una consulta ya atendida.
     return {"ok": True, "pausado": datos.pausado}
 
 
@@ -2739,6 +2739,7 @@ class PrecioDiaIn(BaseModel):
 
 
 _MOTIVO_TEXTO = {
+    "acuerdo_especial": "Hay un acuerdo que debes revisar",
     "precio_del_dia": "Te piden un precio del día",
     "no_se": "El bot no sabe algo",
     "pide_persona": "El cliente pide hablar con una persona",
@@ -2821,7 +2822,7 @@ async def listar_intervenciones(estado: str = "pendiente", _: str = Depends(usua
 
 @router.post("/intervenciones/{intervencion_id}/resolver")
 async def resolver_intervencion(
-    intervencion_id: int, reactivar: bool = True, _: str = Depends(usuario_actual)
+    intervencion_id: int, reactivar: bool = False, _: str = Depends(usuario_actual)
 ):
     """La dueña ya atendió ese chat: cierra el aviso y (por defecto) REACTIVA el bot,
     para que vuelva a atender a ese cliente — y le CONTESTE lo que quedó pendiente."""
@@ -2862,7 +2863,7 @@ async def resolver_intervencion(
                 cliente.pausado_por = None
         await session.commit()
     if devolver:
-        _disparar_retomar(*devolver)
+        await rc.notificar_conversacion(devolver[0], "devuelto_al_bot")
     return {"ok": True, "bot_reactivado": reactivar}
 
 
@@ -2982,6 +2983,9 @@ async def listar_conocimiento(_: str = Depends(usuario_actual)):
             # Las RETIRADAS se listan igual que las activas: el panel las pinta en gris y ella
             # las reenciende con un clic. Esconderlas sería un DELETE con otro nombre.
             "activo": c.activo,
+            "tema_confirmado": c.tema_confirmado,
+            "producto_id": c.producto_id,
+            "confirmado": c.confirmado,
         }
         for c in filas
     ]
@@ -2993,16 +2997,31 @@ async def crear_conocimiento(datos: ConocimientoIn, _: str = Depends(usuario_act
 
     factory = get_session_factory()
     async with factory() as session:
+        await _validar_conocimiento_confirmado(session, datos)
         c = Conocimiento(
             categoria=(datos.categoria or "").strip() or None,
             titulo=datos.titulo,
             contenido=datos.contenido,
             embedding=await obtener_embedding(f"{datos.titulo}. {datos.contenido}"),
+            tema_confirmado=datos.tema_confirmado,
+            producto_id=datos.producto_id,
+            confirmado=datos.confirmado,
         )
         session.add(c)
         await session.commit()
         await session.refresh(c)
     return {"id": c.id}
+
+
+async def _validar_conocimiento_confirmado(session, datos):
+    from app.agent.contratos_atencion import TEMAS_CONFIRMABLES
+
+    if datos.confirmado and datos.tema_confirmado not in TEMAS_CONFIRMABLES:
+        raise HTTPException(422, "Elige el tema de la respuesta antes de confirmarla")
+    if datos.producto_id is not None and await session.get(Producto, datos.producto_id) is None:
+        raise HTTPException(422, "El producto de esta respuesta no existe")
+    if datos.confirmado and datos.tema_confirmado in {"ingredientes", "alergenos", "conservacion"} and datos.producto_id is None:
+        raise HTTPException(422, "Esta respuesta necesita un producto concreto")
 
 
 @router.patch("/conocimiento/{cid}")
@@ -3011,12 +3030,16 @@ async def editar_conocimiento(cid: int, datos: ConocimientoIn, _: str = Depends(
 
     factory = get_session_factory()
     async with factory() as session:
+        await _validar_conocimiento_confirmado(session, datos)
         c = await session.get(Conocimiento, cid)
         if c is None:
             raise HTTPException(status_code=404, detail="Entrada no encontrada")
         c.categoria = (datos.categoria or "").strip() or None
         c.titulo = datos.titulo
         c.contenido = datos.contenido
+        c.tema_confirmado = datos.tema_confirmado
+        c.producto_id = datos.producto_id
+        c.confirmado = datos.confirmado
         # El contenido cambió → recalcula el embedding (búsqueda semántica al día).
         c.embedding = await obtener_embedding(f"{datos.titulo}. {datos.contenido}")
         c.updated_at = now_utc()
@@ -3471,17 +3494,9 @@ async def confirmar_pago(pago_id: int, usuario: str = Depends(usuario_actual)):
 
     encolada = True
     if telefono:
-        from app.services.mensajes import contexto_entrega, leer_guia
         from app.workers.tasks import notificar_cliente_pago
 
-        # 🚚 EL PEDIDO YA ESTABA AQUÍ Y NO SE USABA. Con la guía sola, el cliente pagaba y recibía
-        # "gracias, coordinamos la entrega" — cuando el pedido sabe si es retiro o delivery, en qué
-        # zona y para qué día (se lo preguntamos ANTES de cobrar; eso NO cambia). Whuilianny cierra
-        # coordinando la HORA. Los HECHOS van POR FUERA de la guía a propósito: la guía es de la
-        # dueña y puede estar editada desde el panel; el contexto lo pone el código y llega igual.
-        # Y no lleva NI UN MONTO: lo que entra en la situación queda decible ese turno
-        # (`autorizados_por_moneda(situacion)` en `redactar_mensaje`). Ver `contexto_entrega`.
-        situacion = await leer_guia("msg_guia_confirmado") + await contexto_entrega(pedido)
+        situacion = {"tipo": "confirmado", "pago_id": pago_id}
         encolada = _encolar_notificacion(notificar_cliente_pago, (telefono, situacion))
     return {
         "ok": True, "pago_id": pago_id, "estado": "confirmado",
@@ -3528,11 +3543,10 @@ async def rechazar_pago(
 
     encolada = True
     if telefono:
-        from app.services.mensajes import leer_guia
         from app.workers.tasks import notificar_cliente_pago
 
         encolada = _encolar_notificacion(
-            notificar_cliente_pago, (telefono, await leer_guia("msg_guia_rechazado"))
+            notificar_cliente_pago, (telefono, {"tipo": "rechazado", "pago_id": pago_id})
         )
     return {
         "ok": True, "pago_id": pago_id, "estado": "rechazado",
@@ -3595,29 +3609,10 @@ async def verificar_monto(pago_id: int, datos: MontoIn, usuario: str = Depends(u
         telefono = pedido.cliente_telefono if pedido else None
 
     if telefono:
-        from app.services.mensajes import contexto_entrega
         from app.workers.tasks import notificar_cliente_pago
 
-        if estado_final == "confirmado":
-            situacion = (
-                "el pago del cliente quedo CONFIRMADO; cierra la venta con calidez y agradece la compra"
-            )
-            if recibido > total:
-                situacion += (
-                    f". Ademas pago {moneda} {(recibido - total):.2f} de mas: dile con cariño que "
-                    f"le queda ese saldo a favor para su proxima compra"
-                )
-            # Mismo cierre que en `/confirmar`: por esta puerta el pago TAMBIÉN queda confirmado
-            # (el cliente pagó justo o de más), así que el mensaje tiene que saber cómo y cuándo
-            # recibe su pedido, no solo que el dinero cuadró. En el carril PARCIAL no va: ahí
-            # todavía falta plata y no hay entrega que cerrar.
-            situacion += await contexto_entrega(pedido)
-        else:
-            situacion = (
-                f"el cliente pago {moneda} {recibido:.2f} pero el total era {moneda} {total:.2f}, "
-                f"asi que faltan {moneda} {(total - recibido):.2f}. Pidele con suavidad y sin "
-                f"reclamar que complete ese monto restante para poder despachar su pedido"
-            )
+        # Una diferencia de monto no crea crédito ni autoriza ofrecer abonos.
+        situacion = {"tipo": "confirmado" if recibido == total else "revision_importe", "pago_id": pago_id}
         encolada = _encolar_notificacion(notificar_cliente_pago, (telefono, situacion))
     else:
         encolada = True

@@ -3930,7 +3930,7 @@ _MOTIVO_TITULO = {
 
 # Motivos por los que el bot SÍ se calla y espera a la dueña: el cliente pide una persona o
 # reclama. Los otros (`precio_del_dia`, `no_se`) dejan aviso pero NO callan al bot: sigue vendiendo.
-_MOTIVOS_DE_PAUSA = {"pide_persona", "reclamo", "acuerdo_especial"}
+_MOTIVOS_DE_PAUSA = set(_MOTIVO_TITULO)
 
 
 async def pedir_ayuda(
@@ -3948,6 +3948,10 @@ async def pedir_ayuda(
     if motivo not in _MOTIVO_TITULO:
         motivo = "no_se"
     detalle = (detalle or "").strip()
+
+    from app.agent.fuentes_atencion import bloquear_cliente
+
+    await bloquear_cliente(session, telefono)
 
     # 1) El bot se calla en ESTE chat (la dueña toma el control).
     cliente = (
@@ -4070,7 +4074,7 @@ async def pedir_ayuda(
             "hablas en primera persona del negocio ('te lo confirmo'). Después de este mensaje NO "
             "sigas respondiendo en este chat."
         )
-    return {"ok": True, "nota": nota}
+    return {"ok": True, "pausado": True, "nota": nota}
 
 
 # La COPIA DE SEGURIDAD del teléfono de la dueña, fuera de Postgres. Se reescribe cada vez que
@@ -5308,6 +5312,15 @@ async def ejecutar_tool(nombre: str, args: dict, telefono: str, session_factory=
         session_factory = get_session_factory()
     async with session_factory() as session:
         try:
+            # La pausa es una condición de ejecución, no una sugerencia al modelo.
+            # Registrar la evidencia de un pago nunca se bloquea por atención humana.
+            if nombre in {"registrar_pedido", "generar_datos_pago", "anotar_entrega", "recordar_cliente",
+                          "enviar_catalogo", "enviar_fotos_producto"}:
+                from app.agent.fuentes_atencion import bloquear_cliente
+
+                cliente = await bloquear_cliente(session, telefono)
+                if cliente and (cliente.bot_pausado or cliente.privado):
+                    return {"ok": False, "bloqueado": True, "motivo": "atencion_humana"}
             return await fn(session, telefono, **_solo_lo_declarado(nombre, args))
         except Exception as e:  # noqa: BLE001 — devolver el error al LLM para que se recupere
             # 🔴 ESTE `except` NO ESCRIBÍA NI UNA LÍNEA, y por eso el sistema podía fallar MUDO.

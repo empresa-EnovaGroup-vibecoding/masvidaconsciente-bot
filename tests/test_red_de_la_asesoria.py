@@ -1,3 +1,4 @@
+# Regresión del motor anterior, conservado solo para comparar sus protecciones.
 """LA RED DE LA ASESORÍA — no se recomienda de memoria, se consulta.
 
 EL CASO REAL (smoke de 7 turnos contra el bot real, 2026-08-08, corrido DOS veces con el mismo
@@ -164,7 +165,7 @@ async def _correr(
         base = {"ok": True}
         return resultados_tool.get(nombre, base)
 
-    salida = await ag.responder(
+    salida = await ag._responder_legacy(
         "584240000000", cliente, list(historial if historial is not None else HISTORIAL), "Ana",
         llm=llm, ejecutar=ejecutar,
     )
@@ -316,7 +317,7 @@ async def test_recomendacion_nueva_no_queda_secuestrada_por_la_compra_anterior(m
         llamadas_tool.append(nombre)
         return {"ok": True, "productos": ["Empanadas de yuca", "Pan keto"]}
 
-    salida = await ag.responder(
+    salida = await ag._responder_legacy(
         "584240000000", "Recomiéndame algo para la cena", historial, "Enova",
         llm=llm, ejecutar=ejecutar,
     )

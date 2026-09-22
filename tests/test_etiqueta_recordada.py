@@ -1,3 +1,4 @@
+# Regresión del motor anterior, conservado solo para comparar sus protecciones.
 """LA VERSIÓN QUE EL CLIENTE ELIGIÓ SE RECUERDA — pero solo mientras siga valiendo.
 
 EL CASO REAL (medido contra el bot del taller, 2026-08-09; producto "Empanadas de masa de yuca
@@ -402,7 +403,7 @@ async def _correr_turno(monkeypatch, *, mensaje, historial):
         llamadas.append((nombre, args))
         return {"enviadas": 1, "producto": COMPUESTO}
 
-    salida = await ag.responder(
+    salida = await ag._responder_legacy(
         "584240000000", mensaje, list(historial), "Ana", llm=llm, ejecutar=ejecutar,
     )
     return salida, llamadas
