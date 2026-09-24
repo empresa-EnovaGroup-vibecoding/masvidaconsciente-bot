@@ -10,15 +10,19 @@ import re
 from collections import Counter
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.agent.tools import _MONEDA_POR_TIPO, _fmt_bs, _tipo_canonico
 from app.config import get_settings
 from app.models import (
+    ESTADOS_ACORDADOS,
+    ORIGEN_DUENA,
     Cliente,
     Configuracion,
     Conocimiento,
     Feriado,
+    Intervencion,
+    Pago,
     Pedido,
     PrecioDia,
     Producto,
@@ -705,6 +709,17 @@ def _items_sin_dinero(items) -> str:
     return " · ".join(partes)
 
 
+# Lo que una persona del negocio dijo a mano y el extractor leyó, pero NADIE confirmó todavía en la
+# Bandeja: para el bot ese dato no existe, pero tampoco puede contradecirlo ni darlo por hecho.
+_LINEA_PROPUESTAS = (
+    "- Hay datos de esta venta que una persona del negocio le dijo al cliente a mano y que aún NO "
+    "están confirmados en el sistema: NO los des por hechos ni los contradigas. Si el cliente "
+    "pregunta por algo de eso (un pedido que ya le tomaron, un pago, una entrega), dile que se lo "
+    "confirmas enseguida y llama a pedir_ayuda (motivo 'acuerdo_especial'); no registres ni cobres "
+    "por tu cuenta lo que él dice que ya acordó."
+)
+
+
 def _parece_delivery(pedido) -> bool:
     """¿Se lo LLEVAN? Heurística SOLO para informar al modelo (el candado real, que sí consulta
     la zona, vive en `generar_datos_pago`): flete > 0, o el texto de la entrega habla de delivery."""
@@ -749,6 +764,132 @@ def _lineas_entrega_pendiente(pedido) -> list[str]:
     return lineas
 
 
+async def _pagos_de(session, pedidos) -> dict[int, str]:
+    """El estado del ÚLTIMO pago de cada pedido ({pedido_id: estado}), o {} si no se pudo leer.
+    Fail-safe a propósito: sin el dato, la línea del pago simplemente dice que no hay registro."""
+    ids = [p.id for p in pedidos if getattr(p, "id", None) is not None]
+    if not ids:
+        return {}
+    try:
+        filas = (
+            await session.execute(
+                select(Pago.pedido_id, Pago.estado)
+                .where(Pago.pedido_id.in_(ids))
+                .order_by(Pago.created_at)
+            )
+        ).all()
+        return {pid: est for pid, est in filas}  # el más nuevo gana (vienen en orden)
+    except Exception:  # noqa: BLE001 — leer los pagos nunca debe romper el prompt
+        return {}
+
+
+async def _propuestas_pendientes(session, telefono: str) -> int:
+    """Cuántas propuestas del expediente (lo que una persona del negocio dijo a mano y nadie
+    confirmó todavía) esperan en la Bandeja. Fallo ⇒ 0: sin dato, no sale la línea."""
+    try:
+        return int(
+            (
+                await session.execute(
+                    select(func.count(Intervencion.id)).where(
+                        Intervencion.cliente_telefono == telefono,
+                        Intervencion.estado == "pendiente",
+                        Intervencion.motivo == "propuesta_expediente",
+                    )
+                )
+            ).scalar_one()
+            or 0
+        )
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+def _lineas_pedido_acordado(pedido, pago_estado: str | None) -> list[str]:
+    """🗂️ EL EXPEDIENTE, LEÍDO (PR4, SESIONES (38)): el pedido que ya está ACORDADO — casi siempre el
+    que una persona del negocio le tomó al cliente a mano y alguien confirmó en la Bandeja — se le
+    describe al modelo como HECHO: qué lleva, quién lo tomó, cómo va la entrega y si el pago está
+    registrado. De ese pedido no se registra ni se cobra nada; lo que el cliente pida ADEMÁS es una
+    venta nueva y se atiende normal. Hasta hoy estos pedidos eran INVISIBLES (el bloque no tenía rama
+    para `confirmado` y caía en "no tiene un pedido abierto"), y el bot re-anotaba y re-cobraba lo
+    que ella ya había vendido (6 de las 7 conversaciones reales donde entró detrás de ella).
+
+    ⚠️ Sin una cifra de DINERO (regla de oro del bloque): el total se consulta con ver_pedidos_cliente,
+    que lo devuelve como herramienta y así la red del TOTAL lo deja decir.
+    """
+    a_mano = str(getattr(pedido, "origen", "") or "") == ORIGEN_DUENA
+    creado = getattr(pedido, "created_at", None)
+    cuando = ""
+    if creado is not None:
+        try:
+            cuando = f" el {(creado - timedelta(hours=4)).strftime('%d/%m')}"
+        except (TypeError, ValueError, AttributeError):
+            cuando = ""
+    quien = (
+        f"lo tomó una persona del negocio a mano{cuando}, hablando directo con el cliente"
+        if a_mano
+        else f"lo confirmó el negocio{cuando}"
+    )
+    contenido = _items_sin_dinero(getattr(pedido, "items", None))
+    lleva = f" Lo que lleva: {contenido}." if contenido else ""
+    lineas = [
+        f"- Pedido #{pedido.id} YA ACORDADO ({quien}).{lleva} De ESTE pedido NO registres ni cobres "
+        f"nada: NO llames a registrar_pedido ni a generar_datos_pago por él, ni le repreguntes lo que "
+        f"lleva. Si pregunta cuánto es o cuánto debe, llama a ver_pedidos_cliente y copia el total "
+        f"TAL CUAL te lo devuelva."
+    ]
+    fecha = getattr(pedido, "entrega_fecha", None)
+    franja = str(getattr(pedido, "entrega_franja", None) or "").strip()
+    referencia = str(getattr(pedido, "entrega_referencia", None) or "").strip()
+    entrega_partes = []
+    if fecha is not None:
+        entrega_partes.append(f"el {fecha.isoformat()}")
+    if franja:
+        entrega_partes.append(franja)
+    if referencia:
+        entrega_partes.append(f"en {referencia}")
+    if entrega_partes:
+        lineas.append(
+            f"- Entrega del #{pedido.id} YA ACORDADA: {' '.join(entrega_partes)}. Si pregunta cuándo "
+            f"o dónde, respóndele con eso; NO la repreguntes ni prometas una hora exacta."
+        )
+    elif a_mano:
+        lineas.append(
+            f"- Entrega del #{pedido.id}: aún SIN acordar por el negocio. Si el cliente pregunta cuándo "
+            f"o a qué hora le llega, NO inventes ni le ofrezcas franjas: dile que se lo confirmas "
+            f"enseguida y llama a pedir_ayuda (motivo 'acuerdo_especial')."
+        )
+    else:
+        lineas.extend(_lineas_entrega_pendiente(pedido))
+    if pago_estado == "confirmado":
+        lineas.append(f"- Pago del #{pedido.id}: CONFIRMADO. No le pidas comprobante ni vuelvas a cobrar.")
+    elif pago_estado in ("reportado", "parcial"):
+        lineas.append(
+            f"- Pago del #{pedido.id}: comprobante RECIBIDO, en revisión. No lo pidas otra vez y NO "
+            f"digas que ya está confirmado."
+        )
+    else:
+        lineas.append(
+            f"- Pago del #{pedido.id}: NO hay pago registrado. Si dice que ya pagó o pregunta si llegó, "
+            f"NUNCA afirmes que llegó: dile que lo confirmas enseguida y llama a pedir_ayuda (motivo "
+            f"'acuerdo_especial'). Si manda una captura, el sistema la registra solo."
+        )
+    # Decisión de Maired (24-sep): SOLO se vende encima de una venta que ya CERRÓ (pagada o entregada).
+    # Con el pago sin confirmar, esa venta la está llevando el negocio a mano: agregar o cambiar algo es
+    # de esa misma venta, y lo decide una persona — el bot no abre una segunda venta encima.
+    if pago_estado == "confirmado":
+        lineas.append(
+            f"- Lo que pida ADEMÁS de eso es un pedido NUEVO y aparte: atiéndelo normal (catálogo, "
+            f"registrar_pedido, cobro), sin mezclarlo con el #{pedido.id} ni repetirle sus productos."
+        )
+    else:
+        lineas.append(
+            f"- Si pide MÁS productos, agregar o cambiar algo, NO registres un pedido nuevo ni lo cobres: "
+            f"esa venta la está llevando el negocio a mano. Dile que se lo confirmas enseguida y llama a "
+            f"pedir_ayuda (motivo 'acuerdo_especial') diciendo QUÉ quiere agregar o cambiar al #{pedido.id}. "
+            f"Preguntas de productos (precios, fotos, ingredientes) sí las respondes normal."
+        )
+    return lineas
+
+
 async def _estado_cliente_texto(telefono: str) -> str:
     """Estado REAL de los pedidos del cliente (desde la BD), inyectado cada turno
     para que el modelo NO lo adivine del chat. Mismo principio que el dinero: la
@@ -764,10 +905,22 @@ async def _estado_cliente_texto(telefono: str) -> str:
                     .limit(3)
                 )
             ).scalars().all()
+            # 🗂️ El expediente (PR4): TODOS los pedidos ya acordados (hasta 3), el estado de su pago,
+            # y si hay propuestas del extractor esperando confirmación. Cada lectura es fail-safe.
+            acordados = [p for p in pedidos if getattr(p, "estado", None) in ESTADOS_ACORDADOS]
+            pagos = await _pagos_de(session, acordados) if acordados else {}
+            propuestas = await _propuestas_pendientes(session, telefono)
     except Exception:  # noqa: BLE001 — leer el estado nunca debe romper el bot
         return ""
-    if not pedidos:
+    if not pedidos and not propuestas:
         return ""
+    if not pedidos:
+        # Solo hay propuestas sin confirmar (ella ya le vendió y nadie tocó "Sí" todavía): el bot no
+        # sabe qué, pero sí sabe que NO debe dar nada por hecho ni contradecirla.
+        return "\n".join([
+            "ESTADO DEL CLIENTE (verdad de la base de datos — manda sobre el chat):",
+            _LINEA_PROPUESTAS,
+        ])
     cerrados = {"pagado", "entregado", "cancelado"}
     # El pedido al que se pega el próximo comprobante = el último en 'esperando_pago'
     # (mismo criterio que get_pedido_esperando_pago en tools.py).
@@ -852,8 +1005,17 @@ async def _estado_cliente_texto(telefono: str) -> str:
             lineas.append(
                 f"- Su último pedido (#{ult.id}) ya se CERRÓ. IGNORA esos productos: lo que pida ahora es un PEDIDO NUEVO y aparte."
             )
-        else:
+        elif ult.estado not in ESTADOS_ACORDADOS:
+            # (Si está `confirmado`/`preparando`, lo describe el bloque del expediente de abajo: decir
+            # aquí "no tiene un pedido abierto" era la ceguera exacta que PR4 vino a quitar.)
             lineas.append("- No tiene un pedido abierto ahora.")
+    # 🗂️ Los pedidos YA ACORDADOS (los que tomó una persona del negocio a mano, o confirmó el panel):
+    # todos, con su entrega y su pago. Van DESPUÉS del abierto del bot para que, si hay los dos, el
+    # modelo vea primero el que está cobrando y luego el que NO debe tocar.
+    for p in acordados:
+        lineas.extend(_lineas_pedido_acordado(p, pagos.get(p.id)))
+    if propuestas:
+        lineas.append(_LINEA_PROPUESTAS)
     # 🔴 LO QUE YA ESTÁ REGISTRADO SE MUESTRA, NO SE REPREGUNTA (31-ago, el mapa del "pero ya
     # te lo dije"). Hasta hoy este bloque decía el id y el monto pero NO el contenido: con el
     # historial rodado (cotizar hoy y pagar mañana es lo NORMAL aquí), el bot podía repreguntar

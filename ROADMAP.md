@@ -38,12 +38,17 @@ Las **FASES 0 a 3 ya están hechas y desplegadas**:
 > modo dos, reutilizada) + un EXPEDIENTE (pedido/pago/entrega con procedencia, evidencia y fecha, alimentado
 > también por los mensajes y notas de voz de la dueña vía un extractor tipado que el código valida; lo dudoso se
 > PROPONE, nunca se escribe)**. Orden: P1 migración 040 (#60) + transcripción de ecos (#61) HECHOS y PROBADOS en
-> pruebas (🎤 real, $0,00018) → PR3 extractor + propuestas + endpoints HECHO (falta la tarjeta del dashboard) → P2 extractor
-> + propuestas con un toque + lectores (producción `uno` mejora aquí) + replay sobre las 305 conversaciones →
-> P3 el cerebro lee el expediente y Maired lo oye en pruebas → P4 la Voz → P5 Conocimiento del corpus → P6
-> puertas G1-G6 y producción por configuración. Decisiones: retorno automático CON condiciones (flag apagado,
-> Maired fija N); lo dudoso lo confirma Maired en la Bandeja; `pago_confirmado` siempre propuesta. Producción
-> sigue en `uno` hasta P6.
+> pruebas (🎤 real, $0,00018) → PR3 extractor + propuestas + endpoints (#62, #63) + tarjeta "Sí, es correcto"/"No"
+> (dashboard #10, #11) HECHOS y PROBADOS (pedido #3130 real, 22-sep) → **PR4 LOS LECTORES (24-sep, SESIONES (38)):
+> HECHO, en PR** (rama `expediente-lectores` + dashboard `expediente-lectores-panel`): modo `uno` ve los pedidos
+> tomados a mano, el comprobante se pega a ellos, el cerebro `confirmado` vende lo nuevo solo sobre venta cerrada,
+> tipo `entregado`, candado del gemelo, retomar lee el expediente → SIGUE: fusionar → desplegar pruebas → la prueba
+> de 20 min de Maired → PR5 replay sobre las 305 conversaciones → P3 el cerebro `confirmado` en pruebas → P4 la
+> Voz → P5 Conocimiento del corpus → P6 puertas G1-G6 y producción por configuración. Decisiones: retorno
+> automático CON condiciones (flag apagado, Maired fija N); lo dudoso lo confirma Maired en la Bandeja;
+> `pago_confirmado` siempre propuesta; seguir vendiendo SOLO sobre venta cerrada (pagada/entregada); "ya te lo
+> entregué" se anota como propuesta. Producción sigue en `uno` hasta P6. Mapa para Maired: artefacto "Mapa del
+> expediente" (se actualiza al cerrar cada paso).
 
 1. **Cerrar la regla del delivery.** Whuilianny confirmó la fórmula: productos + delivery y después
    20% de descuento al total cuando se paga en dólares. El cambio de código conserva las cotizaciones

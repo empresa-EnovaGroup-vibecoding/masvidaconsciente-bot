@@ -12,12 +12,14 @@ import unicodedata
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
-from sqlalchemy import select, text
+from sqlalchemy import and_, case, or_, select, text
 from sqlalchemy.exc import IntegrityError
 
 from app.config import get_settings, url_publica_utilizable
 from app.models import (
     MOTIVOS_INFORMATIVOS,
+    ORIGEN_DUENA,
+    ORIGEN_PANEL,
     CatalogoPdf,
     Cliente,
     Configuracion,
@@ -310,7 +312,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "ver_pedidos_cliente",
-            "description": "Muestra los pedidos previos de este cliente. Úsala si pregunta por su pedido o quiere repetir uno.",
+            "description": "Muestra los pedidos de este cliente —también los que una persona del negocio le tomó a mano— con su estado, su total, su entrega y si el pago está registrado. Úsala si pregunta por su pedido, cuánto es o cuánto debe, cuándo le llega, o quiere repetir uno.",
             "parameters": {"type": "object", "properties": {}},
         },
     },
@@ -3350,17 +3352,71 @@ async def buscar_info(session, telefono, consulta):
     }
 
 
+_TOMADO_POR = {
+    ORIGEN_DUENA: "una persona del negocio, a mano (hablando directo con el cliente)",
+    ORIGEN_PANEL: "el negocio, desde el panel",
+}
+
+
+def _pedido_para_el_modelo(p, pago_estado: str | None) -> dict:
+    """🗂️ Un pedido como lo lee el modelo (PR4): con quién lo tomó, cómo va la entrega y el pago.
+
+    El `total` va FORMATEADO como dinero ("$16"), igual que en `registrar_pedido`: así la red del
+    TOTAL (`usd_de_herramienta`) lo reconoce como un monto que devolvió una herramienta y el bot
+    puede copiarlo; `total_usd` (número pelado) se conserva por compatibilidad."""
+    entrega = {
+        k: v for k, v in (
+            ("fecha", p.entrega_fecha.isoformat() if getattr(p, "entrega_fecha", None) else None),
+            ("momento", (getattr(p, "entrega_franja", None) or "").strip() or None),
+            ("referencia", (getattr(p, "entrega_referencia", None) or "").strip() or None),
+            ("modo", (getattr(p, "entrega", None) or "").strip() or None),
+        ) if v
+    }
+    if pago_estado == "confirmado":
+        pago = "confirmado"
+    elif pago_estado in ("reportado", "parcial"):
+        pago = "comprobante recibido, en revisión (no está confirmado)"
+    else:
+        pago = "sin pago registrado"
+    return {
+        "id": p.id,
+        "estado": p.estado,
+        "items": p.items,
+        "total": _fmt_usd(p.total) if p.total is not None else None,
+        "total_usd": float(p.total) if p.total else None,
+        "tomado_por": _TOMADO_POR.get(str(getattr(p, "origen", "") or ""), "el bot (esta conversación)"),
+        "entrega": entrega or "aún sin acordar",
+        "pago": pago,
+    }
+
+
 async def ver_pedidos_cliente(session, telefono):
     pedidos = (
         await session.execute(
             select(Pedido).where(Pedido.cliente_telefono == telefono).order_by(Pedido.created_at.desc()).limit(5)
         )
     ).scalars().all()
+    pagos: dict[int, str] = {}
+    if pedidos:
+        try:
+            filas = (
+                await session.execute(
+                    select(Pago.pedido_id, Pago.estado)
+                    .where(Pago.pedido_id.in_([p.id for p in pedidos]))
+                    .order_by(Pago.created_at)
+                )
+            ).all()
+            pagos = {pid: est for pid, est in filas}  # el más nuevo gana
+        except Exception:  # noqa: BLE001 — sin el pago, el pedido se muestra igual
+            logger.exception("ver_pedidos_cliente: no se pudieron leer los pagos de %s", telefono)
     return {
-        "pedidos": [
-            {"id": p.id, "estado": p.estado, "items": p.items, "total_usd": float(p.total) if p.total else None}
-            for p in pedidos
-        ]
+        "pedidos": [_pedido_para_el_modelo(p, pagos.get(p.id)) for p in pedidos],
+        "nota": (
+            "Un pedido tomado por una persona del negocio ya está ACORDADO: no lo registres ni lo "
+            "cobres otra vez, y su total es el que ves aquí (cópialo tal cual). Si el pago dice 'sin "
+            "pago registrado' y el cliente asegura que pagó, no lo afirmes: llama a pedir_ayuda. Lo "
+            "que pida ADEMÁS es un pedido nuevo."
+        ) if any(str(getattr(p, "origen", "") or "") == ORIGEN_DUENA for p in pedidos) else "",
     }
 
 
@@ -3394,12 +3450,23 @@ async def get_pedido_esperando_pago(session, telefono):
 
     Clave del diseno: el comprobante se amarra al pedido por TELEFONO + ESTADO
     en la base de datos, NO por la memoria del LLM (que no persiste entre turnos).
+
+    🗂️ PR4 (SESIONES (38)): también el pedido que una persona del negocio le tomó a mano y sigue
+    `confirmado` sin pago — ese cliente va a mandar su captura igual, y hasta hoy caía en
+    `comprobante_sin_pedido`: dinero verificado por visión que NO quedaba registrado en ningún
+    lado. Si hay un `esperando_pago` del bot, ese va primero (fue el cobro explícito).
     """
     return (
         await session.execute(
             select(Pedido)
-            .where(Pedido.cliente_telefono == telefono, Pedido.estado == "esperando_pago")
-            .order_by(Pedido.created_at.desc())
+            .where(
+                Pedido.cliente_telefono == telefono,
+                or_(
+                    Pedido.estado == "esperando_pago",
+                    and_(Pedido.origen == ORIGEN_DUENA, Pedido.estado == "confirmado"),
+                ),
+            )
+            .order_by(case((Pedido.estado == "esperando_pago", 0), else_=1), Pedido.created_at.desc())
         )
     ).scalars().first()
 

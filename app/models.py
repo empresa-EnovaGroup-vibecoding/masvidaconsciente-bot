@@ -171,6 +171,18 @@ class Cliente(Base):
 # no reactiva al bot. Hasta que alguien lo confirme, ese dato NO existe para el bot.
 MOTIVOS_INFORMATIVOS: frozenset[str] = frozenset({"propuesta_expediente"})
 
+# ── Procedencia de un pedido / pago (migración 040): quién lo puso ──
+# `bot` (las herramientas) · `dueña` (lo dijo Whuilianny a mano y una persona lo confirmó en la
+# Bandeja, o `auto`) · `panel` (un clic). La constante existe para que los módulos que arman lo que
+# LEE el modelo (`system_prompt.py`, `tools.py`) comparen el origen SIN escribir la palabra: ahí "la
+# dueña" no puede aparecer como personaje (tests/test_la_duena_en_silencio.py).
+ORIGEN_BOT = "bot"
+ORIGEN_DUENA = "dueña"
+ORIGEN_PANEL = "panel"
+# Estados de un pedido que ya está ACORDADO sin cobro del bot en curso: el que tomó una persona del
+# negocio a mano nace `confirmado`; `preparando` es el paso siguiente del panel.
+ESTADOS_ACORDADOS = ("confirmado", "preparando")
+
 
 class Intervencion(Base):
     """'El bot te necesita': el bot se topó con algo que NO le toca resolver

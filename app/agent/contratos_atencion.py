@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 Tema = Literal[
     "precio", "duracion", "se_congela", "apto_diabeticos", "descripcion",
     "disponibilidad", "sabores", "foto", "fecha", "ubicacion", "metodos_pago",
-    "catalogo", "productos", "estado_pedido", "ingredientes", "alergenos",
+    "catalogo", "productos", "estado_pedido", "entrega", "ingredientes", "alergenos",
     "conservacion", "envio_nacional", "politica", "desconocido",
 ]
 TEMAS_CONFIRMABLES = (
@@ -75,10 +75,17 @@ class Contexto:
     metodos: dict[str, dict] = field(default_factory=dict)
     negocio: dict[str, str] = field(default_factory=dict)
     pedido: dict | None = None
+    # 🗂️ PR4: TODOS los pedidos no cancelados (hasta 3, el más nuevo primero, cada uno con `origen`,
+    # `franja`, `pago_pendiente`); `pedido` sigue siendo el primero (compatibilidad con los tests de E0).
+    pedidos: list[dict] = field(default_factory=list)
+    # Propuestas del expediente que nadie confirmó todavía en la Bandeja.
+    propuestas_pendientes: int = 0
     borrador: dict = field(default_factory=dict)
     pausado: bool = False
     activo: bool = True
     hoy: date = field(default_factory=date.today)
+    # Una persona del negocio dijo algo de la venta que aún NO es dato confirmado (hay propuestas
+    # pendientes): registrar, cobrar o afirmar el estado sería adivinar. Se calcula en cargar_contexto.
     humano_sin_acuerdo: bool = False
 
 
@@ -109,7 +116,7 @@ class MensajeConfirmado(str):
 # ni un id ni un precio: los pone el programa.
 
 TipoEventoDuena = Literal[
-    "pedido_tomado", "pago_confirmado", "entrega_acordada", "precio_especial",
+    "pedido_tomado", "pago_confirmado", "entrega_acordada", "entregado", "precio_especial",
     "cancelado", "respuesta_general", "nada",
 ]
 

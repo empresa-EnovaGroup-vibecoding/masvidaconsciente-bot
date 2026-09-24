@@ -133,6 +133,11 @@ async def _correr_retomar(monkeypatch, historial, pausado_por=None):
     monkeypatch.setattr(tasks, "_ventana_abierta", _true)
     monkeypatch.setattr(tasks, "_guardar_en_panel", _nada)
     monkeypatch.setattr(tasks, "_pensar_y_enviar", _pensar)
+
+    async def _sin_expediente(_tel):  # PR4: sin base no hay expediente; el retomar sigue como antes
+        return {"pedidos_a_mano": [], "propuestas_pendientes": 0, "venta_cerrada_a_mano": False, "hechos": ""}
+
+    monkeypatch.setattr(tasks, "leer_expediente", _sin_expediente)
     await tasks._retomar("584125198777", "A", pausado_por)
     return llamadas
 

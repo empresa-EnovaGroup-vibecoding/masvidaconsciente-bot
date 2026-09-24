@@ -18,6 +18,7 @@ from app.agent.resolver_atencion import (
     pregunta,
     relevo,
 )
+from app.models import ESTADOS_ACORDADOS, ORIGEN_DUENA
 
 logger = logging.getLogger(__name__)
 
@@ -187,6 +188,36 @@ def faltante_compra(b, ctx, *, cobro=False):
     return None
 
 
+def _relevo_sin_confirmar():
+    return relevo("Hay datos de la venta dichos a mano por el negocio y aún sin confirmar en la Bandeja", "acuerdo_especial")
+
+
+def _pedido_a_mano(pedido) -> bool:
+    """El pedido que tiene el cliente lo tomó una persona del negocio y sigue acordado (sin pasar a pagado)."""
+    return bool(pedido) and pedido.get("origen") == ORIGEN_DUENA and pedido.get("estado") in ESTADOS_ACORDADOS
+
+
+def _es_venta_nueva(borrador, pedido) -> bool:
+    """¿Lo que el cliente quiere ahora es OTRA venta, distinta del pedido que ya tiene acordado?
+
+    Solo si esa venta ya cerró (pagada o entregada) y los productos son OTROS — la firma de items es la
+    misma identidad que usa el candado de duplicados (`tools._firma_de_items`: cuánto de cada variante).
+    Sin items legibles en alguno de los dos no hay comparación posible ⇒ False (relevo, lo seguro).
+    Un pedido acordado sin pago confirmado ⇒ False siempre: esa venta la lleva una persona.
+    """
+    from app.agent.tools import _firma_de_items
+
+    nueva = _firma_de_items(borrador.get("items") or [])
+    vieja = _firma_de_items(pedido.get("items") or [])
+    if not nueva or not vieja:
+        return False
+    estado = pedido.get("estado")
+    cerrada = estado in {"pagado", "entregado"} or (
+        estado in ESTADOS_ACORDADOS and pedido.get("pago_pendiente") == "confirmado"
+    )
+    return cerrada and nueva != vieja
+
+
 def _nombre_util(nombre):
     """Primer nombre humano; descarta URLs, emojis solos y perfiles extraños de WhatsApp."""
     valor = str(nombre or "").strip()
@@ -219,10 +250,22 @@ async def atender(telefono, mensaje, historial, *, llm, modelo, ejecutar,
         return await _pasar(telefono, relevo("Fallo al consultar la información necesaria"), mensaje, historial, ejecutar, ctx=ctx)
     s = solicitud
     if s.intencion == "comprobante":
+        # 🗂️ PR4: con datos de la venta dichos a mano y SIN confirmar (quizá ella ya dijo "recibido"),
+        # afirmar o pedir el pago sería adivinar: lo resuelve una persona.
+        if ctx.humano_sin_acuerdo:
+            return await _pasar(telefono, _relevo_sin_confirmar(), mensaje, historial, ejecutar, s.tono, ctx)
         if ctx.pedido and ctx.pedido["estado"] == "esperando_pago":
             if ctx.pedido.get("pago_pendiente") in {"reportado", "parcial"}:
                 return MensajeConfirmado("Ya tengo tu comprobante, déjame revisarlo.")
             return MensajeConfirmado("Envíame la captura del comprobante por aquí y lo reviso.")
+        if _pedido_a_mano(ctx.pedido) and ctx.pedido.get("pago_pendiente") in {"reportado", "parcial"}:
+            return MensajeConfirmado("Ya tengo tu comprobante, déjame revisarlo.")
+        if _pedido_a_mano(ctx.pedido):
+            # El pedido lo tomó una persona del negocio y no hay pago registrado: nadie afirma que llegó.
+            return await _pasar(
+                telefono, relevo(s.detalle or "Dice que pagó un pedido tomado a mano y no hay pago registrado", "acuerdo_especial"),
+                mensaje, historial, ejecutar, s.tono, ctx,
+            )
         return await _pasar(
             telefono, relevo(s.detalle or "Se reportó un pago sin un cobro abierto"),
             mensaje, historial, ejecutar, s.tono, ctx,
@@ -248,13 +291,24 @@ async def atender(telefono, mensaje, historial, *, llm, modelo, ejecutar,
         return MensajeConfirmado(falta.texto)
     hechos = [h for d in decisiones for h in d.hechos]
     partes = [d.texto for d in decisiones if d.texto]
+    venta_nueva = False
     if s.intencion in {"registrar", "cobrar", "entrega"}:
         if not consta(s.evidencia_accion, mensaje):
             return MensajeConfirmado("Quieres que avancemos con tu pedido?")
+        # 🗂️ PR4: mientras haya datos de la venta dichos a mano y SIN confirmar, registrar o cobrar es adivinar.
+        if ctx.humano_sin_acuerdo:
+            return await _pasar(telefono, _relevo_sin_confirmar(), mensaje, historial, ejecutar, s.tono, ctx)
         if any("[MENSAJE HUMANO DEL NEGOCIO" in str(h.get("content", "")) for h in historial) and not ctx.pedido:
             return await _pasar(telefono, relevo("Hay atención humana previa sin un pedido estructurado", "acuerdo_especial"), mensaje, historial, ejecutar, s.tono, ctx)
-        if ctx.pedido and ctx.pedido["estado"] in {"pagado", "entregado", "confirmado", "preparando"} and s.intencion != "entrega":
-            return await _pasar(telefono, relevo("Pedido ya acordado: no reconstruir ni cobrar otra vez", "acuerdo_especial"), mensaje, historial, ejecutar, s.tono, ctx)
+        if ctx.pedido and ctx.pedido["estado"] in {"pagado", "entregado", *ESTADOS_ACORDADOS} and s.intencion != "entrega":
+            # 🗂️ SEGUIR VENDIENDO (PR4, decisión de Maired 24-sep): sobre una venta que ya CERRÓ (pagada o
+            # entregada) lo que el cliente pide con OTROS productos es una venta NUEVA y se atiende; los
+            # MISMOS productos son el mismo pedido (no se re-vende). Con la venta a medias (acordada sin
+            # pago confirmado) no se abre otra encima: agregar o cambiar algo lo decide una persona.
+            if _es_venta_nueva(borrador, ctx.pedido):
+                venta_nueva = True
+            else:
+                return await _pasar(telefono, relevo("Pedido ya acordado: no reconstruir ni cobrar otra vez", "acuerdo_especial"), mensaje, historial, ejecutar, s.tono, ctx)
     try:
         if hechos and not await verificar(telefono, hechos):
             return await _pasar(telefono, relevo("La información cambió durante la consulta"), mensaje, historial, ejecutar, s.tono, ctx)
@@ -272,7 +326,8 @@ async def atender(telefono, mensaje, historial, *, llm, modelo, ejecutar,
             falta = faltante_compra(borrador, ctx, cobro=s.intencion == "cobrar")
             if falta:
                 return await _pasar(telefono, falta, mensaje, historial, ejecutar, s.tono, ctx) if falta.tipo == "relevo" else MensajeConfirmado(falta.texto)
-            if s.intencion == "registrar" or not ctx.pedido:
+            pedido_a_cobrar = ctx.pedido["id"] if ctx.pedido else None
+            if s.intencion == "registrar" or not ctx.pedido or venta_nueva:
                 z = ctx.zonas[borrador["zona_id"]]
                 r = await ejecutar("registrar_pedido", {
                     "items": [{k: i[k] for k in ("variante_id", "cantidad", "opciones") if k in i} for i in borrador["items"]],
@@ -283,8 +338,11 @@ async def atender(telefono, mensaje, historial, *, llm, modelo, ejecutar,
                     return await _pasar(telefono, relevo("El pedido no cumplió sus validaciones"), mensaje, historial, ejecutar, s.tono, ctx)
                 if s.intencion == "registrar":
                     partes.append(r.get("resumen") or "Tu pedido quedó registrado.")
+                if venta_nueva:
+                    # El cobro va al pedido RECIÉN registrado, jamás al que ya estaba acordado o pagado.
+                    pedido_a_cobrar = r.get("pedido_id")
             if s.intencion == "cobrar":
-                r = await ejecutar("generar_datos_pago", {"pedido_id": ctx.pedido["id"] if ctx.pedido else None, "metodo": borrador.get("metodo")}, telefono)
+                r = await ejecutar("generar_datos_pago", {"pedido_id": pedido_a_cobrar, "metodo": borrador.get("metodo")}, telefono)
                 if not r.get("ok") or not r.get("resumen_cobro"):
                     return await _pasar(telefono, relevo("Falta información o autorización para emitir el cobro"), mensaje, historial, ejecutar, s.tono, ctx)
                 partes.append(r["resumen_cobro"])

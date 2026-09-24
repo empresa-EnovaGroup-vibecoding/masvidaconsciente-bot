@@ -67,13 +67,36 @@ def consultar(ctx: Contexto, q: Consulta, texto: str) -> DecisionTurno:
     if tema == "estado_pedido":
         if not ctx.pedido:
             return relevo("No se encontró un pedido registrado para confirmar su estado")
+        if ctx.humano_sin_acuerdo:
+            return relevo("Hay datos de la venta dichos a mano por el negocio y aún sin confirmar", "acuerdo_especial")
         estados = {"pendiente": "Tu pedido está en preparación de la cuenta.", "esperando_pago": "Tu pedido está esperando el pago.",
                    "pagado": "Tu pago está aprobado.", "confirmado": "Tu pedido está confirmado.",
                    "preparando": "Estamos preparando tu pedido.", "entregado": "Tu pedido figura como entregado."}
         estado = ctx.pedido["estado"]
         if estado not in estados:
             return relevo("Estado del pedido no reconocido")
-        return DecisionTurno("responder", estados[estado], [hecho("pedido", ctx.pedido["id"], "estado", estado)])
+        # 🗂️ PR4: el estado se responde CON los datos del expediente (qué lleva, cuándo y dónde se entrega),
+        # cada uno como hecho con revisión. Sin dinero: el total lo dice el cobro, no esta frase.
+        hs = [hecho("pedido", ctx.pedido["id"], "estado", estado)]
+        texto = estados[estado]
+        lleva = items_del_pedido(ctx.pedido.get("items"))
+        if lleva:
+            texto += f" Lleva: {lleva}."
+            hs.append(hecho("pedido", ctx.pedido["id"], "items", ctx.pedido.get("items")))
+        entrega, hs_entrega = entrega_del_pedido(ctx.pedido)
+        if entrega:
+            texto += f" Entrega: {entrega}."
+            hs.extend(hs_entrega)
+        return DecisionTurno("responder", texto, hs)
+    if tema == "entrega":
+        if not ctx.pedido:
+            return relevo("No se encontró un pedido para informar su entrega")
+        if ctx.humano_sin_acuerdo:
+            return relevo("Hay datos de la venta dichos a mano por el negocio y aún sin confirmar", "acuerdo_especial")
+        entrega, hs_entrega = entrega_del_pedido(ctx.pedido)
+        if not entrega:
+            return relevo(f"Entrega del pedido #{ctx.pedido['id']} aún no acordada", "acuerdo_especial")
+        return DecisionTurno("responder", f"Tu entrega quedó {entrega}.", hs_entrega)
     if tema in {"ingredientes", "alergenos", "conservacion", "envio_nacional", "politica"}:
         k = ctx.conocimiento.get(q.conocimiento_id, {})
         if not k.get("confirmado") or k.get("tema") != tema or k.get("producto_id") != q.producto_id:
@@ -130,6 +153,52 @@ def consultar(ctx: Contexto, q: Consulta, texto: str) -> DecisionTurno:
     hs.append(hecho("producto", p["id"], tema, valor))
     etiquetas = {"duracion": "Duración", "se_congela": "Para congelarlo", "apto_diabeticos": "Información de la ficha", "descripcion": p["nombre"]}
     return DecisionTurno("responder", f"{etiquetas.get(tema, tema)}: {valor}", hs)
+
+
+_DIAS = ("lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo")
+_MESES = ("enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto",
+          "septiembre", "octubre", "noviembre", "diciembre")
+
+
+def fecha_en_palabras(iso: str | None) -> str:
+    """'2026-09-23' → 'el miércoles 23 de septiembre'. Lo que no sea una fecha ISO vuelve tal cual."""
+    if not iso:
+        return ""
+    try:
+        d = date.fromisoformat(str(iso))
+    except ValueError:
+        return str(iso)
+    return f"el {_DIAS[d.weekday()]} {d.day} de {_MESES[d.month - 1]}"
+
+
+def items_del_pedido(items) -> str:
+    """'2× Quesillo (500 g) · 1× Pan Keto' — sin una cifra de dinero."""
+    partes = []
+    for it in items or []:
+        if not isinstance(it, dict) or not str(it.get("producto") or "").strip():
+            continue
+        linea = f"{it['cantidad']}× {it['producto']}" if it.get("cantidad") else str(it["producto"])
+        pres = str(it.get("presentacion") or "").strip()
+        if pres and pres != "única":
+            linea += f" ({pres})"
+        partes.append(linea)
+    return " · ".join(partes)
+
+
+def entrega_del_pedido(pedido: dict):
+    """(texto, hechos) de la entrega YA ACORDADA de un pedido: fecha, momento y referencia. Sin nada
+    acordado devuelve ('', []): la frase la decide quien llama (relevo), nunca se inventa."""
+    partes, hs = [], []
+    if pedido.get("fecha"):
+        partes.append(fecha_en_palabras(pedido["fecha"]))
+        hs.append(hecho("pedido", pedido["id"], "fecha", pedido["fecha"]))
+    if pedido.get("franja"):
+        partes.append(str(pedido["franja"]))
+        hs.append(hecho("pedido", pedido["id"], "franja", pedido["franja"]))
+    if pedido.get("referencia"):
+        partes.append(f"en {pedido['referencia']}")
+        hs.append(hecho("pedido", pedido["id"], "referencia", pedido["referencia"]))
+    return " ".join(partes), hs
 
 
 def fecha_del_cliente(texto: str, hoy: date):
