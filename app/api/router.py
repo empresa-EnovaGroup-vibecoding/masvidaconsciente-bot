@@ -140,6 +140,11 @@ CLAVES_CONFIG = [
     # `auto` solo cuando el replay sobre las conversaciones reales pase la puerta ≥0,98).
     "modelo_extractor",
     "expediente_escritura",
+    # 🔓 RETORNO AUTOMÁTICO (PR5, SESIONES (39), decisión de Maired 24-sep) — palanca de la PROVEEDORA:
+    # horas SIN respuesta de la dueña tras la que el bot retoma solo un chat que ella pausó al escribir
+    # (0 / vacío = apagado, el default). El bot solo vuelve si además el cliente escribe de nuevo y no
+    # hay propuestas del expediente sin confirmar. Lo lee `_horas_retorno_auto` en tasks.py.
+    "retomar_auto_horas",
     # SINÓNIMOS DEL BUSCADOR: lo que el cliente DICE no siempre es lo que está ESCRITO en el
     # catálogo. Pide "bebidas" y en la base pone "Kombucha", "Kéfir", "Yogurt Kéfirado" —
     # ninguna contiene esa palabra, así que el buscador devolvía CERO y el bot decía "de eso no
@@ -1221,7 +1226,7 @@ async def servir_catalogo_pdf():
 # dueña podía cambiarle el modelo al bot desde la pantalla de Configuración.
 CLAVES_PROVEEDORA = {
     "modelo_ia", "agente_modo", "modelo_operador", "modelo_voz",
-    "modelo_extractor", "expediente_escritura",
+    "modelo_extractor", "expediente_escritura", "retomar_auto_horas",
 }
 
 

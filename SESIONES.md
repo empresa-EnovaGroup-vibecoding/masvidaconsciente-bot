@@ -17,6 +17,47 @@
 
 ---
 
+## 2026-09-24 (40) — 🔓 EL BOT RETOMA SOLO: la pausa de la dueña deja de ser eterna, con condiciones (PR5)
+
+**Por qué (decisión de Maired 24-sep, AskUserQuestion "se calla solo y vuelve solo"):** la pausa
+`pausado_por='dueña'` no expiraba nunca — es la razón por la que producción está muda en 308/322 chats
+(ella contesta a todos por su celular y jamás entra al panel) y por la que hoy no se pudo probar el bot
+sin ir a devolver el chat a mano. "Habla siempre y solo ella lo calla" (SellerChat) es lo contrario y
+choca en 6 de 7. El punto medio: el bot se calla cuando ella escribe (se queda), pero vuelve solo si
+pasan N horas sin respuesta de ella, el cliente vuelve a escribir y no hay propuestas sin confirmar.
+
+**Qué quedó hecho (bot, rama `retorno-automatico`):**
+- `_horas_retorno_auto()` (tasks.py, patrón de `_bot_activo`): lee `retomar_auto_horas` (float, admite
+  decimales y coma); ausente / vacío / ≤0 / no numérico / error → **0.0 = apagado**. Fail-CLOSED al revés
+  de `_bot_activo`: un error NO despausa (hablar encima de ella es peor que no volver).
+- `_retorno_automatico(telefono)` (tasks.py): en UNA sesión con `bloquear_cliente` (advisory lock);
+  condiciones TODAS: flag>0 · `pausado_por=='dueña'` · no privado · bot_pausado · último `Mensaje rol='owner'`
+  existe y > N h · cero `Intervencion` pendientes con motivo en `MOTIVOS_INFORMATIVOS`. Si se cumplen:
+  despausa, cierra los `chat_tomado` pendientes con la nota "El bot retomó solo: {N} h…" (sin motivo nuevo),
+  commit, `rc.notificar_conversacion` → el panel pasa a "Alejandra atiende" en vivo. Cualquier error → False.
+- Gancho llamado en `_procesar` y `_responder_y_enviar` ANTES de `_cliente_pausado` (dentro del turno del
+  cliente: jamás proactivo, jamás desde el barredor).
+- Config `retomar_auto_horas` en `CLAVES_CONFIG` + `CLAVES_PROVEEDORA` (Maired es proveedora).
+- **No se toca:** el barredor sigue sin despausar a nadie, `_lo_paso_una_persona`, `_estado_pausa`,
+  `_retomar`, `pausar_bot_cliente`, `resolver_intervencion`. Un pago sigue siendo humano.
+- Tests `test_retorno_automatico.py` (21): apagado/bot/privado/no-pausado → False; reloj (aún no / sin
+  mensaje owner / propuesta pendiente) → False; camino feliz → despausa + nota + notifica; BD caída → False;
+  lector (2 / 0.05 / 1,5 / vacío / abc / 0 / -3 / None); por fuente: el gancho va antes del freno en los dos
+  carriles, la clave es de proveedora, el barredor no hace UPDATE clientes. Suite **1286/0**.
+
+**Panel (rama `retorno-automatico-panel`):** `Pedido`→ no; en `ConfiguracionNegocio` la clave
+`retomar_auto_horas` (proveedora); en Configuración, sección "El bot retoma solo · solo Enova" con un campo
+numérico (0 = nunca) y la nota de que el pago siempre lo confirma ella y que un chat donde el bot pidió
+ayuda no se reactiva solo. tsc limpio.
+
+**Limitación documentada:** el botón "Yo atiendo" también escribe `pausado_por='dueña'` — indistinguible del
+eco de su celular, así que una pausa puesta a mano SÍ caduca a las N h si ella escribió algo en ese chat.
+Un "sin plazo" real necesitaría una columna aparte; fuera de este PR.
+
+**Sigue (con "dale"):** fusionar bot + panel → desplegar pruebas (bot+worker+dashboard) → la prueba de
+Maired SIN botones: N=0,05 (3 min) en Configuración → escribe como Whuilianny → espera 3 min → escribe como
+clienta → el bot entra solo → vuelve a escribir como Whuilianny → se calla → deja N en 2. Luego PR6 replay.
+
 ## 2026-09-24 (39) — 🗣️ LA BOCA: la despedida del bot volvía a tragarse cuando él mismo se pausaba (PR4c)
 
 **Lo que destapó la prueba de Maired (12:29-12:37 VET, pruebas en `60baacc`):** escribió como Whuilianny

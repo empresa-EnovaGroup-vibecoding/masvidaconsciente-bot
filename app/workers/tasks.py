@@ -514,6 +514,125 @@ async def _bot_activo() -> bool:
     return True
 
 
+async def _horas_retorno_auto() -> float:
+    """Horas que el bot espera SIN respuesta de la dueña antes de retomar un chat que ella pausó al
+    escribir (config 'retomar_auto_horas'). Ausente / vacío / <=0 / no numérico / error = 0.0 =
+    APAGADO. Fail-closed a propósito: al revés que `_bot_activo`, aquí un error NO despausa a nadie —
+    volver a hablar encima de la dueña es peor que no volver. Admite decimales (0.05 = 3 min, probar)."""
+    from sqlalchemy import select
+
+    from app.models import Configuracion
+    from app.services.db import get_session_factory
+
+    try:
+        factory = get_session_factory()
+        async with factory() as session:
+            fila = (
+                await session.execute(
+                    select(Configuracion).where(Configuracion.clave == "retomar_auto_horas")
+                )
+            ).scalar_one_or_none()
+        if fila and fila.valor is not None:
+            horas = float(str(fila.valor).strip().replace(",", "."))
+            return horas if horas > 0 else 0.0
+    except (ValueError, TypeError):
+        return 0.0
+    except Exception:  # noqa: BLE001
+        logger.exception("No se pudo leer retomar_auto_horas (el bot NO retoma solo)")
+        return 0.0
+    return 0.0
+
+
+async def _retorno_automatico(telefono: str) -> bool:
+    """¿El bot puede RETOMAR SOLO este chat que la dueña pausó al escribir? (decisión de Maired,
+    24-sep-2026, SESIONES (39): "se calla solo y vuelve solo"). Si TODAS se cumplen, despausa y
+    devuelve True; si no, False y el chat sigue como estaba.
+
+    Va DENTRO de un turno del cliente (lo llaman `_procesar` y `_responder_y_enviar` ANTES de
+    `_cliente_pausado`): jamás es proactivo, y el barredor NUNCA despausa (`barredor.py`). Condiciones:
+      1. `retomar_auto_horas` > 0 (la palanca de Maired; apagada por defecto).
+      2. El chat lo pausó LA DUEÑA al escribir (`pausado_por='dueña'`), no el bot al escalar
+         (`'bot'` = pidió ayuda: eso lo resuelve una persona) ni un contacto privado.
+      3. Su ÚLTIMO mensaje en ese chat (`Mensaje.rol='owner'`) fue hace más de N horas. Sin ningún
+         mensaje de ella, NO retoma (una pausa puesta a mano sin escribir es deliberada).
+      4. CERO propuestas del expediente sin confirmar (`motivo='propuesta_expediente'`): lo que ella
+         dijo a mano y nadie confirmó todavía NO es dato, y el bot no debe pisarlo.
+    Al retomar: despausa, cierra los avisos `chat_tomado` con una nota (sin motivo nuevo, sin ruido
+    en la Bandeja) y avisa al panel para que el chat pase a "Alejandra atiende" en vivo. Cualquier
+    error → False (el `_cliente_pausado` de siempre decide después). El pago NO se toca: sigue siendo
+    humano. Y su siguiente eco vuelve a pausar el chat en el acto (webhook), como hoy."""
+    from datetime import timedelta
+
+    from sqlalchemy import select
+
+    from app.agent.fuentes_atencion import bloquear_cliente
+    from app.models import Intervencion, Mensaje, now_utc
+    from app.services.db import get_session_factory
+
+    horas = await _horas_retorno_auto()
+    if horas <= 0:
+        return False
+    try:
+        factory = get_session_factory()
+        async with factory() as session:
+            cliente = await bloquear_cliente(session, telefono)  # advisory lock: sin cruzarse con un eco
+            if cliente is None or not cliente.bot_pausado or cliente.privado:
+                return False
+            if cliente.pausado_por != "dueña":
+                return False
+            ultimo_owner = (
+                await session.execute(
+                    select(Mensaje.created_at)
+                    .where(Mensaje.cliente_telefono == telefono, Mensaje.rol == "owner")
+                    .order_by(Mensaje.created_at.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            if ultimo_owner is None or ultimo_owner > now_utc() - timedelta(hours=horas):
+                return False
+            from app.models import MOTIVOS_INFORMATIVOS
+
+            propuestas = (
+                await session.execute(
+                    select(Intervencion).where(
+                        Intervencion.cliente_telefono == telefono,
+                        Intervencion.estado == "pendiente",
+                        Intervencion.motivo.in_(list(MOTIVOS_INFORMATIVOS)),
+                    )
+                )
+            ).scalars().all()
+            if propuestas:
+                return False
+            # TODO se cumple: el bot retoma solo.
+            ahora = now_utc()
+            cliente.bot_pausado = False
+            cliente.pausado_por = None
+            tomados = (
+                await session.execute(
+                    select(Intervencion).where(
+                        Intervencion.cliente_telefono == telefono,
+                        Intervencion.estado == "pendiente",
+                        Intervencion.motivo == "chat_tomado",
+                    )
+                )
+            ).scalars().all()
+            nota = f"\n· El bot retomó solo: {horas:g} h sin respuesta y el cliente volvió a escribir."
+            for aviso in tomados:
+                aviso.estado = "resuelta"
+                aviso.resuelta_at = ahora
+                aviso.detalle = (aviso.detalle or "") + nota
+            await session.commit()
+    except Exception:  # noqa: BLE001 — sin poder decidir, NO se retoma; el freno de siempre actúa
+        logger.exception("Retorno automático de %s falló al evaluar; el bot NO retoma solo", telefono)
+        return False
+    logger.info("Retorno automático: el bot retoma el chat de %s (%.3g h sin respuesta)", telefono, horas)
+    try:
+        await rc.notificar_conversacion(telefono, "actualizada")
+    except Exception:  # noqa: BLE001
+        pass
+    return True
+
+
 async def _cliente_pausado(telefono: str) -> bool:
     """True si el bot está pausado en ESE chat (lo pausara quien lo pausara).
     Si la BD falla, devuelve True: sin poder comprobar quién atiende, el bot se detiene."""
@@ -821,6 +940,12 @@ async def _procesar(telefono: str, nombre: str | None) -> str:
 
         ts_turno = now_utc()
 
+        # 🔓 EL BOT RETOMA SOLO (SESIONES (39)): si la dueña pausó este chat al escribir, ya pasaron
+        # N horas sin que ella conteste y no hay nada suyo pendiente de confirmar, el bot se
+        # despausa AHORA — antes de mirar `_cliente_pausado`— y atiende este mensaje del cliente.
+        # Apagado por defecto (`retomar_auto_horas`=0). Va aquí, dentro del turno del cliente:
+        # jamás proactivo.
+        await _retorno_automatico(telefono)
         if not await _bot_activo() or await _cliente_pausado(telefono) or not await _numero_permitido(telefono):
             # Bot apagado (global o solo en este chat): guarda lo que escribió el
             # cliente para que la dueña lo vea en Conversaciones y responda ella.
@@ -2123,6 +2248,9 @@ async def _responder_y_enviar(telefono: str, texto: str, nombre: str | None) -> 
 
     ts_turno = now_utc()
     try:
+        # 🔓 El bot retoma solo (gemelo del de `_procesar`; SESIONES (39)): mismo gancho, mismas
+        # condiciones, antes de mirar `_cliente_pausado`. Apagado por defecto.
+        await _retorno_automatico(telefono)
         if not await _bot_activo() or await _cliente_pausado(telefono) or not await _numero_permitido(telefono):
             await rc.guardar_historial(telefono, "user", texto)
             guardado = await _guardar_entrante(telefono, nombre, texto)
