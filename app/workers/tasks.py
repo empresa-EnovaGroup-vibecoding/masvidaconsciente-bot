@@ -296,7 +296,12 @@ async def _enviar_en_partes(telefono: str, texto: str) -> list[dict]:
         if es_acuse:
             if not await tomar_acuse(telefono):
                 return []
-        elif await _cliente_pausado(telefono):
+        # 🔴 "¿LO PAUSÓ UNA PERSONA?", NO "¿ESTÁ PAUSADO?" (24-sep-2026, SESIONES (39)). Esta línea
+        # llegó el 22-sep con el código de Codex (98be60fb) preguntando `_cliente_pausado` a secas, y
+        # eso volvió a tragarse la despedida del bot cuando ÉL MISMO se pausa al escalar (pedir_ayuda):
+        # en la prueba de Maired el bot retomó, decidió bien, escaló… y el cliente recibió SILENCIO.
+        # Es exactamente el bug del 12-jul (migración 020) que `_lo_paso_una_persona` vino a matar.
+        elif await _lo_paso_una_persona(telefono):
             return []
     except Exception:  # noqa: BLE001 — sin verificación no hay envío
         logger.exception("No se pudo autorizar el envío de %s", telefono)
@@ -329,8 +334,10 @@ async def _enviar_en_partes(telefono: str, texto: str) -> list[dict]:
     for i, parte in enumerate(partes):
         if i:
             await asyncio.sleep(1.0)  # pausa breve entre globos, como una persona
-        if not es_acuse and await _cliente_pausado(telefono):
-            cola_media.descartar("chat pausado durante el envío")
+        # Misma pregunta que arriba: solo una PERSONA que tomó el chat corta los globos que faltan;
+        # la pausa que el propio bot se puso al escalar no le quita la palabra a su despedida.
+        if not es_acuse and await _lo_paso_una_persona(telefono):
+            cola_media.descartar("una persona tomó el chat durante el envío")
             break
         # 📷 LA PREGUNTA VA ÚLTIMA, LA FOTO ANTES (lo vio Maired el 6-sep en pruebas): el bot
         # decía "te dejo la foto… de cuál te provoca?" y la foto caía DESPUÉS de la pregunta,

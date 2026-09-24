@@ -17,6 +17,37 @@
 
 ---
 
+## 2026-09-24 (39) — 🗣️ LA BOCA: la despedida del bot volvía a tragarse cuando él mismo se pausaba (PR4c)
+
+**Lo que destapó la prueba de Maired (12:29-12:37 VET, pruebas en `60baacc`):** escribió como Whuilianny
+("Te anoté 2 quesillos son 16$") → el bot se pausó por ella (diseño: `pausado_por='dueña'`, no expira) →
+confirmó la propuesta (pedido #3131; el candado del gemelo no frenó porque el #3130 tiene >24 h: correcto)
+→ escribió como clienta "¿A qué hora me llega?" → **silencio**, porque el chat seguía pausado por ella. Tuvo
+que ir al panel y devolverlo. `retomar_chat` corrió (16:37 UTC, 7 s): leyó el expediente, **decidió bien**
+(escalar con `pedir_ayuda`, sin inventar hora: ningún pedido tenía entrega acordada), se pausó a sí mismo
+(`pausado_por='bot'`), avisó por WhatsApp a la agencia y enriqueció el aviso 3460… **y su despedida al
+cliente no salió**: `_enviar_en_partes` preguntaba `_cliente_pausado` (¿está pausado?) en vez de
+`_lo_paso_una_persona` (¿lo pausó una PERSONA?), la regla del 12-jul (migración 020). La regresión entró el
+22-sep con el código de Codex rescatado sin cambios (98be60fb, dentro de PR #59): dos líneas (`:299` y
+`:332`) delante de la "última mirada al freno" que sí preguntaba bien. **Solo en pruebas** (producción
+`42d37de` no tiene #59); afectaba a toda escalada con pausa desde el 22-sep. Yo revisé ese PR y no lo vi.
+
+**Arreglo (rama `despedida-tras-escalar`):** las dos preguntas pasan a `_lo_paso_una_persona`; la rama del
+acuse del cerebro `confirmado` (`tomar_acuse`) y `_cliente_pausado` (que siguen usando `_procesar`,
+`_retomar` y `_responder_y_enviar` ANTES de pensar, donde "pausado a secas" es lo correcto) no se tocan.
+Tests `test_despedida_tras_escalar.py` (7): pausado por el bot → sale (uno y varios globos); pausado por la
+dueña → nada; sin pausa → sale; el acuse del `confirmado` sigue reservándose; BD caída → calla; y por fuente:
+el embudo no vuelve a preguntar `_cliente_pausado`.
+
+**Decisión de Maired (24-sep) sobre QUIÉN calla al bot** (venía dudando entre "como está" y "como
+SellerChat: habla siempre y solo ella lo calla"): **"se calla solo y vuelve solo"**. Cuando ella escribe, el
+bot se calla en ese chat (se queda). Pero si el cliente vuelve a escribir, ella lleva N horas sin contestar
+en ese chat y no hay propuestas del expediente sin confirmar, el bot retoma solo, sabiendo lo que ella vendió
+(PR4). Botones solo para excepciones. N arranca en 2 h, editable desde el panel. Un pago lo confirma siempre
+una persona. Razón: la pausa eterna es lo que tiene a producción muda en 308/322 chats y lo que impidió
+probar el bot hoy sin botones; "habla siempre" es lo que chocó en 6 de 7 conversaciones. → **Sigue: PR5
+retorno automático** (era PR7; se adelanta), diseño en el plan, sección (F).
+
 ## 2026-09-24 (38) — 👓 LOS LECTORES: el bot sabe dónde está entrando (expediente, PR4)
 
 **Dónde estábamos:** el expediente ya se LLENABA de punta a punta y estaba probado en pruebas (SESIONES (37): "Te
