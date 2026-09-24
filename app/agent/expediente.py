@@ -39,8 +39,16 @@ from app.agent.contratos_atencion import (
     PropuestaExpediente,
 )
 from app.agent.resolver_atencion import consta, fecha_del_cliente, normalizar
-from app.agent.tools import _matchear_franja
-from app.models import Conocimiento, Intervencion, Pago, Pedido, now_utc
+from app.agent.tools import _matchear_franja, _pedido_igual_reciente
+from app.models import (
+    ESTADOS_ACORDADOS,
+    ORIGEN_DUENA,
+    Conocimiento,
+    Intervencion,
+    Pago,
+    Pedido,
+    now_utc,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -58,10 +66,11 @@ de voz a un cliente. Tu trabajo: detectar si en esos mensajes ella HIZO algo de 
 con UNA llamada a proponer_eventos_duena. No escribes respuestas ni hablas con nadie.
 Tipos: pedido_tomado (ella anota o confirma qué lleva el cliente, con o sin total); pago_confirmado
 (ella dice que el pago llegó, quedó listo o lo recibió); entrega_acordada (día, momento del día o
-lugar de entrega o retiro); precio_especial (un precio, descuento, regalo o cortesía distinto al
-normal); cancelado (se cancela o se quita algo ya acordado); respuesta_general (explica algo del
-producto o del negocio: ingredientes, alérgenos, conservación, envíos nacionales, políticas); nada
-(charla, saludos, bendiciones, preguntas suyas, cosas fuera de la venta).
+lugar de entrega o retiro); entregado (ella dice que YA lo entregó, ya se lo llevó o ya lo recibió el
+cliente); precio_especial (un precio, descuento, regalo o cortesía distinto al normal); cancelado (se
+cancela o se quita algo ya acordado); respuesta_general (explica algo del producto o del negocio:
+ingredientes, alérgenos, conservación, envíos nacionales, políticas); nada (charla, saludos,
+bendiciones, preguntas suyas, cosas fuera de la venta).
 Reglas: en evidencia copia LITERAL el trozo exacto de ella que sostiene cada evento. nombre_literal y
 cantidad_literal se copian tal cual están (no deduzcas cantidades ni completes nombres con el
 catálogo). total_literal y monto_literal se copian con su moneda si la dijo. fecha_texto copia
@@ -460,6 +469,16 @@ def validar(
         p.contenido = ev.contenido.strip()
         return Veredicto("propuesta", "una cancelación la confirma una persona", 0.0, p)
 
+    if ev.tipo == "entregado":
+        # "Ya te lo entregué" cierra la venta (PR4, decisión de Maired 24-sep): como PROPUESTA. Sin pedido
+        # al que pegarlo no hay nada que cerrar; sobre uno cancelado tampoco.
+        if pedido is None or pedido.get("estado") == "cancelado":
+            return Veredicto("descarta", "no hay pedido abierto que marcar como entregado")
+        if pedido.get("estado") == "entregado":
+            return Veredicto("descarta", f"el pedido #{pedido['id']} ya figura entregado")
+        p.contenido = ev.contenido.strip()
+        return Veredicto("propuesta", "una entrega hecha la confirma una persona", 0.0, p)
+
     if ev.tipo == "respuesta_general":
         if not ev.contenido.strip():
             return Veredicto("descarta", "respuesta sin contenido")
@@ -501,6 +520,8 @@ def resumen_humano(p: PropuestaExpediente, *, tipo_mensaje: str = "text", hora: 
         return f"Parece que Whuilianny dio un precio especial: {_fmt(p.monto, p.moneda)} — ¿lo aplico a este pedido?{cuando}"
     if p.tipo == "cancelado":
         return f"Parece que Whuilianny canceló el pedido #{p.pedido_id} — ¿correcto?{cuando}"
+    if p.tipo == "entregado":
+        return f"Parece que Whuilianny ya entregó el pedido #{p.pedido_id} — ¿correcto?{cuando}"
     if p.tipo == "respuesta_general":
         return f"Whuilianny respondió algo del negocio ({p.tema}): «{p.contenido[:160]}» — ¿lo guardo como respuesta confirmada?{cuando}"
     return f"Propuesta del expediente ({p.tipo}){cuando}"
@@ -603,6 +624,18 @@ async def _crear_pedido_duena(session, p: PropuestaExpediente, usuario: str) -> 
         raise ValueError("un pedido sin productos no existe")
     if any(i.precio_unitario is None for i in p.items) and p.total is None:
         raise ValueError("falta el precio de algún producto y no hay total pactado")
+    # 🔒 EL MISMO CANDADO DE DUPLICADOS que frena al bot (`tools._pedido_igual_reciente`, la familia del
+    # #2074/#2603) frena también al toque humano (PR4): ella repite el pedido en dos mensajes ("te anoté 2
+    # quesillos" … "entonces son los 2 quesillos, 16$"), el extractor propone dos veces, y un segundo "Sí"
+    # NO puede fabricar el pedido gemelo. Si la lectura falla, el candado se abstiene (vender > bloquear).
+    repetido = await _pedido_igual_reciente(
+        session, p.telefono, [{"variante_id": i.variante_id, "cantidad": i.cantidad} for i in p.items]
+    )
+    if repetido is not None:
+        raise ValueError(
+            f"ya existe el pedido #{repetido.id} con estos mismos productos (tomado hace menos de 24 h): "
+            f"si es el mismo, descarta esta propuesta"
+        )
     total = _monto_decimal(p.total) if p.total is not None else sum(
         Decimal(str(i.precio_unitario)) * i.cantidad for i in p.items
     )
@@ -693,6 +726,18 @@ async def aplicar_propuesta(session, propuesta: dict, *, usuario: str) -> dict:
         pedido.updated_at = ahora
         return {"tipo": p.tipo, "pedido_id": pedido.id}
 
+    if p.tipo == "entregado":
+        pedido = await _pedido_de(session, p)
+        if pedido.estado == "cancelado":
+            raise ValueError(f"el pedido #{pedido.id} está cancelado: no se puede marcar entregado")
+        if pedido.estado == "entregado":
+            return {"tipo": p.tipo, "pedido_id": pedido.id}  # ya estaba: idempotente
+        # Se cierra aunque el pago no esté registrado (ella cobra en la puerta muchas veces): el pago,
+        # si llega como dato, sigue siendo SU propuesta aparte. Cerrado = el bot ya no lo toca ni lo cobra.
+        pedido.estado = "entregado"
+        pedido.updated_at = ahora
+        return {"tipo": p.tipo, "pedido_id": pedido.id}
+
     if p.tipo == "respuesta_general":
         tema = p.tema if p.tema in TEMAS_CONFIRMABLES else "politica"
         if not p.contenido.strip():
@@ -712,6 +757,81 @@ async def aplicar_propuesta(session, propuesta: dict, *, usuario: str) -> dict:
         return {"tipo": p.tipo, "conocimiento_id": c.id}
 
     raise ValueError(f"tipo de propuesta sin puerta: {p.tipo}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════════
+#  6) LEER EL EXPEDIENTE (PR4): lo que el bot tiene que saber al entrar a un chat
+# ══════════════════════════════════════════════════════════════════════════════════
+
+def _items_breves(items) -> str:
+    partes = []
+    for it in items or []:
+        if not isinstance(it, dict) or not it.get("producto"):
+            continue
+        cant = it.get("cantidad")
+        partes.append(f"{cant}× {it['producto']}" if cant else str(it["producto"]))
+    return " · ".join(partes)
+
+
+async def leer_expediente(telefono: str) -> dict:
+    """Resumen SIN DINERO de la venta que una persona del negocio ya llevó a mano con este cliente:
+    `pedidos_a_mano` (los últimos 3 con origen dueña, no cancelados), `propuestas_pendientes` y
+    `venta_cerrada_a_mano` (hay al menos un pedido de ella confirmado/pagado/entregado). Lo lee
+    `_retomar` para no reabrir lo que ella cerró. Fallo ⇒ vacío: sin dato, el retomar sigue como antes."""
+    from app.services.db import get_session_factory
+
+    vacio = {"pedidos_a_mano": [], "propuestas_pendientes": 0, "venta_cerrada_a_mano": False, "hechos": ""}
+    try:
+        factory = get_session_factory()
+        async with factory() as session:
+            pedidos = (await session.execute(
+                select(Pedido).where(
+                    Pedido.cliente_telefono == telefono, Pedido.origen == ORIGEN_DUENA,
+                    Pedido.estado != "cancelado",
+                ).order_by(Pedido.created_at.desc()).limit(3)
+            )).scalars().all()
+            pagos: dict[int, str] = {}
+            if pedidos:
+                filas = (await session.execute(
+                    select(Pago.pedido_id, Pago.estado).where(Pago.pedido_id.in_([p.id for p in pedidos]))
+                    .order_by(Pago.created_at)
+                )).all()
+                pagos = {pid: est for pid, est in filas}
+            pendientes = (await session.execute(
+                select(Intervencion.id).where(
+                    Intervencion.cliente_telefono == telefono, Intervencion.estado == "pendiente",
+                    Intervencion.motivo == MOTIVO_PROPUESTA,
+                )
+            )).scalars().all()
+    except Exception:  # noqa: BLE001 — leer el expediente nunca tumba al que retoma
+        logger.exception("No se pudo leer el expediente de %s", telefono)
+        return vacio
+    resumen = []
+    for p in pedidos:
+        pago = pagos.get(p.id)
+        estado_pago = "pago confirmado" if pago == "confirmado" else (
+            "comprobante recibido, en revisión" if pago in ("reportado", "parcial") else "pago SIN registrar")
+        if p.estado == "pagado":
+            estado_pago = "pago confirmado"
+        entrega = " ".join(x for x in (
+            p.entrega_fecha and f"el {p.entrega_fecha.isoformat()}", (p.entrega_franja or "").strip() or None,
+            (p.entrega_referencia or "").strip() and f"en {p.entrega_referencia.strip()}",
+        ) if x) or "sin acordar"
+        resumen.append(
+            f"El negocio ya le tomó a mano el pedido #{p.id} ({p.estado}): {_items_breves(p.items) or 'ver detalle'}; "
+            f"entrega {entrega}; {estado_pago}."
+        )
+    if pendientes:
+        resumen.append(
+            f"Hay {len(pendientes)} dato(s) de esta venta dichos a mano por el negocio y aún SIN confirmar: "
+            "no los des por hechos ni los contradigas."
+        )
+    return {
+        "pedidos_a_mano": [{"id": p.id, "estado": p.estado, "pago": pagos.get(p.id)} for p in pedidos],
+        "propuestas_pendientes": len(pendientes),
+        "venta_cerrada_a_mano": any(p.estado in (*ESTADOS_ACORDADOS, "pagado", "entregado") for p in pedidos),
+        "hechos": " ".join(resumen),
+    }
 
 
 # ══════════════════════════════════════════════════════════════════════════════════

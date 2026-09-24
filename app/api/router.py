@@ -436,6 +436,11 @@ async def listar_pedidos(_: str = Depends(usuario_actual)):
             "subtotal_productos": float(p.total or 0) - float(p.costo_envio or 0),
             "fecha": p.created_at.isoformat(),
             "pago_bloqueante": bloqueo.get(p.id),  # confirmado|parcial|reportado|None
+            # 🗂️ EL EXPEDIENTE (040, PR4): quién puso este pedido — 'bot' (las herramientas), 'dueña'
+            # (lo dijo Whuilianny a mano y una persona lo confirmó en la Bandeja) o 'panel' — y con qué
+            # confianza lo leyó el extractor. El panel lo pinta como "Tomado por Whuilianny".
+            "origen": p.origen or "bot",
+            "confianza": float(p.confianza) if p.confianza is not None else None,
         }
         for p in pedidos
     ]

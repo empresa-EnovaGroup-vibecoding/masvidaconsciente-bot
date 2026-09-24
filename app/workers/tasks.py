@@ -13,6 +13,7 @@ from app.agent.agent import (
     responder,
     transcribir_audio,
 )
+from app.agent.expediente import leer_expediente
 from app.config import get_settings
 from app.services import cola_media
 from app.services import redis_client as rc
@@ -971,7 +972,7 @@ def _es_acuse(texto: str) -> bool:
     return all(p in _ACUSES or p.isdigit() for p in palabras)
 
 
-def _hay_pendiente(historial: list, pausado_por: str | None) -> bool:
+def _hay_pendiente(historial: list, pausado_por: str | None, *, venta_cerrada_a_mano: bool = False) -> bool:
     """¿Quedó el cliente ESPERANDO algo? Decide si `_retomar` puede abrir la boca.
 
     - El bot había escalado (`pausado_por == 'bot'`) ⇒ True: su "te lo confirmo" es un pagaré.
@@ -981,6 +982,9 @@ def _hay_pendiente(historial: list, pausado_por: str | None) -> bool:
     - Algún mensaje del bloque final del cliente pide o pregunta algo ⇒ True.
     - El bloque final son solo acuses ("ok", "gracias", "amén", una foto) ⇒ False. Aquí cae el caso
       de Amanda: la dueña cerró la venta a mano y el cliente solo dijo "Amén".
+    - 🗂️ `venta_cerrada_a_mano` (PR4): el expediente dice que el negocio ya le tomó/cerró la venta a
+      mano. Entonces la pregunta final de la casa era de ELLA ("¿te llegó bien?") y el acuse del
+      cliente la cierra: con solo acuses no hay nada que retomar, termine ella en "?" o no.
     """
     if pausado_por == "bot":
         return True
@@ -994,9 +998,12 @@ def _hay_pendiente(historial: list, pausado_por: str | None) -> bool:
             continue
         ultimo_de_la_casa = str(turno.get("content") or "")
         break
+    solo_acuses = all(_es_acuse(m) for m in bloque)
+    if venta_cerrada_a_mano and solo_acuses:
+        return False
     if ultimo_de_la_casa.rstrip().endswith("?"):
         return True
-    return not all(_es_acuse(m) for m in bloque)
+    return not solo_acuses
 
 # El caso ESTRELLA: el bot escaló (no sabía el precio del día), la dueña lo cargó y le devolvió el
 # chat. Lo que le faltaba YA ESTÁ en el sistema — pero solo lo verá si vuelve a preguntárselo a la
@@ -1151,10 +1158,13 @@ async def _retomar(telefono: str, nombre: str | None, pausado_por: str | None = 
         # —lo que Meta prohíbe sin aprobación humana— y encima le hablaría encima.
         if not historial:
             return
+        # 🗂️ EL EXPEDIENTE (PR4, SESIONES (38)): lo que el negocio ya llevó a mano con este cliente,
+        # como DATO (pedido tomado, pago, entrega, propuestas sin confirmar). Sin lectura ⇒ vacío.
+        expediente = await leer_expediente(telefono)
         # 13-sep-2026 (Amanda): "pendiente" ya no es "el último turno es del cliente". Un "Amén"
         # después de que la dueña cerró la venta a mano NO es una pregunta, y retomar ahí reabría la
         # venta y volvía a cobrar. Ver `_hay_pendiente`.
-        if not _hay_pendiente(historial, pausado_por):
+        if not _hay_pendiente(historial, pausado_por, venta_cerrada_a_mano=expediente["venta_cerrada_a_mano"]):
             logger.info(
                 "Retomar %s: no hay nada pendiente (la casa habló última, o el cliente solo acusó "
                 "recibo)", telefono,
@@ -1179,6 +1189,10 @@ async def _retomar(telefono: str, nombre: str | None, pausado_por: str | None = 
             (h.get("content") for h in reversed(historial) if h.get("role") == "user"), ""
         )
         instruccion = _INSTRUCCION_RETOMAR_ESCALADO if venia_de_escalada else _INSTRUCCION_RETOMAR
+        if expediente["hechos"]:
+            # Lo que el texto blando de arriba pedía adivinar ("si la venta ya se cerró a mano…") ahora
+            # va como HECHO del expediente, sin dinero (el total se consulta con ver_pedidos_cliente).
+            instruccion += "\n[HECHO] " + expediente["hechos"]
         partes, respuesta = await _pensar_y_enviar(
             telefono, instruccion, historial, nombre, pregunta_cliente=ultima_del_cliente
         )
@@ -1424,10 +1438,26 @@ async def _montos_cobrados(telefono: str):
     try:
         from sqlalchemy import select
 
+        from app.agent.tools import get_pedido_esperando_pago
         from app.models import Pedido
 
         factory = get_session_factory()
         async with factory() as s:
+            # 🗂️ PR4: primero el pedido al que el comprobante se va a PEGAR (el mismo criterio que
+            # `registrar_comprobante`). Si es uno que una persona del negocio tomó a mano —sin
+            # cotización del bot—, lo cobrado es su TOTAL PACTADO en dólares; antes no había con qué
+            # comparar y el pago caía en "no cuadra" aunque fuera exacto. En su propio try: si esta
+            # lectura falla, el respaldo de la cotización de abajo sigue igual que siempre.
+            try:
+                destino = await get_pedido_esperando_pago(s, telefono)
+                if (
+                    destino is not None
+                    and getattr(destino, "cotizado_at", None) is None
+                    and getattr(destino, "total", None) is not None
+                ):
+                    return (None, _a_float(destino.total), None)
+            except Exception:  # noqa: BLE001
+                logger.exception("No se pudo leer el pedido destino del comprobante de %s", telefono)
             ped = (
                 await s.execute(
                     select(Pedido)

@@ -2,7 +2,7 @@
 import hashlib
 import json
 
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 
 from app.agent.contratos_atencion import Contexto, Hecho
 from app.models import (
@@ -84,22 +84,39 @@ async def cargar_contexto(telefono: str) -> Contexto:
             }
         for m in (await session.execute(select(MetodoPago).where(MetodoPago.activo.is_(True)))).scalars():
             ctx.metodos[m.titulo or m.tipo] = {"id": m.id, "tipo": m.tipo}
-        pedido = (await session.execute(
+        # 🗂️ PR4 (SESIONES (38)): hasta 3 pedidos no cancelados, cada uno con su procedencia
+        # (`origen`), su franja y el estado de su último pago. `ctx.pedido` sigue siendo el más nuevo.
+        pedidos = (await session.execute(
             select(Pedido).where(Pedido.cliente_telefono == telefono, Pedido.estado != "cancelado")
-            .order_by(Pedido.created_at.desc()).limit(1)
-        )).scalar_one_or_none()
-        if pedido:
-            pago_pendiente = (await session.execute(
-                select(Pago.estado).where(Pago.pedido_id == pedido.id)
-                .order_by(Pago.created_at.desc()).limit(1)
-            )).scalar_one_or_none()
-            ctx.pedido = {
+            .order_by(Pedido.created_at.desc()).limit(3)
+        )).scalars().all()
+        pagos: dict[int, str] = {}
+        if pedidos:
+            filas = (await session.execute(
+                select(Pago.pedido_id, Pago.estado).where(Pago.pedido_id.in_([p.id for p in pedidos]))
+                .order_by(Pago.created_at)
+            )).all()
+            pagos = {pid: est for pid, est in filas}  # el más nuevo gana
+        for pedido in pedidos:
+            ctx.pedidos.append({
                 "id": pedido.id, "estado": pedido.estado, "items": pedido.items,
                 "fecha": pedido.entrega_fecha.isoformat() if pedido.entrega_fecha else None,
+                "franja": pedido.entrega_franja or "",
                 "zona_id": pedido.zona_id, "referencia": pedido.entrega_referencia,
                 "metodo": pedido.metodo_elegido, "total": pedido.total,
-                "pago_pendiente": pago_pendiente,
-            }
+                "pago_pendiente": pagos.get(pedido.id),
+                "origen": pedido.origen or "bot",
+            })
+        ctx.pedido = ctx.pedidos[0] if ctx.pedidos else None
+        # Lo que una persona del negocio dijo a mano y NADIE confirmó todavía: para el bot no existe
+        # como dato, pero mientras esté pendiente tampoco puede registrar, cobrar ni afirmar el estado.
+        ctx.propuestas_pendientes = int((await session.execute(
+            select(func.count(Intervencion.id)).where(
+                Intervencion.cliente_telefono == telefono, Intervencion.estado == "pendiente",
+                Intervencion.motivo.in_(list(MOTIVOS_INFORMATIVOS)),
+            )
+        )).scalar_one() or 0)
+        ctx.humano_sin_acuerdo = ctx.propuestas_pendientes > 0
         return ctx
 
 
@@ -129,8 +146,11 @@ def valor_actual(ctx: Contexto, h: Hecho):
         return k.get(h.campo) if k.get("confirmado") else None
     if h.fuente == "negocio":
         return ctx.negocio.get(h.campo)
-    if h.fuente == "pedido" and ctx.pedido and ctx.pedido["id"] == h.entidad:
-        return ctx.pedido.get(h.campo)
+    if h.fuente == "pedido":
+        for p in (ctx.pedidos or ([ctx.pedido] if ctx.pedido else [])):
+            if p and p["id"] == h.entidad:
+                return p.get(h.campo)
+        return None
     if h.fuente == "metodos":
         return list(ctx.metodos)
     return None

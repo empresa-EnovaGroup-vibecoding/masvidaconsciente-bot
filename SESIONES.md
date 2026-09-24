@@ -17,6 +17,75 @@
 
 ---
 
+## 2026-09-24 (38) — 👓 LOS LECTORES: el bot sabe dónde está entrando (expediente, PR4)
+
+**Dónde estábamos:** el expediente ya se LLENABA de punta a punta y estaba probado en pruebas (SESIONES (37): "Te
+anoté 2 quesillos son 16$" → propuesta → "Sí, es correcto" → pedido #3130 `origen='dueña'`, `confirmado`). Pero
+NADIE lo leía: en modo `uno` un pedido `confirmado` era INVISIBLE (`_estado_cliente_texto` no tenía rama para él y
+decía "No tiene un pedido abierto ahora" → el bot re-anotaba y re-cobraba lo que ella ya vendió, el choque de 6/7
+del corpus); el cerebro `confirmado` cargaba UN solo pedido sin procedencia y relevaba TODA venta nueva; el
+comprobante de un pedido tomado a mano caía en `comprobante_sin_pedido` (dinero verificado por visión que no
+quedaba registrado); y "Devolver al bot" solo tenía un texto blando para no re-cobrar. Maired abrió el día con
+"no sé qué estoy haciendo; ni siquiera me haces preguntas de dónde estamos" → primero el **mapa completo en una
+página** (artefacto "Mapa del expediente": por qué, las tres capas, los 8 pasos, la prueba de 20 min, sus
+decisiones, glosario) y después PR4.
+
+**Decisiones de Maired (24-sep):** (1) *seguir vendiendo* = responder con datos y ofrecer/vender lo NUEVO **solo si
+esa venta ya cerró** (pagada o entregada); con la venta a medias (acordada sin pago confirmado) el bot NO abre otra
+venta encima: agregar o cambiar algo lo decide una persona (relevo `acuerdo_especial` diciendo QUÉ quiere agregar);
+(2) "ya te lo entregué" SÍ se anota: tipo `entregado`, como propuesta.
+
+**Qué quedó hecho (rama `expediente-lectores`, todo ADITIVO):**
+- `models.py`: constantes `ORIGEN_BOT/DUENA/PANEL` y `ESTADOS_ACORDADOS = (confirmado, preparando)`. Existen para que
+  `system_prompt.py` y `tools.py` comparen el origen SIN escribir la palabra "dueña" (el AST de
+  `test_la_duena_en_silencio` los escanea).
+- **Modo `uno` — `_estado_cliente_texto`** (`system_prompt.py`): rama nueva `_lineas_pedido_acordado` para TODOS los
+  pedidos `confirmado`/`preparando` (hasta 3): quién lo tomó ("una persona del negocio a mano el 22/09" / "lo
+  confirmó el negocio"), qué lleva (sin dinero), entrega acordada o "SIN acordar → pedir_ayuda" (a un pedido de
+  ella NO se le ofrecen las franjas del bot), pago (CONFIRMADO / comprobante RECIBIDO en revisión / NO hay pago
+  registrado → NUNCA afirmes que llegó), y la regla de seguir vendiendo según el pago. El total se manda a pedir a
+  `ver_pedidos_cliente` (regla de oro del bloque: ni una cifra de dinero). Línea `_LINEA_PROPUESTAS` cuando hay
+  propuestas pendientes (también SIN pedidos: "no des nada por hecho ni la contradigas"). Lecturas de pagos y
+  propuestas fail-safe (sin dato, no sale la línea). Las ramas viejas (esperando/pendiente/pagado/cerrado) intactas.
+- **`ver_pedidos_cliente`** (`tools.py`): por pedido `tomado_por`, `entrega` (fecha/momento/referencia/modo), `pago`,
+  y el `total` FORMATEADO como dinero ("$16") además de `total_usd` — así `autorizados_por_moneda` lo reconoce y la
+  red del TOTAL deja copiarlo. Descripción de la herramienta actualizada (también los pedidos tomados a mano;
+  "cuánto debe", "cuándo le llega").
+- **`get_pedido_esperando_pago`** (`tools.py`): también el pedido `origen='dueña' AND estado='confirmado'` (el
+  `esperando_pago` del bot va primero). El comprobante de un pedido tomado a mano ya se PEGA y queda registrado.
+  `_montos_cobrados` (worker) compara primero contra el pedido destino: si no tiene cotización, su total pactado
+  en USD (antes: "sin cotización con la que comparar" → "no cuadra" aunque fuera exacto).
+- **Cerebro `confirmado`:** `cargar_contexto` carga `ctx.pedidos` (hasta 3, con `origen`, `franja`, `pago_pendiente`),
+  `ctx.pedido` sigue siendo el más nuevo, `propuestas_pendientes` y **`humano_sin_acuerdo = propuestas_pendientes > 0`**
+  (definición elegida: lo pendiente es lo no resuelto; lo que el extractor descartó es charla; la red vieja de
+  `[MENSAJE HUMANO…] sin pedido` sigue). `atender`: `_es_venta_nueva` (misma identidad que el candado de duplicados,
+  `_firma_de_items`): venta CERRADA + OTROS productos ⇒ registra el pedido NUEVO y el cobro va a ESE id, jamás al
+  pagado; mismos productos, a medias o sin items comparables ⇒ relevo. `humano_sin_acuerdo` ⇒ relevo en
+  registrar/cobrar/entrega, en `comprobante` y en `estado_pedido`/`entrega`. "Ya pagué" sobre un pedido a mano sin
+  pago ⇒ relevo `acuerdo_especial` (nadie afirma que llegó); con comprobante reportado ⇒ "Ya tengo tu comprobante".
+  `resolver_atencion`: `estado_pedido` responde CON datos (qué lleva, entrega en palabras: "el miércoles 23 de
+  septiembre en la tarde (2 a 5) en frente a la plaza"), tema nuevo **`entrega`** (con dato responde; sin acuerdo →
+  relevo). `valor_actual` mira todos los pedidos.
+- **Candado del gemelo:** `_crear_pedido_duena` llama a `_pedido_igual_reciente` → un segundo "Sí" sobre el mismo
+  pedido devuelve 409 legible ("ya existe el pedido #N con estos mismos productos").
+- **Tipo `entregado`** en el extractor: propuesta si hay pedido abierto (descarta sin pedido, cancelado o ya
+  entregado); `aplicar` lo cierra (idempotente; se niega sobre cancelado). Instrucción del extractor actualizada.
+- **Retomar:** `expediente.leer_expediente(telefono)` (pedidos a mano + pagos + propuestas, SIN dinero) →
+  `_hay_pendiente(…, venta_cerrada_a_mano=)`: con la venta cerrada a mano y solo acuses, se calla aunque ella
+  terminara en "?"; si habla, la instrucción lleva `[HECHO] El negocio ya le tomó a mano el pedido #N…`.
+- Panel (bot): `listar_pedidos` devuelve `origen` y `confianza`.
+- Tests: `test_expediente_lectores.py` (37) + 1 ajuste al helper de `test_retomar_pendiente` (sin base no hay
+  expediente). Los 27 de Codex y `test_estado_del_pedido` intactos. Suite completa verde (ver el PR).
+
+**PR hermano del dashboard (`expediente-lectores-panel`):** `Pedido.origen/confianza` en `api.ts`; en Pedidos el chip
+**"Tomado por Whuilianny"** junto al número del pedido (aquí el nombre sí va: es el panel). El filtro "sin pago
+registrado" queda para cuando Maired lo pida.
+
+**Sigue:** Maired fusiona bot + panel → desplegar pruebas (bot + worker + dashboard) → su prueba de 20 min (ella es
+Whuilianny desde el teléfono de la agencia y clienta desde el suyo): pedido a mano → "Sí" → "¿a qué hora me llega?"
+→ "quiero empanadas" → "¿te llegó mi pago?" → PR5 el replay sobre las 305 conversaciones → P3 el cerebro
+`confirmado` en pruebas.
+
 ## 2026-09-22 (37) — 🗂️ EL EXTRACTOR: lo que la dueña dice a mano se vuelve dato o propuesta (expediente, PR3)
 
 **Antes de PR3, la verificación en pruebas (P1-check):** Maired fusionó #60 y #61; pruebas quedó en `944c51d`
