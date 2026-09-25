@@ -166,6 +166,26 @@
 - **Dónde vive:** `services/tasa.py`, `services/salud.py`, `scripts/backup.sh`, `services/telemetria.py`;
   la tasa y el candado, en el panel (Tasa).
 
+### F-16 · El expediente de la venta (lo que Whuilianny hace a mano)
+- **Para qué:** que el bot sepa en qué punto de la venta entra cuando Whuilianny ya atendió al cliente
+  por su cuenta, y no vuelva a cobrar, re-anotar ni contradecir lo que ella ya hizo.
+- **Qué hace:** lee lo que ella le escribe o le dice por nota de voz al cliente (sus notas de voz se
+  transcriben en vivo), y con un modelo barato lo vuelve dato con procedencia — un pedido tomado, una
+  entrega acordada, un pago, un precio especial. **El código valida** contra el catálogo y los precios:
+  lo que ella dice CLARO se anota solo; lo dudoso queda como pregunta en la pantalla "El bot te
+  necesita" que, si nadie toca, el bot no da por hecho. **Un pago SIEMPRE se confirma con una persona:**
+  el bot se lo pregunta a ella por WhatsApp (o queda para un toque en el panel). Cuando ella pausa un
+  chat al escribir, el bot se calla ahí y **retoma solo** pasadas N horas si el cliente vuelve a
+  escribir y no hay nada bloqueante — con N configurable (empieza apagado).
+- **Qué NUNCA:** dar un pedido por pagado sin que una persona lo confirme; escribir un dato dudoso
+  (queda como propuesta o nada); hablarle al cliente encima de Whuilianny mientras ella tiene el chat.
+- **Cómo se ve:** el bot, tras ella, responde con la entrega o el pedido reales; en Pedidos, un chip
+  "Tomado por Whuilianny"; en Configuración (solo Enova), las palancas del expediente y del retorno.
+- **Dónde vive:** `agent/expediente.py` (extractor + validación + la única puerta de escritura),
+  `workers/tasks.py` (`extraer_expediente`, `transcribir_eco`, `_retorno_automatico`),
+  `agent/system_prompt.py` y `agent/fuentes_atencion.py` (los lectores), migración `040_expediente.sql`.
+  Palancas: `expediente_escritura` (auto | propuestas | off) y `retomar_auto_horas`.
+
 ---
 
 *Documento vivo. Cada función tiene su id fijo: si se agrega una herramienta o una sección al panel,
