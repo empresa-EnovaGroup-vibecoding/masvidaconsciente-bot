@@ -17,6 +17,75 @@
 
 ---
 
+## 2026-09-24 (42) — 💰 LA PREGUNTA DEL PAGO POR WHATSAPP: el bot le pregunta a Whuilianny y su SÍ/NO decide (PR6b)
+
+**Por qué (decisión de Maired 24-sep noche, SESIONES (41), punto 2):** Whuilianny no entra al panel. Un pago que
+ella dice a mano ("listo mi reina, ya me llegó tu pago") es SIEMPRE propuesta (nunca se escribe solo: es dinero), y
+una propuesta que nadie confirma en la Bandeja se queda ahí para siempre. La salida: el bot le PREGUNTA a **su
+celular personal** (`dueno_telefono`, distinto del número del negocio) y su palabra a una pregunta directa es la
+confirmación humana. Sin panel. El cliente NUNCA recibe un mensaje por este carril.
+
+**La ventana de 24 h (la duda de fondo, resuelta por Maired hoy):** Meta solo deja escribirle a ella si ELLA le
+escribió al número del negocio en las últimas 24 h — y ella casi nunca lo hace (trabaja desde su celular). Se le
+planteó como riesgo de fondo (sin plantilla HSM, en producción la pregunta podría no llegar). **Respuesta de
+Maired: "ya le dije a ella que le escriba de ese número personal al bot todos los días para que se abra la
+ventana y ya."** Ese "hola" diario además dispara el reintento (abajo): si una pregunta se quedó trabada, se
+libera con él. La plantilla HSM queda como mejora a prueba de olvidos, NO como bloqueo.
+
+**Qué quedó hecho (bot, rama `pago-por-whatsapp`), todo ADITIVO:**
+- **Contrato** (`contratos_atencion.PropuestaExpediente`): `pregunta_wamid` y `preguntada_at` declarados
+  (`extra="forbid"` los exigía: sin declararlos, `aplicar_propuesta` habría reventado al validar).
+- **Parser** (`webhook/parser.py`): `MensajeEntrante.context_id` = `msg.context.id` (el wamid del mensaje que ella
+  CITA al responder). Solo lectura del payload.
+- **La pregunta** (`tasks._preguntar_pagos_a_la_duena(telefono|None)`): por cada `Intervencion` pendiente
+  `propuesta_expediente` con `propuesta.tipo=='pago_confirmado'` y sin `pregunta_wamid`, `enviar_texto(dueño,
+  "💰 ¿Te llegó el pago de $14 por Zelle de Ana? Responde SÍ o NO. (#7)")`, y guarda `pregunta_wamid` +
+  `preguntada_at`. Se manda y DESPUÉS se marca, cada marca en su mini-transacción: si la marca falla, lo peor es
+  re-preguntar; jamás marcar como preguntada una que no salió. Ventana cerrada (131047) → no revienta, la propuesta
+  sigue en la Bandeja sin wamid. La llama `_extraer_expediente` al terminar (por cliente) y la tarea
+  `preguntar_pagos_pendientes` (global, el reintento).
+- **Su respuesta** (`webhook/router._atender_a_la_duena`, dentro del bloque `_es_la_duena`, ANTES del
+  `return "duena"`): (1) SIEMPRE encola `preguntar_pagos_pendientes` (acaba de abrir su ventana); (2) si es texto y
+  `expediente.interpretar_respuesta_duena` da un SÍ/NO claro, encola `responder_pago_duena(texto, context_id,
+  message_id)`, idempotente por `rc.ya_procesado(message_id)`. Sigue sin crear ficha ni gastar IA. Nunca lanza.
+- **`interpretar_respuesta_duena`** (expediente.py): conservadora a propósito — sí/si/yes/✅/👍 · no/❌/👎, con
+  número opcional ("SÍ 3131"); "ok", "listo", "dale", "ya voy", "no sé" y mezclas → None (aplicar un pago falso
+  es peor que dejar la propuesta). La puntuación no cuenta ("sí, ya me llegó" es SÍ).
+- **Aplicar** (`tasks._responder_pago_duena`): elige la propuesta por (a) cita (`context_id == pregunta_wamid`),
+  (b) el número del final SI casa con una pendiente preguntada (un "16" de "$16" que no casa se ignora), (c) la
+  ÚNICA pendiente preguntada, (d) varias sin pista → le pide que cite o ponga el número y no toca nada. Una
+  propuesta pendiente pero SIN preguntar no se aplica por un "sí" suelto. SÍ → `aplicar_propuesta(usuario=
+  'whuilianny (WhatsApp)')` (pedido `pagado`, `Pago` confirmado firmado) + `cerrar_propuesta`; NO → descartada.
+  Le confirma a ELLA ("✅ Listo: el pedido #30 quedó pagado." / "👍 Anotado: ese pago NO se registra."); un
+  `ValueError` (ya pagado, cancelado) se lo dice en una línea y la propuesta sigue pendiente. `notificar_conversacion`.
+- **`expediente.cerrar_propuesta(inter, usuario, resultado)`**: el cierre inline de los dos endpoints del panel
+  (`/aplicar`, `/descartar`) extraído y usado en los tres sitios, sin cambiar su comportamiento.
+- `/api/intervenciones` emite `aplicada_por` (el panel lo necesita para el chip).
+- **No se toca:** `pago_confirmado` sigue siendo propuesta en `validar`; `aplicar_propuesta` (la única puerta) no
+  cambia; `_es_la_duena` sigue sin contestarle; los avisos existentes (`_avisar_a_la_duena`) no cambian.
+- **Tests** `tests/test_pago_por_whatsapp.py` (54): contrato · parser con/sin cita · 14 SÍ/NO + 9 ambiguos ·
+  `cerrar_propuesta` y los dos endpoints la usan (por fuente) · la pregunta: una vez y guarda wamid, sin nombre usa
+  la cola del teléfono, no repregunta, solo pagos, ventana cerrada no marca, sin dueño no manda, filtra por
+  cliente / recorre todas, base caída no tumba, el extractor la llama (por fuente) · la respuesta: por cita, por
+  número, única, número que no casa, varias → ayuda, NO descarta, ValueError → aviso y pendiente, "ok" no hace
+  nada, sin preguntada no aplica, JAMÁS escribe al cliente, base caída · el webhook: encola reintento + respuesta,
+  "hola" solo reintento, audio no se lee, idempotente, cola caída no tumba, bifurca antes del `return "duena"`.
+  Suite completa en verde, ruff limpio.
+
+**Panel (rama `pago-por-whatsapp-panel`):** `api.ts` `PropuestaExpediente.pregunta_wamid/preguntada_at` e
+`Intervencion.aplicada_por`; en la Bandeja, la propuesta pendiente muestra "💰 Preguntado a Whuilianny por
+WhatsApp · 19:40. Su SÍ o NO desde su celular lo resuelve solo; aquí solo si quieres adelantarte", y al
+resolverse el chip y el texto dicen "Confirmada/Descartada por Whuilianny (WhatsApp)". tsc limpio.
+
+**Sigue (con "dale"):** fusionar bot + panel → desplegar pruebas (bot + worker + dashboard) → **la prueba de
+Maired**: comprobar en Configuración → "WhatsApp de avisos" que `dueno_telefono` es SU celular → desde ese celular
+un "hola" al número de la agencia (abre la ventana) → como Whuilianny (número de la agencia) al chat de prueba:
+"listo mi reina, ya me llegó tu pago" → 90 s → a su celular llega "💰 ¿Te llegó el pago…? Responde SÍ o NO.
+(#N)" → responde "SÍ" (citando o a secas) → le llega "✅ Listo: el pedido #… quedó pagado." → en el panel el chip
+"Confirmada por Whuilianny (WhatsApp)" y `select estado from pedidos where id=…` = pagado, `pagos` con
+`confirmado_por='whuilianny (WhatsApp)'`, `origen='dueña'` → como clienta "¿te llegó mi pago?" → el bot responde
+que sí está confirmado sin pedir nada. Luego PR7 replay.
+
 ## 2026-09-24 (41) — 🧭 LA LÓGICA DEL NEGOCIO, CERRADA: "sin panel" (PR6a) y el pago por WhatsApp (PR6b, siguiente)
 
 **Qué pasó (19:38-19:46 VET, pruebas en `c7d7666`/`075587a`):** la prueba del retorno se trabó dos veces. Maired

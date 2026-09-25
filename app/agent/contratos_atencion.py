@@ -207,3 +207,7 @@ class PropuestaExpediente(BaseModel):
     pedido_id: int | None = None
     resumen: str = ""
     resultado: str = ""
+    # 💰 PR6b: cuando el bot le pregunta a la dueña por WhatsApp si un PAGO entró (solo `pago_confirmado`),
+    # deja aquí el id del mensaje que le mandó (para casar su respuesta citada) y cuándo se lo preguntó.
+    pregunta_wamid: str | None = None
+    preguntada_at: str | None = None

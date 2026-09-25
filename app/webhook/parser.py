@@ -29,6 +29,9 @@ class MensajeEntrante(TypedDict):
     caption: str | None
     mime_type: str | None
     timestamp: str | None  # el de Meta (segundos epoch), para no desordenar el hilo
+    # 💰 PR6b: si este mensaje CITA a otro (reply), el `wamid` del citado. Sirve para casar la
+    # respuesta SÍ/NO de la dueña con la pregunta de pago exacta que el bot le mandó. Suele ser None.
+    context_id: str | None
 
 
 class EcoSaliente(TypedDict):
@@ -187,6 +190,7 @@ def _mensaje(msg: dict, nombre: str | None) -> MensajeEntrante | None:
         caption=caption,
         mime_type=mime_type,
         timestamp=msg.get("timestamp"),
+        context_id=(msg.get("context") or {}).get("id"),
     )
 
 

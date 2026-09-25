@@ -114,6 +114,7 @@ async def _procesar_entrante(mensaje) -> str:
             "ventana de 24h. Dijo: %r", mensaje["telefono"], (mensaje.get("texto") or "")[:200],
         )
         await abrir_ventana_de_la_duena()
+        await _atender_a_la_duena(mensaje)
         return "duena"
 
     # 🔴 …NI TAMPOCO SI QUIEN ESCRIBE ES UN **CONTACTO PRIVADO** (Capa 1, reporte de Maired §6).
@@ -218,6 +219,44 @@ async def _procesar_entrante(mensaje) -> str:
     # sticker / video / ubicacion / contactos / etc.: el agente responde como humano.
     logger.info("Evento %s de %s", tipo, mensaje["telefono"])
     return await _encolar_evento(mensaje)
+
+
+async def _atender_a_la_duena(mensaje) -> None:
+    """💰 PR6b: la dueña le escribió al número del negocio desde su celular. Dos cosas, sin contestarle:
+
+    1. Su ventana de 24 h acaba de abrirse ⇒ se encola el reintento de las preguntas de pago que no
+       habían podido salir (`preguntar_pagos_pendientes`). Es el "hola" diario que ella manda.
+    2. Si lo que escribió es un SÍ/NO claro (`interpretar_respuesta_duena`), se encola
+       `responder_pago_duena` con el `context_id` (por si citó la pregunta) y el `message_id`.
+       Idempotente por `message_id` (`rc.ya_procesado`): si Meta reenvía el webhook, no se aplica dos veces.
+
+    Sigue sin crear ficha ni gastar IA. Nunca lanza: un fallo aquí no puede tumbar el webhook.
+    """
+    try:
+        from app.workers.tasks import preguntar_pagos_pendientes
+
+        preguntar_pagos_pendientes.apply_async()
+    except Exception:  # noqa: BLE001 — el reintento es una mejora; su ventana ya quedó abierta
+        logger.exception("PR6b: no se pudo encolar el reintento de las preguntas de pago")
+    if mensaje.get("tipo") != "text":
+        return
+    texto = (mensaje.get("texto") or "").strip()
+    if not texto:
+        return
+    try:
+        from app.agent.expediente import interpretar_respuesta_duena
+        from app.services import redis_client as rc
+
+        if interpretar_respuesta_duena(texto) is None:
+            return
+        if await rc.ya_procesado(mensaje["message_id"]):
+            return
+        from app.workers.tasks import responder_pago_duena
+
+        responder_pago_duena.apply_async((texto, mensaje.get("context_id"), mensaje["message_id"]))
+        logger.info("PR6b: la dueña respondió %r a una pregunta de pago; se encola", texto[:40])
+    except Exception:  # noqa: BLE001
+        logger.exception("PR6b: no se pudo encolar la respuesta de la dueña al pago")
 
 
 async def _es_la_duena(telefono: str) -> bool:
