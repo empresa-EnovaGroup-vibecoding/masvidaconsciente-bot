@@ -765,6 +765,55 @@ async def aplicar_propuesta(session, propuesta: dict, *, usuario: str) -> dict:
     raise ValueError(f"tipo de propuesta sin puerta: {p.tipo}")
 
 
+def cerrar_propuesta(inter, *, usuario: str, resultado: str) -> None:
+    """Marca una Intervencion `propuesta_expediente` como resuelta (firmada por quien la tocó).
+
+    `resultado` es "aplicada" o "descartada". NO hace commit ni notifica: eso lo decide quien llama
+    (los dos endpoints del panel y la respuesta del pago por WhatsApp). Se extrajo para que el cierre
+    sea EL MISMO en los tres sitios y nadie se olvide de firmar quién y cuándo."""
+    ahora = now_utc()
+    inter.estado = "resuelta"
+    inter.resuelta_at = ahora
+    inter.aplicada_por = usuario
+    inter.aplicada_at = ahora
+    inter.propuesta = {**(inter.propuesta or {}), "resultado": resultado}
+
+
+# 💰 PR6b: SÍ/NO claros; una respuesta ambigua NO aplica un pago (se queda como propuesta).
+_SI_PALABRAS = frozenset({"si", "sii", "yes"})
+_NO_PALABRAS = frozenset({"no"})
+_SI_EMOJI = ("✅", "👍", "✔", "☑")
+_NO_EMOJI = ("❌", "👎", "✖")
+
+
+def interpretar_respuesta_duena(texto: str | None) -> tuple[str, int | None] | None:
+    """¿La dueña respondió un SÍ o un NO claro a la pregunta de un pago? (PR6b).
+
+    Devuelve `("si", id|None)` / `("no", id|None)` con el número opcional que puso al final
+    (el `#id` de la propuesta, p. ej. "SÍ 3131"), o **None** si el mensaje no es una respuesta
+    inequívoca. La regla es conservadora a propósito: aplicar un pago falso (marcar pagado lo que
+    no lo está) es peor que dejar la propuesta en la Bandeja, así que ante la duda → None.
+    """
+    if not texto:
+        return None
+    base = normalizar(texto)  # minúsculas, sin acentos, espacios colapsados
+    if not base:
+        return None
+    palabras = re.findall(r"[a-z]+", base)  # "sí," → "si": la puntuación no cuenta
+    # "no sé" NO es un NO: es "no lo sé". Ambiguo → None.
+    if palabras[:2] == ["no", "se"]:
+        return None
+    m = re.search(r"#?\s*(\d{1,7})", texto)
+    num = int(m.group(1)) if m else None
+    tiene_si = bool(_SI_PALABRAS & set(palabras)) or any(e in texto for e in _SI_EMOJI)
+    tiene_no = bool(_NO_PALABRAS & set(palabras)) or any(e in texto for e in _NO_EMOJI)
+    if tiene_si and not tiene_no:
+        return ("si", num)
+    if tiene_no and not tiene_si:
+        return ("no", num)
+    return None
+
+
 # ══════════════════════════════════════════════════════════════════════════════════
 #  6) LEER EL EXPEDIENTE (PR4): lo que el bot tiene que saber al entrar a un chat
 # ══════════════════════════════════════════════════════════════════════════════════

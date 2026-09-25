@@ -25,6 +25,7 @@ from app.services.meta_client import (
     descargar_media,
     enviar_texto,
     marcar_mensaje_propio,
+    wa_message_id,
 )
 from app.services.telemetria import abrir_turno
 from app.workers.celery_app import celery_app
@@ -2469,6 +2470,9 @@ async def _extraer_expediente(telefono, hasta_id=None) -> str:
             await rc.notificar_conversacion(telefono, "actualizada")
         except Exception:  # noqa: BLE001
             pass
+    # 💰 PR6b: si alguna propuesta es un PAGO, el bot le pregunta a la dueña por WhatsApp (no se
+    # da por hecho). Nunca tumba la extracción: un fallo aquí deja la propuesta en la Bandeja.
+    await _preguntar_pagos_a_la_duena(telefono)
     return "ok"
 
 
@@ -2477,6 +2481,210 @@ async def _marcar_expediente(clave: str, ultimo_id: int) -> None:
         await rc.set_cache(clave, str(ultimo_id), 7 * 86400)
     except Exception:  # noqa: BLE001 — sin marca se releen 6 h; la propuesta repetida se filtra
         logger.warning("Expediente: no se pudo guardar la marca %s", clave)
+
+
+# ══════════════════════════════════════════════════════════════════════════════════
+#  💰 PR6b — LA PREGUNTA DEL PAGO POR WHATSAPP (SESIONES (41), decisión de Maired 24-sep)
+#
+#  Whuilianny NO entra al panel: trabaja desde su celular. Así que un pago que ella dice a mano
+#  ("ya me llegó tu pago") no se da por hecho — el bot le PREGUNTA a su celular y su SÍ/NO aplica
+#  o descarta la propuesta. El pago sigue confirmado por una persona (ella), por su palabra a una
+#  pregunta directa. El cliente NUNCA recibe un mensaje por este carril.
+# ══════════════════════════════════════════════════════════════════════════════════
+
+def _texto_pregunta_pago(propuesta: dict, inter_id: int, nombre: str | None, telefono: str) -> str:
+    """La pregunta que le llega a la dueña por WhatsApp. Corta y con el #id por si tiene varias."""
+    from app.agent.expediente import _fmt
+
+    monto = _fmt(propuesta.get("monto"), propuesta.get("moneda") or "")
+    monto_txt = f" de {monto}" if monto else ""
+    metodo = f" por {propuesta['metodo']}" if propuesta.get("metodo") else ""
+    quien = (nombre or "").strip() or f"…{(telefono or '')[-4:]}"
+    return (
+        f"💰 ¿Te llegó el pago{monto_txt}{metodo} de {quien}? "
+        f"Responde SÍ o NO. (#{inter_id})"
+    )
+
+
+async def _preguntar_pagos_a_la_duena(telefono: str | None = None) -> int:
+    """Por cada propuesta de PAGO pendiente que aún no se le preguntó, le manda la pregunta a la
+    dueña por WhatsApp y guarda el `pregunta_wamid`. Devuelve cuántas salieron. Nunca lanza.
+
+    `telefono=None` recorre TODAS las propuestas de pago sin preguntar (el reintento que se dispara
+    cuando ella le escribe al número del negocio y su ventana de 24 h se abre). Con `telefono` mira
+    solo ese cliente (lo llama el extractor tras dejar propuestas). Si la ventana está cerrada,
+    `enviar_texto` lanza y la propuesta se queda en la Bandeja: se reintenta en la próxima apertura.
+    """
+    from sqlalchemy import select
+
+    from app.agent.expediente import MOTIVO_PROPUESTA
+    from app.models import Cliente, Intervencion, now_utc
+    from app.services.dueno import telefono_de_la_duena
+
+    enviadas = 0
+    try:
+        destino = await telefono_de_la_duena()
+        if not destino:
+            logger.info("PR6b: no hay dueno_telefono; las preguntas de pago quedan en la bandeja")
+            return 0
+        factory = get_session_factory()
+        async with factory() as session:
+            q = select(Intervencion).where(
+                Intervencion.motivo == MOTIVO_PROPUESTA,
+                Intervencion.estado == "pendiente",
+            )
+            if telefono:
+                q = q.where(Intervencion.cliente_telefono == telefono)
+            filas = (await session.execute(q.order_by(Intervencion.id))).scalars().all()
+            pendientes = [
+                (i.id, dict(i.propuesta or {}), i.cliente_telefono)
+                for i in filas
+                if (i.propuesta or {}).get("tipo") == "pago_confirmado"
+                and not (i.propuesta or {}).get("pregunta_wamid")
+            ]
+            nombres: dict[str, str | None] = {}
+            for _id, _p, tel in pendientes:
+                if tel not in nombres:
+                    nombres[tel] = (await session.execute(
+                        select(Cliente.nombre).where(Cliente.telefono == tel)
+                    )).scalars().first()
+    except Exception:  # noqa: BLE001 — sin lectura no se pregunta nada; se reintenta en la próxima
+        logger.exception("PR6b: no se pudieron leer las propuestas de pago pendientes")
+        return 0
+
+    # Se manda FUERA de la primera sesión y cada marca va en su propia mini-transacción: así un
+    # commit no expira los objetos a mitad de bucle, y si una marca falla lo peor es re-preguntar
+    # (molesto, no grave) — nunca marcar como preguntada una que no salió.
+    for _id, propuesta, tel in pendientes:
+        texto = _texto_pregunta_pago(propuesta, _id, nombres.get(tel), tel)
+        try:
+            resp = await enviar_texto(destino, texto)
+        except Exception as e:  # noqa: BLE001 — ventana cerrada (131047) u otro: queda en la bandeja
+            logger.info("PR6b: no salió la pregunta del pago #%s (%s); queda en la bandeja", _id, e)
+            continue
+        wamid = wa_message_id(resp)
+        try:
+            factory = get_session_factory()
+            async with factory() as s2:
+                inter = await s2.get(Intervencion, _id)
+                if inter is None or inter.estado != "pendiente":
+                    continue
+                inter.propuesta = {
+                    **(inter.propuesta or {}),
+                    "pregunta_wamid": wamid,
+                    "preguntada_at": now_utc().isoformat(),
+                }
+                await s2.commit()
+            enviadas += 1
+        except Exception:  # noqa: BLE001 — el WhatsApp ya salió; solo no quedó marcada
+            logger.exception("PR6b: la pregunta del pago #%s salió pero no se pudo marcar", _id)
+    return enviadas
+
+
+async def _responder_pago_duena(texto: str, context_id: str | None, message_id: str) -> str:
+    """La dueña respondió SÍ/NO por WhatsApp a una pregunta de pago: aplica o descarta la propuesta.
+
+    Elige la propuesta por: (a) cita (el `context_id` casa el `pregunta_wamid`), (b) el número que
+    puso al final, (c) si hay UNA sola pendiente preguntada, esa; (d) varias sin pista → le pide que
+    cite o ponga el número, y no toca nada. SÍ → `aplicar_propuesta` (pedido pagado, firmado
+    'whuilianny (WhatsApp)'); NO → descartada. Le confirma a ELLA por WhatsApp. Nunca escribe al
+    cliente. Un ValueError (p. ej. ya pagado) se le dice en una línea. Nunca lanza.
+    """
+    from sqlalchemy import select
+
+    from app.agent import expediente as ex
+    from app.agent.expediente import MOTIVO_PROPUESTA
+    from app.models import Intervencion
+    from app.services.dueno import telefono_de_la_duena
+
+    parsed = ex.interpretar_respuesta_duena(texto)
+    if parsed is None:
+        return "no_es_respuesta"
+    si_no, num = parsed
+    telefono_cliente = None
+    try:
+        destino = await telefono_de_la_duena()
+        factory = get_session_factory()
+        async with factory() as session:
+            filas = (await session.execute(
+                select(Intervencion).where(
+                    Intervencion.motivo == MOTIVO_PROPUESTA,
+                    Intervencion.estado == "pendiente",
+                ).order_by(Intervencion.id)
+            )).scalars().all()
+            candidatas = [
+                i for i in filas
+                if (i.propuesta or {}).get("tipo") == "pago_confirmado"
+                and (i.propuesta or {}).get("pregunta_wamid")
+            ]
+            elegida = None
+            if context_id:
+                elegida = next(
+                    (i for i in candidatas if (i.propuesta or {}).get("pregunta_wamid") == context_id),
+                    None,
+                )
+            if elegida is None and num is not None:
+                elegida = next((i for i in candidatas if i.id == num), None)
+            if elegida is None and len(candidatas) == 1:
+                elegida = candidatas[0]
+            if elegida is None:
+                if len(candidatas) > 1:
+                    await _whatsapp_a_la_duena(
+                        destino,
+                        "Tienes varios pagos por confirmar: respóndeme citando la pregunta, o con "
+                        "SÍ/NO y el número que va al final (#…).",
+                        que="ayuda pago dueña",
+                    )
+                    return "varias"
+                logger.info("PR6b: SÍ/NO de la dueña sin propuesta de pago pendiente que casar")
+                return "sin_candidata"
+            telefono_cliente = elegida.cliente_telefono
+            if si_no == "no":
+                ex.cerrar_propuesta(elegida, usuario="whuilianny (WhatsApp)", resultado="descartada")
+                await session.commit()
+                await _whatsapp_a_la_duena(
+                    destino, "👍 Anotado: ese pago NO se registra.", que="pago descartado",
+                )
+            else:
+                try:
+                    resultado = await ex.aplicar_propuesta(
+                        session, elegida.propuesta, usuario="whuilianny (WhatsApp)",
+                    )
+                except ValueError as e:
+                    await session.rollback()
+                    await _whatsapp_a_la_duena(
+                        destino, f"No pude registrar ese pago: {e}", que="pago error",
+                    )
+                    return "error"
+                ex.cerrar_propuesta(elegida, usuario="whuilianny (WhatsApp)", resultado="aplicada")
+                await session.commit()
+                pid = resultado.get("pedido_id")
+                await _whatsapp_a_la_duena(
+                    destino, f"✅ Listo: el pedido #{pid} quedó pagado.", que="pago aplicado",
+                )
+    except Exception:  # noqa: BLE001 — su respuesta no puede tumbar al worker
+        logger.exception("PR6b: no se pudo aplicar el SÍ/NO del pago de la dueña")
+        return "error"
+    if telefono_cliente:
+        try:
+            await rc.notificar_conversacion(telefono_cliente, "actualizada")
+        except Exception:  # noqa: BLE001
+            pass
+    return si_no
+
+
+@celery_app.task(name="preguntar_pagos_pendientes")
+def preguntar_pagos_pendientes(telefono=None):
+    """Tarea: reintenta las preguntas de pago que no salieron (ventana cerrada). Se encola cuando la
+    dueña le escribe al número del negocio y su ventana de 24 h se abre."""
+    _run(_preguntar_pagos_a_la_duena(telefono))
+
+
+@celery_app.task(name="responder_pago_duena")
+def responder_pago_duena(texto, context_id, message_id):
+    """Tarea: aplica o descarta una propuesta de pago según el SÍ/NO que la dueña respondió por
+    WhatsApp desde su celular."""
+    _run(_responder_pago_duena(texto, context_id, message_id))
 
 
 @celery_app.task(name="procesar_audio")

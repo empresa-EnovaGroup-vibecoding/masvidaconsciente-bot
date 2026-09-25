@@ -45,9 +45,11 @@ Las **FASES 0 a 3 ya están hechas y desplegadas**:
 > LÓGICA DEL NEGOCIO CERRADA POR MAIRED (SESIONES (41))**: (1) lo que Whuilianny dice CLARO (pedido, entrega) se
 > ANOTA SOLO — `expediente_escritura` default `auto`; (2) los PAGOS: el bot le PREGUNTA a ella por WhatsApp a su
 > celular personal y su SÍ/NO aplica o descarta (PR6b, pendiente); (3) el bot VUELVE IGUAL aunque haya propuestas
-> sin confirmar (el freno se quitó). → **PR6a "sin panel" HECHO, en PR** (rama `expediente-sin-panel` + dashboard
-> `expediente-sin-panel-panel`) → SIGUE: fusionar → desplegar pruebas → la prueba de Maired SIN botones →
-> PR6b la pregunta del pago por WhatsApp → PR7 replay sobre las 305 conversaciones (mide el extractor en `auto`
+> sin confirmar (el freno se quitó). → ✅ **PR6a "sin panel" FUSIONADO (#67 + dashboard #14) y PROBADO EN VIVO sin
+> botones (24-sep 20:30, "me gusta")** → **PR6b LA PREGUNTA DEL PAGO POR WHATSAPP HECHO, en PR** (rama
+> `pago-por-whatsapp` + dashboard `pago-por-whatsapp-panel`, SESIONES (42); la ventana de 24 h la abre Whuilianny
+> con un "hola" diario desde su celular, decisión de Maired) → SIGUE: fusionar → desplegar pruebas → la prueba de
+> Maired del pago (guion en SESIONES (42)) → PR7 replay sobre las 305 conversaciones (mide el extractor en `auto`
 > ANTES de producción) → P3 el cerebro `confirmado` en pruebas → P4 la Voz → P5 Conocimiento del corpus → P6
 > puertas G1-G6 y producción por configuración. Decisiones: retorno automático CON condiciones (flag apagado,
 > Maired fija N=2 h; un chat donde el bot pidió ayuda no se reactiva solo); lo dudoso queda como pregunta que, si

@@ -2856,6 +2856,8 @@ async def listar_intervenciones(estado: str = "pendiente", _: str = Depends(usua
             "fecha": i.created_at.isoformat(),
             # 🗂️ La propuesta del expediente (040): el panel pinta "Sí, es correcto / No" cuando viene.
             "propuesta": i.propuesta,
+            # 💰 PR6b: quién la resolvió — "whuilianny (WhatsApp)" cuando contestó desde su celular.
+            "aplicada_por": i.aplicada_por,
         }
         for i in filas
     ]
@@ -2874,7 +2876,7 @@ async def aplicar_propuesta_expediente(
     propuesta nunca fue un chat tomado. Si no se puede aplicar, 409 con el motivo legible y la
     propuesta sigue pendiente.
     """
-    from app.agent.expediente import MOTIVO_PROPUESTA, aplicar_propuesta
+    from app.agent.expediente import MOTIVO_PROPUESTA, aplicar_propuesta, cerrar_propuesta
 
     factory = get_session_factory()
     async with factory() as session:
@@ -2891,12 +2893,7 @@ async def aplicar_propuesta_expediente(
         except ValueError as e:  # ValidationError de pydantic también es ValueError
             await session.rollback()
             raise HTTPException(status_code=409, detail=f"No se pudo aplicar: {e}") from e
-        ahora = now_utc()
-        inter.estado = "resuelta"
-        inter.resuelta_at = ahora
-        inter.aplicada_por = usuario
-        inter.aplicada_at = ahora
-        inter.propuesta = {**inter.propuesta, "resultado": "aplicada"}
+        cerrar_propuesta(inter, usuario=usuario, resultado="aplicada")
         await session.commit()
     await rc.notificar_conversacion(telefono, "actualizada")
     return {"ok": True, "bot_reactivado": False, **resultado}
@@ -2908,7 +2905,7 @@ async def descartar_propuesta_expediente(
 ):
     """🗂️ "No": la propuesta se cierra sin escribir NADA. Queda firmado quién la descartó (sirve para
     medir cuánto se equivoca el extractor). No despausa, no retoma, no avisa a nadie."""
-    from app.agent.expediente import MOTIVO_PROPUESTA
+    from app.agent.expediente import MOTIVO_PROPUESTA, cerrar_propuesta
 
     factory = get_session_factory()
     async with factory() as session:
@@ -2919,12 +2916,7 @@ async def descartar_propuesta_expediente(
             raise HTTPException(status_code=409, detail="Este aviso no es una propuesta del expediente")
         if inter.estado != "pendiente":
             raise HTTPException(status_code=409, detail="Esta propuesta ya se atendió")
-        ahora = now_utc()
-        inter.estado = "resuelta"
-        inter.resuelta_at = ahora
-        inter.aplicada_por = usuario
-        inter.aplicada_at = ahora
-        inter.propuesta = {**(inter.propuesta or {}), "resultado": "descartada"}
+        cerrar_propuesta(inter, usuario=usuario, resultado="descartada")
         await session.commit()
     return {"ok": True, "bot_reactivado": False, "resultado": "descartada"}
 
