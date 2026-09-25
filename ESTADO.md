@@ -46,10 +46,11 @@ mensajes de prueba al número de producción.
 | | 🏭 PRUEBAS (Enova) |
 |---|---|
 | **Servidor** | VPS del socio de Enova `152.53.194.89` · Coolify propio `coolify.enovagroup.tech` (proyecto `masvida-pruebas`) |
-| **Qué corre** | bot + worker en `master f60c3f7` (hasta el PR #41, fusionado 6-sep 21:32 VET) + panel `d8b94ab` (PR #4) + PostgreSQL 16 + Redis 7 · **auto-deploy OFF** en las 3 apps — deploy SOLO manual (API de Coolify con token temporal: ver `entorno-pruebas-vps-enova` en la memoria de Claude / SESIONES (15), (16) y (18)) |
+| **Qué corre** | bot + worker en `master ab572dd` (hasta el PR #67, expediente "sin panel", 24-sep) + panel `5874f29` (PR #14) + PostgreSQL 16 + Redis 7 · **auto-deploy OFF** en las 3 apps — deploy SOLO manual (API de Coolify con token temporal: ver `entorno-pruebas-vps-enova` en la memoria de Claude / SESIONES (15), (16) y (18); el último script fue `/root/deploy_pr67.sh`, copia del patrón). *Producción NO ha cambiado: sigue en `42d37de`.* |
 | **Número** | **+57 313 2933806** (WABA "Enova Soporte", SEPARADA de la de la clienta) |
 | **Webhook** | re-apuntado por Graph API (`/{waba}/subscribed_apps` + `override_callback_uri`) → `https://jthc51nxqitd9opc8ywioocr.152.53.194.89.sslip.io/webhook/whatsapp` |
-| **BD** | dump FINAL del taller restaurado el 1-sep (36 migraciones entonces); hoy **39 migraciones** (038 franja + referencia) · 32 productos · 10 conocimiento · `sabores` cargados en Galletas / Mini / CHOCOLATE (6-sep) |
+| **BD** | dump FINAL del taller restaurado el 1-sep; hoy **41 migraciones** (última: 040 el expediente — procedencia/evidencia/confianza en pedidos y pagos + propuesta en intervenciones) · 32 productos · 10 conocimiento |
+| **El expediente (24-sep)** | El bot lee lo que Whuilianny le dice a mano al cliente (texto y notas de voz transcritas) y lo vuelve dato. Config efectiva en pruebas: `expediente_escritura=auto` (lo claro se anota solo; pagos y lo dudoso quedan como propuesta), `retomar_auto_horas=0.05` (para probar; producción irá en 2). El bot se calla cuando ella escribe y **retoma solo** pasadas N h si el cliente vuelve a escribir. Detalle: SESIONES (35)-(41). |
 | **Modelo IA** | `anthropic/claude-sonnet-4.6` (el aprobado por Maired en el taller) |
 | **Salud** | `https://jthc51nxqitd9opc8ywioocr.152.53.194.89.sslip.io/salud` — snapshot del 3-sep tras `f85f781`: `ok`, Meta GREEN, 37 migraciones, saldo $2.552 · **tras `f60c3f7` (6-sep): `ok`, fallos `[]`, 39 migraciones** |
 | **Prueba de fuego** | ✅ "Hola" de Maired → respuesta en 5,8s **con la memoria del taller** (13 mensajes rescatados de Postgres) |
