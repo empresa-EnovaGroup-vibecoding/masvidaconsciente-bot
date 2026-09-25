@@ -11,8 +11,9 @@ chocó). Aquí ese texto se vuelve DATO con procedencia:
   3. `validar` los resuelve el CÓDIGO contra el catálogo, el precio de hoy, el calendario y las
      franjas, y dicta un veredicto: `escribe` (inequívoco), `propuesta` (dudoso: lo confirma una
      persona con un toque en la Bandeja) o `descarta` (no consta o no es de la venta).
-  4. `procesar_ventana` deja la PROPUESTA (`intervenciones.propuesta`, motivo `propuesta_expediente`)
-     o, SOLO si la configuración `expediente_escritura` está en `auto`, aplica lo inequívoco.
+  4. `procesar_ventana` aplica lo inequívoco (pedido claro, entrega clara) cuando `expediente_escritura`
+     está en `auto` (el default desde el 24-sep) y deja como PROPUESTA (`intervenciones.propuesta`,
+     motivo `propuesta_expediente`) todo lo dudoso y TODO pago.
   5. `aplicar_propuesta` es la ÚNICA puerta de escritura: la usan el toque humano del panel y el
      modo `auto`. Todo lo escrito lleva `origen='dueña'`, el mensaje de evidencia, la confianza y la hora.
 
@@ -54,9 +55,14 @@ logger = logging.getLogger(__name__)
 
 MOTIVO_PROPUESTA = "propuesta_expediente"
 HUECO_VENTANA_MIN = 5
-# `expediente_escritura`: off (no extrae) · propuestas (TODO a la Bandeja; el default) · auto (lo
-# inequívoco de pedido/entrega se escribe solo; se enciende tras el replay ≥0,98, SESIONES (35)).
-ESCRITURA_DEFAULT = "propuestas"
+# `expediente_escritura`: off (no extrae) · propuestas (TODO a la Bandeja) · auto (lo inequívoco de
+# pedido/entrega se escribe solo; pagos y lo dudoso siguen siendo propuesta).
+# 🔴 El default pasó a `auto` el 24-sep noche (SESIONES (41), decisión de Maired): Whuilianny no va a
+# estar en el panel confirmando tarjetas, así que lo que ella dice CLARO se anota solo y lo dudoso queda
+# como pregunta que, si nadie toca, el bot simplemente no da por hecho. La palanca `propuestas` sigue
+# disponible en Configuración (solo Enova) si el extractor se equivoca. Antes de PRODUCCIÓN, el replay
+# sobre las conversaciones reales tiene que dar ≥0,98 de precisión en lo escrito (puerta G6).
+ESCRITURA_DEFAULT = "auto"
 ESCRITURAS = ("off", "propuestas", "auto")
 UMBRAL_AUTO = 0.8
 MARCA_VOZ = "🎤"

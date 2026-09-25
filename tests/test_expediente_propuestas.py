@@ -144,8 +144,11 @@ def test_los_dos_disparadores_encolan_el_extractor():
     assert "extraer_expediente.apply_async" in panel_ and "countdown=90" in panel_
 
 
-def test_el_default_del_expediente_es_proponer_y_el_modelo_es_el_barato():
+def test_el_default_del_expediente_es_auto_y_el_modelo_es_el_barato():
+    """24-sep noche (SESIONES (41)): lo claro se anota solo; pagos y lo dudoso siguen siendo propuesta
+    (eso lo fija `validar`, no este interruptor). `propuestas` y `off` siguen existiendo como palancas."""
     from app.config import get_settings
 
-    assert expediente.ESCRITURA_DEFAULT == "propuestas"
+    assert expediente.ESCRITURA_DEFAULT == "auto"
+    assert set(expediente.ESCRITURAS) == {"off", "propuestas", "auto"}
     assert "flash-lite" in get_settings().openrouter_model_extractor
