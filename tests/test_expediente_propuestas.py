@@ -16,6 +16,7 @@ from app.agent import expediente
 from app.api import router as api
 from app.services import redis_client as rc
 from app.webhook import router as webhook
+from app.workers import tasks
 
 TEL = "584240000000"
 
@@ -54,6 +55,11 @@ def _inter(**kw):
 
 @pytest.fixture
 def panel(monkeypatch):
+    # 💰 PR6c: al resolver, el panel reencola la siguiente pregunta de pago. Se captura `apply_async`
+    # (sin esto Celery iría al broker real y cada test tardaría 108 s). `encolados` lo deja verificar.
+    encolados = []
+    monkeypatch.setattr(tasks.preguntar_pagos_pendientes, "apply_async", lambda *a, **kw: encolados.append(a))
+
     def _montar(inter):
         ses = _Sesion(inter)
         monkeypatch.setattr(api, "get_session_factory", lambda: (lambda: ses))
@@ -62,6 +68,7 @@ def panel(monkeypatch):
             api, "_disparar_retomar",
             lambda *a: (_ for _ in ()).throw(AssertionError("una propuesta no retoma nada")),
         )
+        ses.encolados = encolados
         return ses
     return _montar
 
@@ -122,6 +129,24 @@ async def test_descartar_tambien_exige_una_propuesta_pendiente(panel):
     with pytest.raises(HTTPException) as exc:
         await api.descartar_propuesta_expediente(7, usuario="u")
     assert exc.value.status_code == 409
+
+
+async def test_el_panel_libera_la_siguiente_pregunta_al_resolver_un_pago(panel, monkeypatch):
+    """💰 PR6c: resolver una propuesta de PAGO desde el panel deja salir la siguiente pregunta de la
+    cola. Una propuesta que NO es pago no toca la cola."""
+    ses = panel(_inter())  # tipo pago_confirmado
+    monkeypatch.setattr(expediente, "aplicar_propuesta",
+                        AsyncMock(return_value={"tipo": "pago_confirmado", "pedido_id": 30, "pago_id": 5}))
+    await api.aplicar_propuesta_expediente(7, usuario="maired@enova")
+    assert len(ses.encolados) == 1
+
+    ses2 = panel(_inter())
+    await api.descartar_propuesta_expediente(7, usuario="maired@enova")
+    assert len(ses2.encolados) == 2  # misma lista compartida: +1 al descartar
+
+    ses3 = panel(_inter(propuesta={"tipo": "entrega_acordada", "telefono": TEL, "pedido_id": 30, "fecha": "2026-09-25"}))
+    await api.descartar_propuesta_expediente(7, usuario="maired@enova")
+    assert len(ses3.encolados) == 2  # una entrega NO libera la cola de pagos
 
 
 # ══ Cableados fijados en la fuente (patrón R50) ══

@@ -1,13 +1,17 @@
-"""💰 LA PREGUNTA DEL PAGO POR WHATSAPP (PR6b) — decisión de Maired 24-sep, SESIONES (41).
+"""💰 LA PREGUNTA DEL PAGO POR WHATSAPP (PR6b + PR6c) — decisiones de Maired 24-sep, SESIONES (41)/(42).
 
 Whuilianny NO entra al panel. Cuando el extractor lee que ella confirmó un pago (propuesta
 `pago_confirmado`, SIEMPRE propuesta), el bot le PREGUNTA a su celular personal y su SÍ/NO aplica o
 descarta la propuesta. Sin panel. El pago lo sigue confirmando una persona (ella), por su palabra a
 una pregunta directa. El cliente NUNCA recibe un mensaje por este carril.
 
+PR6c: UNA pregunta a la vez (la siguiente espera hasta que se resuelva la abierta), la pregunta NOMBRA
+a la clienta y el pedido (sin códigos), y la dueña nunca es cliente del expediente.
+
 Sin IA, sin red, sin base real: sesiones falsas y Meta simulada.
 """
 import inspect
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -25,6 +29,8 @@ TEL = "584240000000"
 DUENA = "573005690062"
 WAMID_PREG = "wamid.PREGUNTA.7"
 RESP_META = {"messages": [{"id": WAMID_PREG}]}
+AHORA_ISO = datetime.now(UTC).isoformat()               # preguntada hace nada → vigente
+VIEJA_ISO = (datetime.now(UTC) - timedelta(hours=30)).isoformat()  # > 24 h → ya no bloquea
 
 
 # ══ dobles ══
@@ -46,12 +52,20 @@ class _Res:
         return self._filas[0] if self._filas else None
 
 
-class _Sesion:
-    """intervenciones → la lista de propuestas; clientes → el nombre; `get` por id."""
+def _pedido(id=30, total=14.0, items=None):
+    return SimpleNamespace(
+        id=id, total=total,
+        items=items if items is not None else [{"producto": "Quesillo 200g", "cantidad": 2}],
+    )
 
-    def __init__(self, inters=(), nombre="Ana"):
+
+class _Sesion:
+    """intervenciones → la lista de propuestas; clientes → el nombre; `get` por id (Intervencion o Pedido)."""
+
+    def __init__(self, inters=(), nombre="Ana", pedido=None):
         self.inters = list(inters)
         self.nombre = nombre
+        self.pedido = pedido if pedido is not None else _pedido()
         self.commits = 0
         self.rollbacks = 0
         self.sql = []
@@ -72,6 +86,8 @@ class _Sesion:
         return _Res()
 
     async def get(self, modelo, pk):
+        if getattr(modelo, "__name__", "") == "Pedido":
+            return self.pedido if (self.pedido and self.pedido.id == pk) else None
         return next((i for i in self.inters if i.id == pk), None)
 
     async def commit(self):
@@ -90,7 +106,8 @@ def _propuesta(**kw):
 def _inter(id=7, **kw):
     base = dict(
         id=id, motivo="propuesta_expediente", estado="pendiente", cliente_telefono=TEL,
-        propuesta=_propuesta(), resuelta_at=None, aplicada_por=None, aplicada_at=None,
+        detalle="Parece que Whuilianny confirmó el pago", propuesta=_propuesta(),
+        resuelta_at=None, aplicada_por=None, aplicada_at=None,
     )
     base.update(kw)
     return SimpleNamespace(**base)
@@ -98,16 +115,21 @@ def _inter(id=7, **kw):
 
 @pytest.fixture
 def meta(monkeypatch):
-    """Meta simulada + la dueña resuelta + el panel mudo. Devuelve el doble de `enviar_texto`."""
+    """Meta simulada + la dueña resuelta + el panel mudo. `apply_async` de la cola se captura (no toca
+    el broker: sin esto cada SÍ/NO tardaría 108 s). Devuelve el doble de `enviar_texto`, con
+    `.siguiente` = lista de reencolados de `preguntar_pagos_pendientes`."""
     enviado = AsyncMock(return_value=RESP_META)
     monkeypatch.setattr(tasks, "enviar_texto", enviado)
     monkeypatch.setattr("app.services.dueno.telefono_de_la_duena", AsyncMock(return_value=DUENA))
     monkeypatch.setattr(tasks.rc, "notificar_conversacion", AsyncMock())
+    enviado.siguiente = []
+    monkeypatch.setattr(tasks.preguntar_pagos_pendientes, "apply_async",
+                        lambda *a, **kw: enviado.siguiente.append(a))
     return enviado
 
 
-def _montar(monkeypatch, *inters, nombre="Ana"):
-    ses = _Sesion(inters, nombre)
+def _montar(monkeypatch, *inters, nombre="Ana", pedido=None):
+    ses = _Sesion(inters, nombre, pedido)
     monkeypatch.setattr(tasks, "get_session_factory", lambda: (lambda: ses))
     return ses
 
@@ -176,7 +198,8 @@ async def test_pregunta_una_vez_y_guarda_el_wamid(meta, monkeypatch):
     meta.assert_awaited_once()
     destino, texto = meta.await_args.args
     assert destino == DUENA
-    assert texto == "💰 ¿Te llegó el pago de $14 por Zelle de Ana? Responde SÍ o NO. (#7)"
+    # PR6c: nombra a la clienta y el pedido, sin código de propuesta.
+    assert texto == "💰 ¿Te llegó el pago de $14 de Ana por el pedido #30 (2× Quesillo 200g)? Responde SÍ o NO."
     assert inter.propuesta["pregunta_wamid"] == WAMID_PREG and inter.propuesta["preguntada_at"]
     assert inter.estado == "pendiente" and ses.commits == 1  # sigue pendiente: la resuelve su SÍ/NO
 
@@ -184,7 +207,7 @@ async def test_pregunta_una_vez_y_guarda_el_wamid(meta, monkeypatch):
 async def test_sin_nombre_usa_la_cola_del_telefono(meta, monkeypatch):
     _montar(monkeypatch, _inter(), nombre=None)
     await tasks._preguntar_pagos_a_la_duena(TEL)
-    assert "de …0000?" in meta.await_args.args[1]
+    assert "de …0000 por el pedido" in meta.await_args.args[1]
 
 
 async def test_no_repregunta_la_que_ya_se_pregunto(meta, monkeypatch):
@@ -215,13 +238,61 @@ async def test_sin_dueno_telefono_no_manda_nada(meta, monkeypatch):
     meta.assert_not_awaited()
 
 
-async def test_con_telefono_filtra_ese_cliente_y_sin_telefono_las_recorre_todas(meta, monkeypatch):
-    ses = _montar(monkeypatch, _inter())
-    await tasks._preguntar_pagos_a_la_duena(TEL)
-    assert "intervenciones.cliente_telefono = :" in ses.sql[0]  # el WHERE, no la lista de columnas
-    ses2 = _montar(monkeypatch, _inter(propuesta=_propuesta(pregunta_wamid="x")))
-    await tasks._preguntar_pagos_a_la_duena(None)
-    assert "intervenciones.cliente_telefono = :" not in ses2.sql[0]
+async def test_la_cola_es_global_con_o_sin_telefono(meta, monkeypatch):
+    """PR6c: la cola es global — sale la propuesta de pago MÁS VIEJA (menor id) aunque `telefono`
+    apunte a otra clienta; ninguna preguntada todavía."""
+    otra, mia = _inter(7, cliente_telefono="584249999999"), _inter(8)
+    _montar(monkeypatch, otra, mia)
+    assert await tasks._preguntar_pagos_a_la_duena(TEL) == 1  # se pasa TEL (la de #8) pero sale la #7
+    assert otra.propuesta.get("pregunta_wamid") == WAMID_PREG
+    assert "pregunta_wamid" not in mia.propuesta
+
+
+async def test_solo_una_pregunta_de_pago_abierta_a_la_vez(meta, monkeypatch):
+    """Con una ya preguntada y vigente, la siguiente NO sale: espera en la Bandeja."""
+    abierta = _inter(7, propuesta=_propuesta(pregunta_wamid="wamid.A", preguntada_at=AHORA_ISO))
+    _montar(monkeypatch, abierta, _inter(8))
+    assert await tasks._preguntar_pagos_a_la_duena() == 0
+    meta.assert_not_awaited()
+
+
+async def test_una_abierta_de_mas_de_24h_no_bloquea_la_siguiente(meta, monkeypatch):
+    """Una pregunta preguntada hace > 24 h deja de bloquear: sale la siguiente sin preguntar."""
+    vieja = _inter(7, propuesta=_propuesta(pregunta_wamid="wamid.A", preguntada_at=VIEJA_ISO))
+    nueva = _inter(8)
+    _montar(monkeypatch, vieja, nueva)
+    assert await tasks._preguntar_pagos_a_la_duena() == 1
+    assert nueva.propuesta.get("pregunta_wamid") == WAMID_PREG
+
+
+async def test_no_pregunta_por_un_pago_sobre_el_numero_de_la_duena(meta, monkeypatch):
+    """(C) Una propuesta cuyo 'cliente' es el propio número de la dueña se ignora — ni se pregunta ni
+    bloquea la cola; sale la de la clienta real."""
+    de_la_duena = _inter(7, cliente_telefono=DUENA,
+                         propuesta=_propuesta(telefono=DUENA, pregunta_wamid="wamid.A", preguntada_at=AHORA_ISO))
+    real = _inter(8)
+    _montar(monkeypatch, de_la_duena, real)
+    assert await tasks._preguntar_pagos_a_la_duena() == 1
+    assert real.propuesta.get("pregunta_wamid") == WAMID_PREG
+
+
+async def test_la_pregunta_avisa_si_el_monto_no_cuadra_con_el_pedido(meta, monkeypatch):
+    _montar(monkeypatch, _inter(propuesta=_propuesta(monto=14.0)), pedido=_pedido(total=20.0))
+    await tasks._preguntar_pagos_a_la_duena()
+    assert "(el pedido es de $20)" in meta.await_args.args[1]
+
+
+async def test_sin_pedido_la_pregunta_no_lo_nombra(meta, monkeypatch):
+    _montar(monkeypatch, _inter(propuesta=_propuesta(pedido_id=None)))
+    await tasks._preguntar_pagos_a_la_duena()
+    texto = meta.await_args.args[1]
+    assert "por el pedido" not in texto and texto == "💰 ¿Te llegó el pago de $14 de Ana? Responde SÍ o NO."
+
+
+def test_la_pregunta_no_lleva_codigo_de_propuesta(meta, monkeypatch):
+    # El #30 del PEDIDO sí puede ir; lo que no va es "(#7)" (el id de la propuesta).
+    texto = tasks._texto_pregunta_pago(_propuesta(), "Ana", TEL, _pedido())
+    assert "(#7)" not in texto and "Responde SÍ o NO." in texto
 
 
 async def test_una_base_caida_no_tumba_al_worker(meta, monkeypatch):
@@ -245,8 +316,8 @@ def aplicado(monkeypatch):
     return doble
 
 
-def _preguntada(id=7, wamid=WAMID_PREG, **kw):
-    return _inter(id, propuesta=_propuesta(pregunta_wamid=wamid, preguntada_at="2026-09-24T19:40:00", **kw))
+def _preguntada(id=7, wamid=WAMID_PREG, preguntada_at=AHORA_ISO, **kw):
+    return _inter(id, propuesta=_propuesta(pregunta_wamid=wamid, preguntada_at=preguntada_at, **kw))
 
 
 async def test_si_citando_la_pregunta_aplica_cierra_firmado_y_le_confirma(meta, aplicado, monkeypatch):
@@ -286,14 +357,15 @@ async def test_un_numero_que_no_casa_no_manda_a_otra_parte(meta, aplicado, monke
     assert inter.estado == "resuelta"
 
 
-async def test_varias_sin_pista_pide_ayuda_y_no_toca_nada(meta, aplicado, monkeypatch):
+async def test_varias_abiertas_sin_pista_pide_citar_y_no_toca_nada(meta, aplicado, monkeypatch):
     a, b = _preguntada(7, "wamid.A"), _preguntada(8, "wamid.B")
     ses = _montar(monkeypatch, a, b)
     assert await tasks._responder_pago_duena("sí", None, "wamid.MSG") == "varias"
     aplicado.assert_not_awaited()
     assert a.estado == b.estado == "pendiente" and ses.commits == 0
     destino, texto = meta.await_args.args
-    assert destino == DUENA and "varios pagos" in texto and "número" in texto
+    assert destino == DUENA and "más de un pago" in texto and "citando" in texto
+    assert meta.siguiente == []  # no se resolvió nada: no se libera la cola
 
 
 async def test_no_descarta_sin_escribir_nada(meta, aplicado, monkeypatch):
@@ -306,13 +378,18 @@ async def test_no_descarta_sin_escribir_nada(meta, aplicado, monkeypatch):
     meta.assert_awaited_once_with(DUENA, "👍 Anotado: ese pago NO se registra.")
 
 
-async def test_si_aplicar_falla_se_lo_dice_y_la_propuesta_sigue_pendiente(meta, aplicado, monkeypatch):
+async def test_si_aplicar_falla_se_descarta_con_motivo_y_no_traba_la_cola(meta, aplicado, monkeypatch):
+    """PR6c: un ValueError (ya pagado, cancelado…) NO deja la pregunta abierta bloqueando la cola: se
+    cierra descartada con el motivo, se le avisa a ella, y se libera la siguiente."""
     aplicado.side_effect = ValueError("el pedido #30 ya tiene un pago confirmado (#4)")
     inter = _preguntada()
     ses = _montar(monkeypatch, inter)
     assert await tasks._responder_pago_duena("sí", WAMID_PREG, "wamid.MSG") == "error"
-    assert inter.estado == "pendiente" and ses.rollbacks == 1 and ses.commits == 0
+    assert inter.estado == "resuelta" and inter.propuesta["resultado"] == "descartada"
+    assert "No se pudo aplicar por WhatsApp" in inter.detalle
+    assert ses.rollbacks == 1 and ses.commits == 1
     meta.assert_awaited_once_with(DUENA, "No pude registrar ese pago: el pedido #30 ya tiene un pago confirmado (#4)")
+    assert len(meta.siguiente) == 1  # la cola se libera igual
 
 
 async def test_lo_que_no_es_respuesta_no_hace_nada(meta, aplicado, monkeypatch):
@@ -347,6 +424,33 @@ async def test_una_base_caida_no_tumba_la_respuesta(meta, aplicado, monkeypatch)
     monkeypatch.setattr(tasks, "get_session_factory", _revienta)
     assert await tasks._responder_pago_duena("sí", WAMID_PREG, "wamid.MSG") == "error"
     aplicado.assert_not_awaited()
+
+
+async def test_al_resolver_por_whatsapp_se_encola_la_siguiente(meta, aplicado, monkeypatch):
+    """PR6c: tras aplicar (o descartar) la pregunta abierta, sale la siguiente de la cola."""
+    _montar(monkeypatch, _preguntada())
+    await tasks._responder_pago_duena("sí", WAMID_PREG, "wamid.MSG")
+    assert len(meta.siguiente) == 1
+    meta.siguiente.clear()
+    _montar(monkeypatch, _preguntada())
+    await tasks._responder_pago_duena("no", WAMID_PREG, "wamid.MSG")
+    assert len(meta.siguiente) == 1
+
+
+async def test_una_respuesta_suelta_no_va_a_una_pregunta_vieja(meta, aplicado, monkeypatch):
+    """Un 'sí' a secas NO resuelve una pregunta de > 24 h (ya no está abierta); una CITA sí."""
+    vieja = _preguntada(preguntada_at=VIEJA_ISO)
+    _montar(monkeypatch, vieja)
+    assert await tasks._responder_pago_duena("sí", None, "wamid.MSG") == "sin_candidata"
+    aplicado.assert_not_awaited()
+    # pero citándola (context_id) sí se resuelve, aunque sea vieja
+    _montar(monkeypatch, _preguntada(preguntada_at=VIEJA_ISO))
+    assert await tasks._responder_pago_duena("sí", WAMID_PREG, "wamid.MSG") == "si"
+
+
+async def test_el_extractor_no_abre_expediente_sobre_el_numero_de_la_duena(meta, monkeypatch):
+    """(C) Si la dueña se escribe a sí misma, el extractor no le abre expediente."""
+    assert await tasks._extraer_expediente(DUENA) == "duena"
 
 
 # ══ 7) el webhook: la dueña escribe → reintento siempre; su SÍ/NO se encola, idempotente ══

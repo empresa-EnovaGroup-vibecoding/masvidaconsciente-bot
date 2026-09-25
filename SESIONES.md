@@ -17,6 +17,60 @@
 
 ---
 
+## 2026-09-25 (43) — 💰 UNA PREGUNTA A LA VEZ: el pago se pregunta con nombre y pedido, sin códigos (PR6c)
+
+**Por qué (la prueba real de PR6b + la duda de fondo de Maired):** en la prueba de anoche todo el circuito
+funcionó (eco → extractor → propuesta → pregunta al celular → su "Si" leído), pero no aplicó nada porque
+había DOS preguntas de pago abiertas (la frase se escribió en dos chats) y un "Si" a secas era ambiguo. Maired
+preguntó lo de fondo — *"¿cómo va a saber cuál es el pedido de $16 y de quién?"* — y dijo sentirse perdida. Se
+revisó el código: había **una brecha real** (el pago se pegaba al pedido MÁS RECIENTE en silencio, sin mirar si
+estaba pagado ni si el monto cuadraba) y **una de forma** (la pregunta llevaba un código "(#3469)"). Se le
+plantearon 3 caminos (AskUserQuestion); descartó los botones ("me ponen en riesgo con Meta") y eligió **una
+pregunta a la vez, sin códigos, nombrando a la clienta y el pedido**. La lógica queda cerrada por REGLA, no por
+lista de casos: ¿de quién? del chat; ¿de cuál pedido? el que está sin pagar, y si dijo monto el que cuadra, y la
+pregunta lo nombra; ¿a cuál pregunta contesta? a la única abierta; y con dinero el bot no adivina: pregunta.
+
+**Qué quedó hecho (bot, rama `pago-una-a-la-vez`), todo ADITIVO, sin tocar Meta ni el parser:**
+- **(B) El pago va al pedido correcto** — `expediente._pedido_del_pago(pedido, pedidos, monto)`: candidatos = no
+  cancelados y SIN pago confirmado, del más nuevo al más viejo; si dijo monto y UNO cuadra → ese; uno solo → ese;
+  varios → el más reciente + nota "hay N sin pagar" (que `procesar_ventana` pega al detalle de la Bandeja); ninguno
+  → el más reciente (al aplicar, el candado dirá "ya tiene un pago confirmado"). `validar` gana kwarg
+  `pedidos: list|None=None` (default = comportamiento de hoy → `test_expediente_extractor` intacto);
+  `procesar_ventana` pasa `ctx.pedidos`. Un monto en Bs no se compara contra un total en $.
+- **La pregunta NOMBRA a la clienta y el pedido, sin código** — `_texto_pregunta_pago(propuesta, nombre, telefono,
+  pedido)`: *"💰 ¿Te llegó el pago de $16 de Ana por el pedido #3131 (2× Quesillo 200g)?"* + *"(el pedido es de
+  $20)"* si el monto no cuadra + *" Responde SÍ o NO."*. Se quitó el "(#N)" y el "por Zelle" (chocaba con "por el
+  pedido"; el método sigue en la Bandeja). `_preguntar` lee el `Pedido` (`session.get`) para nombrarlo.
+- **(A′) Una pregunta a la vez** — `_preguntar_pagos_a_la_duena` es global y FIFO: si hay una pregunta de pago
+  ABIERTA (`_pregunta_vigente`: con `pregunta_wamid` y preguntada hace < `HORAS_PREGUNTA_VIGENTE=24`), no manda
+  otra; la siguiente espera en la Bandeja. Una ignorada > 24 h deja de bloquear (24 h = la ventana de Meta). Al
+  RESOLVER (por WhatsApp o por el panel) se reencola `preguntar_pagos_pendientes` → sale la siguiente
+  (`encolar_siguiente_pregunta_de_pago(propuesta)` en tasks; `_liberar_siguiente_pregunta_de_pago(tipo)` en los dos
+  endpoints del panel; ambos solo disparan si lo resuelto era un pago).
+- `_responder_pago_duena`: para un "sí/no" A SECAS solo cuenta la pregunta que sigue ABIERTA (vigente); una cita o
+  un número resuelven cualquiera preguntada (respaldo). Rama "varias" → "Tienes más de un pago por confirmar:
+  contéstame citando la pregunta." **Un `ValueError` al aplicar** (ya pagado, cancelado…) ya no deja la pregunta
+  colgada trabando la cola: se CIERRA descartada con el motivo en el detalle, se le avisa a ella y se libera la
+  siguiente.
+- **(C) La dueña nunca es cliente del expediente** — `_extraer_expediente` sale con "duena" si `es_la_duena(telefono)`
+  (evita la #3468 de anoche: propuesta sobre su propio celular por escribirse a sí misma); `_preguntar`/`_responder`
+  excluyen por `cola()` cualquier propuesta cuyo cliente sea la dueña, para que ni se pregunte ni bloquee.
+- **Tests**: `test_pago_por_whatsapp.py` 63 (adaptados: texto con pedido, "varias" cita, ValueError→descarta;
+  nuevos: cola global, una a la vez, >24 h no bloquea, candado dueña, avisa si no cuadra, sin pedido, reencola al
+  resolver, respuesta suelta no va a una vieja, extractor no lee a la dueña) · `test_expediente_extractor.py`
+  (5 nuevos: elige por monto, varios sin pista + nota, salta pagados, sin lista = como antes, la fuente pasa
+  `pedidos`) · `test_expediente_propuestas.py` (fixture mockea `apply_async`; el panel libera la cola al resolver un
+  pago, no una entrega). **Suite 1355/0**, ruff limpio. Panel SIN cambios (su línea "Preguntado a Whuilianny" vale).
+
+**Decisión de diseño (Maired eligió una a la vez):** el riesgo aceptado es que una pregunta olvidada frena las
+siguientes hasta que ella (o Maired en el panel) la resuelva; el log dice cuál (#id) y la Bandeja las muestra
+todas. Sin plazo salvo el corte de 24 h. Un candado de carrera (dos extractores a la vez) queda fuera; la cita lo
+resuelve.
+
+**Sigue (con "dale"):** fusionar #70 → desplegar pruebas (`deploy_pr70.sh`, worker→bot; el dashboard no cambia) →
+antes de probar, descartar en la Bandeja la #3468 (su propio número) y la #3469 si sigue abierta → prueba del pago
+(una clienta con pedido; la pregunta lo nombra; contesta SÍ; luego dos a la vez → llega una sola). → PR7 replay.
+
 ## 2026-09-24 (42) — 💰 LA PREGUNTA DEL PAGO POR WHATSAPP: el bot le pregunta a Whuilianny y su SÍ/NO decide (PR6b)
 
 **Por qué (decisión de Maired 24-sep noche, SESIONES (41), punto 2):** Whuilianny no entra al panel. Un pago que

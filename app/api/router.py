@@ -2863,6 +2863,19 @@ async def listar_intervenciones(estado: str = "pendiente", _: str = Depends(usua
     ]
 
 
+def _liberar_siguiente_pregunta_de_pago(tipo_propuesta: str | None) -> None:
+    """💰 PR6c: al resolver una propuesta de PAGO desde el panel, deja salir la siguiente pregunta de
+    pago (una a la vez). No-op barato si no había ninguna en cola. Nunca lanza."""
+    if tipo_propuesta != "pago_confirmado":
+        return
+    try:
+        from app.workers.tasks import preguntar_pagos_pendientes
+
+        preguntar_pagos_pendientes.apply_async()
+    except Exception:  # noqa: BLE001 — la cola caída no puede tumbar la respuesta del panel
+        logger.exception("PR6c: no se pudo encolar la siguiente pregunta de pago desde el panel")
+
+
 @router.post("/intervenciones/{intervencion_id}/aplicar")
 async def aplicar_propuesta_expediente(
     intervencion_id: int, usuario: str = Depends(usuario_actual)
@@ -2888,6 +2901,7 @@ async def aplicar_propuesta_expediente(
         if inter.estado != "pendiente":
             raise HTTPException(status_code=409, detail="Esta propuesta ya se atendió")
         telefono = inter.cliente_telefono
+        tipo_propuesta = (inter.propuesta or {}).get("tipo")
         try:
             resultado = await aplicar_propuesta(session, inter.propuesta, usuario=usuario)
         except ValueError as e:  # ValidationError de pydantic también es ValueError
@@ -2896,6 +2910,7 @@ async def aplicar_propuesta_expediente(
         cerrar_propuesta(inter, usuario=usuario, resultado="aplicada")
         await session.commit()
     await rc.notificar_conversacion(telefono, "actualizada")
+    _liberar_siguiente_pregunta_de_pago(tipo_propuesta)  # 💰 PR6c: una pregunta a la vez
     return {"ok": True, "bot_reactivado": False, **resultado}
 
 
@@ -2916,8 +2931,10 @@ async def descartar_propuesta_expediente(
             raise HTTPException(status_code=409, detail="Este aviso no es una propuesta del expediente")
         if inter.estado != "pendiente":
             raise HTTPException(status_code=409, detail="Esta propuesta ya se atendió")
+        tipo_propuesta = (inter.propuesta or {}).get("tipo")
         cerrar_propuesta(inter, usuario=usuario, resultado="descartada")
         await session.commit()
+    _liberar_siguiente_pregunta_de_pago(tipo_propuesta)  # 💰 PR6c: una pregunta a la vez
     return {"ok": True, "bot_reactivado": False, "resultado": "descartada"}
 
 
