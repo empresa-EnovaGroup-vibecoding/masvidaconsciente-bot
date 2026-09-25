@@ -48,8 +48,12 @@ Las **FASES 0 a 3 ya están hechas y desplegadas**:
 > sin confirmar (el freno se quitó). → ✅ **PR6a "sin panel" FUSIONADO (#67 + dashboard #14) y PROBADO EN VIVO sin
 > botones (24-sep 20:30, "me gusta")** → **PR6b LA PREGUNTA DEL PAGO POR WHATSAPP HECHO, en PR** (rama
 > `pago-por-whatsapp` + dashboard `pago-por-whatsapp-panel`, SESIONES (42); la ventana de 24 h la abre Whuilianny
-> con un "hola" diario desde su celular, decisión de Maired) → SIGUE: fusionar → desplegar pruebas → la prueba de
-> Maired del pago (guion en SESIONES (42)) → PR7 replay sobre las 305 conversaciones (mide el extractor en `auto`
+> con un "hola" diario desde su celular, decisión de Maired) → ✅ **PR6b FUSIONADO (#69 + panel #15) y probado en
+> vivo** (funcionó el circuito; la prueba destapó dos preguntas abiertas a la vez) → **PR6c "una pregunta a la vez"
+> HECHO, en PR** (rama `pago-una-a-la-vez`, #70, SESIONES (43)): el pago se pega al pedido SIN pagar (o al que cuadra
+> con el monto), la pregunta NOMBRA a la clienta y el pedido sin códigos, una sola pregunta abierta a la vez, y la
+> dueña nunca es cliente del expediente → SIGUE: fusionar → desplegar pruebas → la prueba del pago (guion en
+> SESIONES (43)) → PR7 replay sobre las 305 conversaciones (mide el extractor en `auto`
 > ANTES de producción) → P3 el cerebro `confirmado` en pruebas → P4 la Voz → P5 Conocimiento del corpus → P6
 > puertas G1-G6 y producción por configuración. Decisiones: retorno automático CON condiciones (flag apagado,
 > Maired fija N=2 h; un chat donde el bot pidió ayuda no se reactiva solo); lo dudoso queda como pregunta que, si

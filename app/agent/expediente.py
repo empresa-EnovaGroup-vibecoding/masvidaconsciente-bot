@@ -382,12 +382,44 @@ def _base(ev: EventoDuena, telefono: str, evidencia_id, pedido: dict | None) -> 
     )
 
 
+def _pedido_del_pago(
+    pedido: dict | None, pedidos: list[dict] | None, monto: Decimal | None,
+) -> tuple[dict | None, str]:
+    """💰 PR6c: ¿a qué pedido va este pago? Devuelve (pedido elegido, nota para la Bandeja).
+
+    Candidatos = los que NO están cancelados y NO tienen pago confirmado, del más nuevo al más viejo.
+    Si dijo un monto y UN solo candidato tiene ese total → ese. Un solo candidato → ese. Varios sin
+    pista → el más reciente, pero se anota "hay N sin pagar" para que se vea. Ninguno → el más reciente
+    de la lista (al aplicar, el candado dirá "ya tiene un pago confirmado", que es lo correcto).
+
+    Con `pedidos=None` cae a `pedido` (el de hoy): el comportamiento no cambia para quien no pase lista."""
+    lista = pedidos if pedidos is not None else ([pedido] if pedido else [])
+    candidatos = [
+        p for p in lista
+        if p and p.get("estado") != "cancelado" and p.get("pago_pendiente") != "confirmado"
+    ]
+    if not candidatos:
+        return (lista[0] if lista else pedido), ("todos sus pedidos ya tienen pago" if lista else "")
+    if monto is not None:
+        cuadran = [
+            p for p in candidatos
+            if p.get("total") is not None and abs(Decimal(str(p["total"])) - monto) <= Decimal("0.01")
+        ]
+        if len(cuadran) == 1:
+            return cuadran[0], ""
+    if len(candidatos) == 1:
+        return candidatos[0], ""
+    return candidatos[0], f"hay {len(candidatos)} pedidos sin pagar; se propone el más reciente (#{candidatos[0]['id']})"
+
+
 def validar(
     ev: EventoDuena, texto_ventana: str, ctx: Contexto, *, telefono: str, hoy: date,
     franjas: list[str], pedido: dict | None, evidencia_id: int | None,
+    pedidos: list[dict] | None = None,
 ) -> Veredicto:
     """Función PURA (sin BD): el código dicta escribe / propuesta / descarta. `pedido` = el pedido
-    abierto del cliente según `cargar_contexto` (o None)."""
+    abierto del cliente según `cargar_contexto` (o None); `pedidos` = la lista (PR6c) para elegir a
+    cuál va un pago cuando hay varios; si no viene, se comporta como antes."""
     if ev.tipo == "nada":
         return Veredicto("descarta", "nada que anotar")
     if not consta(ev.evidencia, texto_ventana):
@@ -434,12 +466,15 @@ def validar(
 
     if ev.tipo == "pago_confirmado":
         monto, moneda = parsear_monto(ev.monto_literal)
-        if monto is None and pedido and pedido.get("total") is not None:
-            monto, moneda = Decimal(str(pedido["total"])), "$"
+        # A qué pedido va (PR6c). Un monto en Bs no se compara contra un total en $.
+        elegido, nota = _pedido_del_pago(pedido, pedidos, monto if moneda != "Bs" else None)
+        p.pedido_id = elegido["id"] if elegido else None
+        if monto is None and elegido and elegido.get("total") is not None:
+            monto, moneda = Decimal(str(elegido["total"])), "$"
         p.monto = float(monto) if monto is not None else None
         p.moneda, p.metodo = moneda, ev.metodo.strip()
         # 🔴 SIEMPRE propuesta: `pagado` solo nace de un toque humano (CLAUDE.md §3).
-        return Veredicto("propuesta", "un pago lo confirma una persona", 0.0, p)
+        return Veredicto("propuesta", "un pago lo confirma una persona" + (f"; {nota}" if nota else ""), 0.0, p)
 
     if ev.tipo == "entrega_acordada":
         fecha = fecha_del_cliente(ev.fecha_texto, hoy) if ev.fecha_texto.strip() else None
@@ -565,7 +600,7 @@ async def procesar_ventana(
     for ev in extraccion.eventos:
         v = validar(
             ev, ventana.texto, ctx, telefono=telefono, hoy=hoy, franjas=franjas,
-            pedido=ctx.pedido, evidencia_id=evidencia.get("id"),
+            pedido=ctx.pedido, pedidos=ctx.pedidos, evidencia_id=evidencia.get("id"),
         )
         if v.accion == "descarta" or v.propuesta is None:
             logger.info("Expediente %s: %s descartado (%s)", telefono, ev.tipo, v.motivo)

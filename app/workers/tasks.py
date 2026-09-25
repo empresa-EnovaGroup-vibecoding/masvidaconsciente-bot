@@ -2410,9 +2410,15 @@ async def _extraer_expediente(telefono, hasta_id=None) -> str:
     from app.agent.fuentes_atencion import cargar_contexto
     from app.agent.tools import _franjas_de_entrega
     from app.models import Cliente, Mensaje, hoy_venezuela, now_utc
+    from app.services.dueno import es_la_duena
 
     if (telefono or "").startswith("__"):
         return "interno"
+    # 💰 PR6c: la dueña NUNCA es cliente del expediente. Si ella se escribe a sí misma (o al número de
+    # avisos) no se le abre expediente ni se propone un pago sobre su propio celular.
+    if await es_la_duena(telefono):
+        logger.info("Expediente: %s es el número de la dueña; no se le abre expediente", telefono)
+        return "duena"
     escritura, modelo = await ex.leer_config_expediente()
     if escritura == "off":
         return "apagado"
@@ -2492,93 +2498,130 @@ async def _marcar_expediente(clave: str, ultimo_id: int) -> None:
 #  pregunta directa. El cliente NUNCA recibe un mensaje por este carril.
 # ══════════════════════════════════════════════════════════════════════════════════
 
-def _texto_pregunta_pago(propuesta: dict, inter_id: int, nombre: str | None, telefono: str) -> str:
-    """La pregunta que le llega a la dueña por WhatsApp. Corta y con el #id por si tiene varias."""
-    from app.agent.expediente import _fmt
+# Una pregunta de pago se considera ABIERTA (bloquea las siguientes) hasta 24 h después de mandarla.
+# Sin plazo, una pregunta ignorada dejaría muda la cola entera; a las 24 h la vieja sigue en la
+# Bandeja (visible y resoluble por el panel) pero deja de bloquear. 24 h = la ventana de Meta.
+HORAS_PREGUNTA_VIGENTE = 24
 
-    monto = _fmt(propuesta.get("monto"), propuesta.get("moneda") or "")
+
+def _pregunta_vigente(propuesta: dict, ahora) -> bool:
+    """True si esta propuesta de pago tiene una pregunta AÚN abierta: se le preguntó (`pregunta_wamid`)
+    y hace menos de HORAS_PREGUNTA_VIGENTE. Sin wamid → no está preguntada. Fecha ilegible → vigente
+    (conservador: no abrir otra encima)."""
+    if not (propuesta or {}).get("pregunta_wamid"):
+        return False
+    cuando = propuesta.get("preguntada_at")
+    if not cuando:
+        return True
+    try:
+        return (ahora - datetime.fromisoformat(cuando)).total_seconds() < HORAS_PREGUNTA_VIGENTE * 3600
+    except (ValueError, TypeError):
+        return True
+
+
+def _texto_pregunta_pago(propuesta: dict, nombre: str | None, telefono: str, pedido) -> str:
+    """La pregunta que le llega a la dueña por WhatsApp: nombra a la clienta y el pedido, SIN códigos.
+    `pedido` = el objeto Pedido (o None). Si el monto dicho no cuadra con el total, se lo avisa."""
+    from app.agent.expediente import _fmt, _items_breves
+
+    monto_val = propuesta.get("monto")
+    monto = _fmt(monto_val, propuesta.get("moneda") or "")
     monto_txt = f" de {monto}" if monto else ""
-    metodo = f" por {propuesta['metodo']}" if propuesta.get("metodo") else ""
     quien = (nombre or "").strip() or f"…{(telefono or '')[-4:]}"
-    return (
-        f"💰 ¿Te llegó el pago{monto_txt}{metodo} de {quien}? "
-        f"Responde SÍ o NO. (#{inter_id})"
-    )
+    ref, aviso = "", ""
+    if pedido is not None:
+        items = _items_breves(getattr(pedido, "items", None))
+        ref = f" por el pedido #{pedido.id}" + (f" ({items})" if items else "")
+        total = getattr(pedido, "total", None)
+        if monto_val is not None and total is not None and abs(float(total) - float(monto_val)) > 0.01:
+            aviso = f" (el pedido es de {_fmt(total, '$')})"
+    # El método (Zelle, efectivo…) NO va en la pregunta: chocaba con "por el pedido" y ella lo ve en
+    # la Bandeja. La pregunta nombra a la clienta y el pedido para que sepa exactamente cuál es.
+    return f"💰 ¿Te llegó el pago{monto_txt} de {quien}{ref}?{aviso} Responde SÍ o NO."
 
 
 async def _preguntar_pagos_a_la_duena(telefono: str | None = None) -> int:
-    """Por cada propuesta de PAGO pendiente que aún no se le preguntó, le manda la pregunta a la
-    dueña por WhatsApp y guarda el `pregunta_wamid`. Devuelve cuántas salieron. Nunca lanza.
+    """Le pregunta a la dueña por WhatsApp por el PRÓXIMO pago pendiente — UNA pregunta a la vez (PR6c).
 
-    `telefono=None` recorre TODAS las propuestas de pago sin preguntar (el reintento que se dispara
-    cuando ella le escribe al número del negocio y su ventana de 24 h se abre). Con `telefono` mira
-    solo ese cliente (lo llama el extractor tras dejar propuestas). Si la ventana está cerrada,
-    `enviar_texto` lanza y la propuesta se queda en la Bandeja: se reintenta en la próxima apertura.
+    Si ya hay una pregunta de pago ABIERTA (preguntada hace < 24 h y sin resolver), no manda otra: la
+    siguiente espera en la Bandeja hasta que la abierta se resuelva (por WhatsApp o por el panel, que
+    reencolan esta tarea). La cola es global y FIFO (la propuesta más vieja primero). Nunca abre
+    expediente sobre el propio número de la dueña. Nunca lanza.
+
+    `telefono` ya no filtra (la cola es global); se conserva por compatibilidad con quien la llama.
     """
     from sqlalchemy import select
 
     from app.agent.expediente import MOTIVO_PROPUESTA
-    from app.models import Cliente, Intervencion, now_utc
-    from app.services.dueno import telefono_de_la_duena
+    from app.models import Cliente, Intervencion, Pedido, now_utc
+    from app.services.dueno import cola, telefono_de_la_duena
 
-    enviadas = 0
     try:
         destino = await telefono_de_la_duena()
         if not destino:
             logger.info("PR6b: no hay dueno_telefono; las preguntas de pago quedan en la bandeja")
             return 0
+        cola_duena = cola(destino)
+        ahora = now_utc()
         factory = get_session_factory()
         async with factory() as session:
-            q = select(Intervencion).where(
-                Intervencion.motivo == MOTIVO_PROPUESTA,
-                Intervencion.estado == "pendiente",
-            )
-            if telefono:
-                q = q.where(Intervencion.cliente_telefono == telefono)
-            filas = (await session.execute(q.order_by(Intervencion.id))).scalars().all()
-            pendientes = [
-                (i.id, dict(i.propuesta or {}), i.cliente_telefono)
-                for i in filas
+            filas = (await session.execute(
+                select(Intervencion).where(
+                    Intervencion.motivo == MOTIVO_PROPUESTA,
+                    Intervencion.estado == "pendiente",
+                ).order_by(Intervencion.id)
+            )).scalars().all()
+            pagos = [
+                i for i in filas
                 if (i.propuesta or {}).get("tipo") == "pago_confirmado"
-                and not (i.propuesta or {}).get("pregunta_wamid")
+                and cola(i.cliente_telefono) != cola_duena  # (C) nunca la dueña como cliente
             ]
-            nombres: dict[str, str | None] = {}
-            for _id, _p, tel in pendientes:
-                if tel not in nombres:
-                    nombres[tel] = (await session.execute(
-                        select(Cliente.nombre).where(Cliente.telefono == tel)
-                    )).scalars().first()
-    except Exception:  # noqa: BLE001 — sin lectura no se pregunta nada; se reintenta en la próxima
+            # ¿Hay una pregunta abierta y vigente? Entonces la siguiente espera.
+            abierta = next((i for i in pagos if _pregunta_vigente(i.propuesta or {}, ahora)), None)
+            if abierta is not None:
+                logger.info("PR6c: la pregunta del pago #%s sigue abierta; las demás esperan", abierta.id)
+                return 0
+            # La próxima sin preguntar (la más vieja).
+            siguiente = next((i for i in pagos if not (i.propuesta or {}).get("pregunta_wamid")), None)
+            if siguiente is None:
+                return 0
+            inter_id = siguiente.id
+            propuesta = dict(siguiente.propuesta or {})
+            cliente_tel = siguiente.cliente_telefono
+            nombre = (await session.execute(
+                select(Cliente.nombre).where(Cliente.telefono == cliente_tel)
+            )).scalars().first()
+            pedido = (
+                await session.get(Pedido, propuesta["pedido_id"]) if propuesta.get("pedido_id") else None
+            )
+            texto = _texto_pregunta_pago(propuesta, nombre, cliente_tel, pedido)
+    except Exception:  # noqa: BLE001 — sin lectura no se pregunta; se reintenta en la próxima apertura
         logger.exception("PR6b: no se pudieron leer las propuestas de pago pendientes")
         return 0
 
-    # Se manda FUERA de la primera sesión y cada marca va en su propia mini-transacción: así un
-    # commit no expira los objetos a mitad de bucle, y si una marca falla lo peor es re-preguntar
-    # (molesto, no grave) — nunca marcar como preguntada una que no salió.
-    for _id, propuesta, tel in pendientes:
-        texto = _texto_pregunta_pago(propuesta, _id, nombres.get(tel), tel)
-        try:
-            resp = await enviar_texto(destino, texto)
-        except Exception as e:  # noqa: BLE001 — ventana cerrada (131047) u otro: queda en la bandeja
-            logger.info("PR6b: no salió la pregunta del pago #%s (%s); queda en la bandeja", _id, e)
-            continue
-        wamid = wa_message_id(resp)
-        try:
-            factory = get_session_factory()
-            async with factory() as s2:
-                inter = await s2.get(Intervencion, _id)
-                if inter is None or inter.estado != "pendiente":
-                    continue
-                inter.propuesta = {
-                    **(inter.propuesta or {}),
-                    "pregunta_wamid": wamid,
-                    "preguntada_at": now_utc().isoformat(),
-                }
-                await s2.commit()
-            enviadas += 1
-        except Exception:  # noqa: BLE001 — el WhatsApp ya salió; solo no quedó marcada
-            logger.exception("PR6b: la pregunta del pago #%s salió pero no se pudo marcar", _id)
-    return enviadas
+    # Se manda FUERA de la sesión de lectura y se marca en una mini-transacción aparte: si la marca
+    # falla, lo peor es re-preguntar (molesto, no grave) — nunca marcar como preguntada una que no salió.
+    try:
+        resp = await enviar_texto(destino, texto)
+    except Exception as e:  # noqa: BLE001 — ventana cerrada (131047) u otro: queda en la bandeja
+        logger.info("PR6b: no salió la pregunta del pago #%s (%s); queda en la bandeja", inter_id, e)
+        return 0
+    wamid = wa_message_id(resp)
+    try:
+        factory = get_session_factory()
+        async with factory() as s2:
+            inter = await s2.get(Intervencion, inter_id)
+            if inter is None or inter.estado != "pendiente":
+                return 1
+            inter.propuesta = {
+                **(inter.propuesta or {}),
+                "pregunta_wamid": wamid,
+                "preguntada_at": now_utc().isoformat(),
+            }
+            await s2.commit()
+    except Exception:  # noqa: BLE001 — el WhatsApp ya salió; solo no quedó marcada
+        logger.exception("PR6b: la pregunta del pago #%s salió pero no se pudo marcar", inter_id)
+    return 1
 
 
 async def _responder_pago_duena(texto: str, context_id: str | None, message_id: str) -> str:
@@ -2594,16 +2637,19 @@ async def _responder_pago_duena(texto: str, context_id: str | None, message_id: 
 
     from app.agent import expediente as ex
     from app.agent.expediente import MOTIVO_PROPUESTA
-    from app.models import Intervencion
-    from app.services.dueno import telefono_de_la_duena
+    from app.models import Intervencion, now_utc
+    from app.services.dueno import cola, telefono_de_la_duena
 
     parsed = ex.interpretar_respuesta_duena(texto)
     if parsed is None:
         return "no_es_respuesta"
     si_no, num = parsed
     telefono_cliente = None
+    resultado_txt = "sin_candidata"
     try:
         destino = await telefono_de_la_duena()
+        cola_duena = cola(destino)
+        ahora = now_utc()
         factory = get_session_factory()
         async with factory() as session:
             filas = (await session.execute(
@@ -2612,11 +2658,15 @@ async def _responder_pago_duena(texto: str, context_id: str | None, message_id: 
                     Intervencion.estado == "pendiente",
                 ).order_by(Intervencion.id)
             )).scalars().all()
+            # Preguntadas (no la dueña). Para un "sí/no" A SECAS solo cuenta la que sigue ABIERTA
+            # (vigente); una cita o un número resuelven cualquiera preguntada (respaldo silencioso).
             candidatas = [
                 i for i in filas
                 if (i.propuesta or {}).get("tipo") == "pago_confirmado"
                 and (i.propuesta or {}).get("pregunta_wamid")
+                and cola(i.cliente_telefono) != cola_duena
             ]
+            vigentes = [i for i in candidatas if _pregunta_vigente(i.propuesta or {}, ahora)]
             elegida = None
             if context_id:
                 elegida = next(
@@ -2625,18 +2675,17 @@ async def _responder_pago_duena(texto: str, context_id: str | None, message_id: 
                 )
             if elegida is None and num is not None:
                 elegida = next((i for i in candidatas if i.id == num), None)
-            if elegida is None and len(candidatas) == 1:
-                elegida = candidatas[0]
+            if elegida is None and len(vigentes) == 1:
+                elegida = vigentes[0]
             if elegida is None:
-                if len(candidatas) > 1:
+                if len(vigentes) > 1:
                     await _whatsapp_a_la_duena(
                         destino,
-                        "Tienes varios pagos por confirmar: respóndeme citando la pregunta, o con "
-                        "SÍ/NO y el número que va al final (#…).",
+                        "Tienes más de un pago por confirmar: contéstame citando la pregunta.",
                         que="ayuda pago dueña",
                     )
                     return "varias"
-                logger.info("PR6b: SÍ/NO de la dueña sin propuesta de pago pendiente que casar")
+                logger.info("PR6b: SÍ/NO de la dueña sin pregunta de pago abierta que casar")
                 return "sin_candidata"
             telefono_cliente = elegida.cliente_telefono
             if si_no == "no":
@@ -2645,23 +2694,34 @@ async def _responder_pago_duena(texto: str, context_id: str | None, message_id: 
                 await _whatsapp_a_la_duena(
                     destino, "👍 Anotado: ese pago NO se registra.", que="pago descartado",
                 )
+                resultado_txt = "no"
             else:
                 try:
-                    resultado = await ex.aplicar_propuesta(
+                    res = await ex.aplicar_propuesta(
                         session, elegida.propuesta, usuario="whuilianny (WhatsApp)",
                     )
                 except ValueError as e:
+                    # No se pudo aplicar (ya pagado, cancelado, sin pedido…). Se CIERRA descartada con
+                    # el motivo: el panel puede reintentar, WhatsApp no, y dejarla abierta trabaría la
+                    # cola (una a la vez). En todos estos casos el pago no procede.
                     await session.rollback()
+                    inter = await session.get(Intervencion, elegida.id)
+                    if inter is not None and inter.estado == "pendiente":
+                        inter.detalle = f"{inter.detalle or ''}\n· No se pudo aplicar por WhatsApp: {e}"[:1500]
+                        ex.cerrar_propuesta(inter, usuario="whuilianny (WhatsApp)", resultado="descartada")
+                        await session.commit()
                     await _whatsapp_a_la_duena(
                         destino, f"No pude registrar ese pago: {e}", que="pago error",
                     )
-                    return "error"
-                ex.cerrar_propuesta(elegida, usuario="whuilianny (WhatsApp)", resultado="aplicada")
-                await session.commit()
-                pid = resultado.get("pedido_id")
-                await _whatsapp_a_la_duena(
-                    destino, f"✅ Listo: el pedido #{pid} quedó pagado.", que="pago aplicado",
-                )
+                    resultado_txt = "error"
+                else:
+                    ex.cerrar_propuesta(elegida, usuario="whuilianny (WhatsApp)", resultado="aplicada")
+                    await session.commit()
+                    pid = res.get("pedido_id")
+                    await _whatsapp_a_la_duena(
+                        destino, f"✅ Listo: el pedido #{pid} quedó pagado.", que="pago aplicado",
+                    )
+                    resultado_txt = "si"
     except Exception:  # noqa: BLE001 — su respuesta no puede tumbar al worker
         logger.exception("PR6b: no se pudo aplicar el SÍ/NO del pago de la dueña")
         return "error"
@@ -2670,13 +2730,29 @@ async def _responder_pago_duena(texto: str, context_id: str | None, message_id: 
             await rc.notificar_conversacion(telefono_cliente, "actualizada")
         except Exception:  # noqa: BLE001
             pass
-    return si_no
+    # La pregunta abierta se resolvió (sí, no, o descartada por error) → deja salir la siguiente.
+    encolar_siguiente_pregunta_de_pago({"tipo": "pago_confirmado"})
+    return resultado_txt
+
+
+def encolar_siguiente_pregunta_de_pago(propuesta: dict | None) -> bool:
+    """💰 PR6c: al RESOLVER una pregunta de pago (por WhatsApp o desde el panel), deja salir la
+    siguiente de la cola (una a la vez). Solo si lo resuelto era un pago. La tarea es un no-op barato
+    si no hay ninguna en cola. Nunca lanza."""
+    if (propuesta or {}).get("tipo") != "pago_confirmado":
+        return False
+    try:
+        preguntar_pagos_pendientes.apply_async()
+        return True
+    except Exception:  # noqa: BLE001 — la cola caída no puede tumbar lo que la llamó
+        logger.exception("PR6c: no se pudo encolar la siguiente pregunta de pago")
+        return False
 
 
 @celery_app.task(name="preguntar_pagos_pendientes")
 def preguntar_pagos_pendientes(telefono=None):
-    """Tarea: reintenta las preguntas de pago que no salieron (ventana cerrada). Se encola cuando la
-    dueña le escribe al número del negocio y su ventana de 24 h se abre."""
+    """Tarea: manda la SIGUIENTE pregunta de pago de la cola (una a la vez). Se encola cuando la dueña
+    abre su ventana (le escribe al negocio) y cada vez que se resuelve la pregunta abierta."""
     _run(_preguntar_pagos_a_la_duena(telefono))
 
 

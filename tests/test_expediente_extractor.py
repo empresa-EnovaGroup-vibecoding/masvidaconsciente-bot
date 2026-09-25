@@ -13,6 +13,7 @@ estos tests fijan (frases SINTÉTICAS al estilo de ella; ningún dato real en el
   · `aplicar_propuesta` es la única puerta: pedido 'confirmado' con origen 'dueña', pago 'confirmado'
     firmado por quien tocó, y se niega sobre pedidos cancelados o ya pagados.
 """
+import inspect
 import json
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -249,6 +250,46 @@ def test_evidencia_que_no_consta_o_nada_se_descartan(contexto):
     ev = EventoDuena(tipo="pago_confirmado", evidencia="ya me llegó el pago")
     assert _validar(ev, "hola mi reina, cómo está todo", contexto).accion == "descarta"
     assert _validar(EventoDuena(tipo="nada"), "bendiciones", contexto).accion == "descarta"
+
+
+# ══ 💰 PR6c: a qué pedido va el pago cuando el cliente tiene varios ══
+
+def _ped(id, total, pago_pendiente=None, estado="confirmado"):
+    return {"id": id, "estado": estado, "total": Decimal(str(total)), "items": [], "pago_pendiente": pago_pendiente}
+
+
+def _validar_pagos(ev, texto, ctx, pedidos):
+    return ex.validar(ev, texto, ctx, telefono=TEL, hoy=HOY, franjas=FRANJAS,
+                      pedido=pedidos[0] if pedidos else None, pedidos=pedidos, evidencia_id=77)
+
+
+def test_el_pago_elige_el_pedido_cuyo_total_casa_con_el_monto(contexto):
+    ev = EventoDuena(tipo="pago_confirmado", monto_literal="20$", evidencia="me llegaron los 20")
+    v = _validar_pagos(ev, "me llegaron los 20", contexto, [_ped(30, 36), _ped(29, 20)])
+    assert v.propuesta.pedido_id == 29 and v.propuesta.monto == 20.0
+
+
+def test_el_pago_con_varios_sin_pista_toma_el_mas_reciente_y_lo_dice(contexto):
+    ev = EventoDuena(tipo="pago_confirmado", evidencia="listo")
+    v = _validar_pagos(ev, "listo mi reina", contexto, [_ped(30, 36), _ped(29, 20)])
+    assert v.propuesta.pedido_id == 30 and "se propone el más reciente" in v.motivo
+    assert v.propuesta.monto == 36.0  # sin monto dicho, el total del elegido
+
+
+def test_el_pago_salta_los_pedidos_que_ya_tienen_pago_confirmado(contexto):
+    ev = EventoDuena(tipo="pago_confirmado", evidencia="me pagó")
+    v = _validar_pagos(ev, "me pagó", contexto, [_ped(30, 36, pago_pendiente="confirmado"), _ped(29, 20)])
+    assert v.propuesta.pedido_id == 29
+
+
+def test_sin_lista_de_pedidos_el_pago_se_porta_como_antes(contexto):
+    ev = EventoDuena(tipo="pago_confirmado", monto_literal="36$", metodo="Zelle", evidencia="recibido")
+    v = _validar(ev, "recibido 🙏", contexto, pedido=PEDIDO_ABIERTO)  # pedidos=None (default)
+    assert v.propuesta.pedido_id == 30 and v.propuesta.monto == 36.0
+
+
+def test_procesar_ventana_le_pasa_la_lista_de_pedidos_a_validar():
+    assert "pedidos=ctx.pedidos" in inspect.getsource(ex.procesar_ventana)
 
 
 def test_entrega_manana_en_la_tarde_sobre_el_pedido_abierto_se_escribe(contexto):
