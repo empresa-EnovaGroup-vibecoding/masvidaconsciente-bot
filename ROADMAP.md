@@ -39,13 +39,19 @@ Las **FASES 0 a 3 ya están hechas y desplegadas**:
 > también por los mensajes y notas de voz de la dueña vía un extractor tipado que el código valida; lo dudoso se
 > PROPONE, nunca se escribe)**. Orden: P1 migración 040 (#60) + transcripción de ecos (#61) HECHOS y PROBADOS en
 > pruebas (🎤 real, $0,00018) → PR3 extractor + propuestas + endpoints (#62, #63) + tarjeta "Sí, es correcto"/"No"
-> (dashboard #10, #11) HECHOS y PROBADOS (pedido #3130 real, 22-sep) → **PR4 LOS LECTORES (24-sep, SESIONES (38)):
-> HECHO, en PR** (rama `expediente-lectores` + dashboard `expediente-lectores-panel`): modo `uno` ve los pedidos
-> tomados a mano, el comprobante se pega a ellos, el cerebro `confirmado` vende lo nuevo solo sobre venta cerrada,
-> tipo `entregado`, candado del gemelo, retomar lee el expediente → SIGUE: fusionar → desplegar pruebas → la prueba
-> de 20 min de Maired → PR5 replay sobre las 305 conversaciones → P3 el cerebro `confirmado` en pruebas → P4 la
-> Voz → P5 Conocimiento del corpus → P6 puertas G1-G6 y producción por configuración. Decisiones: retorno
-> automático CON condiciones (flag apagado, Maired fija N); lo dudoso lo confirma Maired en la Bandeja;
+> (dashboard #10, #11) HECHOS y PROBADOS (pedido #3130 real, 22-sep) → ✅ PR4 LOS LECTORES (#64 + dashboard #12,
+> SESIONES (38)) → ✅ PR4c la boca (#65, SESIONES (39)) → ✅ PR5 retorno automático (#66 + dashboard #13,
+> SESIONES (40)) — todos FUSIONADOS y en pruebas (bot/worker `c7d7666`, panel `075587a`) → **24-sep NOCHE,
+> LÓGICA DEL NEGOCIO CERRADA POR MAIRED (SESIONES (41))**: (1) lo que Whuilianny dice CLARO (pedido, entrega) se
+> ANOTA SOLO — `expediente_escritura` default `auto`; (2) los PAGOS: el bot le PREGUNTA a ella por WhatsApp a su
+> celular personal y su SÍ/NO aplica o descarta (PR6b, pendiente); (3) el bot VUELVE IGUAL aunque haya propuestas
+> sin confirmar (el freno se quitó). → **PR6a "sin panel" HECHO, en PR** (rama `expediente-sin-panel` + dashboard
+> `expediente-sin-panel-panel`) → SIGUE: fusionar → desplegar pruebas → la prueba de Maired SIN botones →
+> PR6b la pregunta del pago por WhatsApp → PR7 replay sobre las 305 conversaciones (mide el extractor en `auto`
+> ANTES de producción) → P3 el cerebro `confirmado` en pruebas → P4 la Voz → P5 Conocimiento del corpus → P6
+> puertas G1-G6 y producción por configuración. Decisiones: retorno automático CON condiciones (flag apagado,
+> Maired fija N=2 h; un chat donde el bot pidió ayuda no se reactiva solo); lo dudoso queda como pregunta que, si
+> nadie toca, el bot no da por hecho;
 > `pago_confirmado` siempre propuesta; seguir vendiendo SOLO sobre venta cerrada (pagada/entregada); "ya te lo
 > entregué" se anota como propuesta. Producción sigue en `uno` hasta P6. Mapa para Maired: artefacto "Mapa del
 > expediente" (se actualiza al cerrar cada paso).

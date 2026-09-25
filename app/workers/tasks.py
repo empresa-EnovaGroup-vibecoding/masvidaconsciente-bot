@@ -555,8 +555,11 @@ async def _retorno_automatico(telefono: str) -> bool:
          (`'bot'` = pidió ayuda: eso lo resuelve una persona) ni un contacto privado.
       3. Su ÚLTIMO mensaje en ese chat (`Mensaje.rol='owner'`) fue hace más de N horas. Sin ningún
          mensaje de ella, NO retoma (una pausa puesta a mano sin escribir es deliberada).
-      4. CERO propuestas del expediente sin confirmar (`motivo='propuesta_expediente'`): lo que ella
-         dijo a mano y nadie confirmó todavía NO es dato, y el bot no debe pisarlo.
+      (Las propuestas del expediente sin confirmar NO frenan el retorno — decisión de Maired, 24-sep
+       noche, SESIONES (41): Whuilianny no va a estar en el panel confirmando tarjetas, y una
+       tarjeta sin tocar dejaba al cliente sin bot. El bot vuelve igual; PR4 ya le dice al modelo que
+       no dé por hecho lo no confirmado ni lo contradiga, y si el cliente pregunta justo por eso,
+       escala con `pedir_ayuda`.)
     Al retomar: despausa, cierra los avisos `chat_tomado` con una nota (sin motivo nuevo, sin ruido
     en la Bandeja) y avisa al panel para que el chat pase a "Alejandra atiende" en vivo. Cualquier
     error → False (el `_cliente_pausado` de siempre decide después). El pago NO se toca: sigue siendo
@@ -590,19 +593,9 @@ async def _retorno_automatico(telefono: str) -> bool:
             ).scalar_one_or_none()
             if ultimo_owner is None or ultimo_owner > now_utc() - timedelta(hours=horas):
                 return False
-            from app.models import MOTIVOS_INFORMATIVOS
-
-            propuestas = (
-                await session.execute(
-                    select(Intervencion).where(
-                        Intervencion.cliente_telefono == telefono,
-                        Intervencion.estado == "pendiente",
-                        Intervencion.motivo.in_(list(MOTIVOS_INFORMATIVOS)),
-                    )
-                )
-            ).scalars().all()
-            if propuestas:
-                return False
+            # (Aquí hubo una cuarta condición —"cero propuestas del expediente sin confirmar"— que
+            # trabó la prueba de Maired el 24-sep: la tarjeta de una entrega sin tocar dejaba al
+            # cliente sin bot. Se quitó por decisión suya; ver el docstring.)
             # TODO se cumple: el bot retoma solo.
             ahora = now_utc()
             cliente.bot_pausado = False

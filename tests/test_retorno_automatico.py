@@ -143,12 +143,14 @@ async def test_sin_mensaje_de_la_duena_no_retoma(monkeypatch):
     assert c.bot_pausado is True
 
 
-async def test_propuesta_pendiente_bloquea_el_retorno(monkeypatch):
+async def test_una_propuesta_pendiente_no_frena_el_retorno(monkeypatch):
+    """Decisión de Maired (24-sep noche, SESIONES (41)): una tarjeta sin tocar en la Bandeja no puede dejar
+    al cliente sin bot. El bot vuelve igual; PR4 le dice al modelo que no la dé por hecha."""
     c = _cliente()
     prop = SimpleNamespace(id=9, motivo="propuesta_expediente", estado="pendiente")
     ses = _montar(monkeypatch, horas=2, cliente=c, ultimo_owner=AHORA - timedelta(hours=5), propuestas=[prop])
-    assert await tasks._retorno_automatico(TEL) is False
-    assert c.bot_pausado is True and ses.commits == 0
+    assert await tasks._retorno_automatico(TEL) is True
+    assert c.bot_pausado is False and c.pausado_por is None and ses.commits == 1
 
 
 # ── EL CAMINO FELIZ ──

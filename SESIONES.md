@@ -17,6 +17,41 @@
 
 ---
 
+## 2026-09-24 (41) — 🧭 LA LÓGICA DEL NEGOCIO, CERRADA: "sin panel" (PR6a) y el pago por WhatsApp (PR6b, siguiente)
+
+**Qué pasó (19:38-19:46 VET, pruebas en `c7d7666`/`075587a`):** la prueba del retorno se trabó dos veces. Maired
+puso `0.5` (30 min) en vez de `0.05`; y el extractor dejó una propuesta de entrega (3464, "Parece que Whuilianny
+acordó la entrega el 2026-09-25 de 2 a 6 de la tarde") que nadie confirmó → la condición "cero propuestas
+pendientes" del retorno lo bloqueó. Su reacción: *"esto está engorroso; que ella tenga que ir al panel a confirmar…
+ella no va a estar cada rato con eso… tú ni me preguntas qué quiero hacer realmente"*. Razón: el diseño de
+las propuestas (22-sep) asumía que alguien entra al panel; Whuilianny no lo hace (305/313 conversaciones por su
+celular). Se paró y se le preguntó (AskUserQuestion). **Sus decisiones:**
+1. **Pedidos y entregas que ella dice claro se anotan solos.** Lo dudoso queda como pregunta en la Bandeja; si
+   nadie la toca, el bot simplemente no lo da por hecho.
+2. **Pagos: el bot le pregunta a ella por WhatsApp** a su **celular personal** (distinto del número del negocio,
+   confirmado por Maired) y su SÍ/NO aplica o descarta. Sin panel. → PR6b, una sesión.
+3. **El bot vuelve igual aunque haya algo sin confirmar** en la Bandeja (el freno del retorno se quita).
+
+**PR6a "sin panel" (rama `expediente-sin-panel` + dashboard `expediente-sin-panel-panel`):**
+- `_retorno_automatico`: se quitó la condición de propuestas pendientes (queda: flag>0, `pausado_por='dueña'`,
+  no privado, último mensaje de ella > N h). PR4 ya cubre lo demás: con propuestas pendientes el bloque de
+  estado mete `_LINEA_PROPUESTAS` (no lo des por hecho; si pregunta, `pedir_ayuda`) y el cerebro `confirmado`
+  releva vía `humano_sin_acuerdo`.
+- `expediente.ESCRITURA_DEFAULT = "auto"`: `procesar_ventana` escribe lo que `validar` dicta `escribe` (pedido
+  claro ≥0,8; entrega clara sobre el pedido abierto); pagos SIEMPRE propuesta; dudoso → propuesta; si `aplicar`
+  falla en `auto` (p. ej. el candado del gemelo) cae a propuesta. `propuestas`/`off` siguen como palancas.
+  **Guarda para producción:** el replay (PR7) tiene que dar ≥0,98 en lo escrito antes de promover (G6).
+- Panel: en Configuración (solo Enova) el selector "Lo que Whuilianny le dice al cliente": anota solo (auto,
+  recomendado) · todo me lo pregunta (propuestas) · apagado (off). `api.ts` `expediente_escritura`.
+- Tests: `test_una_propuesta_pendiente_no_frena_el_retorno` (antes "bloquea"); el default del expediente fijado en
+  `auto`. Suite verde.
+- ⚠️ Limitación conocida para PR6b (META-15b): sin plantilla HSM aprobada, la pregunta del pago solo le llega a
+  su celular si él escribió al número del negocio en las últimas 24 h; si no, espera en la Bandeja y se reintenta
+  cuando ella abra la ventana. Tarea para Maired/Erwin: plantilla aprobada en la WABA.
+
+**Sigue:** fusionar → desplegar pruebas → la prueba de Maired SIN botones (N=0,05: escribe como Whuilianny →
+3 min → escribe como clienta → el bot entra solo y responde con la entrega anotada SOLA) → PR6b.
+
 ## 2026-09-24 (40) — 🔓 EL BOT RETOMA SOLO: la pausa de la dueña deja de ser eterna, con condiciones (PR5)
 
 **Por qué (decisión de Maired 24-sep, AskUserQuestion "se calla solo y vuelve solo"):** la pausa
