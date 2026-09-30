@@ -350,12 +350,37 @@ async def test_con_dos_pedidos_un_monto_que_casa_con_uno_pregunta_por_ese(meta, 
     assert inter.propuesta["pedido_id"] == 31
 
 
-async def test_sin_ningun_pedido_sin_pagar_se_cierra_sin_molestarla(meta, monkeypatch):
-    inter = _inter(propuesta=_propuesta(pedido_id=None, candidatos=[]))
+async def test_sin_ningun_pedido_sin_pagar_le_dice_que_entendio_pero_no_hay_nada_que_registrar(meta, monkeypatch):
+    """30-sep (Maired): antes se cerraba en silencio y ella no sabía si el bot la había entendido."""
+    inter = _inter(propuesta=_propuesta(monto=20.0, pedido_id=None, candidatos=[]))
     _montar(monkeypatch, inter)
+    assert await tasks._preguntar_pagos_a_la_duena() == 1
+    texto = meta.await_args.args[1]
+    assert texto == (
+        "💬 Anoté que te llegaron $20 de Ana, pero no tiene ningún pedido sin pagar, "
+        "así que no registré nada. Si es un abono o algo aparte, lo resuelves tú."
+    )
+    assert inter.estado == "resuelta" and inter.propuesta["resultado"] == "descartada"
+    assert inter.propuesta["avisada_at"] and "no tiene ningún pedido sin pagar" in inter.detalle
+    # No se repite: ya está cerrada.
+    meta.reset_mock()
     assert await tasks._preguntar_pagos_a_la_duena() == 0
     meta.assert_not_awaited()
-    assert inter.estado == "resuelta" and inter.propuesta["resultado"] == "descartada"
+
+
+async def test_sin_pedido_y_sin_monto_dicho_tambien_avisa(meta, monkeypatch):
+    _montar(monkeypatch, _inter(propuesta=_propuesta(monto=None, pedido_id=None, candidatos=[])))
+    await tasks._preguntar_pagos_a_la_duena()
+    assert "Anoté que te llegó un pago de Ana, pero no tiene ningún pedido sin pagar" in meta.await_args.args[1]
+
+
+async def test_sin_pedido_con_la_ventana_cerrada_no_se_cierra_y_se_reintenta(meta, monkeypatch):
+    """Si el aviso no sale, la propuesta NO se cierra: se reintenta cuando ella abra la ventana."""
+    meta.side_effect = MetaRechazo(0, CODIGO_FUERA_DE_VENTANA, "ventana cerrada")
+    inter = _inter(propuesta=_propuesta(monto=20.0, pedido_id=None, candidatos=[]))
+    _montar(monkeypatch, inter)
+    assert await tasks._preguntar_pagos_a_la_duena() == 0
+    assert inter.estado == "pendiente" and "avisada_at" not in inter.propuesta
 
 
 async def test_otro_proceso_con_el_candado_no_manda_y_reintenta(meta, monkeypatch):
