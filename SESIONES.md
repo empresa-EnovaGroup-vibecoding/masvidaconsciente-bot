@@ -17,6 +17,25 @@
 
 ---
 
+## 2026-09-30 (45) — 💬 "Ya entendí, pero no hay nada que registrar": el bot deja de callar cuando no hay pedido sin pagar
+
+**Por qué:** en la primera prueba de la regla sencilla (PR #71, ya en pruebas), Maired escribió como Whuilianny "Me
+llegaron $20" en el chat de una clienta cuyo único pedido (#3131) ya estaba pagado desde el 24-sep. El bot SÍ lo leyó
+(propuesta 3471, monto 20, pedido 3131) pero, sin pedido sin pagar, cerró la propuesta **en silencio**
+("Ya no queda un pedido sin pagar de este cliente") y a ella no le llegó nada: parecía que no había pasado nada.
+Pedido de Maired: que ella vea que el bot sí entendió, y que lo resuelva ella.
+
+**Qué se hizo** (rama `pago-sin-pedido-avisa`, cambio chico en `tasks.py`):
+- `_texto_sin_pedido`: *"💬 Anoté que te llegaron $20 de Ana, pero no tiene ningún pedido sin pagar, así que no registré
+  nada. Si es un abono o algo aparte, lo resuelves tú."* (sin monto: "que te llegó un pago de Ana").
+- `_preguntar_pagos_sin_candado`: la acción "cerrar" ahora le AVISA una vez y DESPUÉS cierra la propuesta (nota en el
+  detalle + `avisada_at`). Si el WhatsApp no sale (ventana cerrada) la propuesta queda pendiente y se reintenta cuando
+  ella abra la ventana.
+- Tests: aviso con monto, sin monto, no se repite, ventana cerrada no cierra. **Suite 1379/0**, ruff limpio.
+
+**Sigue:** fusionar → desplegar pruebas (worker + bot) → repetir "Me llegaron $20" en ese mismo chat (debe llegar el
+aviso) y luego el guion completo con un pedido de $20 sin pagar.
+
 ## 2026-09-29 (44) — 💰 LA REGLA SENCILLA DEL PAGO: "si cuadra, pregunta; si no cuadra, se lo pasa a Whuilianny"
 
 **Por qué:** Codex revisó la confirmación de pagos y Maired pidió contrastar cada punto con evidencia. Los cuatro se

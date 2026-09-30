@@ -2544,6 +2544,23 @@ def _texto_pregunta_pago(propuesta: dict, nombre: str | None, telefono: str, ped
     return f"💰 ¿Te llegó el pago{monto_txt} de {_quien(nombre, telefono)}{ref}? Responde SÍ o NO."
 
 
+def _texto_sin_pedido(propuesta: dict, nombre: str | None, telefono: str) -> tuple[str, str]:
+    """💰 Lo que se le dice a la dueña cuando un pago NO tiene ningún pedido sin pagar donde caer:
+    que el bot SÍ entendió lo que dijo, pero no hay nada que registrar. Devuelve (whatsapp, nota)."""
+    from app.agent.expediente import _fmt
+
+    quien = _quien(nombre, telefono)
+    monto = propuesta.get("monto")
+    llego = _fmt(monto, propuesta.get("moneda") or "") if monto is not None else ""
+    que = f"que te llegaron {llego} de {quien}" if llego else f"que te llegó un pago de {quien}"
+    wa = (
+        f"💬 Anoté {que}, pero no tiene ningún pedido sin pagar, así que no registré nada. "
+        "Si es un abono o algo aparte, lo resuelves tú."
+    )
+    nota = f"Entendí {que}, pero no tiene ningún pedido sin pagar: no se registró nada. Se le avisó a una persona."
+    return wa, nota
+
+
 def _texto_no_cuadra(propuesta: dict, nombre: str | None, telefono: str, vivos: list) -> tuple[str, str]:
     """💰 Lo que se le dice a la dueña (y se anota en la Bandeja) cuando un pago NO CUADRA. Devuelve
     (whatsapp, nota). Sin preguntas: ese caso lo resuelve ella con su clienta."""
@@ -2589,7 +2606,8 @@ async def _preguntar_pagos_a_la_duena(telefono: str | None = None) -> int:
       · No cuadra (llegó menos o más, varios pedidos sin saber cuál) → no pregunta ni marca pagado:
         la marca `no_cuadra` (frena el cobro de ese pedido), lo anota en la Bandeja y le avisa a ella
         UNA vez. No bloquea la cola.
-      · Ningún pedido sin pagar → se cierra sin decir nada (el pago ya estaba registrado).
+      · Ningún pedido sin pagar → le dice UNA vez que lo entendió pero no hay nada que registrar
+        (ya no se cierra en silencio), y cierra la propuesta.
     Solo UN proceso a la vez (candado de Redis): si otro lo tiene, se reintenta en 30 s. Nunca lanza.
     `telefono` ya no filtra (la cola es global); se conserva por compatibilidad con quien la llama.
     """
@@ -2662,12 +2680,13 @@ async def _preguntar_pagos_sin_candado() -> int:
                     )).scalars().first()
                     if pagado is None:
                         vivos.append(ped)
-                if not vivos:
-                    plan.append({"id": i.id, "accion": "cerrar"})
-                    continue
                 nombre = (await session.execute(
                     select(Cliente.nombre).where(Cliente.telefono == i.cliente_telefono)
                 )).scalars().first()
+                if not vivos:
+                    wa, nota = _texto_sin_pedido(p, nombre, i.cliente_telefono)
+                    plan.append({"id": i.id, "accion": "cerrar", "texto": wa, "nota": nota})
+                    continue
                 cuadran = [v for v in vivos if await pago_cuadra(v, p.get("monto"), p.get("moneda") or "")]
                 if len(cuadran) == 1:
                     plan.append({
@@ -2686,12 +2705,22 @@ async def _preguntar_pagos_sin_candado() -> int:
     for paso in plan:
         try:
             if paso["accion"] == "cerrar":
+                # Antes se cerraba EN SILENCIO y ella no sabía si el bot la había entendido. Ahora se
+                # le dice una vez; si el WhatsApp no sale (ventana cerrada) la propuesta queda
+                # pendiente y se reintenta en la próxima apertura, sin molestar a nadie más.
+                try:
+                    await enviar_texto(destino, paso["texto"])
+                except Exception as e:  # noqa: BLE001
+                    logger.info("PR6c: no salió el aviso 'sin pedido' #%s (%s)", paso["id"], e)
+                    continue
                 async with factory() as s2:
                     inter = await s2.get(Intervencion, paso["id"])
                     if inter is not None and inter.estado == "pendiente":
-                        inter.detalle = f"{inter.detalle or ''}\n· Ya no queda un pedido sin pagar de este cliente."[:1500]
+                        inter.detalle = "\n".join(filter(None, [inter.detalle, f"· {paso['nota']}"]))[:1500]
+                        inter.propuesta = {**(inter.propuesta or {}), "avisada_at": now_utc().isoformat()}
                         ex.cerrar_propuesta(inter, usuario="sistema", resultado="descartada")
                         await s2.commit()
+                enviados += 1
                 continue
             if paso["accion"] == "avisar":
                 # Primero la MARCA (frena el cobro aunque el WhatsApp falle), después el aviso.
