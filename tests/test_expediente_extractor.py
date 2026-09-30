@@ -252,7 +252,9 @@ def test_evidencia_que_no_consta_o_nada_se_descartan(contexto):
     assert _validar(EventoDuena(tipo="nada"), "bendiciones", contexto).accion == "descarta"
 
 
-# ══ 💰 PR6c: a qué pedido va el pago cuando el cliente tiene varios ══
+# ══ 💰 La regla sencilla (29-sep): la extracción ANOTA los pedidos sin pagar; no elige a ciegas ══
+# A cuál va el pago (o si no cuadra y se le pasa a una persona) se decide al preguntar, con
+# `tools.pago_cuadra` — ver tests/test_pago_por_whatsapp.py.
 
 def _ped(id, total, pago_pendiente=None, estado="confirmado"):
     return {"id": id, "estado": estado, "total": Decimal(str(total)), "items": [], "pago_pendiente": pago_pendiente}
@@ -263,23 +265,24 @@ def _validar_pagos(ev, texto, ctx, pedidos):
                       pedido=pedidos[0] if pedidos else None, pedidos=pedidos, evidencia_id=77)
 
 
-def test_el_pago_elige_el_pedido_cuyo_total_casa_con_el_monto(contexto):
+def test_con_varios_pedidos_sin_pagar_no_elige_ninguno_y_los_anota(contexto):
     ev = EventoDuena(tipo="pago_confirmado", monto_literal="20$", evidencia="me llegaron los 20")
     v = _validar_pagos(ev, "me llegaron los 20", contexto, [_ped(30, 36), _ped(29, 20)])
-    assert v.propuesta.pedido_id == 29 and v.propuesta.monto == 20.0
+    assert v.propuesta.pedido_id is None and v.propuesta.candidatos == [30, 29]
+    assert v.propuesta.monto == 20.0 and "2 pedidos sin pagar" in v.motivo
 
 
-def test_el_pago_con_varios_sin_pista_toma_el_mas_reciente_y_lo_dice(contexto):
+def test_varios_sin_monto_tampoco_elige_el_mas_reciente(contexto):
     ev = EventoDuena(tipo="pago_confirmado", evidencia="listo")
     v = _validar_pagos(ev, "listo mi reina", contexto, [_ped(30, 36), _ped(29, 20)])
-    assert v.propuesta.pedido_id == 30 and "se propone el más reciente" in v.motivo
-    assert v.propuesta.monto == 36.0  # sin monto dicho, el total del elegido
+    assert v.propuesta.pedido_id is None and v.propuesta.monto is None  # no inventa de cuál es el total
 
 
-def test_el_pago_salta_los_pedidos_que_ya_tienen_pago_confirmado(contexto):
+def test_un_solo_pedido_sin_pagar_es_ese(contexto):
     ev = EventoDuena(tipo="pago_confirmado", evidencia="me pagó")
     v = _validar_pagos(ev, "me pagó", contexto, [_ped(30, 36, pago_pendiente="confirmado"), _ped(29, 20)])
-    assert v.propuesta.pedido_id == 29
+    assert v.propuesta.pedido_id == 29 and v.propuesta.candidatos == [29]
+    assert v.propuesta.monto == 20.0  # sin monto dicho, el total del único sin pagar
 
 
 def test_sin_lista_de_pedidos_el_pago_se_porta_como_antes(contexto):

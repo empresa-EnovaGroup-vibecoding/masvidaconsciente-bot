@@ -2519,41 +2519,108 @@ def _pregunta_vigente(propuesta: dict, ahora) -> bool:
         return True
 
 
+def _quien(nombre: str | None, telefono: str) -> str:
+    return (nombre or "").strip() or f"…{(telefono or '')[-4:]}"
+
+
+def _ref_pedido(pedido) -> str:
+    """'el pedido #3131 (2× Quesillo 200g)' — para que ella sepa exactamente cuál es."""
+    from app.agent.expediente import _items_breves
+
+    items = _items_breves(getattr(pedido, "items", None))
+    return f"el pedido #{pedido.id}" + (f" ({items})" if items else "")
+
+
 def _texto_pregunta_pago(propuesta: dict, nombre: str | None, telefono: str, pedido) -> str:
     """La pregunta que le llega a la dueña por WhatsApp: nombra a la clienta y el pedido, SIN códigos.
-    `pedido` = el objeto Pedido (o None). Si el monto dicho no cuadra con el total, se lo avisa."""
-    from app.agent.expediente import _fmt, _items_breves
+    Solo se manda cuando el pago CUADRA con ese pedido (`pago_cuadra`), así que no lleva avisos de monto."""
+    from app.agent.expediente import _fmt
 
-    monto_val = propuesta.get("monto")
-    monto = _fmt(monto_val, propuesta.get("moneda") or "")
+    monto = _fmt(propuesta.get("monto"), propuesta.get("moneda") or "")
     monto_txt = f" de {monto}" if monto else ""
-    quien = (nombre or "").strip() or f"…{(telefono or '')[-4:]}"
-    ref, aviso = "", ""
-    if pedido is not None:
-        items = _items_breves(getattr(pedido, "items", None))
-        ref = f" por el pedido #{pedido.id}" + (f" ({items})" if items else "")
-        total = getattr(pedido, "total", None)
-        if monto_val is not None and total is not None and abs(float(total) - float(monto_val)) > 0.01:
-            aviso = f" (el pedido es de {_fmt(total, '$')})"
+    ref = f" por {_ref_pedido(pedido)}" if pedido is not None else ""
     # El método (Zelle, efectivo…) NO va en la pregunta: chocaba con "por el pedido" y ella lo ve en
     # la Bandeja. La pregunta nombra a la clienta y el pedido para que sepa exactamente cuál es.
-    return f"💰 ¿Te llegó el pago{monto_txt} de {quien}{ref}?{aviso} Responde SÍ o NO."
+    return f"💰 ¿Te llegó el pago{monto_txt} de {_quien(nombre, telefono)}{ref}? Responde SÍ o NO."
+
+
+def _texto_no_cuadra(propuesta: dict, nombre: str | None, telefono: str, vivos: list) -> tuple[str, str]:
+    """💰 Lo que se le dice a la dueña (y se anota en la Bandeja) cuando un pago NO CUADRA. Devuelve
+    (whatsapp, nota). Sin preguntas: ese caso lo resuelve ella con su clienta."""
+    from app.agent.expediente import _fmt
+    from app.agent.tools import monto_en_efectivo
+
+    quien = _quien(nombre, telefono)
+    monto = propuesta.get("monto")
+    llego = _fmt(monto, propuesta.get("moneda") or "") if monto is not None else ""
+    if len(vivos) == 1:
+        ped = vivos[0]
+        total = getattr(ped, "total", None)
+        precio = _fmt(total, "$") if total is not None else "sin total"
+        if total is not None:
+            envio = getattr(ped, "costo_envio", 0) or 0
+            precio += f" ({_fmt(monto_en_efectivo(total, envio), '$')} pagando en dólares)"
+        razon = f"llegaron {llego} y {_ref_pedido(ped)} es de {precio}"
+    else:
+        lista = "; ".join(
+            f"{_ref_pedido(p)} {_fmt(p.total, '$')}" if getattr(p, "total", None) is not None else _ref_pedido(p)
+            for p in vivos
+        )
+        razon = (
+            f"tiene {len(vivos)} pedidos sin pagar ({lista}) y "
+            + (f"los {llego} no cuadran con uno solo" if llego else "no sé a cuál va el pago")
+        )
+    wa = f"💬 Lo de {quien} no cuadra: {razon}. Lo dejé sin marcar pagado; ese lo resuelves tú."
+    nota = f"No cuadra: {razon}. Se le pasó a una persona; el cobro de ese pedido queda frenado."
+    return wa, nota
+
+
+_CANDADO_PREGUNTAS = "preguntas_pago"
 
 
 async def _preguntar_pagos_a_la_duena(telefono: str | None = None) -> int:
-    """Le pregunta a la dueña por WhatsApp por el PRÓXIMO pago pendiente — UNA pregunta a la vez (PR6c).
+    """💰 Decide qué hacer con cada pago nuevo que la dueña dijo a mano, y manda lo que toca.
 
-    Si ya hay una pregunta de pago ABIERTA (preguntada hace < 24 h y sin resolver), no manda otra: la
-    siguiente espera en la Bandeja hasta que la abierta se resuelva (por WhatsApp o por el panel, que
-    reencolan esta tarea). La cola es global y FIFO (la propuesta más vieja primero). Nunca abre
-    expediente sobre el propio número de la dueña. Nunca lanza.
-
+    La regla sencilla (decisión de Maired, 29-sep): **si cuadra, pregunta; si no cuadra, se lo pasa a
+    ella.** Cuadra = lo que llegó coincide con un precio válido de UN solo pedido sin pagar
+    (`tools.pago_cuadra`: total, precio en dólares con el 20%, bolívares cotizados).
+      · Cuadra → la pregunta de SÍ/NO nombrando ese pedido. UNA pregunta a la vez: si hay otra abierta
+        (< 24 h), espera.
+      · No cuadra (llegó menos o más, varios pedidos sin saber cuál) → no pregunta ni marca pagado:
+        la marca `no_cuadra` (frena el cobro de ese pedido), lo anota en la Bandeja y le avisa a ella
+        UNA vez. No bloquea la cola.
+      · Ningún pedido sin pagar → se cierra sin decir nada (el pago ya estaba registrado).
+    Solo UN proceso a la vez (candado de Redis): si otro lo tiene, se reintenta en 30 s. Nunca lanza.
     `telefono` ya no filtra (la cola es global); se conserva por compatibilidad con quien la llama.
     """
+    try:
+        tomado = await rc.tomar_candado(_CANDADO_PREGUNTAS, 60)
+    except Exception:  # noqa: BLE001 — sin Redis no hay candado; se sigue (lo raro es la carrera)
+        logger.warning("PR6c: sin Redis no hay candado para las preguntas de pago; se sigue igual")
+        tomado = True
+    if not tomado:
+        logger.info("PR6c: otro proceso está mandando preguntas de pago; se reintenta en 30 s")
+        try:
+            preguntar_pagos_pendientes.apply_async(countdown=30)
+        except Exception:  # noqa: BLE001
+            pass
+        return 0
+    try:
+        return await _preguntar_pagos_sin_candado()
+    finally:
+        try:
+            await rc.soltar_candado(_CANDADO_PREGUNTAS)
+        except Exception:  # noqa: BLE001 — caduca solo a los 60 s
+            pass
+
+
+async def _preguntar_pagos_sin_candado() -> int:
     from sqlalchemy import select
 
+    from app.agent import expediente as ex
     from app.agent.expediente import MOTIVO_PROPUESTA
-    from app.models import Cliente, Intervencion, Pedido, now_utc
+    from app.agent.tools import pago_cuadra
+    from app.models import Cliente, Intervencion, Pago, Pedido, now_utc
     from app.services.dueno import cola, telefono_de_la_duena
 
     try:
@@ -2564,6 +2631,7 @@ async def _preguntar_pagos_a_la_duena(telefono: str | None = None) -> int:
         cola_duena = cola(destino)
         ahora = now_utc()
         factory = get_session_factory()
+        plan: list[dict] = []
         async with factory() as session:
             filas = (await session.execute(
                 select(Intervencion).where(
@@ -2574,54 +2642,105 @@ async def _preguntar_pagos_a_la_duena(telefono: str | None = None) -> int:
             pagos = [
                 i for i in filas
                 if (i.propuesta or {}).get("tipo") == "pago_confirmado"
-                and cola(i.cliente_telefono) != cola_duena  # (C) nunca la dueña como cliente
+                and cola(i.cliente_telefono) != cola_duena  # la dueña nunca es cliente
             ]
-            # ¿Hay una pregunta abierta y vigente? Entonces la siguiente espera.
-            abierta = next((i for i in pagos if _pregunta_vigente(i.propuesta or {}, ahora)), None)
-            if abierta is not None:
-                logger.info("PR6c: la pregunta del pago #%s sigue abierta; las demás esperan", abierta.id)
-                return 0
-            # La próxima sin preguntar (la más vieja).
-            siguiente = next((i for i in pagos if not (i.propuesta or {}).get("pregunta_wamid")), None)
-            if siguiente is None:
-                return 0
-            inter_id = siguiente.id
-            propuesta = dict(siguiente.propuesta or {})
-            cliente_tel = siguiente.cliente_telefono
-            nombre = (await session.execute(
-                select(Cliente.nombre).where(Cliente.telefono == cliente_tel)
-            )).scalars().first()
-            pedido = (
-                await session.get(Pedido, propuesta["pedido_id"]) if propuesta.get("pedido_id") else None
-            )
-            texto = _texto_pregunta_pago(propuesta, nombre, cliente_tel, pedido)
-    except Exception:  # noqa: BLE001 — sin lectura no se pregunta; se reintenta en la próxima apertura
+            hay_abierta = any(_pregunta_vigente(i.propuesta or {}, ahora) for i in pagos)
+            por_decidir = [
+                i for i in pagos
+                if not (i.propuesta or {}).get("pregunta_wamid") and not (i.propuesta or {}).get("avisada_at")
+            ]
+            for i in por_decidir:
+                p = dict(i.propuesta or {})
+                ids = p.get("candidatos") or ([p["pedido_id"]] if p.get("pedido_id") else [])
+                vivos = []
+                for pid in ids:
+                    ped = await session.get(Pedido, pid)
+                    if ped is None or getattr(ped, "estado", None) == "cancelado":
+                        continue
+                    pagado = (await session.execute(
+                        select(Pago.id).where(Pago.pedido_id == ped.id, Pago.estado == "confirmado")
+                    )).scalars().first()
+                    if pagado is None:
+                        vivos.append(ped)
+                if not vivos:
+                    plan.append({"id": i.id, "accion": "cerrar"})
+                    continue
+                nombre = (await session.execute(
+                    select(Cliente.nombre).where(Cliente.telefono == i.cliente_telefono)
+                )).scalars().first()
+                cuadran = [v for v in vivos if await pago_cuadra(v, p.get("monto"), p.get("moneda") or "")]
+                if len(cuadran) == 1:
+                    plan.append({
+                        "id": i.id, "accion": "preguntar", "pedido_id": cuadran[0].id,
+                        "texto": _texto_pregunta_pago(p, nombre, i.cliente_telefono, cuadran[0]),
+                    })
+                else:
+                    wa, nota = _texto_no_cuadra(p, nombre, i.cliente_telefono, vivos)
+                    plan.append({"id": i.id, "accion": "avisar", "texto": wa, "nota": nota})
+    except Exception:  # noqa: BLE001 — sin lectura no se decide nada; se reintenta en la próxima
         logger.exception("PR6b: no se pudieron leer las propuestas de pago pendientes")
         return 0
 
-    # Se manda FUERA de la sesión de lectura y se marca en una mini-transacción aparte: si la marca
-    # falla, lo peor es re-preguntar (molesto, no grave) — nunca marcar como preguntada una que no salió.
-    try:
-        resp = await enviar_texto(destino, texto)
-    except Exception as e:  # noqa: BLE001 — ventana cerrada (131047) u otro: queda en la bandeja
-        logger.info("PR6b: no salió la pregunta del pago #%s (%s); queda en la bandeja", inter_id, e)
-        return 0
-    wamid = wa_message_id(resp)
-    try:
-        factory = get_session_factory()
-        async with factory() as s2:
-            inter = await s2.get(Intervencion, inter_id)
-            if inter is None or inter.estado != "pendiente":
-                return 1
-            inter.propuesta = {
-                **(inter.propuesta or {}),
-                "pregunta_wamid": wamid,
-                "preguntada_at": now_utc().isoformat(),
-            }
-            await s2.commit()
-    except Exception:  # noqa: BLE001 — el WhatsApp ya salió; solo no quedó marcada
-        logger.exception("PR6b: la pregunta del pago #%s salió pero no se pudo marcar", inter_id)
-    return 1
+    enviados = 0
+    pregunto = hay_abierta  # UNA pregunta a la vez; los avisos de "no cuadra" no esperan turno
+    for paso in plan:
+        try:
+            if paso["accion"] == "cerrar":
+                async with factory() as s2:
+                    inter = await s2.get(Intervencion, paso["id"])
+                    if inter is not None and inter.estado == "pendiente":
+                        inter.detalle = f"{inter.detalle or ''}\n· Ya no queda un pedido sin pagar de este cliente."[:1500]
+                        ex.cerrar_propuesta(inter, usuario="sistema", resultado="descartada")
+                        await s2.commit()
+                continue
+            if paso["accion"] == "avisar":
+                # Primero la MARCA (frena el cobro aunque el WhatsApp falle), después el aviso.
+                async with factory() as s2:
+                    inter = await s2.get(Intervencion, paso["id"])
+                    if inter is None or inter.estado != "pendiente":
+                        continue
+                    if not (inter.propuesta or {}).get("no_cuadra"):
+                        inter.detalle = f"{inter.detalle or ''}\n· {paso['nota']}"[:1500]
+                    inter.propuesta = {**(inter.propuesta or {}), "no_cuadra": True}
+                    await s2.commit()
+                try:
+                    await enviar_texto(destino, paso["texto"])
+                except Exception as e:  # noqa: BLE001 — ventana cerrada: se reintenta en la próxima
+                    logger.info("PR6c: no salió el aviso de 'no cuadra' #%s (%s)", paso["id"], e)
+                    continue
+                async with factory() as s2:
+                    inter = await s2.get(Intervencion, paso["id"])
+                    if inter is not None and inter.estado == "pendiente":
+                        inter.propuesta = {**(inter.propuesta or {}), "avisada_at": now_utc().isoformat()}
+                        await s2.commit()
+                enviados += 1
+                continue
+            # preguntar
+            if pregunto:
+                continue
+            try:
+                resp = await enviar_texto(destino, paso["texto"])
+            except Exception as e:  # noqa: BLE001 — ventana cerrada (131047) u otro: queda en la bandeja
+                logger.info("PR6b: no salió la pregunta del pago #%s (%s); queda en la bandeja", paso["id"], e)
+                continue
+            pregunto = True
+            enviados += 1
+            # Se marca DESPUÉS de mandar: si la marca falla, lo peor es re-preguntar, nunca marcar
+            # como preguntada una que no salió.
+            async with factory() as s2:
+                inter = await s2.get(Intervencion, paso["id"])
+                if inter is not None and inter.estado == "pendiente":
+                    inter.propuesta = {
+                        **(inter.propuesta or {}),
+                        "pregunta_wamid": wa_message_id(resp),
+                        "preguntada_at": now_utc().isoformat(),
+                        "pedido_id": paso["pedido_id"],
+                        "no_cuadra": False,
+                    }
+                    await s2.commit()
+        except Exception:  # noqa: BLE001 — un paso roto no tumba los demás
+            logger.exception("PR6c: falló el paso '%s' del pago #%s", paso.get("accion"), paso.get("id"))
+    return enviados
 
 
 async def _responder_pago_duena(texto: str, context_id: str | None, message_id: str) -> str:
@@ -2673,6 +2792,20 @@ async def _responder_pago_duena(texto: str, context_id: str | None, message_id: 
                     (i for i in candidatas if (i.propuesta or {}).get("pregunta_wamid") == context_id),
                     None,
                 )
+                if elegida is None:
+                    # Citó un mensaje que NO es una pregunta abierta (una ya resuelta, u otro
+                    # mensaje): su "sí" no se le aplica a otra. Se le dice y no se toca nada.
+                    abierta = ""
+                    if len(vigentes) == 1:
+                        pid = (vigentes[0].propuesta or {}).get("pedido_id")
+                        abierta = f" La que sigue abierta es la del pedido #{pid}." if pid else ""
+                    await _whatsapp_a_la_duena(
+                        destino,
+                        "Esa pregunta ya no está abierta, así que no anoté nada." + abierta
+                        + " Si es por esa, contéstame citándola.",
+                        que="cita sin pregunta",
+                    )
+                    return "cita_sin_pregunta"
             if elegida is None and num is not None:
                 elegida = next((i for i in candidatas if i.id == num), None)
             if elegida is None and len(vigentes) == 1:
@@ -2686,6 +2819,8 @@ async def _responder_pago_duena(texto: str, context_id: str | None, message_id: 
                     )
                     return "varias"
                 logger.info("PR6b: SÍ/NO de la dueña sin pregunta de pago abierta que casar")
+                # El webhook ya no encola la cola cuando llega un SÍ/NO: se deja salir aquí.
+                encolar_siguiente_pregunta_de_pago({"tipo": "pago_confirmado"})
                 return "sin_candidata"
             telefono_cliente = elegida.cliente_telefono
             if si_no == "no":

@@ -224,31 +224,36 @@ async def _procesar_entrante(mensaje) -> str:
 async def _atender_a_la_duena(mensaje) -> None:
     """💰 PR6b: la dueña le escribió al número del negocio desde su celular. Dos cosas, sin contestarle:
 
-    1. Su ventana de 24 h acaba de abrirse ⇒ se encola el reintento de las preguntas de pago que no
-       habían podido salir (`preguntar_pagos_pendientes`). Es el "hola" diario que ella manda.
-    2. Si lo que escribió es un SÍ/NO claro (`interpretar_respuesta_duena`), se encola
+    1. Si lo que escribió es un SÍ/NO claro (`interpretar_respuesta_duena`), se encola
        `responder_pago_duena` con el `context_id` (por si citó la pregunta) y el `message_id`.
        Idempotente por `message_id` (`rc.ya_procesado`): si Meta reenvía el webhook, no se aplica dos veces.
+       La SIGUIENTE pregunta la deja salir esa tarea DESPUÉS de su "✅ Listo" (antes se encolaba aquí
+       en paralelo y podía llegarle una pregunta nueva antes de saber si la anterior se anotó).
+    2. Cualquier otra cosa: su ventana de 24 h acaba de abrirse ⇒ se encola la cola de preguntas de
+       pago (`preguntar_pagos_pendientes`). Es el "hola" diario que ella manda.
 
     Sigue sin crear ficha ni gastar IA. Nunca lanza: un fallo aquí no puede tumbar el webhook.
     """
-    try:
-        from app.workers.tasks import preguntar_pagos_pendientes
+    texto = (mensaje.get("texto") or "").strip() if mensaje.get("tipo") == "text" else ""
+    es_respuesta = False
+    if texto:
+        try:
+            from app.agent.expediente import interpretar_respuesta_duena
 
-        preguntar_pagos_pendientes.apply_async()
-    except Exception:  # noqa: BLE001 — el reintento es una mejora; su ventana ya quedó abierta
-        logger.exception("PR6b: no se pudo encolar el reintento de las preguntas de pago")
-    if mensaje.get("tipo") != "text":
-        return
-    texto = (mensaje.get("texto") or "").strip()
-    if not texto:
+            es_respuesta = interpretar_respuesta_duena(texto) is not None
+        except Exception:  # noqa: BLE001
+            logger.exception("PR6b: no se pudo leer si la dueña respondió a un pago")
+    if not es_respuesta:
+        try:
+            from app.workers.tasks import preguntar_pagos_pendientes
+
+            preguntar_pagos_pendientes.apply_async()
+        except Exception:  # noqa: BLE001 — el reintento es una mejora; su ventana ya quedó abierta
+            logger.exception("PR6b: no se pudo encolar el reintento de las preguntas de pago")
         return
     try:
-        from app.agent.expediente import interpretar_respuesta_duena
         from app.services import redis_client as rc
 
-        if interpretar_respuesta_duena(texto) is None:
-            return
         if await rc.ya_procesado(mensaje["message_id"]):
             return
         from app.workers.tasks import responder_pago_duena

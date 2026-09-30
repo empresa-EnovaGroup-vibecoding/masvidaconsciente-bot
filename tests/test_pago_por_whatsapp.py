@@ -52,23 +52,37 @@ class _Res:
         return self._filas[0] if self._filas else None
 
 
-def _pedido(id=30, total=14.0, items=None):
-    return SimpleNamespace(
-        id=id, total=total,
+def _pedido(id=30, total=14.0, items=None, **kw):
+    base = dict(
+        id=id, total=total, estado="confirmado", costo_envio=0, cliente_telefono=TEL,
+        cotizado_bs=None, cotizado_usd=None, cotizado_usd_divisas=None, tasa_cotizada=None,
         items=items if items is not None else [{"producto": "Quesillo 200g", "cantidad": 2}],
     )
+    base.update(kw)
+    return SimpleNamespace(**base)
 
 
 class _Sesion:
     """intervenciones → la lista de propuestas; clientes → el nombre; `get` por id (Intervencion o Pedido)."""
 
-    def __init__(self, inters=(), nombre="Ana", pedido=None):
+    def __init__(self, inters=(), nombre="Ana", pedido=None, pedidos=None):
         self.inters = list(inters)
         self.nombre = nombre
-        self.pedido = pedido if pedido is not None else _pedido()
+        lista = pedidos if pedidos is not None else [pedido if pedido is not None else _pedido()]
+        self.pedidos = {p.id: p for p in lista}
+        self.pedido = lista[0]
+        self.agregados = []
         self.commits = 0
         self.rollbacks = 0
         self.sql = []
+
+    def add(self, obj):
+        self.agregados.append(obj)
+
+    async def flush(self):
+        for o in self.agregados:
+            if getattr(o, "id", None) is None:
+                o.id = 99
 
     async def __aenter__(self):
         return self
@@ -87,7 +101,7 @@ class _Sesion:
 
     async def get(self, modelo, pk):
         if getattr(modelo, "__name__", "") == "Pedido":
-            return self.pedido if (self.pedido and self.pedido.id == pk) else None
+            return self.pedidos.get(pk)
         return next((i for i in self.inters if i.id == pk), None)
 
     async def commit(self):
@@ -124,12 +138,15 @@ def meta(monkeypatch):
     monkeypatch.setattr(tasks.rc, "notificar_conversacion", AsyncMock())
     enviado.siguiente = []
     monkeypatch.setattr(tasks.preguntar_pagos_pendientes, "apply_async",
-                        lambda *a, **kw: enviado.siguiente.append(a))
+                        lambda *a, **kw: enviado.siguiente.append(kw or a))
+    # El candado de "un proceso a la vez" (Redis): libre por defecto.
+    monkeypatch.setattr(tasks.rc, "tomar_candado", AsyncMock(return_value=True))
+    monkeypatch.setattr(tasks.rc, "soltar_candado", AsyncMock())
     return enviado
 
 
-def _montar(monkeypatch, *inters, nombre="Ana", pedido=None):
-    ses = _Sesion(inters, nombre, pedido)
+def _montar(monkeypatch, *inters, nombre="Ana", pedido=None, pedidos=None):
+    ses = _Sesion(inters, nombre, pedido, pedidos)
     monkeypatch.setattr(tasks, "get_session_factory", lambda: (lambda: ses))
     return ses
 
@@ -276,17 +293,122 @@ async def test_no_pregunta_por_un_pago_sobre_el_numero_de_la_duena(meta, monkeyp
     assert real.propuesta.get("pregunta_wamid") == WAMID_PREG
 
 
-async def test_la_pregunta_avisa_si_el_monto_no_cuadra_con_el_pedido(meta, monkeypatch):
-    _montar(monkeypatch, _inter(propuesta=_propuesta(monto=14.0)), pedido=_pedido(total=20.0))
-    await tasks._preguntar_pagos_a_la_duena()
-    assert "(el pedido es de $20)" in meta.await_args.args[1]
+# ══ 5b) LA REGLA SENCILLA (29-sep): si cuadra, pregunta; si no cuadra, se lo pasa a ella ══
+
+async def test_16_sobre_20_cuadra_porque_es_el_precio_en_dolares(meta, monkeypatch):
+    """La regla de Whuilianny: pagando en dólares, 20% de descuento. $16 sobre $20 ES el pago completo."""
+    inter = _inter(propuesta=_propuesta(monto=16.0))
+    _montar(monkeypatch, inter, pedido=_pedido(total=20.0))
+    assert await tasks._preguntar_pagos_a_la_duena() == 1
+    assert meta.await_args.args[1].startswith("💰 ¿Te llegó el pago de $16 de Ana por el pedido #30")
+    assert inter.propuesta["pregunta_wamid"] == WAMID_PREG and inter.propuesta["no_cuadra"] is False
 
 
-async def test_sin_pedido_la_pregunta_no_lo_nombra(meta, monkeypatch):
-    _montar(monkeypatch, _inter(propuesta=_propuesta(pedido_id=None)))
+async def test_si_no_cuadra_no_pregunta_avisa_una_vez_y_frena_el_cobro(meta, monkeypatch):
+    inter = _inter(propuesta=_propuesta(monto=12.0))
+    ses = _montar(monkeypatch, inter, pedido=_pedido(total=20.0))
+    assert await tasks._preguntar_pagos_a_la_duena() == 1
+    texto = meta.await_args.args[1]
+    assert texto.startswith("💬 Lo de Ana no cuadra: llegaron $12 y el pedido #30")
+    assert "es de $20 ($16 pagando en dólares)" in texto and "ese lo resuelves tú" in texto
+    assert "Responde SÍ o NO" not in texto  # no es una pregunta
+    assert inter.propuesta["no_cuadra"] is True and inter.propuesta["avisada_at"]
+    assert "pregunta_wamid" not in inter.propuesta and inter.estado == "pendiente"
+    assert "No cuadra" in inter.detalle
+    # Una sola vez: la próxima corrida ya no avisa de nuevo.
+    meta.reset_mock()
+    assert await tasks._preguntar_pagos_a_la_duena() == 0
+    meta.assert_not_awaited()
+    assert ses.commits >= 2
+
+
+async def test_un_no_cuadra_no_bloquea_la_pregunta_de_otro_pago_que_si_cuadra(meta, monkeypatch):
+    raro = _inter(7, propuesta=_propuesta(monto=12.0, pedido_id=30))
+    bueno = _inter(8, cliente_telefono="584241111111", propuesta=_propuesta(telefono="584241111111", monto=14.0, pedido_id=31))
+    _montar(monkeypatch, raro, bueno, pedidos=[_pedido(30, total=20.0), _pedido(31, total=14.0)])
+    assert await tasks._preguntar_pagos_a_la_duena() == 2  # el aviso de uno y la pregunta del otro
+    textos = [c.args[1] for c in meta.await_args_list]
+    assert any(t.startswith("💬 Lo de Ana no cuadra") for t in textos)
+    assert any(t.startswith("💰 ¿Te llegó el pago de $14") for t in textos)
+    assert bueno.propuesta.get("pregunta_wamid") == WAMID_PREG
+
+
+async def test_con_dos_pedidos_sin_pagar_y_sin_monto_no_adivina(meta, monkeypatch):
+    inter = _inter(propuesta=_propuesta(monto=None, pedido_id=None, candidatos=[30, 31]))
+    _montar(monkeypatch, inter, pedidos=[_pedido(30, total=16.0), _pedido(31, total=14.0, items=[{"producto": "Galletas", "cantidad": 1}])])
     await tasks._preguntar_pagos_a_la_duena()
     texto = meta.await_args.args[1]
-    assert "por el pedido" not in texto and texto == "💰 ¿Te llegó el pago de $14 de Ana? Responde SÍ o NO."
+    assert "tiene 2 pedidos sin pagar" in texto and "no sé a cuál va el pago" in texto
+    assert "#30" in texto and "#31" in texto and inter.propuesta["no_cuadra"] is True
+
+
+async def test_con_dos_pedidos_un_monto_que_casa_con_uno_pregunta_por_ese(meta, monkeypatch):
+    inter = _inter(propuesta=_propuesta(monto=14.0, pedido_id=None, candidatos=[30, 31]))
+    _montar(monkeypatch, inter, pedidos=[_pedido(30, total=36.0), _pedido(31, total=14.0)])
+    await tasks._preguntar_pagos_a_la_duena()
+    assert "por el pedido #31" in meta.await_args.args[1]
+    assert inter.propuesta["pedido_id"] == 31
+
+
+async def test_sin_ningun_pedido_sin_pagar_se_cierra_sin_molestarla(meta, monkeypatch):
+    inter = _inter(propuesta=_propuesta(pedido_id=None, candidatos=[]))
+    _montar(monkeypatch, inter)
+    assert await tasks._preguntar_pagos_a_la_duena() == 0
+    meta.assert_not_awaited()
+    assert inter.estado == "resuelta" and inter.propuesta["resultado"] == "descartada"
+
+
+async def test_otro_proceso_con_el_candado_no_manda_y_reintenta(meta, monkeypatch):
+    monkeypatch.setattr(tasks.rc, "tomar_candado", AsyncMock(return_value=False))
+    _montar(monkeypatch, _inter())
+    assert await tasks._preguntar_pagos_a_la_duena() == 0
+    meta.assert_not_awaited()
+    assert meta.siguiente == [{"countdown": 30}]
+
+
+async def test_el_candado_se_suelta_siempre(meta, monkeypatch):
+    _montar(monkeypatch, _inter())
+    await tasks._preguntar_pagos_a_la_duena()
+    tasks.rc.soltar_candado.assert_awaited_once()
+
+
+@pytest.mark.parametrize("monto, moneda, total, extra, cuadra", [
+    (None, "", 20.0, {}, True),                      # "ya me pagó": su palabra sobre ESE pedido
+    (20.0, "$", 20.0, {}, True),                     # el total
+    (16.0, "$", 20.0, {}, True),                     # precio en dólares (20% de descuento)
+    (19.7, "$", 20.0, {}, True),                     # redondeo ($0,50)
+    (12.0, "$", 20.0, {}, False),                    # llegó menos
+    (25.0, "$", 20.0, {}, False),                    # llegó más
+    (7300.0, "Bs", 20.0, {"cotizado_bs": 7300}, True),   # los bolívares cotizados
+    (7300.0, "Bs", 20.0, {"tasa_cotizada": 365}, True),  # total × la tasa grabada
+    (5000.0, "Bs", 20.0, {"tasa_cotizada": 365}, False),
+    (20.0, "$", None, {}, False),                    # sin total no hay con qué comparar
+])
+async def test_pago_cuadra(monto, moneda, total, extra, cuadra):
+    from app.agent.tools import pago_cuadra
+
+    assert await pago_cuadra(_pedido(total=total, **extra), monto, moneda) is cuadra
+
+
+async def test_la_puerta_de_escritura_no_marca_pagado_un_monto_que_no_cuadra(monkeypatch):
+    """Protege también el botón del panel: $12 sobre $20 no se marca pagado."""
+    ses = _Sesion([], pedido=_pedido(total=20.0))
+    with pytest.raises(ValueError, match="no cuadra"):
+        await expediente.aplicar_propuesta(ses, _propuesta(monto=12.0), usuario="x")
+    assert ses.agregados == []
+    r = await expediente.aplicar_propuesta(ses, _propuesta(monto=16.0), usuario="x")  # dólares: sí
+    assert r["pedido_id"] == 30 and ses.pedido.estado == "pagado"
+
+
+async def test_el_cobro_no_se_da_de_un_pedido_con_pago_en_disputa():
+    from app.agent.tools import _pago_en_disputa
+
+    disputa = _inter(propuesta=_propuesta(no_cuadra=True, candidatos=[30]))
+    assert await _pago_en_disputa(_Sesion([disputa]), TEL, 30) is True
+    assert await _pago_en_disputa(_Sesion([disputa]), TEL, 31) is False
+    assert await _pago_en_disputa(_Sesion([_inter()]), TEL, 30) is False  # cuadra: no frena
+    src = inspect.getsource(__import__("app.agent.tools", fromlist=["x"]).generar_datos_pago)
+    assert "await _pago_en_disputa(session, telefono, pedido.id)" in src
 
 
 def test_la_pregunta_no_lleva_codigo_de_propuesta(meta, monkeypatch):
@@ -366,6 +488,23 @@ async def test_varias_abiertas_sin_pista_pide_citar_y_no_toca_nada(meta, aplicad
     destino, texto = meta.await_args.args
     assert destino == DUENA and "más de un pago" in texto and "citando" in texto
     assert meta.siguiente == []  # no se resolvió nada: no se libera la cola
+
+
+async def test_si_cita_un_mensaje_que_no_es_la_pregunta_abierta_no_se_aplica_a_otra(meta, aplicado, monkeypatch):
+    """Codex, 29-sep: citaba una pregunta ya resuelta (u otro mensaje) y su "sí" caía en la abierta."""
+    abierta = _preguntada(7, "wamid.ABIERTA")
+    ses = _montar(monkeypatch, abierta)
+    assert await tasks._responder_pago_duena("sí", "wamid.OTRO_MENSAJE", "wamid.MSG") == "cita_sin_pregunta"
+    aplicado.assert_not_awaited()
+    assert abierta.estado == "pendiente" and ses.commits == 0
+    texto = meta.await_args.args[1]
+    assert "no anoté nada" in texto and "pedido #30" in texto
+
+
+async def test_un_si_sin_nada_que_casar_deja_salir_la_cola(meta, aplicado, monkeypatch):
+    _montar(monkeypatch, _inter())  # pendiente pero sin preguntar
+    assert await tasks._responder_pago_duena("sí", None, "wamid.MSG") == "sin_candidata"
+    assert len(meta.siguiente) == 1
 
 
 async def test_no_descarta_sin_escribir_nada(meta, aplicado, monkeypatch):
@@ -470,10 +609,11 @@ def _msg(texto="sí", tipo="text", context_id=WAMID_PREG, message_id="wamid.MSG"
             "context_id": context_id}
 
 
-async def test_su_si_encola_la_respuesta_con_la_cita_y_el_reintento(cola):
+async def test_su_si_encola_la_respuesta_y_no_la_siguiente_pregunta_en_paralelo(cola):
+    """La siguiente pregunta la deja salir la respuesta DESPUÉS de su "✅ Listo", no el webhook a la vez."""
     reintentos, respuestas = cola
     await webhook._atender_a_la_duena(_msg("sí"))
-    assert len(reintentos) == 1
+    assert reintentos == []
     assert respuestas == [("sí", WAMID_PREG, "wamid.MSG")]
 
 

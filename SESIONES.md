@@ -17,6 +17,68 @@
 
 ---
 
+## 2026-09-29 (44) — 💰 LA REGLA SENCILLA DEL PAGO: "si cuadra, pregunta; si no cuadra, se lo pasa a Whuilianny"
+
+**Por qué:** Codex revisó la confirmación de pagos y Maired pidió contrastar cada punto con evidencia. Los cuatro se
+confirmaron en el código:
+1. un pago de menos marcaba el pedido como pagado (`expediente.py`, antes línea 729: `pedido.estado = "pagado"` sin
+   comparar);
+2. con varios pedidos sin pagar se elegía el más reciente a ciegas;
+3. una cita que no casaba con ninguna pregunta caía en "la única abierta";
+4. no había candado contra dos envíos a la vez (el worker corre `--concurrency=2`). Además, al contestar "sí", el
+   webhook encolaba en paralelo la siguiente pregunta, que podía llegarle antes del "✅ Listo".
+
+**La pausa:** el cambio de Codex `98be60f` (22-sep, "no revisado") hizo que los cinco motivos de ayuda pausaran, contra
+la decisión del 14-jul (`0722794`). Entró con la fusión del #59, que Claude revisó sin detectarlo. Está **solo en
+pruebas**: producción corre una versión anterior (`{"pide_persona", "reclamo"}`). En el informe de costo se dijo, mal,
+que "apaga el bot con las clientas".
+
+**La evidencia de negocio** (las 313 conversaciones del corpus): pagar de menos es raro, unas 8 a 10 de verdad del
+negocio, y cada caso es un arreglo personal (cuenta abierta con abonos, saldo a favor "para el próximo kilo",
+diferencia por el cambio). **Hallazgo clave:** $16 sobre $20 puede ser el pago COMPLETO, por la regla del 20% pagando
+en dólares (`monto_en_efectivo`).
+
+**Decisión de Maired:** anota y se lo pasa a Whuilianny. La cuenta abierta queda para después.
+
+**Qué se hizo** (rama `pagos-regla-sencilla`):
+- `tools.monto_calza` + `tools.pago_cuadra(pedido, monto, moneda)`, la ÚNICA cuenta de "¿cuadra?". Acepta el total, el
+  precio en dólares con el 20%, `cotizado_usd`/`cotizado_usd_divisas` y los Bs (`cotizado_bs` o total × `tasa_cotizada`
+  o la BCV). Tolerancia de $0,50 o 2%. Sin monto dicho, cuadra; sin total, no. El comprobante usa `monto_calza`, sin
+  cambiar su conducta.
+- `validar` ya no elige: anota `candidatos` (los pedidos sin pagar). Con uno solo fija `pedido_id`; con varios queda
+  `pedido_id=None`.
+- `_preguntar_pagos_a_la_duena`: candado de Redis de 60 s (`rc.tomar_candado`/`soltar_candado`; si está ocupado,
+  reintenta a los 30 s). Para cada pago nuevo:
+  - cuadra con UNO → pregunta nombrando ese pedido (una a la vez);
+  - no cuadra → marca `no_cuadra` PRIMERO (frena el cobro aunque el WhatsApp falle), lo anota en el detalle y le avisa
+    UNA vez ("💬 Lo de Ana no cuadra: llegaron $12 y el pedido #30 (…) es de $20 ($16 pagando en dólares). Lo dejé sin
+    marcar pagado; ese lo resuelves tú."), con `avisada_at`; no bloquea la cola;
+  - sin pedidos sin pagar → se cierra sin molestarla.
+- `aplicar_propuesta` se niega a marcar pagado un monto que no cuadra, también desde el botón del panel. Un precio menor
+  aceptado es un "precio especial".
+- `generar_datos_pago` no cobra un pedido con pago en disputa (`_pago_en_disputa`): le dice a Alejandra que pida ayuda.
+- `_responder_pago_duena`: una cita que no casa → no aplica nada y se lo explica. Un "sí" sin nada que casar deja
+  salir la cola.
+- Webhook: un SÍ/NO ya no encola la siguiente pregunta en paralelo; la saca la respuesta, después del "✅ Listo".
+- La pausa vuelve a lo de julio: `_MOTIVOS_DE_PAUSA = {"pide_persona", "reclamo", "acuerdo_especial"}`, fijada por
+  `tests/test_pausa_solo_cuando_toca.py`.
+- Tests: `test_pago_por_whatsapp.py` (pago_cuadra ×10, $16/$20 cuadra, $12 no cuadra + aviso una vez, un no-cuadra no
+  bloquea a otro, dos pedidos sin monto, dos pedidos con monto que casa, cerrar sin pedidos, candado ocupado
+  reintenta, candado se suelta, puerta de escritura, cobro en disputa, cita que no casa, webhook) +
+  `test_expediente_extractor.py` (candidatos). **Suite 1377/0**, ruff limpio.
+
+**Correcciones de lo dicho antes:**
+- el bot NO "aprende": mejora solo si se mide y una persona cambia la configuración;
+- los pagos SÍ pueden quedar esperando (sin respuesta; tras 24 h dejan de bloquear pero siguen pendientes);
+- que pasen los tests no prueba que Alejandra converse bien;
+- "~4 pagos al día" es una estimación.
+
+**Queda para después:** aviso diario de pagos sin respuesta de más de un día; cuenta abierta; prueba pagada de la
+caché (límite de $1,50, espera el OK).
+
+**Sigue:** Maired fusiona → desplegar pruebas (worker + bot) → guion en pruebas: "me llegaron 20" / "me llegaron 16" /
+"me llegaron 12" / datos de pago de un pedido en disputa / precio del día sin pausa.
+
 ## 2026-09-25 (43) — 💰 UNA PREGUNTA A LA VEZ: el pago se pregunta con nombre y pedido, sin códigos (PR6c)
 
 **Por qué (la prueba real de PR6b + la duda de fondo de Maired):** en la prueba de anoche todo el circuito

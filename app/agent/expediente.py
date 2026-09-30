@@ -40,7 +40,7 @@ from app.agent.contratos_atencion import (
     PropuestaExpediente,
 )
 from app.agent.resolver_atencion import consta, fecha_del_cliente, normalizar
-from app.agent.tools import _matchear_franja, _pedido_igual_reciente
+from app.agent.tools import _matchear_franja, _pedido_igual_reciente, pago_cuadra
 from app.models import (
     ESTADOS_ACORDADOS,
     ORIGEN_DUENA,
@@ -382,34 +382,16 @@ def _base(ev: EventoDuena, telefono: str, evidencia_id, pedido: dict | None) -> 
     )
 
 
-def _pedido_del_pago(
-    pedido: dict | None, pedidos: list[dict] | None, monto: Decimal | None,
-) -> tuple[dict | None, str]:
-    """💰 PR6c: ¿a qué pedido va este pago? Devuelve (pedido elegido, nota para la Bandeja).
-
-    Candidatos = los que NO están cancelados y NO tienen pago confirmado, del más nuevo al más viejo.
-    Si dijo un monto y UN solo candidato tiene ese total → ese. Un solo candidato → ese. Varios sin
-    pista → el más reciente, pero se anota "hay N sin pagar" para que se vea. Ninguno → el más reciente
-    de la lista (al aplicar, el candado dirá "ya tiene un pago confirmado", que es lo correcto).
-
-    Con `pedidos=None` cae a `pedido` (el de hoy): el comportamiento no cambia para quien no pase lista."""
+def _pedidos_sin_pagar(pedido: dict | None, pedidos: list[dict] | None) -> list[dict]:
+    """💰 Los pedidos del cliente que NO están cancelados y NO tienen pago confirmado, del más nuevo
+    al más viejo. Aquí NO se elige a cuál va el pago: eso se decide al preguntar, con la cuenta
+    completa de `tools.pago_cuadra` (total, precio en dólares con el 20%, bolívares cotizados).
+    Con `pedidos=None` cae a `pedido` (el de hoy): se comporta como antes para quien no pase lista."""
     lista = pedidos if pedidos is not None else ([pedido] if pedido else [])
-    candidatos = [
+    return [
         p for p in lista
         if p and p.get("estado") != "cancelado" and p.get("pago_pendiente") != "confirmado"
     ]
-    if not candidatos:
-        return (lista[0] if lista else pedido), ("todos sus pedidos ya tienen pago" if lista else "")
-    if monto is not None:
-        cuadran = [
-            p for p in candidatos
-            if p.get("total") is not None and abs(Decimal(str(p["total"])) - monto) <= Decimal("0.01")
-        ]
-        if len(cuadran) == 1:
-            return cuadran[0], ""
-    if len(candidatos) == 1:
-        return candidatos[0], ""
-    return candidatos[0], f"hay {len(candidatos)} pedidos sin pagar; se propone el más reciente (#{candidatos[0]['id']})"
 
 
 def validar(
@@ -466,11 +448,20 @@ def validar(
 
     if ev.tipo == "pago_confirmado":
         monto, moneda = parsear_monto(ev.monto_literal)
-        # A qué pedido va (PR6c). Un monto en Bs no se compara contra un total en $.
-        elegido, nota = _pedido_del_pago(pedido, pedidos, monto if moneda != "Bs" else None)
-        p.pedido_id = elegido["id"] if elegido else None
-        if monto is None and elegido and elegido.get("total") is not None:
-            monto, moneda = Decimal(str(elegido["total"])), "$"
+        # 💰 La regla sencilla (29-sep): aquí solo se ANOTAN los pedidos sin pagar; a cuál va el pago
+        # (o si no cuadra y se le pasa a una persona) se decide al preguntar, con `pago_cuadra`.
+        sin_pagar = _pedidos_sin_pagar(pedido, pedidos)
+        p.candidatos = [c["id"] for c in sin_pagar]
+        nota = ""
+        if len(sin_pagar) == 1:
+            p.pedido_id = sin_pagar[0]["id"]
+            if monto is None and sin_pagar[0].get("total") is not None:
+                monto, moneda = Decimal(str(sin_pagar[0]["total"])), "$"
+        elif len(sin_pagar) > 1:
+            p.pedido_id = None  # no se elige "el más reciente" a ciegas
+            nota = f"tiene {len(sin_pagar)} pedidos sin pagar"
+        else:
+            nota = "todos sus pedidos ya tienen pago" if pedidos or pedido else ""
         p.monto = float(monto) if monto is not None else None
         p.moneda, p.metodo = moneda, ev.metodo.strip()
         # 🔴 SIEMPRE propuesta: `pagado` solo nace de un toque humano (CLAUDE.md §3).
@@ -714,6 +705,15 @@ async def aplicar_propuesta(session, propuesta: dict, *, usuario: str) -> dict:
         )).scalars().first()
         if otro is not None:
             raise ValueError(f"el pedido #{pedido.id} ya tiene un pago confirmado (#{otro})")
+        # 💰 Candado del dinero (29-sep): lo que llegó tiene que CUADRAR con un precio válido del pedido
+        # (total, precio en dólares con el 20%, bolívares cotizados). Si no, NO se marca pagado —
+        # tampoco desde el botón del panel. Si se aceptó un precio menor, eso es un precio especial.
+        if p.monto is not None and not await pago_cuadra(pedido, p.monto, p.moneda):
+            raise ValueError(
+                f"llegaron {_fmt(p.monto, p.moneda)} y el pedido #{pedido.id} es de "
+                f"{_fmt(pedido.total, '$')}: no cuadra, así que no lo marco pagado "
+                "(si se aceptó un precio menor, anótalo como precio especial)"
+            )
         monto = _monto_decimal(p.monto) if p.monto is not None else (
             Decimal(str(pedido.total)) if pedido.total is not None else None)
         # `pagado` nace de ESTE toque humano (o de `auto` solo si Maired lo enciende): igual que

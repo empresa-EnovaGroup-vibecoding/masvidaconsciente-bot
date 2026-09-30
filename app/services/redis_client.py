@@ -353,3 +353,13 @@ async def aviso_unico(clave: str, ttl: int) -> bool:
     para TODO el sistema (la avería es una sola, la base).
     """
     return await _client().set(f"aviso:{clave}", "1", nx=True, ex=ttl) is not None
+
+
+async def tomar_candado(clave: str, ttl: int) -> bool:
+    """True si ESTE proceso tomó el candado (nadie más lo tenía). Caduca solo a los `ttl` segundos,
+    así que un proceso que se cae a mitad no lo deja trabado. Se suelta con `soltar_candado`."""
+    return await _client().set(f"candado:{clave}", "1", nx=True, ex=ttl) is not None
+
+
+async def soltar_candado(clave: str) -> None:
+    await _client().delete(f"candado:{clave}")
