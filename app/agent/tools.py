@@ -535,6 +535,53 @@ def monto_en_efectivo(total, envio) -> Decimal:
     return (Decimal(str(total)) * Decimal("0.80")).quantize(Decimal("0.01"))
 
 
+def monto_calza(a: Decimal, b: Decimal) -> bool:
+    """¿Dos montos son el mismo, salvo redondeos? Tolerancia: $0,50 o 2%, lo que sea mayor.
+    La usan el comprobante (qué precio se pagó) y la confirmación por WhatsApp (¿cuadra?)."""
+    return abs(a - b) <= max(Decimal("0.50"), b * Decimal("0.02"))
+
+
+async def pago_cuadra(pedido, monto, moneda: str = "") -> bool:
+    """💰 ¿El dinero que dice la persona del negocio que llegó es el pago COMPLETO de este pedido?
+
+    Cuadra si coincide con ALGUNO de sus precios válidos: el total, el precio en dólares con el 20%
+    de descuento (`monto_en_efectivo`, la regla del 16-sep: $16 sobre $20 ES el pago completo) o los
+    bolívares que se le cotizaron (o el total a la tasa grabada / la de hoy). Sin monto dicho
+    ("ya me pagó") cuadra: es su palabra sobre ESE pedido. Si no se puede comparar, NO cuadra: con
+    dinero, ante la duda, lo decide una persona. Nunca lanza.
+    """
+    if monto is None:
+        return True
+    total = getattr(pedido, "total", None)
+    if total is None:
+        return False
+    try:
+        m = Decimal(str(monto))
+        total = Decimal(str(total))
+        if moneda == "Bs":
+            objetivos = []
+            if getattr(pedido, "cotizado_bs", None) is not None:
+                objetivos.append(Decimal(str(pedido.cotizado_bs)))
+            tasa = getattr(pedido, "tasa_cotizada", None)
+            if tasa is None:
+                try:
+                    tasa = await obtener_tasa_bcv()
+                except Exception:  # noqa: BLE001 — sin tasa no hay con qué comparar
+                    tasa = None
+            if tasa is not None:
+                objetivos.append((total * Decimal(str(tasa))).quantize(Decimal("0.01")))
+        else:
+            envio = Decimal(str(getattr(pedido, "costo_envio", 0) or 0))
+            objetivos = [total, monto_en_efectivo(total, envio)]
+            for campo in ("cotizado_usd", "cotizado_usd_divisas"):
+                if getattr(pedido, campo, None) is not None:
+                    objetivos.append(Decimal(str(getattr(pedido, campo))))
+        return any(monto_calza(m, o) for o in objetivos)
+    except Exception:  # noqa: BLE001
+        logger.exception("pago_cuadra: no se pudo comparar el monto del pedido %s", getattr(pedido, "id", None))
+        return False
+
+
 def _fmt_usd(x) -> str:
     """Monto USD listo para mostrar: '$16' si es entero, '$16.50' si no.
     None -> 'a consultar'. El cobro NUNCA lo calcula el modelo: estos strings
@@ -3596,6 +3643,28 @@ def _nota_cobro_metodo_elegido(titulo: str, tipo: str, otros: list[str]) -> str:
     )
 
 
+async def _pago_en_disputa(session, telefono, pedido_id) -> bool:
+    """¿Hay una propuesta de pago PENDIENTE de este cliente marcada `no_cuadra` sobre este pedido?
+    Falla ABIERTA (False) si la consulta no se puede hacer: el candado es una red, no el cobro."""
+    try:
+        filas = (await session.execute(
+            select(Intervencion).where(
+                Intervencion.cliente_telefono == telefono,
+                Intervencion.estado == "pendiente",
+                Intervencion.motivo == "propuesta_expediente",
+            )
+        )).scalars().all()
+        for i in filas:
+            p = i.propuesta or {}
+            if p.get("tipo") != "pago_confirmado" or not p.get("no_cuadra"):
+                continue
+            if pedido_id in (p.get("candidatos") or []) or p.get("pedido_id") == pedido_id:
+                return True
+    except Exception:  # noqa: BLE001
+        logger.warning("No se pudo revisar si el pago de %s está en disputa", telefono)
+    return False
+
+
 async def generar_datos_pago(session, telefono, pedido_id=None, metodo=None):
     """Calcula el monto en Bs (tasa del dia), deja el pedido en 'esperando_pago'
     y devuelve el cobro. En DOS pasos (rama B, 31-ago): sin `metodo`, el cobro completo y los
@@ -3648,6 +3717,18 @@ async def generar_datos_pago(session, telefono, pedido_id=None, metodo=None):
             "nota": (
                 "ese pedido ya tiene un pago confirmado: NO lo cobres de nuevo. Si quiere "
                 "comprar mas, registra un pedido NUEVO."
+            ),
+        }
+
+    # 💰 Un pago de este pedido que NO CUADRA lo está resolviendo una persona del negocio (llegó
+    # menos, un abono, varios pedidos sin saber cuál): el bot NO lo cobra por su cuenta.
+    if await _pago_en_disputa(session, telefono, pedido.id):
+        return {
+            "ok": False,
+            "nota": (
+                "hay un pago de este pedido que una persona del negocio está revisando porque el "
+                "monto no cuadra: NO lo cobres ni digas que está pagado. Dile al cliente que se lo "
+                "confirmas enseguida y llama a pedir_ayuda (motivo 'acuerdo_especial')."
             ),
         }
 
@@ -3996,9 +4077,11 @@ _MOTIVO_TITULO = {
 }
 
 
-# Motivos por los que el bot SÍ se calla y espera a la dueña: el cliente pide una persona o
-# reclama. Los otros (`precio_del_dia`, `no_se`) dejan aviso pero NO callan al bot: sigue vendiendo.
-_MOTIVOS_DE_PAUSA = set(_MOTIVO_TITULO)
+# Motivos por los que el bot SÍ se calla y espera a una persona: el cliente pide una persona,
+# reclama, o hay un acuerdo especial. Los otros (`precio_del_dia`, `no_se`) dejan aviso pero NO
+# callan al bot: sigue vendiendo (decisión del 14-jul, commit 0722794). El 22-sep un cambio pasó
+# a pausar por los cinco sin que nadie lo decidiera; lo fija `test_pausa_solo_cuando_toca`.
+_MOTIVOS_DE_PAUSA = {"pide_persona", "reclamo", "acuerdo_especial"}
 
 
 async def pedir_ayuda(
@@ -4447,12 +4530,9 @@ async def registrar_comprobante(
                 if monto_usd_divisas_cotizado is not None
                 else monto_en_efectivo(monto_usd, _envio)
             )
-            # Tolerancia del 2% (redondeos). Se compara contra el monto en DÓLARES: si el
-            # comprobante viene en Bs, el número es mil veces mayor y no calza con ninguno.
-            def _calza(a: Decimal, b: Decimal) -> bool:
-                return abs(a - b) <= max(Decimal("0.50"), b * Decimal("0.02"))
-
-            if _calza(leido, en_divisas) and not _calza(leido, monto_usd):
+            # Tolerancia del 2% (redondeos, `monto_calza`). Se compara contra el monto en DÓLARES:
+            # si el comprobante viene en Bs, el número es mil veces mayor y no calza con ninguno.
+            if monto_calza(leido, en_divisas) and not monto_calza(leido, monto_usd):
                 metodo = "divisas"
                 monto_usd = en_divisas  # lo que de verdad se acordó cobrar
                 monto_bs = None  # no hay Bs que comparar: pagó en dólares

@@ -211,3 +211,10 @@ class PropuestaExpediente(BaseModel):
     # deja aquí el id del mensaje que le mandó (para casar su respuesta citada) y cuándo se lo preguntó.
     pregunta_wamid: str | None = None
     preguntada_at: str | None = None
+    # 💰 La regla sencilla (29-sep): los pedidos SIN PAGAR del cliente cuando se leyó el pago. Al
+    # preguntar se revisa cuál CUADRA con lo que llegó; si ninguno o varios → `no_cuadra`: no se
+    # pregunta ni se marca pagado, se le avisa a la persona del negocio (`avisada_at`) y el cobro
+    # de ese pedido queda frenado hasta que ella lo resuelva.
+    candidatos: list[int] = Field(default_factory=list)
+    no_cuadra: bool = False
+    avisada_at: str | None = None
