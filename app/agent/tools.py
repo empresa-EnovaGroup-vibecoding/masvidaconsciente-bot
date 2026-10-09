@@ -1153,11 +1153,15 @@ async def ver_catalogo(session, telefono, categoria=None, busqueda=None):
             "pidió, y NO le digas que no tienes nada. "
         )
     elif como == "nada":
+        # 🛒 Maired (8-oct): el negocio vende cosas que todavía NO están cargadas (granola, harina de
+        # yuca, sal… salieron 87 veces en las conversaciones reales). Decir "eso no lo tengo" sería
+        # falso: se releva, Whuilianny se entera de qué falta en el catálogo, y la venta sigue.
         _aviso = (
-            f" 🔴 NADA en el catálogo se parece a '{busqueda}'. Dile con cariño y SIN RODEOS que "
-            "ESO puntual no lo tienes — pero NUNCA cortes ahí: de esta lista (que es TODO lo que "
-            "vendes) ofrécele lo que mejor encaje con lo que buscaba. Un 'no tengo' a secas mata "
-            "la venta; un 'eso no, pero mira esto' la salva. "
+            f" 🔴 NADA en el catálogo se parece a '{busqueda}'. NO le digas que no lo tienes (el "
+            "negocio vende cosas que aún no están cargadas) ni le inventes precio o datos: dile con "
+            "tus palabras que lo revisas y llama a `pedir_ayuda` (motivo='no_se', detalle: "
+            f"\"{busqueda} no está en el catálogo\"). Mientras, de esta lista ofrécele lo que mejor "
+            "encaje con lo que buscaba. "
         )
 
     if len(productos) > 1:
@@ -4249,6 +4253,28 @@ async def _recordar_dueno(destino: str) -> None:
         pass
 
 
+MARCA_FUERA_DE_CATALOGO = "no está en el catálogo"
+
+
+def _cierre_del_aviso(motivo: str, detalle: str) -> str:
+    """Lo que ella tiene que hacer, dicho como ES. Hasta el 8-oct el aviso decía SIEMPRE que el bot
+    "se quedó callado", también con `no_se`/`precio_del_dia`, que NO lo callan (el bot sigue)."""
+    if motivo in _MOTIVOS_DE_PAUSA:
+        cierre = (
+            "\n\nEl cliente ya sabe que se lo confirmas y el bot *se quedó callado* en ese chat."
+            "\nEntra al WhatsApp del negocio y respóndele tú."
+            "\nCuando termines, reactiva el bot desde el panel."
+        )
+    else:
+        cierre = (
+            "\n\nEl bot le dijo que lo revisa y *sigue atendiendo* lo demás."
+            "\nEntra al WhatsApp del negocio y respóndele eso tú."
+        )
+    if _sin_acentos(MARCA_FUERA_DE_CATALOGO) in _sin_acentos(detalle or ""):
+        cierre += "\nSi lo vendes, súbelo al catálogo con su precio y así Alejandra también lo podrá vender."
+    return cierre
+
+
 async def _avisar_intervencion(session, telefono, motivo, detalle, mensaje_cliente) -> None:
     """Le manda a la dueña el 'el bot te necesita' por WhatsApp. Best-effort: si no hay
     número configurado o Meta rechaza (ventana de 24h), se loguea y ya — el aviso vive
@@ -4285,11 +4311,7 @@ async def _avisar_intervencion(session, telefono, motivo, detalle, mensaje_clien
             cuerpo += f"\n\n👉 {detalle}"
         if mensaje_cliente:
             cuerpo += f'\n\nÉl escribió: "{mensaje_cliente[:180]}"'
-        cuerpo += (
-            "\n\nEl bot ya le dijo que le confirmas enseguida y *se quedó callado* en ese chat."
-            "\nEntra al WhatsApp del negocio y respóndele tú."
-            "\nCuando termines, reactiva el bot desde el panel."
-        )
+        cuerpo += _cierre_del_aviso(motivo, detalle)
         await enviar_texto(destino, cuerpo)
     except Exception:  # noqa: BLE001 — un aviso que falla no puede tumbar el turno
         logger.exception("pedir_ayuda: no se pudo avisar por WhatsApp; queda en el panel")

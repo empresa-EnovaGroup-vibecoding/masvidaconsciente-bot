@@ -48,6 +48,7 @@ import httpx  # noqa: E402
 
 from app.agent import expediente as ex  # noqa: E402
 from app.agent.contratos_atencion import Contexto  # noqa: E402
+from app.agent.fuentes_atencion import parsear_apodos  # noqa: E402
 from app.agent.resolver_atencion import normalizar  # noqa: E402
 from app.agent.tools import _parsear_franjas  # noqa: E402
 from app.config import get_settings  # noqa: E402
@@ -170,6 +171,10 @@ def contexto_del_snapshot(lev: Path) -> tuple[Contexto, list[str]]:
             ctx.zonas[z["id"]] = {"id": z["id"], "nombre": z["nombre"]}
     for m in snap["metodos_pago"]:
         ctx.metodos[m.get("titulo") or m.get("tipo")] = {"id": m.get("id"), "tipo": m.get("tipo")}
+    # Los apodos que Maired aprobó (mismo formato que la config `apodos_productos`), si ya existen.
+    aprobados = lev / "medicion" / "apodos_aprobados.txt"
+    if aprobados.exists():
+        ctx.apodos = parsear_apodos(aprobados.read_text(encoding="utf-8"))
     return ctx, _parsear_franjas(snap["configuracion"].get("franjas_entrega"))
 
 

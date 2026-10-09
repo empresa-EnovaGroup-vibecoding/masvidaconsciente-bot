@@ -151,6 +151,9 @@ CLAVES_CONFIG = [
     # tengo" sobre tres productos que SÍ vende. Formato: una línea por término,
     # "termino: palabra1, palabra2". Vacío = se usa el default de tools.py (_SINONIMOS_DEFAULT).
     "sinonimos_busqueda",
+    # 🏷️ APODOS (8-oct): cómo llama Whuilianny a los productos ("galletas pequeñas choco: Mini New
+    # York"), una por línea. Lo usa el lector del expediente para entender lo que ella vendió.
+    "apodos_productos",
     # LOS DOS AGENTES (fase 5, migración 025). Palancas de la PROVEEDORA.
     # `agente_modo`: 'uno' (el agente único de siempre) | 'dos' (Operador + Voz).
     # `modelo_operador` / `modelo_voz`: ausentes ⇒ caen a `modelo_ia` (compatibilidad).

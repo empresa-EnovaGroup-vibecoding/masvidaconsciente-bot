@@ -30,6 +30,26 @@ def hecho(fuente, entidad, campo, valor) -> Hecho:
     return Hecho(fuente, entidad, campo, valor, revision(valor))
 
 
+def parsear_apodos(texto: str | None) -> dict[str, str]:
+    """🏷️ `apodos_productos` (8-oct): "apodo: Nombre del catálogo", una por línea → {apodo normalizado:
+    nombre}. Misma normalización que `resolver_atencion.normalizar` (minúsculas, sin acentos, espacios
+    simples; no se importa de allí porque ese módulo ya importa este). Líneas raras se ignoran."""
+    import unicodedata
+
+    def _n(s: str) -> str:
+        return " ".join("".join(c for c in unicodedata.normalize("NFKD", s.lower())
+                                if not unicodedata.combining(c)).split())
+
+    mapa: dict[str, str] = {}
+    for linea in (texto or "").splitlines():
+        if linea.strip().startswith("#") or ":" not in linea:
+            continue
+        apodo, _, nombre = linea.partition(":")
+        if _n(apodo) and nombre.strip():
+            mapa[_n(apodo)] = nombre.strip()
+    return mapa
+
+
 async def bloquear_cliente(session, telefono):
     # También serializa la creación de clientes y avisos: FOR UPDATE solo no bloquea filas ausentes.
     await session.execute(
@@ -56,6 +76,7 @@ async def cargar_contexto(telefono: str) -> Contexto:
             borrador=dict(cliente.borrador_confirmado or {}) if cliente else {},
             hoy=hoy_venezuela(),
             negocio={k: config[k] for k in ("negocio_ubicacion", "negocio_instagram") if config.get(k)},
+            apodos=parsear_apodos(config.get("apodos_productos")),
         )
         for p in (await session.execute(select(Producto))).scalars():
             ctx.productos[p.id] = {

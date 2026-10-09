@@ -17,6 +17,48 @@
 
 ---
 
+## 2026-10-08 (47) — 🛒 ALEJANDRA SIGUE LA VENTA de Whuilianny, y cuando no sabe algo releva con naturalidad (sin nombrarla)
+
+**Por qué (decisiones de Maired, 8-oct):**
+- Whuilianny entra de vez en cuando al chat a guiar y Alejandra SIGUE atendiendo: ve lo que ella acordó y
+  lo continúa, cobrando por SU total.
+- Se propuso y se cerró sin fusionar el PR #74 ("lo de ella lo termina ella"): NO es lo que se busca.
+- Cuando Alejandra no sabe algo, o le piden algo que no está en el catálogo, lo dice con sus palabras,
+  variado, sin frase fija y sin repetirlo, **y jamás nombra a Whuilianny** ni a nadie del negocio. Por detrás
+  le avisa a ella.
+- El análisis gratis de los 46 pedidos claros reales mostró que el freno principal es el CATÁLOGO: 22 traen
+  algo que no está o lo llaman distinto.
+
+**Qué se hizo** (rama `alejandra-sigue-la-venta`):
+- `_REGLAS`:
+  - lo que no está en el catálogo ya no se niega con "no lo tengo" (el negocio vende cosas sin cargar): se
+    releva con `pedir_ayuda` (`no_se`, "… no está en el catálogo");
+  - la regla de las promesas dice CÓMO: con sus palabras, distinto cada vez, sin nombrar a nadie del
+    negocio, sin repetir;
+  - `ver_catalogo` (escalón "nada") alineado con lo mismo.
+- `_lineas_pedido_acordado`:
+  - el pedido de ella es "una venta en curso que SIGUES tú": cobro con su `pedido_id` y su total, entrega
+    coordinada normal (`anotar_entrega` no toca el total);
+  - sumar productos va como pedido aparte; CAMBIAR o QUITAR lo acordado → `acuerdo_especial`;
+  - reemplaza la decisión del 24-sep ("no vender encima").
+- `_LINEA_YA_AVISASTE`: con un aviso vivo en el chat (no propuestas ni `chat_tomado`), el bot no repite la
+  promesa.
+- WhatsApp a Whuilianny (`_cierre_del_aviso`):
+  - dice la verdad: "se quedó callado" solo si el motivo pausa, y si no, "sigue atendiendo";
+  - si falta en el catálogo, agrega "súbelo con su precio".
+- 📦 `tasks._avisar_fuera_de_catalogo`: cuando ELLA vende algo que el lector no encuentra en el catálogo, se lo
+  recuerda UNA vez por producto cada 7 días (texto fijo, sin IA). `Veredicto.fuera_de_catalogo` lo marca.
+- 🏷️ Apodos:
+  - config `apodos_productos` ("apodo: Nombre del catálogo", en `CLAVES_CONFIG`) → `Contexto.apodos` →
+    `producto_por_nombre`;
+  - el replay lee `LEV/medicion/apodos_aprobados.txt`.
+- Tests: `tests/test_alejandra_sigue_la_venta.py` (8) y 3 de `test_expediente_lectores.py` actualizados a la
+  decisión nueva. **Suite 1393/0**, ruff limpio.
+
+**Sigue:**
+- Maired marca ✔/✘ la lista de productos y apodos sacada de las conversaciones.
+- Se cargan en pruebas, se vuelve a medir (~$0,70) y el panel vuelve a "Lo anota solo".
+
 ## 2026-10-08 (46) — 📏 LA MEDICIÓN: ¿el lector entiende lo que Whuilianny vendió? Antes y después
 
 **Por qué:** Maired se sintió perdida ("arreglamos y arreglamos sin saber"). Los PRs #69-#72 pulieron pagos
