@@ -17,6 +17,43 @@
 
 ---
 
+## 2026-10-08 (46) — 📏 LA MEDICIÓN: ¿el lector entiende lo que Whuilianny vendió? Antes y después
+
+**Por qué:** Maired se sintió perdida ("arreglamos y arreglamos sin saber"). Los PRs #69-#72 pulieron pagos
+mientras lo central —¿el lector del expediente acierta?— nunca se había medido. Ahora existe la regla de medir.
+
+**Qué se hizo** (rama `medir-lector`):
+- `scripts/levantamiento/replay_expediente.py` (sin datos): `ventanas` (corta las conversaciones con
+  `ventanas_owner`, la misma función del bot en vivo), `correr` (el lector REAL `interpretar_duena` +
+  `validar` con el catálogo del snapshot del 15-sep y un pedido abierto simulado; tope duro de gasto;
+  `--llave-archivo` para que la llave no pase por la consola) y `comparar` (informe para Maired con la frase real).
+- **Hoja de respuestas** (fuera del repo, `LEV/medicion/`): 84 conversaciones de clientas, 1.486 ventanas,
+  7 anotadores de Claude, verificada (734/740 evidencias literales) y revisada a muestra por Maired (1 corrección).
+- **Primera medición** (Flash-Lite, $0,73): de lo que escribía SOLO, la mitad estaba mal (27 escrituras, 13 bien):
+  inventaba ventas cuando ella solo MENCIONABA un producto ("3 dedos de kéfir en la mañana" → 3 kéfir por $24) y
+  suponía cantidad 1. Veía 37% de los pedidos, 22% de los pagos y 39% de las entregas. Causa de raíz: leía solo
+  a Whuilianny ("Ok nena"), y lo que se compra lo dice la clienta.
+- **Arreglos** en `app/agent/expediente.py`:
+  - la `Ventana` guarda lo que escribió la clienta desde la ventana anterior (`cliente`, `texto_cliente`) y el
+    modelo la recibe;
+  - instrucción nueva: un pedido = la clienta pide + ella acepta, y mencionar no es vender;
+  - `validar(texto_cliente=…)`: el producto y la cantidad tienen que constar en la conversación; nunca se supone
+    "1"; sin total y sin que la clienta lo haya pedido queda como pregunta; una ubicación sola no es una entrega.
+- **Segunda medición** ($0,71): escrituras solas **27 → 1**, y esa es "8$ el kéfir" (1 kéfir de $8, correcta en
+  la práctica). Pedidos vistos **37% → 55%**, pagos **22% → 68%**, entregas 39% → 39%, "ya entregué" 0/15.
+- Tests: ventana con la clienta, el lector la recibe, cantidad nunca supuesta, mencionar no es vender, la
+  clienta pide + ella acepta = pedido, ubicación sola. **Suite 1385/0**, ruff limpio.
+
+**Lo que mostró y sigue abierto:**
+- 87 propuestas de pedido son productos FUERA del catálogo (granola, harina de yuca, sal, aceite de coco,
+  mermelada, desodorante…): por la regla del 8-oct ("lo complejo lo atiende Whuilianny") se quedan como pregunta.
+- Apodos que el resolvedor no une (yogur → Yogurt Kéfirado, barritas, paquete de galletas, mini galletas).
+- Entregas (39%) y "ya te lo entregué" (0%).
+- 134 preguntas sin motivo.
+- Decisión de Maired 8-oct: cuentas, abonos, fiado, regalos y lo que está fuera del catálogo los atiende
+  Whuilianny; no se construye una cuenta abierta. En pruebas, el modo pasa a "Todo me lo pregunta" mientras dure
+  la medición.
+
 ## 2026-09-30 (45) — 💬 "Ya entendí, pero no hay nada que registrar": el bot deja de callar cuando no hay pedido sin pagar
 
 **Por qué:** en la primera prueba de la regla sencilla (PR #71, ya en pruebas), Maired escribió como Whuilianny "Me

@@ -57,8 +57,11 @@ Las **FASES 0 a 3 ya están hechas y desplegadas**:
 > `pagos-regla-sencilla`, SESIONES (44)): "si cuadra, pregunta; si no cuadra, anota y se lo pasa a Whuilianny"
 > (cuadra = total, precio en dólares con el 20% o Bs cotizados de UN pedido sin pagar), candado de un proceso a la
 > vez, la cita que no casa no se aplica, el cobro de un pedido en disputa frenado, la pausa vuelve a lo de julio →
-> SIGUE: fusionar → desplegar pruebas → guion de SESIONES (44) → PR7 replay sobre las 305 conversaciones (mide el extractor en `auto`
-> ANTES de producción) → P3 el cerebro `confirmado` en pruebas → P4 la Voz → P5 Conocimiento del corpus → P6
+> ✅ #71 y #72 (aviso cuando un pago no tiene pedido sin pagar, SESIONES (45)) fusionados y en pruebas → **8-oct:
+> LA MEDICIÓN EXISTE (SESIONES (46))**: `scripts/levantamiento/replay_expediente.py` + hoja de respuestas de 1.486
+> ventanas reales; el lector pasó de escribir mal la mitad de lo que anotaba solo (27) a 1 escritura correcta, y de
+> ver 37%/22% de pedidos/pagos a 55%/68%. Cada cambio del lector se mide ahí ANTES de entrar → SIGUE: entregas y "ya
+> entregué", apodos del catálogo y preguntas sin motivo, medidos con el mismo replay → P3 el cerebro `confirmado` en pruebas → P4 la Voz → P5 Conocimiento del corpus → P6
 > puertas G1-G6 y producción por configuración. Decisiones: retorno automático CON condiciones (flag apagado,
 > Maired fija N=2 h; un chat donde el bot pidió ayuda no se reactiva solo); lo dudoso queda como pregunta que, si
 > nadie toca, el bot no da por hecho;
