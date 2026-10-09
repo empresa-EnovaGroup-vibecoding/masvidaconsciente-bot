@@ -81,6 +81,40 @@ def test_ventanas_owner_agrupa_y_corta_con_el_cliente_y_con_el_hueco():
     assert ventanas[0].ultimo_id == 3
 
 
+def test_ventanas_owner_guarda_lo_que_pidio_la_clienta():
+    """📏 La ventana lleva TODO lo que la clienta escribió desde la ventana anterior (no solo su último
+    mensaje), y una ventana que sigue tras un hueco sin que la clienta hable conserva ese contexto."""
+    mensajes = [
+        _msg(1, "user", "hola amiga"),
+        _msg(2, "user", "véndeme 1 kilo de harina"),
+        _msg(3, "user", "paso mañana"),
+        _msg(4, "owner", "Ok amiga", 1),
+        _msg(5, "owner", "te espero en la tarde", 20),
+        _msg(6, "user", "gracias"),
+        _msg(7, "owner", "a ti", 21),
+    ]
+    v = ex.ventanas_owner(mensajes)
+    assert v[0].cliente == ["hola amiga", "véndeme 1 kilo de harina", "paso mañana"]
+    assert v[1].cliente == v[0].cliente
+    assert v[2].cliente == ["gracias"]
+    assert "1 kilo de harina" in v[0].texto_cliente
+
+
+def test_una_ubicacion_sola_no_es_una_entrega_acordada(contexto):
+    """📏 Medición 8-oct: mandar el enlace del mapa se escribía como entrega."""
+    ev = EventoDuena(tipo="entrega_acordada", lugar_texto="https://maps.example/?q=10,-69", evidencia="https://maps.example/?q=10,-69")
+    v = _validar(ev, "Voy amor\nhttps://maps.example/?q=10,-69", contexto, pedido=PEDIDO_ABIERTO)
+    assert v.accion == "propuesta" and "solo dijo un lugar" in v.motivo
+
+
+async def test_el_lector_recibe_lo_que_pidio_la_clienta(contexto):
+    llm = _llm_con({"eventos": []})
+    v = ex.Ventana(owner=[_msg(4, "owner", "Ok amiga")], cliente=["véndeme 1 kilo de harina", "paso mañana"])
+    await ex.interpretar_duena(v, contexto, llm, "m")
+    usuario = llm.await_args.args[0][1]["content"]
+    assert "véndeme 1 kilo de harina" in usuario and "paso mañana" in usuario and "Ok amiga" in usuario
+
+
 def test_ventanas_owner_salta_placeholders_y_mensajes_del_bot():
     mensajes = [
         _msg(1, "owner", "[nota de voz]", tipo="audio"),
@@ -193,11 +227,46 @@ def test_pedido_claro_con_total_que_cuadra_se_puede_escribir(contexto):
     assert p.total == 36.0 and p.moneda == "$" and p.evidencia_mensaje_id == 77 and p.telefono == TEL
 
 
-def test_sin_cantidad_ni_total_se_asume_uno_y_baja_al_umbral(contexto):
+def test_sin_cantidad_nunca_se_supone_uno_queda_como_pregunta(contexto):
+    """📏 Medición 8-oct: el lector suponía "1" y lo escribía solo (4 pedidos falsos en 27)."""
     ev = EventoDuena(tipo="pedido_tomado", items=[ItemDuena(nombre_literal="quesillo")], evidencia="te anoté el quesillo")
     v = _validar(ev, "te anoté el quesillo", contexto)
-    assert v.accion == "escribe" and v.confianza == ex.UMBRAL_AUTO
-    assert v.propuesta.items[0].cantidad == 1 and "asumida" in v.motivo
+    assert v.accion == "propuesta" and "nadie dijo la cantidad" in v.motivo
+    # Una cantidad que el modelo "copió" pero no está escrita en ningún lado tampoco vale.
+    ev2 = EventoDuena(tipo="pedido_tomado", items=[ItemDuena(nombre_literal="quesillo", cantidad_literal="3")],
+                      total_literal="54$", evidencia="te anoté el quesillo, 54$")
+    assert _validar(ev2, "te anoté el quesillo, 54$", contexto).accion == "propuesta"
+
+
+def test_mencionar_un_producto_no_es_venderlo(contexto):
+    """📏 Medición 8-oct: "3 dedos de kéfir en la mañana" (cómo se toma) se escribía como 3 kéfir.
+    Sin total y sin que la clienta lo haya pedido, es una mención: pregunta, nunca escritura."""
+    ev = EventoDuena(tipo="pedido_tomado", items=[ItemDuena(nombre_literal="quesillo", cantidad_literal="3")],
+                     evidencia="3 dedos de quesillo en la mañana")
+    v = ex.validar(ev, "3 dedos de quesillo en la mañana", contexto, telefono=TEL, hoy=HOY, franjas=FRANJAS,
+                   pedido=None, evidencia_id=77, texto_cliente="(el cliente envió un sticker)")
+    assert v.accion == "propuesta" and "no lo pidió" in v.motivo
+
+
+def test_la_clienta_pide_y_ella_acepta_es_un_pedido(contexto):
+    """📏 Lo más común en las conversaciones reales: la clienta pide, ella dice "Ok amiga". El
+    producto y la cantidad salen de la clienta; la evidencia (el sí) es de ella."""
+    ev = EventoDuena(tipo="pedido_tomado", items=[ItemDuena(nombre_literal="quesillo", cantidad_literal="2")],
+                     evidencia="Ok amiga, claro que sí")
+    v = ex.validar(ev, "Ok amiga, claro que sí", contexto, telefono=TEL, hoy=HOY, franjas=FRANJAS, pedido=None,
+                   evidencia_id=77, texto_cliente="véndeme 2 quesillo, paso mañana")
+    assert v.accion == "escribe" and v.propuesta.items[0].cantidad == 2 and "lo pidió la clienta" in v.motivo
+    # El "sí" tiene que ser de ELLA: una evidencia que solo está en el mensaje de la clienta no consta.
+    ev_mala = EventoDuena(tipo="pedido_tomado", items=[ItemDuena(nombre_literal="quesillo", cantidad_literal="2")],
+                          evidencia="véndeme 2 quesillo")
+    assert ex.validar(ev_mala, "Ok amiga", contexto, telefono=TEL, hoy=HOY, franjas=FRANJAS, pedido=None,
+                      evidencia_id=77, texto_cliente="véndeme 2 quesillo").accion == "descarta"
+
+
+def test_un_producto_que_no_consta_en_la_conversacion_es_pregunta(contexto):
+    ev = EventoDuena(tipo="pedido_tomado", items=[ItemDuena(nombre_literal="quesillo", cantidad_literal="2")],
+                     total_literal="36$", evidencia="son 36$")
+    assert _validar(ev, "son 36$", contexto).accion == "propuesta"
 
 
 def test_producto_con_varias_presentaciones_sin_decir_cual_es_propuesta(contexto):

@@ -67,22 +67,28 @@ ESCRITURAS = ("off", "propuestas", "auto")
 UMBRAL_AUTO = 0.8
 MARCA_VOZ = "🎤"
 
-INSTRUCCION = """Lees SOLO mensajes que la dueña del negocio (Whuilianny) le escribió o le dijo por nota
-de voz a un cliente. Tu trabajo: detectar si en esos mensajes ella HIZO algo de la venta y describirlo
-con UNA llamada a proponer_eventos_duena. No escribes respuestas ni hablas con nadie.
-Tipos: pedido_tomado (ella anota o confirma qué lleva el cliente, con o sin total); pago_confirmado
-(ella dice que el pago llegó, quedó listo o lo recibió); entrega_acordada (día, momento del día o
-lugar de entrega o retiro); entregado (ella dice que YA lo entregó, ya se lo llevó o ya lo recibió el
-cliente); precio_especial (un precio, descuento, regalo o cortesía distinto al normal); cancelado (se
-cancela o se quita algo ya acordado); respuesta_general (explica algo del producto o del negocio:
-ingredientes, alérgenos, conservación, envíos nacionales, políticas); nada (charla, saludos,
-bendiciones, preguntas suyas, cosas fuera de la venta).
-Reglas: en evidencia copia LITERAL el trozo exacto de ella que sostiene cada evento. nombre_literal y
-cantidad_literal se copian tal cual están (no deduzcas cantidades ni completes nombres con el
-catálogo). total_literal y monto_literal se copian con su moneda si la dijo. fecha_texto copia
+INSTRUCCION = """Recibes lo que una CLIENTA escribió y lo que la dueña del negocio (Whuilianny) le
+respondió, por texto o por nota de voz. Tu trabajo: detectar si en su respuesta ella HIZO algo de la
+venta y describirlo con UNA llamada a proponer_eventos_duena. No escribes respuestas ni hablas con nadie.
+Ella casi siempre responde corto ("Ok nena", "Perfecto", "Claro que sí"): lo que se compra suele
+decirlo la clienta y ella lo ACEPTA. Pedido = la clienta pide algo y ella lo acepta, o ella arma la
+cuenta. MENCIONAR, ofrecer o explicar un producto NO es un pedido ("te puedo poner chocolate", "3
+dedos de kéfir en la mañana", "estoy haciendo barras" no son pedidos).
+Tipos: pedido_tomado (ella acepta lo que pidió la clienta, o anota o confirma qué lleva, con o sin
+total); pago_confirmado (ella dice que el pago llegó o lo recibió, o agradece justo después de que
+la clienta mandó o anunció el pago); entrega_acordada (día, momento del día o lugar de entrega o
+retiro, propuesto por ella o aceptado por ella); entregado (ella dice que YA lo entregó, ya se lo
+llevó o ya lo recibió la clienta); precio_especial (un precio, descuento, regalo o cortesía distinto
+al normal); cancelado (se cancela o se quita algo ya acordado); respuesta_general (explica algo del
+producto o del negocio: ingredientes, alérgenos, conservación, envíos, políticas, precios sueltos);
+nada (charla, saludos, bendiciones, preguntas suyas, cosas fuera de la venta).
+Reglas: en evidencia copia LITERAL el trozo exacto de ELLA que sostiene cada evento (su sí, su
+cuenta, su "recibido"). nombre_literal y cantidad_literal se copian tal cual están, de la clienta o
+de ella (no deduzcas cantidades ni completes nombres con el catálogo; si nadie dijo la cantidad,
+déjala vacía). total_literal y monto_literal se copian con su moneda si se dijo. fecha_texto copia
 "mañana", "el sábado" o la fecha tal cual; nunca calcules. momento_texto copia "en la tarde", "a las
-10". Si ella se corrige dentro de la ventana, vale SOLO lo último. No inventes nada que no esté
-escrito. Si dudas, usa nada. Sin texto, cifras ni explicaciones fuera del contrato.
+10". Si alguien se corrige, vale SOLO lo último. No inventes nada que no esté escrito. Si dudas, usa
+nada. Sin texto, cifras ni explicaciones fuera del contrato.
 FORMATO EXACTO de la llamada (cada elemento de eventos es un OBJETO con sus campos, nunca una palabra
 sola; todos los valores van entre comillas): {"eventos": [{"tipo": "pedido_tomado", "items":
 [{"nombre_literal": "quesillos", "cantidad_literal": "2"}], "total_literal": "16$", "evidencia":
@@ -102,14 +108,27 @@ _TOPES = {
 #  1) LAS VENTANAS: sus mensajes consecutivos, hasta que habla el cliente
 # ══════════════════════════════════════════════════════════════════════════════════
 
+CLIENTE_MAX_MENSAJES = 6
+CLIENTE_MAX_CHARS = 800
+
+
 @dataclass
 class Ventana:
     owner: list[dict] = field(default_factory=list)
     ultimo_cliente: str = ""
+    # 📏 Lo que la CLIENTA escribió antes de esta ventana (8-oct, medición sobre 1.486 ventanas
+    # reales): Whuilianny casi siempre contesta "Ok nena" y lo que se compró lo dijo la clienta.
+    # Leyendo solo a ella, el lector veía ~6 de 10 pedidos claros.
+    cliente: list[str] = field(default_factory=list)
 
     @property
     def texto(self) -> str:
         return "\n".join(str(m.get("contenido") or "") for m in self.owner)
+
+    @property
+    def texto_cliente(self) -> str:
+        texto = "\n".join(self.cliente) if self.cliente else self.ultimo_cliente
+        return texto[-CLIENTE_MAX_CHARS:]
 
     @property
     def ultimo_id(self) -> int | None:
@@ -135,6 +154,10 @@ def ventanas_owner(mensajes, hueco_min: int = HUECO_VENTANA_MIN) -> list[Ventana
     ventanas: list[Ventana] = []
     actual: Ventana | None = None
     ultimo_cliente = ""
+    # Lo que la clienta dijo desde la última ventana de ella. Si la dueña escribe otra vez tras un
+    # hueco sin que la clienta hable, la ventana nueva conserva ese mismo contexto.
+    cliente: list[str] = []
+    cliente_nuevo = False
     for m in sorted(mensajes, key=lambda x: x.get("id") or 0):
         rol = m.get("rol")
         if rol == "user":
@@ -142,6 +165,10 @@ def ventanas_owner(mensajes, hueco_min: int = HUECO_VENTANA_MIN) -> list[Ventana
                 ventanas.append(actual)
             actual = None
             ultimo_cliente = str(m.get("contenido") or "")
+            if not cliente_nuevo:
+                cliente, cliente_nuevo = [], True
+            if ultimo_cliente.strip():
+                cliente = (cliente + [ultimo_cliente])[-CLIENTE_MAX_MENSAJES:]
             continue
         if rol != "owner" or _es_placeholder(m.get("contenido")):
             continue
@@ -152,7 +179,8 @@ def ventanas_owner(mensajes, hueco_min: int = HUECO_VENTANA_MIN) -> list[Ventana
                 ventanas.append(actual)
                 actual = None
         if actual is None:
-            actual = Ventana(ultimo_cliente=ultimo_cliente)
+            actual = Ventana(ultimo_cliente=ultimo_cliente, cliente=list(cliente))
+            cliente_nuevo = False
         actual.owner.append(m)
     if actual and actual.owner:
         ventanas.append(actual)
@@ -192,8 +220,8 @@ def _mensajes_para_modelo(ventana: Ventana, ctx: Contexto) -> list[dict]:
         {"role": "system", "content": INSTRUCCION + "\nCatálogo (solo nombres):\n"
          + json.dumps(indice_para_extractor(ctx), ensure_ascii=False)},
         {"role": "user", "content": (
-            "Último mensaje del cliente: " + (ventana.ultimo_cliente or "(ninguno)")
-            + "\n\nMensajes de la dueña:\n" + "\n".join(lineas)
+            "Lo que escribió la clienta antes:\n" + (ventana.texto_cliente or "(nada)")
+            + "\n\nLo que respondió la dueña:\n" + "\n".join(lineas)
         )},
     ]
 
@@ -397,11 +425,13 @@ def _pedidos_sin_pagar(pedido: dict | None, pedidos: list[dict] | None) -> list[
 def validar(
     ev: EventoDuena, texto_ventana: str, ctx: Contexto, *, telefono: str, hoy: date,
     franjas: list[str], pedido: dict | None, evidencia_id: int | None,
-    pedidos: list[dict] | None = None,
+    pedidos: list[dict] | None = None, texto_cliente: str = "",
 ) -> Veredicto:
     """Función PURA (sin BD): el código dicta escribe / propuesta / descarta. `pedido` = el pedido
     abierto del cliente según `cargar_contexto` (o None); `pedidos` = la lista (PR6c) para elegir a
-    cuál va un pago cuando hay varios; si no viene, se comporta como antes."""
+    cuál va un pago cuando hay varios; si no viene, se comporta como antes. `texto_cliente` = lo que
+    la clienta escribió antes de la ventana: el producto y la cantidad pueden venir de ahí, pero la
+    evidencia (el sí de ella) tiene que estar en lo que dijo ELLA."""
     if ev.tipo == "nada":
         return Veredicto("descarta", "nada que anotar")
     if not consta(ev.evidencia, texto_ventana):
@@ -411,20 +441,30 @@ def validar(
     if ev.tipo == "pedido_tomado":
         if not ev.items:
             return Veredicto("descarta", "pedido sin ítems")
+        conversacion = texto_ventana + "\n" + texto_cliente
         confianza = 1.0
         motivos = []
         total = Decimal("0")
+        pedido_por_la_clienta = bool(texto_cliente.strip())
         for it in ev.items:
+            if not consta(it.nombre_literal, conversacion):
+                return Veredicto("propuesta", f"'{it.nombre_literal}' no consta en la conversación", 0.0, p)
             prod, ambiguo = producto_por_nombre(ctx, it.nombre_literal)
             if prod is None:
                 return Veredicto("propuesta", f"'{it.nombre_literal}' {'calza con varios productos' if ambiguo else 'no está en el catálogo'}", 0.0, p)
-            var = variante_para(prod, it.nombre_literal, texto_ventana)
+            var = variante_para(prod, it.nombre_literal, conversacion)
             if var is None:
                 return Veredicto("propuesta", f"'{prod['nombre']}' tiene varias presentaciones y no dijo cuál", 0.0, p)
-            cantidad = parsear_cantidad(it.cantidad_literal)
+            # 📏 Mencionar no es vender (medición 8-oct: "3 dedos de kéfir" se escribía como 3 kéfir):
+            # el producto tiene que haberlo nombrado la CLIENTA, salvo que ella arme la cuenta con total.
+            if not (_palabras(it.nombre_literal) & _palabras(texto_cliente)):
+                pedido_por_la_clienta = False
+            dicha = it.cantidad_literal if consta(it.cantidad_literal, conversacion) else ""
+            cantidad = parsear_cantidad(dicha)
             if cantidad is None:
-                cantidad, confianza = 1, min(confianza, UMBRAL_AUTO)
-                motivos.append(f"cantidad de '{prod['nombre']}' asumida en 1")
+                # Nadie dijo cuántos: nunca se supone "1" en silencio (se escribían pedidos de 1).
+                cantidad, confianza = 1, 0.0
+                motivos.append(f"nadie dijo la cantidad de '{prod['nombre']}'")
             precio = var.get("precio")
             p.items.append(ItemPropuesto(
                 producto_id=prod["id"], variante_id=var["id"], nombre=prod["nombre"],
@@ -440,9 +480,12 @@ def validar(
         if dicho is not None and moneda != "Bs" and abs(dicho - total) > Decimal("0.01"):
             p.total = float(dicho)  # lo que ELLA pactó manda, pero lo confirma una persona
             return Veredicto("propuesta", f"el total que dijo ({dicho}) no cuadra con el catálogo ({total})", 0.0, p)
-        if dicho is None:
-            confianza = min(confianza, UMBRAL_AUTO)
-            motivos.append("sin total dicho")
+        if dicho is None and not pedido_por_la_clienta:
+            # Sin total y sin una clienta que lo haya pedido, es una mención, no una venta.
+            confianza = 0.0
+            motivos.append("sin total dicho y la clienta no lo pidió")
+        elif dicho is None:
+            motivos.append("sin total dicho; lo pidió la clienta")
         p.confianza = confianza
         return Veredicto("escribe" if confianza >= UMBRAL_AUTO else "propuesta", "; ".join(motivos) or "pedido claro", confianza, p)
 
@@ -475,6 +518,9 @@ def validar(
         if not (p.fecha or p.franja or p.lugar):
             return Veredicto("descarta", "entrega sin fecha, momento ni lugar reconocibles")
         dudas = []
+        if not (p.fecha or p.franja):
+            # Mandar la ubicación no es acordar la entrega (medición 8-oct: un enlace de mapa se escribía).
+            dudas.append("solo dijo un lugar, sin día ni momento")
         if ev.fecha_texto.strip() and fecha is None:
             dudas.append(f"no entendí la fecha '{ev.fecha_texto}'")
         if ev.momento_texto.strip() and franja is None:
@@ -592,6 +638,7 @@ async def procesar_ventana(
         v = validar(
             ev, ventana.texto, ctx, telefono=telefono, hoy=hoy, franjas=franjas,
             pedido=ctx.pedido, pedidos=ctx.pedidos, evidencia_id=evidencia.get("id"),
+            texto_cliente=ventana.texto_cliente,
         )
         if v.accion == "descarta" or v.propuesta is None:
             logger.info("Expediente %s: %s descartado (%s)", telefono, ev.tipo, v.motivo)
