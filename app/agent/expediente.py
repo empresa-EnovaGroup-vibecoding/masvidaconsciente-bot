@@ -316,6 +316,8 @@ class Veredicto:
     motivo: str = ""
     confianza: float = 0.0
     propuesta: PropuestaExpediente | None = None
+    # 📦 Lo que ella vendió y NO está en el catálogo (8-oct): para avisarle que lo suba.
+    fuera_de_catalogo: str = ""
 
 
 _STOP = {"el", "la", "de", "los", "las", "un", "una", "unos", "unas", "del", "al", "y", "con"}
@@ -346,6 +348,14 @@ def producto_por_nombre(ctx: Contexto, nombre_literal: str):
     exactos = [p for p in productos if " ".join(_singular(w) for w in normalizar(p["nombre"]).split()) == obj_sg]
     if len(exactos) == 1:
         return exactos[0], False
+    # 🏷️ Cómo lo llama ELLA (8-oct): "galletas pequeñas choco" → Mini New York. Un apodo apunta a un
+    # nombre EXACTO del catálogo; si ese nombre ya no existe, el apodo no vale (no se adivina).
+    for clave in (objetivo, obj_sg):
+        if clave in ctx.apodos:
+            destino = normalizar(ctx.apodos[clave])
+            hallado = [p for p in productos if normalizar(p["nombre"]) == destino]
+            if len(hallado) == 1:
+                return hallado[0], False
     palabras = _palabras(nombre_literal)
     if not palabras:
         return None, False
@@ -451,7 +461,10 @@ def validar(
                 return Veredicto("propuesta", f"'{it.nombre_literal}' no consta en la conversación", 0.0, p)
             prod, ambiguo = producto_por_nombre(ctx, it.nombre_literal)
             if prod is None:
-                return Veredicto("propuesta", f"'{it.nombre_literal}' {'calza con varios productos' if ambiguo else 'no está en el catálogo'}", 0.0, p)
+                if ambiguo:
+                    return Veredicto("propuesta", f"'{it.nombre_literal}' calza con varios productos", 0.0, p)
+                return Veredicto("propuesta", f"'{it.nombre_literal}' no está en el catálogo", 0.0, p,
+                                 fuera_de_catalogo=it.nombre_literal.strip())
             var = variante_para(prod, it.nombre_literal, conversacion)
             if var is None:
                 return Veredicto("propuesta", f"'{prod['nombre']}' tiene varias presentaciones y no dijo cuál", 0.0, p)
@@ -624,9 +637,11 @@ async def _propuesta_repetida(session, telefono: str, p: PropuestaExpediente) ->
 async def procesar_ventana(
     factory, telefono: str, ventana: Ventana, ctx: Contexto, *, llm, modelo: str,
     escritura: str, franjas: list[str], hoy: date, modelo_respaldo: str | None = None,
+    fuera_de_catalogo: list[str] | None = None,
 ) -> list[tuple[str, str]]:
     """Interpreta una ventana y deja propuestas (o escribe, solo en `auto`). Devuelve
-    [(tipo, accion)] para el log y los tests. Nunca lanza: un fallo aquí no puede tumbar al worker."""
+    [(tipo, accion)] para el log y los tests. Nunca lanza: un fallo aquí no puede tumbar al worker.
+    Si se pasa `fuera_de_catalogo`, se le agregan los productos que ella vendió y no están cargados."""
     try:
         extraccion = await interpretar_duena(ventana, ctx, llm, modelo, modelo_respaldo=modelo_respaldo)
     except (ValidationError, ValueError, KeyError, TypeError) as e:
@@ -640,6 +655,8 @@ async def procesar_ventana(
             pedido=ctx.pedido, pedidos=ctx.pedidos, evidencia_id=evidencia.get("id"),
             texto_cliente=ventana.texto_cliente,
         )
+        if v.fuera_de_catalogo and fuera_de_catalogo is not None:
+            fuera_de_catalogo.append(v.fuera_de_catalogo)
         if v.accion == "descarta" or v.propuesta is None:
             logger.info("Expediente %s: %s descartado (%s)", telefono, ev.tipo, v.motivo)
             resultados.append((ev.tipo, "descarta"))

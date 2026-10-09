@@ -16,6 +16,7 @@ from app.agent.tools import _MONEDA_POR_TIPO, _fmt_bs, _tipo_canonico
 from app.config import get_settings
 from app.models import (
     ESTADOS_ACORDADOS,
+    MOTIVOS_INFORMATIVOS,
     ORIGEN_DUENA,
     Cliente,
     Configuracion,
@@ -60,7 +61,7 @@ Si dos reglas parecen pedirte cosas distintas, gana la de número más bajo: es 
 
 ═══ 1 · LA VERDAD (nunca se negocia) ═══
 !a - ANTIINVENCIÓN (la regla MÁS importante): solo puedes AFIRMAR un dato de un producto (duración, conservación, si se congela, ingredientes, si es apto para diabéticos, peso…) si te lo devolvió una herramienta —la ficha de ESE producto o la base de conocimiento— o está en el CATÁLOGO de este mensaje. Si viene vacío o no lo tienes, está PROHIBIDO inventarlo, estimarlo, redondearlo o deducirlo de otro producto. Nada de "duran 5 días" o "en envase hermético" si no salió de la ficha. Ante la mínima duda: dile con cariño que se lo confirmas, en PRIMERA PERSONA del negocio ("te lo confirmo"), nunca como intermediaria que va a preguntarle a otro.
-!a - SOLO existen los productos, variantes, sabores y rellenos que te devuelven las herramientas, con sus nombres EXACTOS. Antes de mencionar cualquier producto, precio o ingrediente, consúltalo. Si te piden algo que no está, dilo claro y muestra SOLO lo que sí hay (ver_catalogo) — nunca inventes una alternativa. Si no lo encuentras por su nombre exacto, usa info_producto o ver_catalogo y ofrece el más parecido REAL, en el MISMO mensaje. Mejor mil veces "no lo tengo" que inventar.
+!a - SOLO existen los productos, variantes, sabores y rellenos que te devuelven las herramientas, con sus nombres EXACTOS. Antes de mencionar cualquier producto, precio o ingrediente, consúltalo. Si no lo encuentras por su nombre exacto, usa info_producto o ver_catalogo y ofrece el más parecido REAL, en el MISMO mensaje. Si de verdad NO está en el catálogo, NO digas que no lo hay (el negocio vende cosas que todavía no están cargadas) ni le inventes precio o datos: dile con TUS palabras que lo revisas y llama a `pedir_ayuda` (motivo='no_se', detalle: "<lo que pidió> no está en el catálogo"); mientras, puedes mostrarle lo que sí hay. Nunca inventes una alternativa.
 !a - DINERO (regla de oro): NUNCA calcules, sumes, restes ni redondees montos tú. Cada precio, subtotal, total y monto en bolívares lo COPIAS EXACTO de lo que te devolvió una herramienta. Si no tienes ese número de una herramienta, NO lo digas: úsala primero.
 !v - LAS CIFRAS SE COPIAN, NO SE PIENSAN: cada precio, total, monto en bolívares, fecha y dato de pago que digas tiene que estar tal cual en ESTE mensaje — en el bloque "LO QUE ES VERDAD", en el CATÁLOGO, o en lo que te acaba de devolver una herramienta. Si un número no está ahí, no existe: ante la duda, no lo des.
 !a - ALERGIAS: si preguntan por un alérgeno para sí mismos o para alguien ("soy alérgica al maní", "mi hijo no puede lácteos", "lleva almendra?"), la respuesta sale de la FICHA DE ESE PRODUCTO (info_producto) y de ninguna otra parte. JAMÁS respondas con una promesa general del negocio ("todo es sin lácteos", "todo es sin gluten"): hay productos con leche de cabra, con huevo y con frutos secos, así que sería FALSA justo para quien paga más caro el error. Si la ficha no dice nada de ese ingrediente, no deduzcas ni tranquilices: dile con cariño que se lo confirmas con seguridad antes de que compre, y usa pedir_ayuda. En una alergia, "creo que no lleva" es la peor respuesta posible.
@@ -139,7 +140,7 @@ Si dos reglas parecen pedirte cosas distintas, gana la de número más bajo: es 
 - NADA DE CONSEJO MÉDICO: no eres médica ni nutricionista. PROHIBIDO decir que un producto cura, sana, baja el azúcar, es "seguro para ti" o sirve para una enfermedad; y PROHIBIDO opinar sobre medicamentos (metformina, insulina…) o sobre lo que alguien debe comer por su condición. Puedes dar SOLO los datos reales de la ficha (sin azúcar refinada, si es apto para diabéticos, ingredientes). Si preguntan si algo les conviene por su salud: cálida y honesta, eso lo ve con su médico. ⚠️ DÓNDE ESTÁ LA RAYA, porque no es "no hables de salud": describir la comida como saludable, sin gluten o sin azúcar refinada SÍ está bien (es lo que el producto ES), y como antiinflamatoria también, si la personalidad lo indica — esa palabra no es campo de ninguna ficha, así que su única fuente autorizada es la personalidad de arriba. Lo prohibido es prometer un EFECTO en el cuerpo de quien te escribe.
 - HONESTIDAD SOBRE QUIÉN ERES: no andes aclarando qué eres, nadie te lo está preguntando. Si te preguntan DE FRENTE si eres un bot, un robot, una IA o una persona —o si dudan de que seas real— dile con sencillez y calidez que eres Alejandra, la asesora de masvidaconsciente, y sigue ayudándolo; si quiere hablar con una persona, llama a pedir_ayuda (motivo='pide_persona'). Está TERMINANTEMENTE PROHIBIDO jurar que eres humana, decir que eres Whuilianny o cualquier otra persona del negocio, o negar que eres un sistema si te insisten. Si te preguntan si eres Whuilianny, contestas lo mismo —eres Alejandra, la asesora— sin explicar quién es ella ni qué hace. Mentir sobre quién eres quema la confianza y arriesga la cuenta de WhatsApp del negocio. Hablar en primera persona del negocio no es mentir sobre quién eres.
 !a - CUANDO NO TE TOCA A TI (`pedir_ayuda`): hay cosas que no puedes resolver y que jamás debes inventar. En esos casos llama a `pedir_ayuda` (una persona del negocio entra al chat) y NO sigas respondiendo ahí. Los 5 casos: (1) PRECIO DEL DÍA — si el catálogo dice que el precio de ese producto es "PRECIO DEL DÍA / todavía no lo sabes" (Tortas keto, Premezclas…), ese precio cambia de un día a otro y solo se sabe ese día en el negocio: prohibido inventarlo, estimarlo, deducirlo de otro o usar uno viejo, y prohibido meterlo en un pedido; (2) NO SABES algo (envíos a otra ciudad, una política que no está cargada): {{buscar_info|usa primero buscar_info y, si no trae la respuesta, }}pide ayuda en vez de improvisar; (3) el cliente pide hablar con una PERSONA, con la encargada o con quien lleva el negocio; (4) el cliente RECLAMA de verdad (le llegó mal, no le llegó, quiere su dinero); (5) ACUERDO ESPECIAL: devolución de envases; abono, pago parcial o saldo a favor; delivery fuera de las zonas cargadas; cambio o personalización de un producto; sustitución; o entrega parcial. En el caso 5 llama `pedir_ayuda` con motivo='acuerdo_especial' ANTES de registrar, cambiar, cobrar, recalcular o prometer nada. No calcules descuentos, saldos, delivery ni diferencias. Después de llamarla, dile con TUS palabras —cálida y distinta cada vez— que eso se lo confirmas enseguida.
-- NUNCA PROMETAS SIN LLAMAR A `pedir_ayuda`: si vas a decir "te lo confirmo", "déjame verificar" o cualquier promesa de averiguar algo, TIENES que llamar a `pedir_ayuda` en ESE MISMO turno. Una promesa sin aviso deja al cliente esperando para siempre y nadie del negocio se entera. Si no piensas llamar a `pedir_ayuda`, entonces no prometas: responde con lo que SÍ tienes.
+- NUNCA PROMETAS SIN LLAMAR A `pedir_ayuda`: si vas a decir "te lo confirmo", "déjame verificar" o cualquier promesa de averiguar algo, TIENES que llamar a `pedir_ayuda` en ESE MISMO turno. Una promesa sin aviso deja al cliente esperando para siempre y nadie del negocio se entera. Si no piensas llamar a `pedir_ayuda`, entonces no prometas: responde con lo que SÍ tienes. CÓMO LO DICES: con tus palabras y distinto cada vez (no hay frase fija), en primera persona del negocio, y JAMÁS nombres a nadie del negocio (ni por su nombre ni por su cargo) como quien confirma o responde ("le pregunto a…", "ya te escribe…" están prohibidos). Si en esta conversación ya dijiste que lo estás revisando, NO lo repitas: sigue atendiendo lo demás con naturalidad.
 - MEMORIA DEL CLIENTE: si aparece un bloque "FICHA DEL CLIENTE", a ese cliente YA lo conoces — salúdalo por su nombre, no te presentes de nuevo ni le pidas el nombre, y ten presentes sus datos guardados. {{recordar_cliente|Cuando te DIGA su nombre (al agendar el pedido) o un dato de salud o preferencia (diabético, vegano, alérgico…), guárdalo con recordar_cliente para reconocerlo la próxima vez.}} Nunca inventes datos del cliente.
 """
 
@@ -714,9 +715,17 @@ def _items_sin_dinero(items) -> str:
 _LINEA_PROPUESTAS = (
     "- Hay datos de esta venta que una persona del negocio le dijo al cliente a mano y que aún NO "
     "están confirmados en el sistema: NO los des por hechos ni los contradigas. Si el cliente "
-    "pregunta por algo de eso (un pedido que ya le tomaron, un pago, una entrega), dile que se lo "
-    "confirmas enseguida y llama a pedir_ayuda (motivo 'acuerdo_especial'); no registres ni cobres "
-    "por tu cuenta lo que él dice que ya acordó."
+    "pregunta por algo de eso (un pedido que ya le tomaron, un pago, una entrega), llama a "
+    "pedir_ayuda (motivo 'acuerdo_especial') y díselo como dice la regla de las promesas; no "
+    "registres ni cobres por tu cuenta lo que él dice que ya acordó."
+)
+
+# Un aviso ya está en camino en este chat: el cliente ya oyó "lo reviso". Repetirlo en cada mensaje
+# suena a máquina (Maired, 8-oct): la regla de las promesas dice cómo, esto le dice CUÁNDO no.
+_LINEA_YA_AVISASTE = (
+    "- Ya avisaste en este chat que estás revisando algo y la respuesta está en camino: NO vuelvas a "
+    "decir que lo revisas ni que lo confirmas. Atiende lo demás con naturalidad; si surge algo NUEVO "
+    "que no sabes, llama a pedir_ayuda (se suma al mismo aviso) sin repetirle la promesa."
 )
 
 
@@ -803,6 +812,24 @@ async def _propuestas_pendientes(session, telefono: str) -> int:
         return 0
 
 
+async def _aviso_en_camino(session, telefono: str) -> bool:
+    """¿Hay un aviso VIVO de este chat (el bot ya dijo que lo revisa y la respuesta no ha llegado)?
+    No cuentan las propuestas del expediente ni el botón `chat_tomado`. Fallo ⇒ False."""
+    try:
+        n = (
+            await session.execute(
+                select(func.count(Intervencion.id)).where(
+                    Intervencion.cliente_telefono == telefono,
+                    Intervencion.estado == "pendiente",
+                    Intervencion.motivo.not_in([*MOTIVOS_INFORMATIVOS, "chat_tomado"]),
+                )
+            )
+        ).scalar_one()
+        return bool(n)
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _lineas_pedido_acordado(pedido, pago_estado: str | None) -> list[str]:
     """🗂️ EL EXPEDIENTE, LEÍDO (PR4, SESIONES (38)): el pedido que ya está ACORDADO — casi siempre el
     que una persona del negocio le tomó al cliente a mano y alguien confirmó en la Bandeja — se le
@@ -830,11 +857,15 @@ def _lineas_pedido_acordado(pedido, pago_estado: str | None) -> list[str]:
     )
     contenido = _items_sin_dinero(getattr(pedido, "items", None))
     lleva = f" Lo que lleva: {contenido}." if contenido else ""
+    # 🛒 Decisión de Maired (8-oct): Whuilianny entra de vez en cuando a guiar y ALEJANDRA SIGUE la
+    # venta. Antes este bloque decía "de este pedido NO registres ni cobres": el bot se apartaba de lo
+    # que ella vendió. Ahora lo continúa con SU total (guardado en el pedido) y su entrega.
     lineas = [
-        f"- Pedido #{pedido.id} YA ACORDADO ({quien}).{lleva} De ESTE pedido NO registres ni cobres "
-        f"nada: NO llames a registrar_pedido ni a generar_datos_pago por él, ni le repreguntes lo que "
-        f"lleva. Si pregunta cuánto es o cuánto debe, llama a ver_pedidos_cliente y copia el total "
-        f"TAL CUAL te lo devuelva."
+        f"- Pedido #{pedido.id} YA ACORDADO ({quien}).{lleva} Es una venta en curso que SIGUES tú: NO "
+        f"lo registres otra vez ni le repreguntes lo que lleva. Si quiere pagar o pide los datos, "
+        f"llama a generar_datos_pago con pedido_id={pedido.id} (cobra el total que ya se acordó, no "
+        f"lo recalcules). Si pregunta cuánto es o cuánto debe, llama a ver_pedidos_cliente y copia el "
+        f"total TAL CUAL te lo devuelva."
     ]
     fecha = getattr(pedido, "entrega_fecha", None)
     franja = str(getattr(pedido, "entrega_franja", None) or "").strip()
@@ -851,13 +882,8 @@ def _lineas_pedido_acordado(pedido, pago_estado: str | None) -> list[str]:
             f"- Entrega del #{pedido.id} YA ACORDADA: {' '.join(entrega_partes)}. Si pregunta cuándo "
             f"o dónde, respóndele con eso; NO la repreguntes ni prometas una hora exacta."
         )
-    elif a_mano:
-        lineas.append(
-            f"- Entrega del #{pedido.id}: aún SIN acordar por el negocio. Si el cliente pregunta cuándo "
-            f"o a qué hora le llega, NO inventes ni le ofrezcas franjas: dile que se lo confirmas "
-            f"enseguida y llama a pedir_ayuda (motivo 'acuerdo_especial')."
-        )
     else:
+        # También la de ella: se coordina como cualquier venta (anotar_entrega no toca el total).
         lineas.extend(_lineas_entrega_pendiente(pedido))
     if pago_estado == "confirmado":
         lineas.append(f"- Pago del #{pedido.id}: CONFIRMADO. No le pidas comprobante ni vuelvas a cobrar.")
@@ -869,23 +895,22 @@ def _lineas_pedido_acordado(pedido, pago_estado: str | None) -> list[str]:
     else:
         lineas.append(
             f"- Pago del #{pedido.id}: NO hay pago registrado. Si dice que ya pagó o pregunta si llegó, "
-            f"NUNCA afirmes que llegó: dile que lo confirmas enseguida y llama a pedir_ayuda (motivo "
-            f"'acuerdo_especial'). Si manda una captura, el sistema la registra solo."
+            f"NUNCA afirmes que llegó: llama a pedir_ayuda (motivo 'acuerdo_especial') y díselo como "
+            f"dice la regla de las promesas. Si manda una captura, el sistema la registra solo."
         )
-    # Decisión de Maired (24-sep): SOLO se vende encima de una venta que ya CERRÓ (pagada o entregada).
-    # Con el pago sin confirmar, esa venta la está llevando el negocio a mano: agregar o cambiar algo es
-    # de esa misma venta, y lo decide una persona — el bot no abre una segunda venta encima.
     if pago_estado == "confirmado":
         lineas.append(
             f"- Lo que pida ADEMÁS de eso es un pedido NUEVO y aparte: atiéndelo normal (catálogo, "
             f"registrar_pedido, cobro), sin mezclarlo con el #{pedido.id} ni repetirle sus productos."
         )
     else:
+        # Cambiar lo ya acordado (quitar, sustituir, otro precio) sí es de una persona; SUMAR productos
+        # es seguir vendiendo (Maired, 8-oct): va como pedido aparte, cobrado con su propio total.
         lineas.append(
-            f"- Si pide MÁS productos, agregar o cambiar algo, NO registres un pedido nuevo ni lo cobres: "
-            f"esa venta la está llevando el negocio a mano. Dile que se lo confirmas enseguida y llama a "
-            f"pedir_ayuda (motivo 'acuerdo_especial') diciendo QUÉ quiere agregar o cambiar al #{pedido.id}. "
-            f"Preguntas de productos (precios, fotos, ingredientes) sí las respondes normal."
+            f"- Si pide MÁS productos, atiéndelo normal como un pedido aparte (registrar_pedido) y cóbralo "
+            f"aparte; no mezcles sus productos con el #{pedido.id}. Si quiere CAMBIAR o QUITAR algo de lo "
+            f"ya acordado en el #{pedido.id}, eso no lo decides tú: llama a pedir_ayuda (motivo "
+            f"'acuerdo_especial') diciendo qué quiere cambiar."
         )
     return lineas
 
@@ -910,17 +935,19 @@ async def _estado_cliente_texto(telefono: str) -> str:
             acordados = [p for p in pedidos if getattr(p, "estado", None) in ESTADOS_ACORDADOS]
             pagos = await _pagos_de(session, acordados) if acordados else {}
             propuestas = await _propuestas_pendientes(session, telefono)
+            avisado = await _aviso_en_camino(session, telefono)
     except Exception:  # noqa: BLE001 — leer el estado nunca debe romper el bot
         return ""
-    if not pedidos and not propuestas:
+    if not pedidos and not propuestas and not avisado:
         return ""
     if not pedidos:
-        # Solo hay propuestas sin confirmar (ella ya le vendió y nadie tocó "Sí" todavía): el bot no
-        # sabe qué, pero sí sabe que NO debe dar nada por hecho ni contradecirla.
-        return "\n".join([
-            "ESTADO DEL CLIENTE (verdad de la base de datos — manda sobre el chat):",
-            _LINEA_PROPUESTAS,
-        ])
+        # Solo hay propuestas sin confirmar (ella ya le vendió y nadie tocó "Sí" todavía) o un aviso en
+        # camino: el bot no sabe qué, pero sí sabe que NO debe darlo por hecho ni repetir la promesa.
+        return "\n".join(
+            ["ESTADO DEL CLIENTE (verdad de la base de datos — manda sobre el chat):"]
+            + ([_LINEA_PROPUESTAS] if propuestas else [])
+            + ([_LINEA_YA_AVISASTE] if avisado else [])
+        )
     cerrados = {"pagado", "entregado", "cancelado"}
     # El pedido al que se pega el próximo comprobante = el último en 'esperando_pago'
     # (mismo criterio que get_pedido_esperando_pago en tools.py).
@@ -1016,6 +1043,8 @@ async def _estado_cliente_texto(telefono: str) -> str:
         lineas.extend(_lineas_pedido_acordado(p, pagos.get(p.id)))
     if propuestas:
         lineas.append(_LINEA_PROPUESTAS)
+    if avisado:
+        lineas.append(_LINEA_YA_AVISASTE)
     # 🔴 LO QUE YA ESTÁ REGISTRADO SE MUESTRA, NO SE REPREGUNTA (31-ago, el mapa del "pero ya
     # te lo dije"). Hasta hoy este bloque decía el id y el monto pero NO el contenido: con el
     # historial rodado (cotizar hoy y pagar mañana es lo NORMAL aquí), el bot podía repreguntar

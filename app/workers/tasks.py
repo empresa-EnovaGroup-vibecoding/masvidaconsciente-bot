@@ -2461,6 +2461,7 @@ async def _extraer_expediente(telefono, hasta_id=None) -> str:
     ctx = await cargar_contexto(telefono)
     abrir_turno(telefono, "expediente")  # 📊 su costo, aparte, en `llamadas_ia`
     anotados = 0
+    fuera_de_catalogo: list[str] = []
     for v in ventanas:
         ultimo = v.owner[-1].get("created_at")
         hoy = (ultimo - timedelta(hours=4)).date() if ultimo else hoy_venezuela()
@@ -2468,9 +2469,11 @@ async def _extraer_expediente(telefono, hasta_id=None) -> str:
             factory, telefono, v, ctx, llm=_llamar_openrouter, modelo=modelo,
             escritura=escritura, franjas=franjas, hoy=hoy,
             modelo_respaldo=settings.openrouter_model_extractor_respaldo,
+            fuera_de_catalogo=fuera_de_catalogo,
         )
         anotados += sum(1 for _, accion in resultados if accion in ("propuesta", "escribe"))
     await _marcar_expediente(clave_marca, ultimo_id)
+    await _avisar_fuera_de_catalogo(telefono, fuera_de_catalogo)
     if anotados:
         try:
             await rc.notificar_conversacion(telefono, "actualizada")
@@ -2480,6 +2483,52 @@ async def _extraer_expediente(telefono, hasta_id=None) -> str:
     # da por hecho). Nunca tumba la extracción: un fallo aquí deja la propuesta en la Bandeja.
     await _preguntar_pagos_a_la_duena(telefono)
     return "ok"
+
+
+# Una sola vez por producto (Maired, 8-oct): si no lo sube, es que no es del negocio (desodorante,
+# maquillaje de aliados…) y no se le vuelve a recordar. Un año de candado = "una vez".
+DIAS_AVISO_CATALOGO = 365
+
+
+def _texto_fuera_de_catalogo(productos: list[str], quien: str) -> str:
+    lista = productos[0] if len(productos) == 1 else ", ".join(productos[:-1]) + " y " + productos[-1]
+    eso = "no está" if len(productos) == 1 else "no están"
+    return (
+        f"📦 Le vendiste {lista} a {quien}, pero {eso} en el catálogo. "
+        "Súbelo con su precio y así Alejandra también lo podrá vender."
+    )
+
+
+async def _avisar_fuera_de_catalogo(telefono: str, productos: list[str]) -> int:
+    """📦 (8-oct, decisión de Maired) Ella vendió algo que el catálogo no tiene: se lo recuerda por
+    WhatsApp para que lo suba. UNA sola vez por producto (`DIAS_AVISO_CATALOGO`), no a cada venta,
+    texto fijo y sin IA. Nunca lanza: un aviso que no sale no toca el expediente."""
+    from sqlalchemy import select
+
+    from app.agent.resolver_atencion import normalizar
+    from app.models import Cliente
+    from app.services.dueno import telefono_de_la_duena
+
+    try:
+        unicos = list(dict.fromkeys(p.strip() for p in productos if p and p.strip()))
+        if not unicos:
+            return 0
+        destino = await telefono_de_la_duena()
+        if not destino:
+            return 0
+        nuevos = [p for p in unicos
+                  if await rc.aviso_unico(f"aviso:fuera_catalogo:{normalizar(p)}", DIAS_AVISO_CATALOGO * 86400)]
+        if not nuevos:
+            return 0
+        async with get_session_factory()() as session:
+            nombre = (await session.execute(
+                select(Cliente.nombre).where(Cliente.telefono == telefono)
+            )).scalar_one_or_none()
+        await enviar_texto(destino, _texto_fuera_de_catalogo(nuevos, _quien(nombre, telefono)))
+        return len(nuevos)
+    except Exception:  # noqa: BLE001
+        logger.warning("No se pudo avisar de productos fuera del catálogo (%s)", telefono, exc_info=True)
+        return 0
 
 
 async def _marcar_expediente(clave: str, ultimo_id: int) -> None:

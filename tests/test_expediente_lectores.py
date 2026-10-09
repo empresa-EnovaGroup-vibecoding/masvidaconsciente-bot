@@ -135,7 +135,9 @@ async def test_el_pedido_tomado_a_mano_deja_de_ser_invisible(monkeypatch):
     assert "Pedido #3130 YA ACORDADO" in texto
     assert "una persona del negocio a mano el 22/09" in texto
     assert "2× Quesillo (500 g)" in texto
-    assert "NO llames a registrar_pedido ni a generar_datos_pago" in texto
+    # 🛒 Decisión de Maired (8-oct): Alejandra SIGUE esa venta — no la re-registra, la cobra por su total.
+    assert "Es una venta en curso que SIGUES tú" in texto and "NO lo registres otra vez" in texto
+    assert "generar_datos_pago con pedido_id=3130" in texto
     assert "ver_pedidos_cliente" in texto, "el total se pide a la herramienta, no se imprime aquí"
 
 
@@ -149,9 +151,10 @@ async def test_pago_sin_registrar_nunca_se_afirma_y_no_se_vende_encima(monkeypat
     texto = await _estado(monkeypatch, [_pedido()])
     assert "NO hay pago registrado" in texto and "NUNCA afirmes que llegó" in texto
     assert "pedir_ayuda" in texto
-    # Decisión de Maired (24-sep): con la venta a medias no se abre otra venta encima.
-    assert "NO registres un pedido nuevo ni lo cobres" in texto
-    assert "pedido NUEVO y aparte" not in texto
+    # Decisión de Maired (8-oct, reemplaza la del 24-sep): sumar productos es seguir vendiendo, aparte;
+    # CAMBIAR lo ya acordado sí es de una persona.
+    assert "atiéndelo normal como un pedido aparte" in texto
+    assert "CAMBIAR o QUITAR algo de lo ya acordado" in texto and "acuerdo_especial" in texto
 
 
 async def test_pago_confirmado_si_permite_vender_lo_nuevo(monkeypatch):
@@ -171,8 +174,9 @@ async def test_entrega_acordada_se_muestra_y_sin_acordar_se_escala(monkeypatch):
                                               entrega_referencia="frente a la plaza")])
     assert "Entrega del #3130 YA ACORDADA: el 2026-09-23 en la tarde (2 a 5) en frente a la plaza" in con
     sin = await _estado(monkeypatch, [_pedido()])
-    assert "aún SIN acordar por el negocio" in sin and "NO inventes ni le ofrezcas franjas" in sin
-    assert "Franja de entrega SIN ELEGIR" not in sin, "las franjas del bot no se ofrecen sobre un pedido de ella"
+    # 🛒 8-oct: Alejandra sigue la venta, así que la entrega de un pedido de ella se coordina normal.
+    assert "aún SIN acordar por el negocio" not in sin
+    assert "Franja de entrega SIN ELEGIR" in sin
 
 
 async def test_varios_pedidos_acordados_salen_todos_y_el_del_bot_primero(monkeypatch):

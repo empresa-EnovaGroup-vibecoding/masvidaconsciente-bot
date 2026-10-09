@@ -87,6 +87,9 @@ class Contexto:
     # Una persona del negocio dijo algo de la venta que aún NO es dato confirmado (hay propuestas
     # pendientes): registrar, cobrar o afirmar el estado sería adivinar. Se calcula en cargar_contexto.
     humano_sin_acuerdo: bool = False
+    # 🏷️ Cómo llama Whuilianny a los productos (8-oct): apodo normalizado → nombre del catálogo
+    # (config `apodos_productos`). Lo usa el lector del expediente.
+    apodos: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass

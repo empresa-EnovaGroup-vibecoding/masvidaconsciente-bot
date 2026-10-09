@@ -80,6 +80,8 @@ class ProductoIn(BaseModel):
     se_congela: str | None = None
     apto_diabeticos: str | None = None
     info: str | None = None
+    # 🏷️ Otros nombres con que lo llaman, separados por coma (041). Si el panel no lo manda, no se toca.
+    apodos: str | None = None
     # Días de anticipación que necesita ESTE producto (0 = mismo día si hay stock).
     dias_anticipacion: int = 0
     disponible: bool = True
@@ -682,6 +684,7 @@ async def listar_productos(_: str = Depends(usuario_actual)):
             "se_congela": p.se_congela,
             "apto_diabeticos": p.apto_diabeticos,
             "info": p.info,
+            "apodos": p.apodos,
             "dias_anticipacion": p.dias_anticipacion or 0,
             "disponible": p.disponible,
             "imagen": r2.url_publica(primera_img[p.id]) if p.id in primera_img else None,
@@ -715,6 +718,7 @@ async def crear_producto(datos: ProductoIn, _: str = Depends(usuario_actual)):
             se_congela=datos.se_congela,
             apto_diabeticos=datos.apto_diabeticos,
             info=datos.info,
+            apodos=(datos.apodos or "").strip() or None,
             dias_anticipacion=max(0, int(datos.dias_anticipacion or 0)),
             disponible=datos.disponible,
         )
@@ -805,6 +809,9 @@ async def editar_producto(producto_id: int, datos: ProductoIn, _: str = Depends(
         prod.se_congela = datos.se_congela
         prod.apto_diabeticos = datos.apto_diabeticos
         prod.info = datos.info
+        # Un panel viejo que no conoce el campo no debe BORRAR los otros nombres: solo si vino.
+        if "apodos" in datos.model_fields_set:
+            prod.apodos = (datos.apodos or "").strip() or None
         prod.dias_anticipacion = max(0, int(datos.dias_anticipacion or 0))
         prod.disponible = datos.disponible
         await session.commit()
