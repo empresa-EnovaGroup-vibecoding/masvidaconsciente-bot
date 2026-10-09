@@ -17,6 +17,34 @@
 
 ---
 
+## 2026-10-08 (47) — 🧺 LA REGLA DEFINITIVA: "lo que vendió Whuilianny lo termina Whuilianny; el bot vende lo nuevo"
+
+**Por qué:** con #73 el lector ya no inventa, pero casi todo lo deja como pregunta, y la medición mostró que
+ni una persona sabe con certeza qué vendió ella en ~1 de cada 4 ventanas ("Ok nena", notas de voz perdidas).
+Seguir puliendo el lector era gastar sin final. Maired pidió la solución de negocio, no otro arreglo. El bot no
+necesita saber TODO lo que vendió ella: necesita saber qué es suyo y qué es de ella, y eso lo dice el RELOJ.
+
+**La regla:**
+- Lo que el bot vendió DESPUÉS del último mensaje de Whuilianny en el chat es del bot: lo cobra normal.
+- Lo de ANTES es de ella (lo que anotó a mano, lo del panel, o un pedido que el bot armó antes de que ella
+  interviniera): el bot no lo cobra, no lo cambia ni lo da por hecho. Si el cliente pregunta por eso, dice
+  que lo confirma y llama a `pedir_ayuda` (`acuerdo_especial`). Lo nuevo sí lo vende.
+- El saludo automático de WhatsApp Business ("Gracias por comunicarte…") no cuenta como ella hablando.
+
+**Qué se hizo** (rama `venta-de-la-duena`):
+- `tools.py`:
+  - `ultimo_mensaje_de_la_duena` y `_venta_de_la_duena` (falla cerrado);
+  - candado en `generar_datos_pago`, junto al del pago en disputa (el código impide, no solo el prompt).
+- `system_prompt.py`: `_estado_cliente_texto` lee el último mensaje de ella.
+  - Si habló en los últimos 14 días (`DIAS_VENTA_DE_LA_DUENA`), sale la línea de la regla, aunque el lector no
+    haya visto nada.
+  - Un pedido del bot armado antes de que ella hablara deja de ofrecerse para cobrar.
+  - Va en la parte dinámica del prompt: no toca la caché.
+- `tests/test_venta_de_la_duena.py` (10 casos). **Suite 1395/0**, ruff limpio. Costo en OpenRouter: $0.
+
+**Lo que deja de hacer falta:** perfeccionar entregas y "ya te lo entregué" del lector para las ventas de
+ella, porque son de ella. El lector queda como información para el bot.
+
 ## 2026-10-08 (46) — 📏 LA MEDICIÓN: ¿el lector entiende lo que Whuilianny vendió? Antes y después
 
 **Por qué:** Maired se sintió perdida ("arreglamos y arreglamos sin saber"). Los PRs #69-#72 pulieron pagos

@@ -12,10 +12,11 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select
 
-from app.agent.tools import _MONEDA_POR_TIPO, _fmt_bs, _tipo_canonico
+from app.agent.tools import _MONEDA_POR_TIPO, _fmt_bs, _tipo_canonico, ultimo_mensaje_de_la_duena
 from app.config import get_settings
 from app.models import (
     ESTADOS_ACORDADOS,
+    ORIGEN_BOT,
     ORIGEN_DUENA,
     Cliente,
     Configuracion,
@@ -720,6 +721,39 @@ _LINEA_PROPUESTAS = (
 )
 
 
+# 🧺 LA REGLA DEFINITIVA (8-oct, SESIONES (47)): lo que vendió Whuilianny lo termina Whuilianny. El reloj
+# separa lo de ella de lo del bot (ver `tools._venta_de_la_duena`, que lo impide en el cobro). La línea
+# solo sale si ella habló en el chat en estos días: una venta de hace meses ya no se está atendiendo.
+DIAS_VENTA_DE_LA_DUENA = 14
+
+
+def _linea_venta_de_la_duena(ultimo, pedidos_de_ella: list[int]) -> str:
+    try:
+        cuando = (ultimo - timedelta(hours=4)).strftime("%d/%m a las %H:%M")
+    except (TypeError, ValueError, AttributeError):
+        cuando = "hace poco"
+    incluidos = f", incluido el pedido #{', #'.join(str(i) for i in pedidos_de_ella)}" if pedidos_de_ella else ""
+    return (
+        f"- Whuilianny atendió a este cliente en este chat (su último mensaje: {cuando}). Todo lo que "
+        f"se acordó ANTES de eso es de ella{incluidos}: NO lo cobres, NO lo cambies y NO lo des por "
+        "hecho. Si el cliente pregunta por eso (un pedido, un pago o una entrega que habló con ella), "
+        "dile que se lo confirmas con Whuilianny enseguida y llama a pedir_ayuda (motivo "
+        "'acuerdo_especial'). Sus preguntas de productos y lo NUEVO que quiera comprar sí lo atiendes "
+        "normal, como una venta aparte."
+    )
+
+
+def _es_de_la_duena(pedido, ultimo) -> bool:
+    """Mismo criterio que `tools._venta_de_la_duena`, sin base (ya se leyó `ultimo`)."""
+    if str(getattr(pedido, "origen", None) or ORIGEN_BOT) != ORIGEN_BOT:
+        return True
+    creado = getattr(pedido, "created_at", None)
+    try:
+        return ultimo is not None and creado is not None and creado < ultimo
+    except TypeError:
+        return False
+
+
 def _parece_delivery(pedido) -> bool:
     """¿Se lo LLEVAN? Heurística SOLO para informar al modelo (el candado real, que sí consulta
     la zona, vive en `generar_datos_pago`): flete > 0, o el texto de la entrega habla de delivery."""
@@ -910,22 +944,38 @@ async def _estado_cliente_texto(telefono: str) -> str:
             acordados = [p for p in pedidos if getattr(p, "estado", None) in ESTADOS_ACORDADOS]
             pagos = await _pagos_de(session, acordados) if acordados else {}
             propuestas = await _propuestas_pendientes(session, telefono)
+            try:
+                ultimo_duena = await ultimo_mensaje_de_la_duena(session, telefono)
+            except Exception:  # noqa: BLE001 — sin el dato no sale la línea (el cobro igual se frena)
+                ultimo_duena = None
     except Exception:  # noqa: BLE001 — leer el estado nunca debe romper el bot
         return ""
-    if not pedidos and not propuestas:
+    try:
+        duena_reciente = ultimo_duena is not None and (
+            datetime.now(UTC) - ultimo_duena <= timedelta(days=DIAS_VENTA_DE_LA_DUENA))
+    except TypeError:
+        duena_reciente = False
+    if not pedidos and not propuestas and not duena_reciente:
         return ""
     if not pedidos:
-        # Solo hay propuestas sin confirmar (ella ya le vendió y nadie tocó "Sí" todavía): el bot no
-        # sabe qué, pero sí sabe que NO debe dar nada por hecho ni contradecirla.
-        return "\n".join([
-            "ESTADO DEL CLIENTE (verdad de la base de datos — manda sobre el chat):",
-            _LINEA_PROPUESTAS,
-        ])
+        # Solo hay propuestas sin confirmar o ella habló en el chat: el bot no sabe qué vendió, pero
+        # sí sabe que NO debe dar nada por hecho ni contradecirla.
+        return "\n".join(
+            ["ESTADO DEL CLIENTE (verdad de la base de datos — manda sobre el chat):"]
+            + ([_linea_venta_de_la_duena(ultimo_duena, [])] if duena_reciente else [])
+            + ([_LINEA_PROPUESTAS] if propuestas else [])
+        )
     cerrados = {"pagado", "entregado", "cancelado"}
     # El pedido al que se pega el próximo comprobante = el último en 'esperando_pago'
     # (mismo criterio que get_pedido_esperando_pago en tools.py).
     esperando = next((p for p in pedidos if p.estado == "esperando_pago"), None)
     pendiente = next((p for p in pedidos if p.estado == "pendiente"), None)
+    # 🧺 Un pedido que el bot armó ANTES de que Whuilianny hablara es de ella: no se le ofrece cobrarlo.
+    de_ella = [p.id for p in (esperando, pendiente) if p is not None and _es_de_la_duena(p, ultimo_duena)]
+    if esperando is not None and esperando.id in de_ella:
+        esperando = None
+    if pendiente is not None and pendiente.id in de_ella:
+        pendiente = None
     lineas = ["ESTADO DEL CLIENTE (verdad de la base de datos — manda sobre el chat):"]
     if esperando is not None:
         lineas.append(
@@ -982,6 +1032,8 @@ async def _estado_cliente_texto(telefono: str) -> str:
         lineas.append(
             f"- Pedido #{pendiente.id} ARMADO pero SIN cobro presentado aún: para cobrarlo, llama a generar_datos_pago con ese pedido_id."
         )
+    elif pedidos[0].id in de_ella:
+        pass  # lo dice la línea de la venta de Whuilianny, abajo
     else:
         ult = pedidos[0]
         # 🔴 'pagado' se SEPARA de los demás cerrados (cacería 3-sep, C20 — el caso #2603): la
@@ -1014,6 +1066,8 @@ async def _estado_cliente_texto(telefono: str) -> str:
     # modelo vea primero el que está cobrando y luego el que NO debe tocar.
     for p in acordados:
         lineas.extend(_lineas_pedido_acordado(p, pagos.get(p.id)))
+    if duena_reciente or de_ella:
+        lineas.append(_linea_venta_de_la_duena(ultimo_duena, de_ella))
     if propuestas:
         lineas.append(_LINEA_PROPUESTAS)
     # 🔴 LO QUE YA ESTÁ REGISTRADO SE MUESTRA, NO SE REPREGUNTA (31-ago, el mapa del "pero ya

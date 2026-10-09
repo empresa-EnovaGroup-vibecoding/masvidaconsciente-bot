@@ -18,6 +18,7 @@ from sqlalchemy.exc import IntegrityError
 from app.config import get_settings, url_publica_utilizable
 from app.models import (
     MOTIVOS_INFORMATIVOS,
+    ORIGEN_BOT,
     ORIGEN_DUENA,
     ORIGEN_PANEL,
     CatalogoPdf,
@@ -3665,6 +3666,44 @@ async def _pago_en_disputa(session, telefono, pedido_id) -> bool:
     return False
 
 
+# 🧺 LA REGLA DEFINITIVA (8-oct, decisión de Maired; SESIONES (47)): lo que vendió Whuilianny lo termina
+# Whuilianny; el bot vende lo nuevo. La medición sobre 1.486 ventanas reales mostró que ni una persona
+# sabe con certeza qué vendió ella en ~1 de cada 4 ("Ok nena", notas de voz): ningún lector lo va a
+# adivinar siempre. La línea entre "de ella" y "del bot" la pone el RELOJ: lo que pasó antes de su
+# último mensaje en el chat es de ella. El saludo automático de WhatsApp Business no es ella hablando.
+_SALUDOS_AUTOMATICOS_DUENA = ("gracias por comunicarte",)
+
+
+async def ultimo_mensaje_de_la_duena(session, telefono):
+    """La hora del último mensaje que Whuilianny escribió (o dijo por voz) en este chat, o None.
+    Lanza si la base falla: cada llamador decide si eso abre o cierra."""
+    filas = (await session.execute(
+        select(Mensaje.created_at, Mensaje.contenido)
+        .where(Mensaje.cliente_telefono == telefono, Mensaje.rol == "owner")
+        .order_by(Mensaje.created_at.desc())
+        .limit(20)
+    )).all()
+    for creado, contenido in filas:
+        if not str(contenido or "").strip().lower().startswith(_SALUDOS_AUTOMATICOS_DUENA):
+            return creado
+    return None
+
+
+async def _venta_de_la_duena(session, telefono, pedido) -> bool:
+    """¿Este pedido es de Whuilianny? Sí si lo anotó ella o el panel, o si el bot lo armó ANTES de que
+    ella hablara en el chat (ella intervino: lo que siga de esa venta lo decide ella). Falla CERRADO:
+    sin poder leer el chat, no se cobra (el bot pide ayuda, que es lo seguro)."""
+    if str(getattr(pedido, "origen", None) or ORIGEN_BOT) != ORIGEN_BOT:
+        return True
+    try:
+        ultimo = await ultimo_mensaje_de_la_duena(session, telefono)
+    except Exception:  # noqa: BLE001
+        logger.warning("No se pudo leer si Whuilianny habló en el chat de %s: no se cobra", telefono)
+        return True
+    creado = getattr(pedido, "created_at", None)
+    return ultimo is not None and creado is not None and creado < ultimo
+
+
 async def generar_datos_pago(session, telefono, pedido_id=None, metodo=None):
     """Calcula el monto en Bs (tasa del dia), deja el pedido en 'esperando_pago'
     y devuelve el cobro. En DOS pasos (rama B, 31-ago): sin `metodo`, el cobro completo y los
@@ -3729,6 +3768,18 @@ async def generar_datos_pago(session, telefono, pedido_id=None, metodo=None):
                 "hay un pago de este pedido que una persona del negocio está revisando porque el "
                 "monto no cuadra: NO lo cobres ni digas que está pagado. Dile al cliente que se lo "
                 "confirmas enseguida y llama a pedir_ayuda (motivo 'acuerdo_especial')."
+            ),
+        }
+
+    # 🧺 Lo que vendió Whuilianny lo termina Whuilianny: el bot no cobra una venta de ella.
+    if await _venta_de_la_duena(session, telefono, pedido):
+        return {
+            "ok": False,
+            "nota": (
+                f"el pedido #{pedido.id} es una venta que atendió Whuilianny: NO lo cobres, no lo "
+                "cambies ni des nada por hecho. Dile al cliente que se lo confirmas con ella enseguida "
+                "y llama a pedir_ayuda (motivo 'acuerdo_especial'). Si quiere comprar algo NUEVO, eso "
+                "sí lo atiendes como una venta aparte."
             ),
         }
 
