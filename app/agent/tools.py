@@ -637,7 +637,8 @@ def _tokens_producto(prod, extra: str = "") -> list[str]:
     TAMAÑO. Sin pasarlos aquí, "quiero la kombucha de flor de jamaica" NO ENCONTRARÍA NADA y la
     regla antiinvención obligaría al bot a decir "de eso no tengo" sobre algo que SÍ se vende.
     """
-    texto = f"{prod.nombre} {prod.descripcion or ''} {extra}"
+    # 🏷️ Y sus OTROS NOMBRES (041): "yogur" encuentra el Yogurt Kéfirado.
+    texto = f"{prod.nombre} {prod.descripcion or ''} {getattr(prod, 'apodos', None) or ''} {extra}"
     limpio = (
         _sin_acentos(texto)
         .replace(",", " ").replace(".", " ").replace(":", " ")

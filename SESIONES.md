@@ -47,17 +47,26 @@
   - dice la verdad: "se quedó callado" solo si el motivo pausa, y si no, "sigue atendiendo";
   - si falta en el catálogo, agrega "súbelo con su precio".
 - 📦 `tasks._avisar_fuera_de_catalogo`: cuando ELLA vende algo que el lector no encuentra en el catálogo, se lo
-  recuerda UNA vez por producto cada 7 días (texto fijo, sin IA). `Veredicto.fuera_de_catalogo` lo marca.
-- 🏷️ Apodos:
-  - config `apodos_productos` ("apodo: Nombre del catálogo", en `CLAVES_CONFIG`) → `Contexto.apodos` →
-    `producto_por_nombre`;
+  recuerda UNA SOLA VEZ por producto (candado de 365 días, texto fijo, sin IA). Si no lo sube, es que no es del
+  negocio. `Veredicto.fuera_de_catalogo` lo marca.
+- 🏷️ **Otros nombres en la FICHA del producto** (idea de Maired, mejor que una lista aparte):
+  - migración 041 `productos.apodos`;
+  - la API de productos lo lee y escribe, y un panel viejo que no lo manda no lo borra (`model_fields_set`);
+  - campo en el panel = dashboard PR #16;
+  - lo usan el lector (`Contexto.apodos` vía `apodos_de_productos`; un apodo que reclaman dos productos es
+    ambiguo y no se usa) y el buscador (`_tokens_producto`);
   - el replay lee `LEV/medicion/apodos_aprobados.txt`.
-- Tests: `tests/test_alejandra_sigue_la_venta.py` (8) y 3 de `test_expediente_lectores.py` actualizados a la
-  decisión nueva. **Suite 1393/0**, ruff limpio.
+- Tests: `tests/test_alejandra_sigue_la_venta.py` (11) y 3 de `test_expediente_lectores.py` actualizados a la
+  decisión nueva. **Suite 1396/0**, ruff limpio. Dashboard: `tsc` limpio.
+- Lista sacada de las conversaciones (`LEV/medicion/catalogo_propuesto.csv`, `apodos_propuestos.txt`). Maired
+  decidió que desodorante, maquillaje y sartenes NO son de Más Vida y no entran al catálogo.
 
 **Sigue:**
-- Maired marca ✔/✘ la lista de productos y apodos sacada de las conversaciones.
-- Se cargan en pruebas, se vuelve a medir (~$0,70) y el panel vuelve a "Lo anota solo".
+- Fusionar #75 y el dashboard #16, y desplegar pruebas (worker, bot y panel).
+- Precargar los 47 apodos claros en las fichas de pruebas (Maired los revisa ahí).
+- Que Whuilianny confirme los precios que no coinciden (Galletas New York 4u $12, tortas por tamaño, Pan Keto
+  $25).
+- Volver a medir (~$0,70) y poner el panel otra vez en "Lo anota solo".
 
 ## 2026-10-08 (46) — 📏 LA MEDICIÓN: ¿el lector entiende lo que Whuilianny vendió? Antes y después
 

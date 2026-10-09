@@ -2485,7 +2485,9 @@ async def _extraer_expediente(telefono, hasta_id=None) -> str:
     return "ok"
 
 
-DIAS_AVISO_CATALOGO = 7
+# Una sola vez por producto (Maired, 8-oct): si no lo sube, es que no es del negocio (desodorante,
+# maquillaje de aliados…) y no se le vuelve a recordar. Un año de candado = "una vez".
+DIAS_AVISO_CATALOGO = 365
 
 
 def _texto_fuera_de_catalogo(productos: list[str], quien: str) -> str:
@@ -2499,7 +2501,7 @@ def _texto_fuera_de_catalogo(productos: list[str], quien: str) -> str:
 
 async def _avisar_fuera_de_catalogo(telefono: str, productos: list[str]) -> int:
     """📦 (8-oct, decisión de Maired) Ella vendió algo que el catálogo no tiene: se lo recuerda por
-    WhatsApp para que lo suba. UNA vez por producto cada `DIAS_AVISO_CATALOGO` días (no a cada venta),
+    WhatsApp para que lo suba. UNA sola vez por producto (`DIAS_AVISO_CATALOGO`), no a cada venta,
     texto fijo y sin IA. Nunca lanza: un aviso que no sale no toca el expediente."""
     from sqlalchemy import select
 

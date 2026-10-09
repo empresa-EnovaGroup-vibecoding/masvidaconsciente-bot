@@ -59,6 +59,8 @@ class Producto(Base):
     se_congela: Mapped[str | None] = mapped_column(Text, nullable=True)
     apto_diabeticos: Mapped[str | None] = mapped_column(Text, nullable=True)
     info: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 🏷️ Otros nombres con que lo llaman ("yogur", "mini galletas"), separados por coma (041).
+    apodos: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Cuántos días de ANTICIPACIÓN necesita ESTE producto (0 = puede ser el mismo día si hay
     # stock; las tortas y lo horneado, 2). Lo decide la dueña, producto por producto: los
     # congelados ya están hechos, pero una torta hay que hornearla.

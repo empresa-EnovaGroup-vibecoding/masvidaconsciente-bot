@@ -1,6 +1,8 @@
 """Lecturas autoritativas. Ningún texto del modelo se convierte aquí en dato del negocio."""
 import hashlib
 import json
+import re
+import unicodedata
 
 from sqlalchemy import func, select, text
 
@@ -30,24 +32,44 @@ def hecho(fuente, entidad, campo, valor) -> Hecho:
     return Hecho(fuente, entidad, campo, valor, revision(valor))
 
 
-def parsear_apodos(texto: str | None) -> dict[str, str]:
-    """🏷️ `apodos_productos` (8-oct): "apodo: Nombre del catálogo", una por línea → {apodo normalizado:
-    nombre}. Misma normalización que `resolver_atencion.normalizar` (minúsculas, sin acentos, espacios
-    simples; no se importa de allí porque ese módulo ya importa este). Líneas raras se ignoran."""
-    import unicodedata
+def _normal(s: str) -> str:
+    """Misma normalización que `resolver_atencion.normalizar` (minúsculas, sin acentos, espacios
+    simples). No se importa de allí porque ese módulo ya importa este."""
+    return " ".join("".join(c for c in unicodedata.normalize("NFKD", str(s or "").lower())
+                            if not unicodedata.combining(c)).split())
 
-    def _n(s: str) -> str:
-        return " ".join("".join(c for c in unicodedata.normalize("NFKD", s.lower())
-                                if not unicodedata.combining(c)).split())
 
+def separar_apodos(texto: str | None) -> list[str]:
+    """🏷️ Los "otros nombres" de un producto (columna `productos.apodos`, 041): separados por coma,
+    punto y coma o uno por línea."""
+    return [a.strip() for a in re.split(r"[,;\n]+", texto or "") if a.strip()]
+
+
+def apodos_de_productos(pares) -> dict[str, str]:
+    """[(apodos del producto, nombre del producto)] → {apodo normalizado: nombre}. Un apodo que dos
+    productos reclaman a la vez es AMBIGUO y no se usa: ahí el bot pregunta, no adivina."""
     mapa: dict[str, str] = {}
+    repetidos: set[str] = set()
+    for texto, nombre in pares:
+        for apodo in separar_apodos(texto):
+            clave = _normal(apodo)
+            if clave in mapa and mapa[clave] != nombre:
+                repetidos.add(clave)
+            mapa.setdefault(clave, nombre)
+    return {k: v for k, v in mapa.items() if k not in repetidos}
+
+
+def parsear_apodos(texto: str | None) -> dict[str, str]:
+    """Formato de archivo "apodo: Nombre del catálogo", una por línea (lo usa el replay con la lista
+    aprobada). Comentarios con # y líneas sin dos puntos se ignoran."""
+    pares = []
     for linea in (texto or "").splitlines():
         if linea.strip().startswith("#") or ":" not in linea:
             continue
         apodo, _, nombre = linea.partition(":")
-        if _n(apodo) and nombre.strip():
-            mapa[_n(apodo)] = nombre.strip()
-    return mapa
+        if apodo.strip() and nombre.strip():
+            pares.append((apodo, nombre.strip()))
+    return apodos_de_productos(pares)
 
 
 async def bloquear_cliente(session, telefono):
@@ -76,15 +98,17 @@ async def cargar_contexto(telefono: str) -> Contexto:
             borrador=dict(cliente.borrador_confirmado or {}) if cliente else {},
             hoy=hoy_venezuela(),
             negocio={k: config[k] for k in ("negocio_ubicacion", "negocio_instagram") if config.get(k)},
-            apodos=parsear_apodos(config.get("apodos_productos")),
         )
+        apodos = []
         for p in (await session.execute(select(Producto))).scalars():
+            apodos.append((getattr(p, "apodos", None), p.nombre))
             ctx.productos[p.id] = {
                 "id": p.id, "nombre": p.nombre, "categoria": p.categoria,
                 "descripcion": p.descripcion, "duracion": p.duracion,
                 "se_congela": p.se_congela, "apto_diabeticos": p.apto_diabeticos,
                 "disponibilidad": p.disponible, "variantes": {},
             }
+        ctx.apodos = apodos_de_productos(apodos)
         for v in (await session.execute(select(ProductoVariante))).scalars():
             if v.producto_id in ctx.productos:
                 precio = await _precio_efectivo(session, v)

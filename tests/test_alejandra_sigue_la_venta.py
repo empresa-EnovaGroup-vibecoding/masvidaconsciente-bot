@@ -7,7 +7,7 @@ Lo que fijan estos tests (sin red ni base):
   · la regla de las promesas: sin frase fija, sin nombrar a nadie, sin repetir;
   · con un aviso en camino, el bot ve "ya avisaste: no lo repitas";
   · el WhatsApp a Whuilianny dice la verdad (si el bot se calló o sigue) y pide subir lo que falta;
-  · lo que ella vende fuera del catálogo se le recuerda UNA vez por producto.
+  · lo que ella vende fuera del catálogo se le recuerda UNA sola vez por producto.
 """
 import inspect
 from datetime import date
@@ -145,6 +145,26 @@ def test_los_apodos_de_ella_llevan_al_producto_del_catalogo():
     assert ex.producto_por_nombre(ctx, "flan") == (None, False)  # un apodo a un nombre que no existe no vale
 
 
+def test_los_otros_nombres_viven_en_la_ficha_y_el_ambiguo_no_se_usa():
+    from app.agent.fuentes_atencion import apodos_de_productos, separar_apodos
+
+    assert separar_apodos("yogur, yoghurt;\nyogurt de kefir") == ["yogur", "yoghurt", "yogurt de kefir"]
+    mapa = apodos_de_productos([("yogur, barras", "Yogurt Kéfirado"), ("barras", "Barra de maca-proteica"), (None, "Pan")])
+    assert mapa == {"yogur": "Yogurt Kéfirado"}  # "barras" lo reclaman dos: el bot pregunta, no adivina
+
+
+def test_el_buscador_encuentra_por_los_otros_nombres():
+    prod = SimpleNamespace(nombre="Yogurt Kéfirado", descripcion="", apodos="yogur, yoghurt")
+    assert tl._coincide_texto(prod, ["yogur"]) and "yoghurt" in tl._tokens_producto(prod)
+
+
+def test_un_panel_viejo_no_borra_los_otros_nombres():
+    from app.api.router import ProductoIn
+
+    assert "apodos" not in ProductoIn(nombre="Quesillo").model_fields_set
+    assert "apodos" in ProductoIn(nombre="Quesillo", apodos="").model_fields_set
+
+
 async def test_lo_de_fuera_del_catalogo_se_le_recuerda_una_vez_por_producto(monkeypatch):
     enviados, vistos = [], set()
 
@@ -174,6 +194,6 @@ async def test_lo_de_fuera_del_catalogo_se_le_recuerda_una_vez_por_producto(monk
     destino, texto = enviados[0]
     assert destino == "584125260318" and "granola y sal a Ana" in texto and "no están en el catálogo" in texto
     assert "Alejandra también lo podrá vender" in texto
-    # La misma semana, otra venta de granola: no se repite.
+    # Otra venta de granola: no se repite (una sola vez por producto).
     assert await tasks._avisar_fuera_de_catalogo(TEL, ["granola"]) == 0
     assert len(enviados) == 1
