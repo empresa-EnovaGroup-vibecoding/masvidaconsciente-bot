@@ -15,6 +15,7 @@ from decimal import Decimal
 from sqlalchemy import and_, case, or_, select, text
 from sqlalchemy.exc import IntegrityError
 
+from app.agent.montos_duena import lo_dijo_la_duena, montos_de_la_duena
 from app.config import get_settings, url_publica_utilizable
 from app.models import (
     MOTIVOS_INFORMATIVOS,
@@ -88,7 +89,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "registrar_pedido",
-            "description": "Registra el pedido del cliente con TODOS los productos y cantidades en UNA sola llamada (no lo dividas en varias). El total lo calcula el código con los precios reales del catálogo y te devuelve un `resumen` (líneas + total) listo para copiarle al cliente; NUNCA sumes tú.",
+            "description": "Registra el pedido del cliente con TODOS los productos y cantidades en UNA sola llamada (no lo dividas en varias). El total lo calcula el código con los precios reales del catálogo —o con el precio que una persona del negocio YA le dio al cliente en el chat (`precio_acordado` / `total_acordado`)— y te devuelve un `resumen` (líneas + total) listo para copiarle al cliente; NUNCA sumes tú.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -147,9 +148,41 @@ TOOL_SCHEMAS = [
                                         "NUNCA dejes de registrar un pedido por esto."
                                     ),
                                 },
+                                "precio_acordado": {
+                                    "type": "number",
+                                    "description": (
+                                        "OPCIONAL. SOLO si una persona del negocio, en un mensaje "
+                                        "suyo del historial (texto o 🎤 nota de voz), le dio a "
+                                        "este cliente un PRECIO POR UNIDAD distinto al del "
+                                        "catálogo para este producto (ej. 'el chocolate te lo "
+                                        "dejo en 32'): pon ese número, en dólares. Ese precio "
+                                        "manda. Si lo propuso el cliente y ella no lo repitió, NO "
+                                        "lo pongas. El código comprueba que ella lo dijo."
+                                    ),
+                                },
                             },
                             "required": ["variante_id", "cantidad"],
                         },
+                    },
+                    "total_acordado": {
+                        "type": "number",
+                        "description": (
+                            "OPCIONAL. SOLO si una persona del negocio, en un mensaje suyo del "
+                            "historial (texto o 🎤 nota de voz), le dijo a este cliente el TOTAL "
+                            "de esta compra (ej. 'ok nena, son 36, te lo llevo mañana'): pon ese "
+                            "número, en dólares. Ese total manda: no se recalcula ni se le suma el "
+                            "envío. Si lo propuso el cliente y ella no lo repitió, NO lo pongas. "
+                            "El código comprueba que ella lo dijo."
+                        ),
+                    },
+                    "pedido_id": {
+                        "type": "integer",
+                        "description": (
+                            "OPCIONAL. Si estás completando la fecha, la zona o la dirección de un "
+                            "pedido YA ACORDADO por una persona del negocio, pon aquí su número "
+                            "(con sus mismos productos): se completa ESE pedido con su total, no se "
+                            "crea otro."
+                        ),
                     },
                     "notas": {"type": "string", "description": "Notas del pedido (opcional)"},
                     "entrega": {
@@ -535,6 +568,34 @@ def monto_en_efectivo(total, envio) -> Decimal:
     return (Decimal(str(total)) * Decimal("0.80")).quantize(Decimal("0.01"))
 
 
+def _parte_acordada(pedido) -> Decimal:
+    """Lo que vale la parte del pedido cuyo precio dio Whuilianny en el chat (`precio_acordado`)."""
+    parte = Decimal("0")
+    for it in getattr(pedido, "items", None) or []:
+        if isinstance(it, dict) and it.get("precio_acordado") and it.get("precio_unitario") is not None:
+            parte += Decimal(str(it["precio_unitario"])) * int(it.get("cantidad") or 0)
+    return parte
+
+
+def monto_en_dolares(pedido, total=None) -> Decimal:
+    """💵 Lo que se cobra de ESTE pedido pagando en dólares. La puerta única por la que pasan el
+    cobro, el comprobante y la confirmación por WhatsApp (los tres tienen que dar lo mismo).
+
+    El precio que dio Whuilianny es FINAL (Maired, 10-oct): no lleva el 20% encima. Si ella dio el
+    total (`total_acordado`), se cobra ese total tal cual; si dio el precio de algunos productos,
+    esos van tal cual y el 20% sigue aplicando al resto de la cuenta (otros productos y envío)."""
+    total = Decimal(str(getattr(pedido, "total", None) if total is None else total))
+    if getattr(pedido, "total_acordado", None) is not None:
+        return total.quantize(Decimal("0.01"))
+    acordado = _parte_acordada(pedido)
+    envio = getattr(pedido, "costo_envio", 0) or 0
+    if acordado <= 0:
+        return monto_en_efectivo(total, envio)
+    return (acordado + monto_en_efectivo(max(total - acordado, Decimal("0")), envio)).quantize(
+        Decimal("0.01")
+    )
+
+
 def monto_calza(a: Decimal, b: Decimal) -> bool:
     """¿Dos montos son el mismo, salvo redondeos? Tolerancia: $0,50 o 2%, lo que sea mayor.
     La usan el comprobante (qué precio se pagó) y la confirmación por WhatsApp (¿cuadra?)."""
@@ -571,8 +632,7 @@ async def pago_cuadra(pedido, monto, moneda: str = "") -> bool:
             if tasa is not None:
                 objetivos.append((total * Decimal(str(tasa))).quantize(Decimal("0.01")))
         else:
-            envio = Decimal(str(getattr(pedido, "costo_envio", 0) or 0))
-            objetivos = [total, monto_en_efectivo(total, envio)]
+            objetivos = [total, monto_en_dolares(pedido, total)]
             for campo in ("cotizado_usd", "cotizado_usd_divisas"):
                 if getattr(pedido, campo, None) is not None:
                     objetivos.append(Decimal(str(getattr(pedido, campo))))
@@ -2787,18 +2847,23 @@ def _mismo_pedido_esperando(
 
 
 def _resumen_del_pedido(pedido: Pedido) -> str:
+    # 💵 Con el TOTAL que dio Whuilianny, las líneas van sin precio: su total no es la suma del
+    # catálogo, y enseñar las dos cuentas a la vez confunde a la clienta.
+    pactado = getattr(pedido, "total_acordado", None) is not None
     lineas: list[str] = []
     for item in pedido.items or []:
-        precio = item["precio_unitario"]
+        precio = item.get("precio_unitario")
         subtotal = Decimal(str(precio)) * item["cantidad"] if precio is not None else None
         linea = f"{item['producto']} x{item['cantidad']}"
         if item.get("presentacion"):
             linea += f" (paquete de {item['presentacion']})"
         if item.get("opciones"):
             linea += f" — {item['opciones']}"
-        lineas.append(f"{linea} = {_fmt_usd(subtotal)}")
+        lineas.append(linea if pactado else f"{linea} = {_fmt_usd(subtotal)}")
     if pedido.zona_nombre:
-        if pedido.costo_envio and Decimal(str(pedido.costo_envio)) > 0:
+        if pactado:
+            lineas.append(pedido.zona_nombre)
+        elif pedido.costo_envio and Decimal(str(pedido.costo_envio)) > 0:
             lineas.append(f"Envío a {pedido.zona_nombre} = {_fmt_usd(pedido.costo_envio)}")
         else:
             lineas.append(f"{pedido.zona_nombre} — sin costo")
@@ -2948,9 +3013,191 @@ async def _pedido_igual_reciente(session, telefono, items):
     return None
 
 
+# ─── 💵 EL PRECIO QUE DIO WHUILIANNY (10-oct, SESIONES (48)) ─────────────────────────────
+
+def _precio_no_dicho(que: str) -> dict:
+    """El candado: el modelo quiso cobrar un precio "acordado" que Whuilianny NO dijo en el chat.
+    No se registra nada; Alejandra releva con naturalidad y ella decide."""
+    return {
+        "ok": False,
+        "necesita_ayuda": True,
+        "nota": (
+            f"⛔ No encuentro {que} en los mensajes de la persona del negocio a este cliente: NO lo "
+            "registres. Un precio distinto al del catálogo solo vale si ELLA lo dijo (que lo pida o "
+            "lo proponga el cliente no cuenta). Dile con naturalidad que lo revisas un momentico, "
+            "sin nombrar a nadie, y llama a pedir_ayuda (motivo 'acuerdo_especial') diciendo qué "
+            "precio se habló. NO le digas un monto."
+        ),
+    }
+
+
+def _completar_el_de_ella(pedido) -> str:
+    """La coletilla de la caja para el pedido que dejó Whuilianny: se completa ESE, no se rehace."""
+    if str(getattr(pedido, "origen", "") or "") != ORIGEN_DUENA:
+        return ""
+    return (
+        f" OJO: es el pedido #{pedido.id}, que ya acordó una persona del negocio. Al registrar, "
+        f"pasa `pedido_id={pedido.id}` con sus MISMOS productos: se completa ese pedido con su "
+        "total. NO crees otro."
+    )
+
+
+def _trae_acuerdo(items, total_acordado) -> bool:
+    """¿El modelo pasó en ESTA llamada un precio o un total acordado por Whuilianny?"""
+    if total_acordado not in (None, ""):
+        return True
+    return any(isinstance(i, dict) and i.get("precio_acordado") not in (None, "") for i in items or [])
+
+
+async def _zona_valida(session, zona_id):
+    """(zona, None) si el `zona_id` es de la lista cerrada y está disponible; (None, rechazo) si no."""
+    from app.models import ZonaEntrega
+
+    try:
+        zona = await session.get(ZonaEntrega, int(zona_id))
+    except (TypeError, ValueError):
+        zona = None
+    if zona is None or not zona.disponible:
+        return None, {
+            "ok": False,
+            "nota": (
+                f"La zona {zona_id!r} no existe o no está disponible. NO la inventes ni "
+                "deduzcas el costo: elige un `zona_id` EXACTO de la lista y vuelve a registrar "
+                "el pedido COMPLETO. Si el sitio del cliente no calza con ninguna zona, "
+                "pregúntale en cuál está; si sigue sin calzar, llama a `pedir_ayuda`."
+            ),
+            "zonas": await _lista_de_zonas(session),
+        }
+    return zona, None
+
+
+async def _fecha_valida(session, entrega_fecha, items_pedido):
+    """(fecha, None) si la fecha se puede entregar según el calendario del negocio; (None, rechazo)
+    con el motivo y la primera fecha buena si no."""
+    try:
+        fecha = (
+            entrega_fecha
+            if isinstance(entrega_fecha, date)
+            else date.fromisoformat(str(entrega_fecha).strip()[:10])
+        )
+    except ValueError:
+        return None, {
+            "ok": False,
+            "nota": (
+                f"la fecha '{entrega_fecha}' no es una fecha válida. Pásala como AAAA-MM-DD "
+                "(hoy en Venezuela te lo digo en este mismo mensaje)."
+            ),
+        }
+    problema = await _validar_entrega(session, fecha, items_pedido)
+    if problema is not None:
+        return None, {
+            "ok": False,
+            "nota": (
+                f"NO se puede entregar esa fecha: {problema['motivo']}. NO se lo prometas "
+                f"al cliente. Díselo con cariño, con TUS palabras, y ofrécele la primera "
+                f"fecha en que SÍ se puede: {problema['primera_fecha_valida'].isoformat()}. "
+                f"Cuando el cliente acepte, vuelve a registrar el pedido COMPLETO con esa fecha."
+            ),
+            "primera_fecha_valida": problema["primera_fecha_valida"].isoformat(),
+        }
+    return fecha, None
+
+
+async def _pedido_de_la_duena_a_completar(session, telefono, items, pedido_id):
+    """El pedido que Whuilianny ya dejó anotado (origen dueña, acordado, sin pago vivo) y que el
+    modelo está completando: el que señala `pedido_id`, o el de los últimos días con estos mismos
+    productos. None si no hay ninguno (o si la lectura falla: entonces sigue el camino normal)."""
+    from app.agent.montos_duena import DIAS_ACUERDO
+    from app.models import ESTADOS_ACORDADOS
+
+    try:
+        if pedido_id not in (None, ""):
+            candidatos = [await session.get(Pedido, int(pedido_id))]
+        else:
+            candidatos = (
+                await session.execute(
+                    select(Pedido)
+                    .where(
+                        Pedido.cliente_telefono == telefono,
+                        Pedido.origen == ORIGEN_DUENA,
+                        Pedido.estado.in_(ESTADOS_ACORDADOS),
+                        Pedido.created_at >= now_utc() - timedelta(days=DIAS_ACUERDO),
+                    )
+                    .order_by(Pedido.created_at.desc())
+                )
+            ).scalars().all()
+        firma = _firma_de_items(items)
+        for p in candidatos:
+            if (
+                p is None
+                or p.cliente_telefono != telefono
+                or p.origen != ORIGEN_DUENA
+                or p.estado not in ESTADOS_ACORDADOS
+                or _firma_de_items(p.items or []) != firma
+            ):
+                continue
+            pago = (
+                await session.execute(
+                    select(Pago.id).where(Pago.pedido_id == p.id, Pago.estado.in_(_PAGOS_VIVOS))
+                )
+            ).scalars().first()
+            if pago is None:
+                return p
+    except Exception:  # noqa: BLE001
+        logger.exception("_pedido_de_la_duena_a_completar: no se pudo leer; sigue el camino normal")
+    return None
+
+
+async def _completar_pedido_de_la_duena(
+    session, pedido, *, entrega, entrega_fecha, zona_id, referencia, total_pactado,
+):
+    """Completa la entrega del pedido que dejó Whuilianny SIN tocar lo que ella acordó: sus
+    productos y su total se quedan; el envío se suma solo si ella no dio el total."""
+    zona = None
+    if zona_id is not None:
+        zona, rechazo = await _zona_valida(session, zona_id)
+        if rechazo is not None:
+            return rechazo
+    fecha = None
+    if entrega_fecha:
+        fecha, rechazo = await _fecha_valida(session, entrega_fecha, pedido.items or [])
+        if rechazo is not None:
+            return rechazo
+    if total_pactado is not None:
+        pedido.total_acordado = total_pactado
+    if zona is not None:
+        productos = Decimal(str(pedido.total or 0)) - Decimal(str(pedido.costo_envio or 0))
+        pedido.zona_id = zona.id
+        pedido.zona_nombre = zona.nombre
+        pedido.costo_envio = Decimal(str(zona.costo))
+        pedido.total = productos + pedido.costo_envio
+    if pedido.total_acordado is not None:
+        pedido.total = Decimal(str(pedido.total_acordado))
+    if fecha is not None:
+        pedido.entrega_fecha = fecha
+    entrega_txt = str(entrega or "").strip()
+    if entrega_txt:
+        pedido.entrega = entrega_txt
+    referencia_txt = " ".join(str(referencia or "").split())[:_REFERENCIA_MAX]
+    if referencia_txt:
+        pedido.entrega_referencia = referencia_txt
+    pedido.updated_at = now_utc()
+    await session.commit()
+    await session.refresh(pedido)
+    try:
+        from app.services.redis_client import borrar_cobro
+
+        await borrar_cobro(pedido.cliente_telefono)  # una cotización vieja ya no vale
+    except Exception:  # noqa: BLE001
+        logger.warning("No se pudo borrar el cobro en curso de %s", pedido.cliente_telefono)
+    return _respuesta_registro(
+        pedido, nuevo=False, falta_referencia=await _falta_referencia(session, pedido)
+    )
+
+
 async def registrar_pedido(
     session, telefono, items, notas=None, entrega=None, entrega_fecha=None, zona_id=None,
-    referencia=None,
+    referencia=None, total_acordado=None, pedido_id=None,
 ):
     """Registra el pedido. El TOTAL lo suma el CÓDIGO: productos + envío.
 
@@ -2959,8 +3206,6 @@ async def registrar_pedido(
     (El 2026-07-13 el bot sumó $20 + $3 de cabeza y le dijo a una clienta REAL que el total en
     bolívares eran "$23 USD". El prompt se lo prohibía dos veces. Lo que vive en el texto se rompe.)
     """
-    from app.models import ZonaEntrega
-
     cliente = (
         await session.execute(select(Cliente).where(Cliente.telefono == telefono))
     ).scalar_one_or_none()
@@ -2978,6 +3223,42 @@ async def registrar_pedido(
                 "cliente qué quiere llevar y registra el pedido con sus items."
             ),
         }
+
+    # 💵 EL TOTAL QUE DIO WHUILIANNY: solo vale si el número está en SUS mensajes (montos_duena.py).
+    montos_duena: set[float] | None = None
+    total_pactado = None
+    if total_acordado not in (None, ""):
+        montos_duena = await montos_de_la_duena(session, telefono)
+        total_pactado = lo_dijo_la_duena(total_acordado, montos_duena)
+        if total_pactado is None:
+            return _precio_no_dicho(f"un total de {total_acordado!r}")
+
+    # 🛒 EL PEDIDO QUE YA DEJÓ WHUILIANNY se COMPLETA (fecha, zona, dirección) con SU total. Va antes
+    # del candado del duplicado: ese pedido nace 'confirmado' y el candado lo tomaba por una venta
+    # repetida, mientras la caja pedía la zona — Alejandra quedaba dando vueltas sin poder cobrar.
+    de_la_duena = await _pedido_de_la_duena_a_completar(session, telefono, items, pedido_id)
+    if de_la_duena is not None:
+        return await _completar_pedido_de_la_duena(
+            session, de_la_duena, entrega=entrega, entrega_fecha=entrega_fecha, zona_id=zona_id,
+            referencia=referencia, total_pactado=total_pactado,
+        )
+    if pedido_id not in (None, ""):
+        # Señaló un pedido de ella pero con OTROS productos: no se mezcla ni se crea uno con todo.
+        try:
+            señalado = await session.get(Pedido, int(pedido_id))
+        except (TypeError, ValueError):
+            señalado = None
+        if señalado is not None and señalado.cliente_telefono == telefono and señalado.origen == ORIGEN_DUENA:
+            return {
+                "ok": False,
+                "nota": (
+                    f"el pedido #{señalado.id} ya está acordado con OTROS productos. Para completar "
+                    "su fecha, zona o dirección, pásale sus MISMOS productos. Si el cliente quiere "
+                    "SUMAR algo, eso es un pedido aparte: regístralo solo con lo nuevo y SIN "
+                    "pedido_id. Si quiere cambiar lo acordado, llama a pedir_ayuda (motivo "
+                    "'acuerdo_especial')."
+                ),
+            }
 
     # ── EL CANDADO DEL DUPLICADO: dinero comprometido + mismas cantidades = no se repite ──
     repetido = await _pedido_igual_reciente(session, telefono, items)
@@ -3000,21 +3281,9 @@ async def registrar_pedido(
     # ── LA ZONA (si la mandó): de la lista CERRADA, y su costo lo pone el CÓDIGO ──
     zona = None
     if zona_id is not None:
-        try:
-            zona = await session.get(ZonaEntrega, int(zona_id))
-        except (TypeError, ValueError):
-            zona = None
-        if zona is None or not zona.disponible:
-            return {
-                "ok": False,
-                "nota": (
-                    f"La zona {zona_id!r} no existe o no está disponible. NO la inventes ni "
-                    "deduzcas el costo: elige un `zona_id` EXACTO de la lista y vuelve a registrar "
-                    "el pedido COMPLETO. Si el sitio del cliente no calza con ninguna zona, "
-                    "pregúntale en cuál está; si sigue sin calzar, llama a `pedir_ayuda`."
-                ),
-                "zonas": await _lista_de_zonas(session),
-            }
+        zona, rechazo = await _zona_valida(session, zona_id)
+        if rechazo is not None:
+            return rechazo
 
     items_pedido = []
     total = Decimal("0")
@@ -3060,7 +3329,16 @@ async def registrar_pedido(
         # se cobra (antes se colaba como $0 y el pedido salía gratis). Jamás inventar ni
         # reutilizar el de ayer.
         precio_hoy = await _precio_efectivo(session, variante)
-        if precio_hoy is None:
+        # 💵 EL PRECIO QUE DIO WHUILIANNY en el chat manda sobre el catálogo (y sobre el precio del
+        # día que falte), pero solo si el número está en SUS mensajes.
+        precio_pactado = None
+        if it.get("precio_acordado") not in (None, ""):
+            if montos_duena is None:
+                montos_duena = await montos_de_la_duena(session, telefono)
+            precio_pactado = lo_dijo_la_duena(it.get("precio_acordado"), montos_duena)
+            if precio_pactado is None:
+                return _precio_no_dicho(f"{it.get('precio_acordado')!r} por '{prod.nombre}'")
+        if precio_hoy is None and precio_pactado is None:
             cual = f"{prod.nombre} ({variante.presentacion})" if _tiene_varios(prod, variante) else prod.nombre
             return {
                 "ok": False,
@@ -3088,25 +3366,26 @@ async def registrar_pedido(
                     "pedido completo. NO registres cantidades en 0."
                 ),
             }
-        subtotal = precio_hoy * cantidad
-        total += subtotal
+        precio = precio_pactado if precio_pactado is not None else precio_hoy
         # `opciones` = lo que el cliente eligió DENTRO del paquete (relleno, masa, sabor,
         # mezcla). NO toca el precio, pero la dueña lo necesita para COCINAR: antes se perdía
         # (en el panel quedaba solo "Empanadas" y había que leerse el chat entero).
         opciones = str(it.get("opciones") or "").strip() or None
-        items_pedido.append(
-            {
-                "producto": prod.nombre,
-                # El "código de barras" queda GRABADO en el pedido: así el panel y el recibo
-                # saben EXACTAMENTE qué tamaño se vendió (y no se despacha la de 250g habiendo
-                # pagado la de 1kg).
-                "variante_id": variante.id,
-                "cantidad": cantidad,  # PAQUETES completos, nunca unidades sueltas
-                "precio_unitario": float(precio_hoy),  # el de HOY (fijo o precio del día)
-                "presentacion": variante.presentacion,
-                "opciones": opciones,
-            }
-        )
+        item = {
+            "producto": prod.nombre,
+            # El "código de barras" queda GRABADO en el pedido: así el panel y el recibo
+            # saben EXACTAMENTE qué tamaño se vendió (y no se despacha la de 250g habiendo
+            # pagado la de 1kg).
+            "variante_id": variante.id,
+            "cantidad": cantidad,  # PAQUETES completos, nunca unidades sueltas
+            "precio_unitario": float(precio),  # el de HOY (fijo, del día o el que dio Whuilianny)
+            "presentacion": variante.presentacion,
+            "opciones": opciones,
+        }
+        if precio_pactado is not None:
+            item["precio_acordado"] = True
+            item["precio_catalogo"] = float(precio_hoy) if precio_hoy is not None else None
+        items_pedido.append(item)
 
     # UN pedido por venta. El agente vuelve a llamar a esta herramienta cada vez que el cliente
     # agrega o quita algo (así lo ordena el prompt: "vuelve a registrar el pedido COMPLETO"), y
@@ -3138,6 +3417,41 @@ async def registrar_pedido(
         if tiene_pago is not None:
             abierto = None
 
+    # 💵 LO QUE DIO WHUILIANNY NO SE PIERDE AL RE-REGISTRAR. El prompt ordena "vuelve a registrar el
+    # pedido COMPLETO" cada vez que el cliente agrega algo o da la zona, y el modelo puede omitir el
+    # `precio_acordado` / `total_acordado` en la segunda vuelta: antes el pedido volvía solo al precio
+    # de catálogo. El precio de un producto se conserva; un total pactado solo vale para LOS MISMOS
+    # productos (si cambian, ese total ya no dice nada y lo decide una persona).
+    if abierto is not None:
+        previos = {
+            i.get("variante_id"): i
+            for i in (abierto.items or [])
+            if isinstance(i, dict) and i.get("precio_acordado")
+        }
+        for item in items_pedido:
+            previo = previos.get(item["variante_id"])
+            if previo is not None and not item.get("precio_acordado"):
+                item["precio_catalogo"] = item["precio_unitario"]
+                item["precio_unitario"] = previo["precio_unitario"]
+                item["precio_acordado"] = True
+        if total_pactado is None and getattr(abierto, "total_acordado", None) is not None:
+            if _firma_de_items(abierto.items or []) != _firma_de_items(items_pedido):
+                return {
+                    "ok": False,
+                    "necesita_ayuda": True,
+                    "nota": (
+                        f"el pedido #{abierto.id} tiene un TOTAL que una persona del negocio ya le "
+                        "dio al cliente para lo que llevaba, y ahora cambian los productos: ese "
+                        "total ya no aplica y no lo decides tú. Dile con naturalidad que lo revisas "
+                        "un momentico y llama a pedir_ayuda (motivo 'acuerdo_especial') diciendo qué "
+                        "quiere cambiar. NO le digas un total nuevo."
+                    ),
+                }
+            total_pactado = Decimal(str(abierto.total_acordado))
+    total = sum(
+        (Decimal(str(i["precio_unitario"])) * i["cantidad"] for i in items_pedido), Decimal("0")
+    )
+
     entrega_txt = str(entrega or "").strip() or None
     # La DIRECCIÓN (038): si el cliente ya la dio, se guarda aquí mismo y el modelo se ahorra una
     # vuelta por anotar_entrega. Recortada igual que allá; texto libre del cliente.
@@ -3164,39 +3478,17 @@ async def registrar_pedido(
         costo_envio = Decimal(str(abierto.costo_envio or 0))
     else:
         costo_envio = Decimal("0")
-    total = subtotal_productos + costo_envio
+    # 💵 Si Whuilianny dio el TOTAL, ese es el que se cobra (ya incluye lo que ella sumó).
+    total = total_pactado if total_pactado is not None else subtotal_productos + costo_envio
 
     # CANDADO DE LA ENTREGA (por FECHA REAL, no por palabras). El bot pasa la fecha que
     # acordó con el cliente y el CÓDIGO la valida contra el calendario del negocio. Si no
     # sirve, le devuelve el motivo y LA PRIMERA FECHA BUENA (calculada aquí, no por el modelo).
     fecha_entrega = None
     if entrega_fecha:
-        try:
-            fecha_entrega = (
-                entrega_fecha
-                if isinstance(entrega_fecha, date)
-                else date.fromisoformat(str(entrega_fecha).strip()[:10])
-            )
-        except ValueError:
-            return {
-                "ok": False,
-                "nota": (
-                    f"la fecha '{entrega_fecha}' no es una fecha válida. Pásala como AAAA-MM-DD "
-                    "(hoy en Venezuela te lo digo en este mismo mensaje)."
-                ),
-            }
-        problema = await _validar_entrega(session, fecha_entrega, items_pedido)
-        if problema is not None:
-            return {
-                "ok": False,
-                "nota": (
-                    f"NO se puede entregar esa fecha: {problema['motivo']}. NO se lo prometas "
-                    f"al cliente. Díselo con cariño, con TUS palabras, y ofrécele la primera "
-                    f"fecha en que SÍ se puede: {problema['primera_fecha_valida'].isoformat()}. "
-                    f"Cuando el cliente acepte, vuelve a registrar el pedido COMPLETO con esa fecha."
-                ),
-                "primera_fecha_valida": problema["primera_fecha_valida"].isoformat(),
-            }
+        fecha_entrega, rechazo = await _fecha_valida(session, entrega_fecha, items_pedido)
+        if rechazo is not None:
+            return rechazo
     zona_solicitada_id = zona.id if zona is not None else None
     if abierto is not None and _mismo_pedido_esperando(
         abierto,
@@ -3204,7 +3496,7 @@ async def registrar_pedido(
         fecha_entrega,
         zona_solicitada_id,
         notas,
-    ):
+    ) and not _trae_acuerdo(items, total_acordado):
         # El cliente solo eligió cómo pagar y el modelo intentó registrar TODO otra vez.
         # No reabrimos ni recalculamos: conserva el recibo y el precio que ya vio.
         return _respuesta_registro(
@@ -3215,6 +3507,7 @@ async def registrar_pedido(
         pedido = abierto
         pedido.items = items_pedido
         pedido.total = total
+        pedido.total_acordado = total_pactado
         if notas:
             pedido.notas = notas
         if entrega_txt:
@@ -3232,7 +3525,7 @@ async def registrar_pedido(
         nuevo = False
     else:
         pedido = Pedido(
-            cliente_telefono=telefono, items=items_pedido, total=total,
+            cliente_telefono=telefono, items=items_pedido, total=total, total_acordado=total_pactado,
             notas=notas, entrega=entrega_txt, entrega_fecha=fecha_entrega,
             entrega_referencia=referencia_txt,
             zona_id=(zona.id if zona else None),
@@ -3750,7 +4043,7 @@ async def generar_datos_pago(session, telefono, pedido_id=None, metodo=None):
                 "todavía NO le puedes cobrar: falta acordar PARA CUÁNDO es la entrega. "
                 "Consulta proxima_fecha_entrega, afírmale la fecha (y pregúntale cómo lo recibe "
                 "SOLO si aún no lo dijo), registra el pedido con esa fecha (`entrega_fecha`) y "
-                "recién entonces cobra."
+                "recién entonces cobra." + _completar_el_de_ella(pedido)
             ),
         }
 
@@ -3770,7 +4063,7 @@ async def generar_datos_pago(session, telefono, pedido_id=None, metodo=None):
                 "retira o quiere delivery. Después vuelve a registrar el pedido COMPLETO pasando "
                 "el `zona_id` que corresponda. NUNCA sumes tú el envío ni lo estimes: el costo lo "
                 "pone el sistema. Si el sitio del cliente no calza con ninguna zona, llama a "
-                "`pedir_ayuda`."
+                "`pedir_ayuda`." + _completar_el_de_ella(pedido)
             ),
             "zonas": zonas,
         }
@@ -3867,7 +4160,8 @@ async def generar_datos_pago(session, telefono, pedido_id=None, metodo=None):
     # propósito: renombrarlo obligaría a una migración y a tocar `_montos_cobrados`, que compara
     # el comprobante contra esa cotización. Cambia lo que vale, no cómo se llama.
     envio = Decimal(str(pedido.costo_envio or 0))
-    monto_usd_divisas = monto_en_efectivo(monto_usd, envio)
+    # 💵 Si Whuilianny dio el precio, ese es final: sin el 20% encima (`monto_en_dolares`).
+    monto_usd_divisas = monto_en_dolares(pedido, monto_usd)
 
     pedido.estado = "esperando_pago"
     await session.commit()
@@ -4547,11 +4841,10 @@ async def registrar_comprobante(
             # ⚠️ LA MISMA FUNCIÓN que usa `generar_datos_pago` para cobrar — no una copia de su
             # fórmula. Antes eran dos cuentas escritas a mano que se pedían por comentario no
             # desincronizarse; ahora es imposible que difieran (ver `monto_en_efectivo`).
-            _envio = Decimal(str(getattr(pedido, "costo_envio", 0) or 0))
             en_divisas = (
                 monto_usd_divisas_cotizado
                 if monto_usd_divisas_cotizado is not None
-                else monto_en_efectivo(monto_usd, _envio)
+                else monto_en_dolares(pedido, monto_usd)
             )
             # Tolerancia del 2% (redondeos, `monto_calza`). Se compara contra el monto en DÓLARES:
             # si el comprobante viene en Bs, el número es mil veces mayor y no calza con ninguno.

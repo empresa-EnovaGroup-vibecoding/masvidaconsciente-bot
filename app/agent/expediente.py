@@ -732,14 +732,20 @@ async def _crear_pedido_duena(session, p: PropuestaExpediente, usuario: str) -> 
             f"ya existe el pedido #{repetido.id} con estos mismos productos (tomado hace menos de 24 h): "
             f"si es el mismo, descarta esta propuesta"
         )
-    total = _monto_decimal(p.total) if p.total is not None else sum(
-        Decimal(str(i.precio_unitario)) * i.cantidad for i in p.items
+    catalogo = (
+        sum(Decimal(str(i.precio_unitario)) * i.cantidad for i in p.items)
+        if all(i.precio_unitario is not None for i in p.items)
+        else None
     )
+    total = _monto_decimal(p.total) if p.total is not None else catalogo
+    # 💵 Si el total que ELLA dijo no es la suma del catálogo, es SU precio (042): se cobra tal cual,
+    # sin sumarle el envío ni el 20% de dólares cuando Alejandra siga la venta.
+    acordado = total if catalogo is None or abs(total - catalogo) > Decimal("0.01") else None
     pedido = Pedido(
         cliente_telefono=p.telefono,
         # Nace 'confirmado', JAMÁS 'esperando_pago': eso dispararía el cobro del bot sobre una venta
         # que ella ya cerró a mano.
-        estado="confirmado", items=_items_json(p), total=total,
+        estado="confirmado", items=_items_json(p), total=total, total_acordado=acordado,
         notas=f"Tomado a mano por Whuilianny ({usuario}): «{p.evidencia[:200]}»",
         origen="dueña", evidencia_mensaje_id=p.evidencia_mensaje_id,
         confianza=_monto_decimal(round(p.confianza, 2)), extraido_at=now_utc(),
@@ -813,6 +819,7 @@ async def aplicar_propuesta(session, propuesta: dict, *, usuario: str) -> dict:
         if p.moneda == "Bs":
             raise ValueError("un precio especial en bolívares no se aplica solo: el total del pedido es en dólares")
         pedido.total = _monto_decimal(p.monto)
+        pedido.total_acordado = pedido.total  # 💵 su precio manda (042): sin 20% ni envío encima
         nota = f"Precio especial según Whuilianny ({usuario}): {_fmt(p.monto, p.moneda)} — «{p.evidencia[:160]}»"
         pedido.notas = f"{pedido.notas}\n{nota}" if pedido.notas else nota
         pedido.updated_at = ahora

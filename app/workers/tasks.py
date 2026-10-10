@@ -2614,7 +2614,7 @@ def _texto_no_cuadra(propuesta: dict, nombre: str | None, telefono: str, vivos: 
     """💰 Lo que se le dice a la dueña (y se anota en la Bandeja) cuando un pago NO CUADRA. Devuelve
     (whatsapp, nota). Sin preguntas: ese caso lo resuelve ella con su clienta."""
     from app.agent.expediente import _fmt
-    from app.agent.tools import monto_en_efectivo
+    from app.agent.tools import monto_en_dolares
 
     quien = _quien(nombre, telefono)
     monto = propuesta.get("monto")
@@ -2624,8 +2624,9 @@ def _texto_no_cuadra(propuesta: dict, nombre: str | None, telefono: str, vivos: 
         total = getattr(ped, "total", None)
         precio = _fmt(total, "$") if total is not None else "sin total"
         if total is not None:
-            envio = getattr(ped, "costo_envio", 0) or 0
-            precio += f" ({_fmt(monto_en_efectivo(total, envio), '$')} pagando en dólares)"
+            en_dolares = monto_en_dolares(ped, total)
+            if float(en_dolares) != float(total):  # con el precio de ella no hay 20% que mostrar
+                precio += f" ({_fmt(en_dolares, '$')} pagando en dólares)"
         razon = f"llegaron {llego} y {_ref_pedido(ped)} es de {precio}"
     else:
         lista = "; ".join(

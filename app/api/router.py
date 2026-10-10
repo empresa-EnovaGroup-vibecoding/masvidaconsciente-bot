@@ -613,6 +613,9 @@ async def editar_items_pedido(
         telefono_cliente = pedido.cliente_telefono
         pedido.items = items_pedido
         pedido.total = total_final
+        # 💵 Corregir los productos desde el panel vuelve al precio de catálogo: el total que dio
+        # Whuilianny en el chat era para lo que llevaba antes (042).
+        pedido.total_acordado = None
         await session.commit()
 
     # La COTIZACIÓN vieja ya no vale. Si ese cliente tenía un cobro en curso, los montos

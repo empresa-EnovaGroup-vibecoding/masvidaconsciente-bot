@@ -115,15 +115,17 @@ def test_la_regla_anterior_ya_no_aplica():
 def test_cobrar_y_comprobar_usan_la_misma_funcion():
     """El bug que esto previene: si `generar_datos_pago` cobra $13.60 y `registrar_comprobante`
     espera $11.20, el cliente paga bien y su comprobante sale "no cuadra" — y el bot deja de
-    decirle que recibió su pago. Las dos llaman a `monto_en_efectivo`; esto lo comprueba leyendo
+    decirle que recibió su pago. Las dos llaman a `monto_en_dolares` (que es la que sabe del precio
+    de Whuilianny, SESIONES (48), y por dentro usa `monto_en_efectivo`); esto lo comprueba leyendo
     el código, que es lo único que no se puede desincronizar sin que este test lo vea."""
     import inspect
 
     from app.agent import tools
 
+    assert "monto_en_efectivo(" in inspect.getsource(tools.monto_en_dolares)
     for funcion in (tools.generar_datos_pago, tools.registrar_comprobante):
         fuente = inspect.getsource(funcion)
-        assert "monto_en_efectivo(" in fuente, (
+        assert "monto_en_dolares(" in fuente, (
             f"{funcion.__name__} dejó de usar la función común: la cuenta del efectivo volvió a "
             "estar duplicada y las dos puertas pueden desincronizarse"
         )

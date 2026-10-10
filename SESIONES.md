@@ -17,6 +17,40 @@
 
 ---
 
+## 2026-10-10 (48) — 💵 EL PRECIO QUE DIO WHUILIANNY MANDA (texto o nota de voz), y su pedido se completa sin rehacerse
+
+**Por qué (Maired, 10-oct):** si Whuilianny le dice a la clienta "el chocolate te lo dejo en 32" (vale 36),
+Alejandra tiene que seguir con 32 sin preguntar ni suponer. Verificado en el código: Alejandra YA lo lee
+(marca de autoría humana; las notas de voz llegan transcritas con 🎤). Lo que fallaba eran dos muros del
+código: (1) `registrar_pedido` ponía siempre el precio del catálogo y (2) la red del dinero no creía en los
+mensajes de ella. Y un tercero: el pedido que ella deja anotado (origen dueña, `confirmado`, sin zona) quedaba
+en círculo — la caja pedía la zona y al re-registrar el candado del duplicado lo frenaba.
+
+**Decisiones de Maired:** solo vale un número que ELLA dijo ("¿me lo dejas en 32?" + "ok nena" NO cuenta →
+relevo); su precio es FINAL: sin el 20% de pagar en dólares.
+
+**Qué se hizo** (rama `precio-de-whuilianny`):
+- `app/agent/montos_duena.py` (nuevo): los montos de sus mensajes de 14 días, con cifras y con palabras
+  ("treinta y dos", "treinta y seis con cincuenta"); falla cerrado.
+- `registrar_pedido`: `precio_acordado` por producto y `total_acordado` por pedido, aceptados SOLO si el número
+  está en sus mensajes (si no → no registra, `pedir_ayuda` `acuerdo_especial`); un re-registro no pierde el
+  precio de ella; un total de ella no vale si cambian los productos. `pedido_id` + mismos productos completa el
+  pedido de ella (zona, fecha, dirección) con su total, antes del candado del duplicado.
+- Migración 042 `pedidos.total_acordado`. El expediente la llena cuando el total de ella ≠ catálogo y al
+  aplicar un `precio_especial`; el panel la limpia si corrige los productos.
+- `monto_en_dolares(pedido)`: puerta única de cobro, comprobante, `pago_cuadra` y aviso "no cuadra": sin 20%
+  sobre lo de ella (el resto de la cuenta sí lo lleva).
+- Red del dinero: lo que ella dijo autoriza precio y total (camino uno, hoja del modo dos y carril del pago
+  abierto; la lista cerrada del pago no cambia).
+- Prompt: la regla de AUTORÍA HUMANA ya no dice "no vuelvas a cobrar lo que una persona acordó" (chocaba con
+  #75): su precio manda y se pasa en `precio_acordado` / `total_acordado`.
+- Tests: `test_precio_de_whuilianny.py` (26). Suite 1422/0.
+
+**Sigue:** fusionar → desplegar worker + bot en pruebas (migración 042) → prueba en vivo: desde el número de
+Whuilianny un audio "te la dejo en treinta y dos", y como clienta pedir pagar → cobra $32.
+
+---
+
 ## 2026-10-08 (47) — 🛒 ALEJANDRA SIGUE LA VENTA de Whuilianny, y cuando no sabe algo releva con naturalidad (sin nombrarla)
 
 **Por qué (decisiones de Maired, 8-oct):**
