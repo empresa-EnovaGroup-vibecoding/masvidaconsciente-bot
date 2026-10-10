@@ -60,13 +60,14 @@ class _Sesion:
     `origen`) y los abiertos se configuran aparte; el candado del duplicado ve los de la dueña."""
 
     def __init__(self, mensajes_duena=(), de_la_duena=(), abiertos=(), zona=None, falla_mensajes=False,
-                 cierre_pago=None):
+                 cierre_pago=None, intervenciones=()):
         # La charla en orden: un texto suelto es de ella; (rol, texto) para la clienta. La consulta
         # real la devuelve de la más nueva a la más vieja: por eso se invierte.
         self.mensajes = [
             (m[0], m[1], None) if isinstance(m, tuple) else ("owner", m, None) for m in mensajes_duena
         ][::-1]
         self.cierre_pago = cierre_pago
+        self.intervenciones = list(intervenciones)
         self.sql_mensajes = ""
         self.de_la_duena = list(de_la_duena)
         self.abiertos = list(abiertos)
@@ -87,6 +88,8 @@ class _Sesion:
             return _Res(self.mensajes)
         if "FROM clientes" in sql:
             return _Res(uno=SimpleNamespace(telefono=TEL))
+        if "FROM intervenciones" in sql:
+            return _Res(self.intervenciones)
         if "FROM pagos" in sql:
             return _Res([], uno=self.cierre_pago if "max(" in sql else None)
         if "FROM pedidos" in sql:
@@ -420,8 +423,9 @@ CHARLA = [
 
 
 class _SesionCharla:
-    def __init__(self, filas=(), pedidos=(), propuestas=0, falla=False):
+    def __init__(self, filas=(), pedidos=(), propuestas=0, falla=False, inters=()):
         self.filas, self.pedidos, self.propuestas, self.falla = list(filas), list(pedidos), propuestas, falla
+        self.inters = list(inters)
 
     def __call__(self):
         return self
@@ -440,6 +444,8 @@ class _SesionCharla:
             return _Res(self.filas)
         if "FROM pedidos" in sql:
             return _Res(self.pedidos)
+        if "FROM intervenciones" in sql and "count(" not in sql:
+            return _Res(self.inters)
         if "FROM intervenciones" in sql:
             n = self.propuestas if "propuesta_expediente" in str(
                 q.compile(compile_kwargs={"literal_binds": True})
@@ -591,3 +597,69 @@ async def test_un_cierre_de_hace_un_mes_no_alarga_la_ventana():
     viejo = now_utc() - timedelta(days=30)
     desde = await montos_duena._desde(_Sesion(cierre_pago=viejo), TEL, 14)
     assert desde > viejo and (now_utc() - desde) <= timedelta(days=14, minutes=1)
+
+
+# ══ 10) "YA LE COBRÓ 36" (el ejemplo de Maired, 10-oct) ═════════════════════════════
+#
+# Whuilianny cobró a mano y todavía no hay pedido. Cuando vuelve Alejandra: NO cobra otra vez, pide la
+# dirección, anota la torta, y a Whuilianny le llega "¿Los $36 de María son por la torta? Sí/No".
+
+def _pago_suyo(monto=36.0, **kw):
+    base = {"tipo": "pago_confirmado", "telefono": TEL, "monto": monto, "moneda": "$", "candidatos": []}
+    base.update(kw)
+    return SimpleNamespace(propuesta=base, created_at=None)
+
+
+async def test_un_pago_sin_pedido_se_engancha_al_pedido_que_cuadra():
+    pedido = SimpleNamespace(id=500, total=Decimal("36"), total_acordado=None, costo_envio=0, items=[],
+                             cotizado_usd=None, cotizado_usd_divisas=None)
+    assert await tools.pagos_de_la_duena_por_confirmar(_Sesion(intervenciones=[_pago_suyo()]), TEL, pedido)
+    otro = SimpleNamespace(**{**vars(pedido), "total": Decimal("50")})
+    assert not await tools.pagos_de_la_duena_por_confirmar(_Sesion(intervenciones=[_pago_suyo()]), TEL, otro)
+    # El que ya señala ese pedido cuenta; uno que no cuadra (abono) no frena por aquí (lo frena `_pago_en_disputa`).
+    assert await tools.pagos_de_la_duena_por_confirmar(
+        _Sesion(intervenciones=[_pago_suyo(pedido_id=500, candidatos=[500])]), TEL, pedido)
+    assert not await tools.pagos_de_la_duena_por_confirmar(
+        _Sesion(intervenciones=[_pago_suyo(no_cuadra=True)]), TEL, pedido)
+
+
+async def test_alejandra_anota_lo_que_ella_ya_cobro_y_no_lo_cobra(monkeypatch):
+    encolado = []
+    monkeypatch.setattr(tools, "_encolar_preguntas_de_pago", lambda: encolado.append(1))
+    ses = _Sesion(mensajes_duena=["listo nena, recibido, son 36"], intervenciones=[_pago_suyo(36.0)])
+    r = await tools.registrar_pedido(ses, TEL, [{"variante_id": 21, "cantidad": 1}])
+    assert r["ok"] is True and r["ya_pago_a_mano"] is True
+    assert "NO le cobres" in r["nota"] and "generar_datos_pago" not in r["nota"]
+    assert encolado  # la pregunta a Whuilianny sale enseguida
+
+
+async def test_si_alejandra_lo_lee_en_el_chat_deja_la_pregunta_para_ella(monkeypatch):
+    monkeypatch.setattr(tools, "_encolar_preguntas_de_pago", lambda: None)
+    ses = _Sesion(mensajes_duena=["recibido nena 🙏"])
+    r = await tools.registrar_pedido(ses, TEL, [{"variante_id": 21, "cantidad": 1}], ya_pagado_a_mano=True)
+    assert r["ok"] is True and r["ya_pago_a_mano"] is True
+    pregunta = [a for a in ses.agregados if getattr(a, "motivo", None) == "propuesta_expediente"]
+    assert len(pregunta) == 1
+    prop = pregunta[0].propuesta
+    assert prop["tipo"] == "pago_confirmado" and prop["pedido_id"] == 9001 and prop["monto"] == 36.0
+
+
+async def test_sin_pago_de_ella_el_registro_sigue_como_siempre():
+    r = await tools.registrar_pedido(_Sesion(), TEL, [{"variante_id": 21, "cantidad": 1}])
+    assert r["ok"] is True and "ya_pago_a_mano" not in r and "generar_datos_pago" in r["nota"]
+
+
+def test_la_caja_no_cobra_lo_que_ella_ya_cobro_antes_de_tocar_nada():
+    import inspect
+
+    fuente = inspect.getsource(tools.generar_datos_pago)
+    assert fuente.index("pagos_de_la_duena_por_confirmar(") < fuente.index('pedido.estado = "esperando_pago"')
+
+
+async def test_la_ficha_le_dice_que_ya_le_pagaron_sin_cifra_en_dolares(monkeypatch):
+    from app.agent import system_prompt as sp
+
+    monkeypatch.setattr(sp, "get_session_factory", lambda: _SesionCharla(inters=[_pago_suyo(36.0)]))
+    texto = await sp._estado_cliente_texto(TEL)
+    assert "YA LE PAGÓ" in texto and "la dirección" in texto
+    assert "$" not in texto

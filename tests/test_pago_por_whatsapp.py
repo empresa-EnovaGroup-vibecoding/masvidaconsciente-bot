@@ -350,19 +350,22 @@ async def test_con_dos_pedidos_un_monto_que_casa_con_uno_pregunta_por_ese(meta, 
     assert inter.propuesta["pedido_id"] == 31
 
 
-async def test_sin_ningun_pedido_sin_pagar_le_dice_que_entendio_pero_no_hay_nada_que_registrar(meta, monkeypatch):
-    """30-sep (Maired): antes se cerraba en silencio y ella no sabía si el bot la había entendido."""
+async def test_sin_pedido_le_dice_que_entendio_y_el_pago_queda_esperando(meta, monkeypatch):
+    """30-sep: antes se cerraba en silencio. 💵 10-oct (SESIONES (48), "ya le cobró 36"): ya no se cierra:
+    queda esperando a que Alejandra anote lo que compró, y mientras tanto no se le vuelve a cobrar."""
     inter = _inter(propuesta=_propuesta(monto=20.0, pedido_id=None, candidatos=[]))
     _montar(monkeypatch, inter)
+    monkeypatch.setattr(tasks, "_pedidos_por_cobrar_de", AsyncMock(return_value=[]))
     assert await tasks._preguntar_pagos_a_la_duena() == 1
     texto = meta.await_args.args[1]
     assert texto == (
-        "💬 Anoté que te llegaron $20 de Ana, pero no tiene ningún pedido sin pagar, "
-        "así que no registré nada. Si es un abono o algo aparte, lo resuelves tú."
+        "💬 Anoté que te llegaron $20 de Ana, pero todavía no hay un pedido anotado. Alejandra no se lo "
+        "vuelve a cobrar, y cuando anote lo que compró te pregunto si es por eso. Si es un abono o algo "
+        "aparte, lo resuelves tú."
     )
-    assert inter.estado == "resuelta" and inter.propuesta["resultado"] == "descartada"
-    assert inter.propuesta["avisada_at"] and "no tiene ningún pedido sin pagar" in inter.detalle
-    # No se repite: ya está cerrada.
+    assert inter.estado == "pendiente" and inter.propuesta["sin_pedido"] is True
+    assert inter.propuesta["avisada_at"] and "aún no hay pedido" in inter.detalle
+    # No se repite el aviso mientras siga sin pedido.
     meta.reset_mock()
     assert await tasks._preguntar_pagos_a_la_duena() == 0
     meta.assert_not_awaited()
@@ -370,8 +373,31 @@ async def test_sin_ningun_pedido_sin_pagar_le_dice_que_entendio_pero_no_hay_nada
 
 async def test_sin_pedido_y_sin_monto_dicho_tambien_avisa(meta, monkeypatch):
     _montar(monkeypatch, _inter(propuesta=_propuesta(monto=None, pedido_id=None, candidatos=[])))
+    monkeypatch.setattr(tasks, "_pedidos_por_cobrar_de", AsyncMock(return_value=[]))
     await tasks._preguntar_pagos_a_la_duena()
-    assert "Anoté que te llegó un pago de Ana, pero no tiene ningún pedido sin pagar" in meta.await_args.args[1]
+    assert "Anoté que te llegó un pago de Ana, pero todavía no hay un pedido anotado" in meta.await_args.args[1]
+
+
+async def test_cuando_alejandra_anota_el_pedido_se_le_pregunta_si_el_pago_es_por_eso(meta, monkeypatch):
+    """El ejemplo de Maired: ella ya cobró 36 sin pedido; Alejandra anota la torta de 36 → la pregunta."""
+    inter = _inter(propuesta=_propuesta(monto=36.0, pedido_id=None, candidatos=[], sin_pedido=True,
+                                        avisada_at="2026-10-10T12:00:00+00:00"))
+    _montar(monkeypatch, inter, pedido=_pedido(30, total=36.0))
+    monkeypatch.setattr(tasks, "_pedidos_por_cobrar_de", AsyncMock(return_value=[30]))
+    assert await tasks._preguntar_pagos_a_la_duena() == 1
+    assert meta.await_args.args[1].startswith("💰 ¿Te llegó el pago de $36 de Ana por el pedido #30")
+    assert inter.propuesta["pedido_id"] == 30 and inter.propuesta["pregunta_wamid"] == WAMID_PREG
+
+
+async def test_un_pago_sin_pedido_vencido_se_cierra_en_silencio(meta, monkeypatch):
+    inter = _inter(propuesta=_propuesta(monto=36.0, pedido_id=None, candidatos=[], sin_pedido=True,
+                                        avisada_at="2026-09-20T12:00:00+00:00"))
+    _montar(monkeypatch, inter)
+    monkeypatch.setattr(tasks, "_pedidos_por_cobrar_de", AsyncMock(return_value=[]))
+    monkeypatch.setattr(tasks, "_pago_suelto_vencido", AsyncMock(return_value=True))
+    assert await tasks._preguntar_pagos_a_la_duena() == 0
+    meta.assert_not_awaited()
+    assert inter.estado == "resuelta" and inter.propuesta["resultado"] == "descartada"
 
 
 async def test_sin_pedido_con_la_ventana_cerrada_no_se_cierra_y_se_reintenta(meta, monkeypatch):

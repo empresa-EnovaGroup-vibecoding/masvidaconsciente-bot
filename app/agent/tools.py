@@ -177,6 +177,15 @@ TOOL_SCHEMAS = [
                             "NO. El código lo comprueba."
                         ),
                     },
+                    "ya_pagado_a_mano": {
+                        "type": "boolean",
+                        "description": (
+                            "OPCIONAL. true SOLO si en el historial la persona del negocio dejó claro "
+                            "que este cliente YA LE PAGÓ esta compra (ej. 'recibido nena', 'listo, ya "
+                            "me llegó'). Se registra sin cobrar y se le confirma a ella. Si pagó solo "
+                            "una parte o es un abono, NO: llama a pedir_ayuda."
+                        ),
+                    },
                     "pedido_id": {
                         "type": "integer",
                         "description": (
@@ -3044,6 +3053,34 @@ def _completar_el_de_ella(pedido) -> str:
     )
 
 
+async def _lo_que_ya_cobro(session, telefono, pedido, respuesta: dict, ya_pagado: bool) -> dict:
+    """💵 Después de registrar: si la dueña ya cobró esto (lo dijo y el lector lo oyó, o Alejandra lo
+    leyó en el chat → `ya_pagado`), la respuesta dice "NO cobres, sigue con la entrega" en vez de
+    "para cobrar…", y la cola le pregunta a ella si el pago es por este pedido."""
+    if not respuesta.get("ok"):
+        return respuesta
+    try:
+        pendientes = await pagos_de_la_duena_por_confirmar(session, telefono, pedido)
+        if not pendientes and ya_pagado:
+            await _anotar_pago_que_vio_alejandra(session, telefono, pedido)
+            pendientes = [True]
+    except Exception:  # noqa: BLE001 — sin lectura, el registro sigue como siempre
+        logger.exception("_lo_que_ya_cobro: no se pudo revisar el pago de la dueña de %s", telefono)
+        return respuesta
+    if not pendientes:
+        return respuesta
+    _encolar_preguntas_de_pago()
+    return {
+        **respuesta,
+        "ya_pago_a_mano": True,
+        "nota": (
+            f"pedido #{pedido.id} anotado. Si le confirmas lo que lleva, usa este `resumen` tal cual "
+            "(NO recalcules). " + _NOTA_YA_LE_PAGO
+            + (" " + _NOTA_FALTA_REFERENCIA if respuesta.get("falta_referencia") else "")
+        ),
+    }
+
+
 def _trae_acuerdo(items, total_acordado) -> bool:
     """¿El modelo pasó en ESTA llamada un precio o un total acordado por Whuilianny?"""
     if total_acordado not in (None, ""):
@@ -3199,7 +3236,7 @@ async def _completar_pedido_de_la_duena(
 
 async def registrar_pedido(
     session, telefono, items, notas=None, entrega=None, entrega_fecha=None, zona_id=None,
-    referencia=None, total_acordado=None, pedido_id=None,
+    referencia=None, total_acordado=None, pedido_id=None, ya_pagado_a_mano=False,
 ):
     """Registra el pedido. El TOTAL lo suma el CÓDIGO: productos + envío.
 
@@ -3240,10 +3277,11 @@ async def registrar_pedido(
     # repetida, mientras la caja pedía la zona — Alejandra quedaba dando vueltas sin poder cobrar.
     de_la_duena = await _pedido_de_la_duena_a_completar(session, telefono, items, pedido_id)
     if de_la_duena is not None:
-        return await _completar_pedido_de_la_duena(
+        completado = await _completar_pedido_de_la_duena(
             session, de_la_duena, entrega=entrega, entrega_fecha=entrega_fecha, zona_id=zona_id,
             referencia=referencia, total_pactado=total_pactado,
         )
+        return await _lo_que_ya_cobro(session, telefono, de_la_duena, completado, ya_pagado_a_mano)
     if pedido_id not in (None, ""):
         # Señaló un pedido de ella pero con OTROS productos: no se mezcla ni se crea uno con todo.
         try:
@@ -3501,10 +3539,10 @@ async def registrar_pedido(
     ) and not _trae_acuerdo(items, total_acordado):
         # El cliente solo eligió cómo pagar y el modelo intentó registrar TODO otra vez.
         # No reabrimos ni recalculamos: conserva el recibo y el precio que ya vio.
-        return _respuesta_registro(
+        return await _lo_que_ya_cobro(session, telefono, abierto, _respuesta_registro(
             abierto, nuevo=False, sin_cambios=True,
             falta_referencia=await _falta_referencia(session, abierto),
-        )
+        ), ya_pagado_a_mano)
     if abierto is not None:
         pedido = abierto
         pedido.items = items_pedido
@@ -3538,9 +3576,9 @@ async def registrar_pedido(
         nuevo = True
     await session.commit()
     await session.refresh(pedido)
-    return _respuesta_registro(
+    return await _lo_que_ya_cobro(session, telefono, pedido, _respuesta_registro(
         pedido, nuevo=nuevo, falta_referencia=await _falta_referencia(session, pedido)
-    )
+    ), ya_pagado_a_mano)
 
 
 async def info_negocio(session, telefono):
@@ -3965,6 +4003,79 @@ async def _pago_en_disputa(session, telefono, pedido_id) -> bool:
     return False
 
 
+async def pagos_de_la_duena_por_confirmar(session, telefono, pedido=None) -> list[dict]:
+    """💵 Los pagos que la DUEÑA dijo haber recibido de este cliente y que esperan su confirmación
+    (propuestas `pago_confirmado` pendientes, sin `no_cuadra`). Con `pedido`, solo los que van a ESE
+    pedido: los que lo señalan, o los que llegaron sin pedido y cuadran con él. Los de antes del
+    último cierre de una venta (o de hace más de 14 días) no cuentan (`montos_duena._desde`).
+    Falla ABIERTA ([]), como `_pago_en_disputa`: es una red, no el cobro."""
+    from app.agent.montos_duena import DIAS_ACUERDO, _desde
+
+    try:
+        desde = await _desde(session, telefono, DIAS_ACUERDO)
+        filas = (await session.execute(
+            select(Intervencion).where(
+                Intervencion.cliente_telefono == telefono,
+                Intervencion.estado == "pendiente",
+                Intervencion.motivo == "propuesta_expediente",
+            )
+        )).scalars().all()
+        vivos = []
+        for i in filas:
+            p = i.propuesta or {}
+            if p.get("tipo") != "pago_confirmado" or p.get("no_cuadra"):
+                continue
+            creado = getattr(i, "created_at", None)
+            if creado is not None and creado < desde:
+                continue
+            if pedido is None:
+                vivos.append(p)
+                continue
+            ids = set(p.get("candidatos") or []) | ({p["pedido_id"]} if p.get("pedido_id") else set())
+            if pedido.id in ids or (not ids and await pago_cuadra(pedido, p.get("monto"), p.get("moneda") or "")):
+                vivos.append(p)
+        return vivos
+    except Exception:  # noqa: BLE001
+        logger.warning("No se pudo revisar si %s ya le pagó a la dueña", telefono)
+        return []
+
+
+_NOTA_YA_LE_PAGO = (
+    "NO le cobres: según la persona del negocio, este cliente YA LE PAGÓ y se le está confirmando a "
+    "ella. NO le pidas datos de pago ni otra captura. Sigue con lo que falta de la entrega (cómo lo "
+    "recibe, la dirección, el día) con naturalidad."
+)
+
+
+def _encolar_preguntas_de_pago() -> None:
+    """Que la cola de preguntas de pago revise YA (un pago sin pedido pudo ganar su pedido). Perezoso,
+    como en el panel (`api/router.py`); si el broker no está, la próxima apertura lo hace."""
+    try:
+        from app.workers.tasks import preguntar_pagos_pendientes
+
+        preguntar_pagos_pendientes.apply_async()
+    except Exception:  # noqa: BLE001
+        logger.warning("No se pudo encolar la revisión de pagos de la dueña")
+
+
+async def _anotar_pago_que_vio_alejandra(session, telefono, pedido) -> None:
+    """Alejandra leyó en el chat que la dueña ya cobró: se deja la PREGUNTA de pago para ella (el mismo
+    camino que usa el lector), apuntando a este pedido. `pagado` solo nace de su SÍ (CLAUDE.md §3)."""
+    from app.agent.contratos_atencion import PropuestaExpediente
+
+    p = PropuestaExpediente(
+        tipo="pago_confirmado", telefono=telefono, pedido_id=pedido.id, candidatos=[pedido.id],
+        monto=float(pedido.total) if pedido.total is not None else None, moneda="$",
+        evidencia="Alejandra leyó en el chat que ya le pagaron a la persona del negocio",
+    )
+    session.add(Intervencion(
+        cliente_telefono=telefono, motivo="propuesta_expediente",
+        detalle=f"Alejandra leyó en el chat que ya te pagaron el pedido #{pedido.id}. ¿Es correcto?",
+        propuesta=p.model_dump(),
+    ))
+    await session.commit()
+
+
 async def generar_datos_pago(session, telefono, pedido_id=None, metodo=None):
     """Calcula el monto en Bs (tasa del dia), deja el pedido en 'esperando_pago'
     y devuelve el cobro. En DOS pasos (rama B, 31-ago): sin `metodo`, el cobro completo y los
@@ -4031,6 +4142,12 @@ async def generar_datos_pago(session, telefono, pedido_id=None, metodo=None):
                 "confirmas enseguida y llama a pedir_ayuda (motivo 'acuerdo_especial')."
             ),
         }
+
+    # 💵 10-oct (SESIONES (48), el ejemplo de Maired: "ya le cobró 36"): si la dueña dijo que este cliente
+    # ya le pagó (y se le está confirmando), el bot NO lo vuelve a cobrar: sigue con la entrega.
+    if await pagos_de_la_duena_por_confirmar(session, telefono, pedido):
+        _encolar_preguntas_de_pago()
+        return {"ok": False, "ya_pago_a_mano": True, "pedido_id": pedido.id, "nota": _NOTA_YA_LE_PAGO}
 
     if pedido.total is None:
         return {"ok": False, "nota": "el pedido no tiene un total definido para cobrar"}

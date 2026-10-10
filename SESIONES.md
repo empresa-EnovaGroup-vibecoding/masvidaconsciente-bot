@@ -68,7 +68,16 @@ relevo); su precio es FINAL: sin el 20% de pagar en dólares.
   - 🧠 Un solo cerebro: el lector (`procesar_ventana`) ya no deja tarjetas de pedidos, precios ni entregas
     (`TIPOS_DEL_LECTOR = ("pago_confirmado",)`); sigue preguntando los pagos por WhatsApp y avisando lo que no
     está en el catálogo. En `auto` ya no escribe pedidos solo.
-- Tests: `test_precio_de_whuilianny.py` (41) + lector actualizado. Suite 1438/0.
+- **"Ya le cobró 36" (el ejemplo de Maired, 10-oct):** el objetivo es que Alejandra sepa qué vendió ella, a
+  cuánto, si ya cobró y qué falta. Hueco real: un pago que ella decía sin pedido anotado se CERRABA ("no
+  registré nada") y nada impedía cobrarlo otra vez. Ahora:
+  - el pago sin pedido queda esperando (`sin_pedido`, 14 días o hasta un cierre);
+  - cuando aparece un pedido que cuadra, la cola le pregunta a ella "¿te llegó el pago… por el pedido…?";
+  - la ficha le dice a Alejandra "YA LE PAGÓ: no cobres, sigue con la entrega" (sin cifra en dólares);
+  - `generar_datos_pago` no cobra ese pedido (`pagos_de_la_duena_por_confirmar`);
+  - si Alejandra lo lee en el chat, `registrar_pedido(ya_pagado_a_mano=true)` deja la pregunta para ella;
+  - abono / pagó de menos → sigue igual: no cuadra, se frena y lo lleva ella.
+- Tests: `test_precio_de_whuilianny.py` (47), `test_pago_por_whatsapp.py` y el lector actualizados. Suite 1446/0.
 
 **Sigue:** fusionar → desplegar worker + bot en pruebas (migración 042) → prueba en vivo: desde el número de
 Whuilianny un audio "te la dejo en treinta y dos", y como clienta pedir pagar → cobra $32.
