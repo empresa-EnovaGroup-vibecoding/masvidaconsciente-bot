@@ -40,7 +40,7 @@ from app.agent.contratos_atencion import (
     PropuestaExpediente,
 )
 from app.agent.resolver_atencion import consta, fecha_del_cliente, normalizar
-from app.agent.tools import _matchear_franja, _pedido_igual_reciente, pago_cuadra
+from app.agent.tools import _firma_de_items, _matchear_franja, _pedido_igual_reciente, pago_cuadra
 from app.models import (
     ESTADOS_ACORDADOS,
     ORIGEN_DUENA,
@@ -64,6 +64,10 @@ HUECO_VENTANA_MIN = 5
 # sobre las conversaciones reales tiene que dar ≥0,98 de precisión en lo escrito (puerta G6).
 ESCRITURA_DEFAULT = "auto"
 ESCRITURAS = ("off", "propuestas", "auto")
+# 🧠 10-oct (SESIONES (48), Maired: "un solo cerebro"): de lo que lee el lector, solo los PAGOS siguen a la
+# Bandeja y a la pregunta por WhatsApp. Pedidos, precios y entregas los entiende Alejandra leyendo el chat
+# (medido: el lector anotaba mal 3 de cada 4 cosas). Vale para `propuestas` y `auto`; `off` apaga todo.
+TIPOS_DEL_LECTOR = ("pago_confirmado",)
 UMBRAL_AUTO = 0.8
 MARCA_VOZ = "🎤"
 
@@ -661,6 +665,13 @@ async def procesar_ventana(
             logger.info("Expediente %s: %s descartado (%s)", telefono, ev.tipo, v.motivo)
             resultados.append((ev.tipo, "descarta"))
             continue
+        if ev.tipo not in TIPOS_DEL_LECTOR:
+            # 🧠 UN SOLO CEREBRO (Maired, 10-oct): la venta la entiende y la sigue Alejandra leyendo el
+            # chat. El lector ya no deja tarjetas de pedidos, precios ni entregas que nadie confirma y
+            # que chocaban con ella; solo pagos (y el aviso de lo que no está en el catálogo, arriba).
+            logger.info("Expediente %s: %s lo sigue Alejandra (sin tarjeta)", telefono, ev.tipo)
+            resultados.append((ev.tipo, "lo_sigue_alejandra"))
+            continue
         p = v.propuesta
         p.resumen = resumen_humano(
             p, tipo_mensaje=str(evidencia.get("tipo") or "text"),
@@ -715,6 +726,28 @@ def _items_json(p: PropuestaExpediente) -> list[dict]:
     } for i in p.items]
 
 
+async def _pedido_abierto_igual(session, p: PropuestaExpediente):
+    """El pedido ABIERTO (pendiente / esperando pago) de este cliente con los mismos productos, de los
+    últimos 14 días — o None. Si la lectura falla, None (vender > bloquear, como el otro candado)."""
+    from app.agent.montos_duena import DIAS_ACUERDO
+
+    firma = _firma_de_items([{"variante_id": i.variante_id, "cantidad": i.cantidad} for i in p.items])
+    try:
+        abiertos = (
+            await session.execute(
+                select(Pedido).where(
+                    Pedido.cliente_telefono == p.telefono,
+                    Pedido.estado.in_(("pendiente", "esperando_pago")),
+                    Pedido.created_at >= now_utc() - timedelta(days=DIAS_ACUERDO),
+                )
+            )
+        ).scalars().all()
+    except Exception:  # noqa: BLE001
+        logger.exception("_pedido_abierto_igual: no se pudo leer; se deja aplicar")
+        return None
+    return next((x for x in abiertos if _firma_de_items(x.items or []) == firma), None)
+
+
 async def _crear_pedido_duena(session, p: PropuestaExpediente, usuario: str) -> Pedido:
     if not p.items:
         raise ValueError("un pedido sin productos no existe")
@@ -732,14 +765,29 @@ async def _crear_pedido_duena(session, p: PropuestaExpediente, usuario: str) -> 
             f"ya existe el pedido #{repetido.id} con estos mismos productos (tomado hace menos de 24 h): "
             f"si es el mismo, descarta esta propuesta"
         )
-    total = _monto_decimal(p.total) if p.total is not None else sum(
-        Decimal(str(i.precio_unitario)) * i.cantidad for i in p.items
+    # 💵 10-oct (SESIONES (48)): Alejandra ahora SIGUE lo que ella dijo aunque la propuesta siga sin
+    # confirmar, así que la venta puede estar ya registrada por el bot (abierta, sin pago). Un "Sí" tardío
+    # en la Bandeja no puede fabricarle el gemelo.
+    abierto = await _pedido_abierto_igual(session, p)
+    if abierto is not None:
+        raise ValueError(
+            f"el bot ya registró esta venta como el pedido #{abierto.id} con los mismos productos: "
+            f"si es la misma, descarta esta propuesta"
+        )
+    catalogo = (
+        sum(Decimal(str(i.precio_unitario)) * i.cantidad for i in p.items)
+        if all(i.precio_unitario is not None for i in p.items)
+        else None
     )
+    total = _monto_decimal(p.total) if p.total is not None else catalogo
+    # 💵 Si el total que ELLA dijo no es la suma del catálogo, es SU precio (042): se cobra tal cual,
+    # sin sumarle el envío ni el 20% de dólares cuando Alejandra siga la venta.
+    acordado = total if catalogo is None or abs(total - catalogo) > Decimal("0.01") else None
     pedido = Pedido(
         cliente_telefono=p.telefono,
         # Nace 'confirmado', JAMÁS 'esperando_pago': eso dispararía el cobro del bot sobre una venta
         # que ella ya cerró a mano.
-        estado="confirmado", items=_items_json(p), total=total,
+        estado="confirmado", items=_items_json(p), total=total, total_acordado=acordado,
         notas=f"Tomado a mano por Whuilianny ({usuario}): «{p.evidencia[:200]}»",
         origen="dueña", evidencia_mensaje_id=p.evidencia_mensaje_id,
         confianza=_monto_decimal(round(p.confianza, 2)), extraido_at=now_utc(),
@@ -813,6 +861,7 @@ async def aplicar_propuesta(session, propuesta: dict, *, usuario: str) -> dict:
         if p.moneda == "Bs":
             raise ValueError("un precio especial en bolívares no se aplica solo: el total del pedido es en dólares")
         pedido.total = _monto_decimal(p.monto)
+        pedido.total_acordado = pedido.total  # 💵 su precio manda (042): sin 20% ni envío encima
         nota = f"Precio especial según Whuilianny ({usuario}): {_fmt(p.monto, p.moneda)} — «{p.evidencia[:160]}»"
         pedido.notas = f"{pedido.notas}\n{nota}" if pedido.notas else nota
         pedido.updated_at = ahora

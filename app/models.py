@@ -334,6 +334,10 @@ class Pedido(Base):
     # (decisión de Maired, 1-sep: quien dice pago móvil no recibe la cuenta del banco).
     metodo_elegido: Mapped[str | None] = mapped_column(Text, nullable=True)
     metodo_elegido_tipo: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 💵 EL TOTAL QUE DIO WHUILIANNY (migración 042). Si existe, es lo que se cobra: no se recalcula
+    # con el catálogo, no se le suma el envío y no lleva el 20% de pagar en dólares. Solo se llena
+    # si el número aparece en sus mensajes (`montos_duena.py`).
+    total_acordado: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
     # ── EL EXPEDIENTE DE LA VENTA (migración 040): QUIÉN puso este dato ──
     # `origen`: 'bot' (lo registró `registrar_pedido`), 'dueña' (lo dijo Whuilianny a mano, por
     # texto o nota de voz, y el extractor lo leyó) o 'panel' (un clic). `evidencia_mensaje_id`

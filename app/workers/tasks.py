@@ -2602,19 +2602,62 @@ def _texto_sin_pedido(propuesta: dict, nombre: str | None, telefono: str) -> tup
     monto = propuesta.get("monto")
     llego = _fmt(monto, propuesta.get("moneda") or "") if monto is not None else ""
     que = f"que te llegaron {llego} de {quien}" if llego else f"que te llegó un pago de {quien}"
+    # 💵 10-oct: el pago ya no se olvida. Alejandra no se lo vuelve a cobrar y, cuando anote lo que
+    # compró, se le pregunta a ella si es por eso.
     wa = (
-        f"💬 Anoté {que}, pero no tiene ningún pedido sin pagar, así que no registré nada. "
-        "Si es un abono o algo aparte, lo resuelves tú."
+        f"💬 Anoté {que}, pero todavía no hay un pedido anotado. Alejandra no se lo vuelve a cobrar, "
+        "y cuando anote lo que compró te pregunto si es por eso. Si es un abono o algo aparte, lo "
+        "resuelves tú."
     )
-    nota = f"Entendí {que}, pero no tiene ningún pedido sin pagar: no se registró nada. Se le avisó a una persona."
+    nota = (
+        f"Entendí {que}, pero aún no hay pedido: queda esperando a que se anote lo que compró "
+        "(no se le vuelve a cobrar). Se le avisó a una persona."
+    )
     return wa, nota
+
+
+async def _pedidos_por_cobrar_de(session, telefono: str) -> list[int]:
+    """Los pedidos de este cliente que todavía se le podrían cobrar (14 días): a ellos puede ir un pago
+    que la dueña dijo cuando aún no había pedido."""
+    from datetime import timedelta
+
+    from sqlalchemy import select
+
+    from app.agent.montos_duena import DIAS_ACUERDO
+    from app.models import Pedido, now_utc
+
+    try:
+        return list((await session.execute(
+            select(Pedido.id).where(
+                Pedido.cliente_telefono == telefono,
+                Pedido.estado.in_(("pendiente", "esperando_pago", "confirmado", "preparando")),
+                Pedido.created_at >= now_utc() - timedelta(days=DIAS_ACUERDO),
+            ).order_by(Pedido.created_at.desc())
+        )).scalars().all())
+    except Exception:  # noqa: BLE001
+        logger.warning("No se pudieron leer los pedidos por cobrar de %s", telefono)
+        return []
+
+
+async def _pago_suelto_vencido(session, inter) -> bool:
+    """¿Un pago sin pedido ya no vale? Pasaron 14 días o se cerró una venta después (la regla de
+    `montos_duena._desde`). Ante la duda, NO vence (se sigue esperando)."""
+    from app.agent.montos_duena import DIAS_ACUERDO, _desde
+
+    creado = getattr(inter, "created_at", None)
+    if creado is None:
+        return False
+    try:
+        return creado < await _desde(session, inter.cliente_telefono, DIAS_ACUERDO)
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _texto_no_cuadra(propuesta: dict, nombre: str | None, telefono: str, vivos: list) -> tuple[str, str]:
     """💰 Lo que se le dice a la dueña (y se anota en la Bandeja) cuando un pago NO CUADRA. Devuelve
     (whatsapp, nota). Sin preguntas: ese caso lo resuelve ella con su clienta."""
     from app.agent.expediente import _fmt
-    from app.agent.tools import monto_en_efectivo
+    from app.agent.tools import monto_en_dolares
 
     quien = _quien(nombre, telefono)
     monto = propuesta.get("monto")
@@ -2624,8 +2667,9 @@ def _texto_no_cuadra(propuesta: dict, nombre: str | None, telefono: str, vivos: 
         total = getattr(ped, "total", None)
         precio = _fmt(total, "$") if total is not None else "sin total"
         if total is not None:
-            envio = getattr(ped, "costo_envio", 0) or 0
-            precio += f" ({_fmt(monto_en_efectivo(total, envio), '$')} pagando en dólares)"
+            en_dolares = monto_en_dolares(ped, total)
+            if float(en_dolares) != float(total):  # con el precio de ella no hay 20% que mostrar
+                precio += f" ({_fmt(en_dolares, '$')} pagando en dólares)"
         razon = f"llegaron {llego} y {_ref_pedido(ped)} es de {precio}"
     else:
         lista = "; ".join(
@@ -2712,13 +2756,19 @@ async def _preguntar_pagos_sin_candado() -> int:
                 and cola(i.cliente_telefono) != cola_duena  # la dueña nunca es cliente
             ]
             hay_abierta = any(_pregunta_vigente(i.propuesta or {}, ahora) for i in pagos)
+            # 💵 10-oct (SESIONES (48)): un pago que llegó SIN pedido anotado ya no se cierra: queda
+            # esperando (`sin_pedido`) a que Alejandra anote lo que compró. Por eso se vuelve a revisar.
             por_decidir = [
                 i for i in pagos
-                if not (i.propuesta or {}).get("pregunta_wamid") and not (i.propuesta or {}).get("avisada_at")
+                if not (i.propuesta or {}).get("pregunta_wamid")
+                and (not (i.propuesta or {}).get("avisada_at") or (i.propuesta or {}).get("sin_pedido"))
             ]
             for i in por_decidir:
                 p = dict(i.propuesta or {})
                 ids = p.get("candidatos") or ([p["pedido_id"]] if p.get("pedido_id") else [])
+                if not ids:
+                    # Sin pedido cuando se leyó: se buscan los de AHORA (Alejandra pudo anotarlo después).
+                    ids = await _pedidos_por_cobrar_de(session, i.cliente_telefono)
                 vivos = []
                 for pid in ids:
                     ped = await session.get(Pedido, pid)
@@ -2733,8 +2783,13 @@ async def _preguntar_pagos_sin_candado() -> int:
                     select(Cliente.nombre).where(Cliente.telefono == i.cliente_telefono)
                 )).scalars().first()
                 if not vivos:
+                    if p.get("sin_pedido"):
+                        # Ya se le avisó; espera al pedido. Pasado su plazo (o tras un cierre), se cierra.
+                        if await _pago_suelto_vencido(session, i):
+                            plan.append({"id": i.id, "accion": "vencer"})
+                        continue
                     wa, nota = _texto_sin_pedido(p, nombre, i.cliente_telefono)
-                    plan.append({"id": i.id, "accion": "cerrar", "texto": wa, "nota": nota})
+                    plan.append({"id": i.id, "accion": "sin_pedido", "texto": wa, "nota": nota})
                     continue
                 cuadran = [v for v in vivos if await pago_cuadra(v, p.get("monto"), p.get("moneda") or "")]
                 if len(cuadran) == 1:
@@ -2753,10 +2808,18 @@ async def _preguntar_pagos_sin_candado() -> int:
     pregunto = hay_abierta  # UNA pregunta a la vez; los avisos de "no cuadra" no esperan turno
     for paso in plan:
         try:
-            if paso["accion"] == "cerrar":
-                # Antes se cerraba EN SILENCIO y ella no sabía si el bot la había entendido. Ahora se
-                # le dice una vez; si el WhatsApp no sale (ventana cerrada) la propuesta queda
-                # pendiente y se reintenta en la próxima apertura, sin molestar a nadie más.
+            if paso["accion"] == "vencer":
+                async with factory() as s2:
+                    inter = await s2.get(Intervencion, paso["id"])
+                    if inter is not None and inter.estado == "pendiente":
+                        ex.cerrar_propuesta(inter, usuario="sistema", resultado="descartada")
+                        await s2.commit()
+                continue
+            if paso["accion"] == "sin_pedido":
+                # Se le dice UNA vez que se entendió. 💵 10-oct: la propuesta ya NO se cierra: queda
+                # `sin_pedido` hasta que Alejandra anote lo que compró (entonces se le pregunta a qué
+                # pedido va) o hasta que venza. Mientras tanto Alejandra no cobra eso otra vez. Si el
+                # WhatsApp no sale (ventana cerrada), se reintenta en la próxima apertura.
                 try:
                     await enviar_texto(destino, paso["texto"])
                 except Exception as e:  # noqa: BLE001
@@ -2766,8 +2829,9 @@ async def _preguntar_pagos_sin_candado() -> int:
                     inter = await s2.get(Intervencion, paso["id"])
                     if inter is not None and inter.estado == "pendiente":
                         inter.detalle = "\n".join(filter(None, [inter.detalle, f"· {paso['nota']}"]))[:1500]
-                        inter.propuesta = {**(inter.propuesta or {}), "avisada_at": now_utc().isoformat()}
-                        ex.cerrar_propuesta(inter, usuario="sistema", resultado="descartada")
+                        inter.propuesta = {
+                            **(inter.propuesta or {}), "avisada_at": now_utc().isoformat(), "sin_pedido": True,
+                        }
                         await s2.commit()
                 enviados += 1
                 continue

@@ -16,6 +16,7 @@ import httpx
 from sqlalchemy import select
 
 from app.agent.hoja import HojaDeHechos
+from app.agent.montos_duena import montos_de_la_duena_en_el_turno
 from app.agent.system_prompt import (
     construir_partes_prompt,
     leer_config_agente,
@@ -2660,6 +2661,13 @@ async def responder(
     # Los TOTALES solo los pone una HERRAMIENTA. El catálogo autoriza precios SUELTOS, no sumas:
     # sin esto, "$20 + $5 = $25" se colaba porque $25 es el precio del Pan Keto.
     usd_de_herramienta: set[float] = set()
+    # 💵 …o WHUILIANNY: lo que ella le dijo al cliente en el chat ("son 36", "te lo dejo en 32",
+    # también en 🎤 nota de voz) es un precio y un total de verdad (SESIONES (48)). Sin esto, la red
+    # tomaba por inventado el precio que Alejandra seguía de ella. Ella escribe sin "$": por eso se
+    # leen sus números pelados, solo de SUS mensajes.
+    _de_la_duena = montos_de_la_duena_en_el_turno(historial, dinamico)
+    usd_ok |= _de_la_duena
+    usd_de_herramienta |= _de_la_duena
     # 🔴 UN CUPO DE CORRECCIÓN **POR RED**, NO UNO COMPARTIDO (auditoría 2026-08-02, PRM-12).
     # Hasta hoy las tres redes de abajo (dinero · datos sensibles · frase prohibida) se repartían
     # un solo `corregido`, aunque cada docstring promete "una oportunidad de corregirse". La
@@ -3477,6 +3485,11 @@ async def _responder_dos_agentes(
     estable, dinamico = await construir_partes_prompt(
         nombre_cliente, telefono, activas=activas, quien="operador"
     )
+    # 💵 Lo que dijo Whuilianny (historial + PUNTO DE PARTIDA) es precio y total de verdad (ver
+    # `responder`): entra en la hoja para que sobreviva a cada `listas_blancas()` del turno.
+    _de_la_duena = montos_de_la_duena_en_el_turno(historial, dinamico)
+    hoja.montos_usd |= _de_la_duena
+    hoja.totales_usd |= _de_la_duena
     messages: list = [
         {
             "role": "system",
@@ -3987,6 +4000,9 @@ async def redactar_mensaje(
         usd_ok, bs_ok = autorizados_por_moneda(estable, dinamico)
         usd_ok |= usd_sit
         bs_ok |= bs_sit
+        # 💵 Lo que dijo Whuilianny en el chat (ver `responder`). En la LISTA CERRADA de abajo no
+        # entra: ahí el código ya sabe cuánto se cobró.
+        usd_ok |= montos_de_la_duena_en_el_turno(historial, dinamico)
     else:
         # LISTA CERRADA, y CADA MONEDA EN SU SACO: lo que el código cobró en dólares solo autoriza
         # dólares, y lo que cobró en bolívares solo autoriza bolívares. Mezclarlos era justo el bug

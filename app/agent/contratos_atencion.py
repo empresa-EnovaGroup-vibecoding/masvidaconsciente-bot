@@ -221,3 +221,6 @@ class PropuestaExpediente(BaseModel):
     candidatos: list[int] = Field(default_factory=list)
     no_cuadra: bool = False
     avisada_at: str | None = None
+    # 💵 10-oct (SESIONES (48)): el pago llegó cuando aún no había pedido. Ya no se cierra: espera a que
+    # Alejandra anote lo que compró (y mientras tanto no se le vuelve a cobrar).
+    sin_pedido: bool = False

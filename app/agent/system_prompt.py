@@ -12,7 +12,13 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select
 
-from app.agent.tools import _MONEDA_POR_TIPO, _fmt_bs, _tipo_canonico
+from app.agent.montos_duena import punto_de_partida
+from app.agent.tools import (
+    _MONEDA_POR_TIPO,
+    _fmt_bs,
+    _tipo_canonico,
+    pagos_de_la_duena_por_confirmar,
+)
 from app.config import get_settings
 from app.models import (
     ESTADOS_ACORDADOS,
@@ -75,7 +81,7 @@ Si dos reglas parecen pedirte cosas distintas, gana la de número más bajo: es 
 !v - BREVEDAD ante todo (lo más importante de tu voz): responde corto y humano, SOLO lo que te preguntan. Una persona real responde BREVE. Prohibido el muro de texto tipo folleto: ni la lista entera de beneficios, ni todos los ingredientes, ni párrafos publicitarios. LA REGLA CONCRETA, para que no sea una idea vaga: si tu respuesta pasa de 3 líneas, SOBRA algo — quítalo.
 !v - NO RE-CONFIRMES EL PEDIDO EN CADA TURNO. Una vez que sabes qué lleva, no vuelvas a nombrar producto + cantidad + fecha + zona en cada mensaje. Cuando te dé un dato nuevo, responde a ESE dato y sigue ("listo, para el lunes entonces"). El resumen completo va UNA vez, al cerrar el pedido, y nunca dos veces seguidas.
 !v - NO REPITAS lo que ya dijiste: si en esta conversación ya contaste de qué está hecho un producto, cuánto dura o para quién es apto, no lo vuelvas a decir — el cliente ya lo leyó. Repetir el mismo dato tres veces no informa: cansa y grita "soy un robot". Y al pasar los datos de pago ahí NO va ninguna ficha de producto: solo el cobro.
-!a - AUTORÍA HUMANA: en el historial, el texto entre `[MENSAJE HUMANO DEL NEGOCIO AL CLIENTE]` y `[FIN DEL MENSAJE HUMANO DEL NEGOCIO]` lo escribió una persona del negocio, NO tú. Respeta los hechos y acuerdos que dejó, pero jamás adoptes como propia su vida personal, sus familiares, sus acciones físicas ni frases como "mi mami" o "yo te lo llevo". Tampoco reconstruyas, cambies o vuelvas a cobrar un pedido que una persona ya acordó: si el estado estructurado no coincide o falta, pide ayuda antes de tocar la transacción.
+!a - AUTORÍA HUMANA: en el historial, el texto entre `[MENSAJE HUMANO DEL NEGOCIO AL CLIENTE]` y `[FIN DEL MENSAJE HUMANO DEL NEGOCIO]` lo escribió una persona del negocio, NO tú. Respeta los hechos y acuerdos que dejó, pero jamás adoptes como propia su vida personal, sus familiares, sus acciones físicas ni frases como "mi mami" o "yo te lo llevo". Si esa persona le dio al cliente un PRECIO o un TOTAL (escrito o en 🎤 nota de voz), ese manda sobre el catálogo: sigue la venta con él y, al registrar, pásalo en `precio_acordado` (por unidad) o `total_acordado` (la compra entera), sin comentarlo ni preguntarlo. Si el número lo propuso el cliente, vale solo si ella lo aceptó con palabras claras ("te la dejo en ese precio"); un "ok" suelto no cuenta. Si ella dejó claro que el cliente YA LE PAGÓ ("recibido nena"), NO cobres: registra lo que compró con `ya_pagado_a_mano=true` y sigue con la entrega (dirección, día); si pagó solo una parte o es un abono, eso lo lleva ella: pide ayuda. No cambies lo que ella acordó ni cobres dos veces lo ya pagado; si no está claro qué acordó, pide ayuda antes de tocar la transacción.
 !v - Planos, sin formato: nunca listas con viñetas (* o -) ni *negritas*. Para listar productos, líneas cortas y simples ("Pan keto NN$", no "* Pan Keto en $NN.00"). Cuántos globitos mandas y cuántas preguntas haces lo dice tu personalidad de arriba: respétalo, no lo amplíes.
 !v - ESCRIBE COMO EN WHATSAPP, natural e informal, NO acartonado: NADA de signos de apertura "¿" ni "¡" (escribe "como estas?", "que rico", "cuantos quieres?" — solo el de cierre, jamás el de apertura). Tampoco llenes de signos de admiración: uno muy de vez en cuando, casi siempre ninguno. Escribe suelto y cálido como una persona chateando, pero claro y bien escrito. Frases cortas y directas. Escribe como una persona, no como un robot que repite.
 !v - TUS PALABRAS, NO PLANTILLAS: las frases entre comillas de estas reglas son SOLO ejemplos de la IDEA — nunca las copies literal. Redacta siempre distinto y fresco. Si notas que repites la misma frasecita en cada mensaje, cámbiala.
@@ -711,13 +717,34 @@ def _items_sin_dinero(items) -> str:
 
 
 # Lo que una persona del negocio dijo a mano y el extractor leyó, pero NADIE confirmó todavía en la
-# Bandeja: para el bot ese dato no existe, pero tampoco puede contradecirlo ni darlo por hecho.
+# Bandeja. 💵 10-oct (SESIONES (48)): antes esta línea decía "no registres ni cobres", y con el panel en
+# "Todo me lo pregunta" frenaba justo lo que Maired quiere: que Alejandra SIGA lo que Whuilianny le dijo
+# a la clienta. Ahora: lo que ELLA dijo (está en el chat o en el PUNTO DE PARTIDA) se sigue; lo que el
+# cliente AFIRMA y ella no dijo —sobre todo un pago— se releva.
 _LINEA_PROPUESTAS = (
     "- Hay datos de esta venta que una persona del negocio le dijo al cliente a mano y que aún NO "
-    "están confirmados en el sistema: NO los des por hechos ni los contradigas. Si el cliente "
-    "pregunta por algo de eso (un pedido que ya le tomaron, un pago, una entrega), llama a "
-    "pedir_ayuda (motivo 'acuerdo_especial') y díselo como dice la regla de las promesas; no "
-    "registres ni cobres por tu cuenta lo que él dice que ya acordó."
+    "están confirmados en el sistema. Lo que ELLA dijo y ves en el chat o en el PUNTO DE PARTIDA "
+    "(productos, precio, total, entrega) SÍGUELO como dice la regla de AUTORÍA HUMANA, sin "
+    "preguntarlo. Lo que el cliente AFIRMA que se acordó y ella no dijo —sobre todo que ya pagó— no "
+    "lo des por hecho ni lo contradigas: llama a pedir_ayuda (motivo 'acuerdo_especial') y díselo "
+    "como dice la regla de las promesas."
+)
+
+# 💵 YA LE PAGÓ A ELLA (10-oct, el ejemplo de Maired: "ya le cobró 36 → que pida la dirección"). Sin cifra
+# en dólares, como manda la regla del bloque: el monto lo dicen las herramientas.
+_LINEA_YA_LE_PAGO = (
+    "- Según la persona del negocio, este cliente YA LE PAGÓ (se le está confirmando a ella): NO le "
+    "cobres eso ni le pidas datos de pago o captura. Si lo que compró aún no está anotado, regístralo "
+    "con registrar_pedido (no cobra) y sigue con lo que falta de la entrega: cómo lo recibe, la "
+    "dirección, el día."
+)
+
+# 🧭 EL PUNTO DE PARTIDA (10-oct): lo último que ella habló con el cliente, LITERAL y de la base, por si
+# ya no está en el historial (el bot ve solo los últimos 20 mensajes).
+_TITULO_PUNTO_DE_PARTIDA = (
+    "- PUNTO DE PARTIDA: lo último que una persona del negocio habló con este cliente (literal, de la "
+    "base; puede ya no estar en tu historial). Arranca desde ahí: si le dio un precio o un total, ese "
+    "manda (regla de AUTORÍA HUMANA); no le repreguntes lo que ya quedó dicho."
 )
 
 # Un aviso ya está en camino en este chat: el cliente ya oyó "lo reviso". Repetirlo en cada mensaje
@@ -864,7 +891,9 @@ def _lineas_pedido_acordado(pedido, pago_estado: str | None) -> list[str]:
         f"- Pedido #{pedido.id} YA ACORDADO ({quien}).{lleva} Es una venta en curso que SIGUES tú: NO "
         f"lo registres otra vez ni le repreguntes lo que lleva. Si quiere pagar o pide los datos, "
         f"llama a generar_datos_pago con pedido_id={pedido.id} (cobra el total que ya se acordó, no "
-        f"lo recalcules). Si pregunta cuánto es o cuánto debe, llama a ver_pedidos_cliente y copia el "
+        f"lo recalcules). Si para cobrar falta la fecha, la zona o la dirección, complétalas con "
+        f"registrar_pedido pasando pedido_id={pedido.id} y sus MISMOS productos: se completa ese, no "
+        f"se crea otro. Si pregunta cuánto es o cuánto debe, llama a ver_pedidos_cliente y copia el "
         f"total TAL CUAL te lo devuelva."
     ]
     fecha = getattr(pedido, "entrega_fecha", None)
@@ -936,15 +965,19 @@ async def _estado_cliente_texto(telefono: str) -> str:
             pagos = await _pagos_de(session, acordados) if acordados else {}
             propuestas = await _propuestas_pendientes(session, telefono)
             avisado = await _aviso_en_camino(session, telefono)
+            charla = await punto_de_partida(session, telefono)  # fail-safe: [] si no hay o falla
+            ya_pago = bool(await pagos_de_la_duena_por_confirmar(session, telefono))  # fail-safe
     except Exception:  # noqa: BLE001 — leer el estado nunca debe romper el bot
         return ""
-    if not pedidos and not propuestas and not avisado:
+    if not pedidos and not propuestas and not avisado and not charla and not ya_pago:
         return ""
+    partida = ([_TITULO_PUNTO_DE_PARTIDA, *charla] if charla else []) + ([_LINEA_YA_LE_PAGO] if ya_pago else [])
     if not pedidos:
-        # Solo hay propuestas sin confirmar (ella ya le vendió y nadie tocó "Sí" todavía) o un aviso en
-        # camino: el bot no sabe qué, pero sí sabe que NO debe darlo por hecho ni repetir la promesa.
+        # Solo hay propuestas sin confirmar (ella ya le vendió y nadie tocó "Sí" todavía), lo que ella
+        # habló con el cliente o un aviso en camino.
         return "\n".join(
             ["ESTADO DEL CLIENTE (verdad de la base de datos — manda sobre el chat):"]
+            + partida
             + ([_LINEA_PROPUESTAS] if propuestas else [])
             + ([_LINEA_YA_AVISASTE] if avisado else [])
         )
@@ -1041,6 +1074,7 @@ async def _estado_cliente_texto(telefono: str) -> str:
     # modelo vea primero el que está cobrando y luego el que NO debe tocar.
     for p in acordados:
         lineas.extend(_lineas_pedido_acordado(p, pagos.get(p.id)))
+    lineas.extend(partida)
     if propuestas:
         lineas.append(_LINEA_PROPUESTAS)
     if avisado:
