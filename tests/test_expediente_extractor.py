@@ -24,7 +24,7 @@ import pytest
 
 from app.agent import expediente as ex
 from app.agent.contratos_atencion import Contexto, EventoDuena, ItemDuena, PropuestaExpediente
-from app.models import Conocimiento, Intervencion, Pago, Pedido
+from app.models import Conocimiento, Pago, Pedido
 
 TEL = "584240000000"
 HOY = date(2026, 9, 22)  # martes
@@ -460,32 +460,29 @@ def _ventana_pedido():
     return ex.Ventana(owner=[_msg(3, "owner", "te anoté 2 quesillos, son 36$", 2)], ultimo_cliente="quiero quesillo")
 
 
-async def test_en_modo_propuestas_lo_claro_tambien_va_a_la_bandeja(contexto):
+async def test_un_pedido_claro_ya_no_deja_tarjeta_lo_sigue_alejandra(contexto):
+    """🧠 UN SOLO CEREBRO (Maired, 10-oct, SESIONES (48)): antes un pedido claro iba a la Bandeja en
+    `propuestas`. Ahora la venta la entiende Alejandra leyendo el chat: el lector no deja tarjeta."""
     ses = _Sesion()
     llm = _llm_con({"eventos": [{"tipo": "pedido_tomado", "items": [{"nombre_literal": "quesillos", "cantidad_literal": "2"}],
                                  "total_literal": "36$", "evidencia": "te anoté 2 quesillos, son 36$"}]})
-    r = await ex.procesar_ventana(lambda: ses, TEL, _ventana_pedido(), contexto, llm=llm, modelo="m",
-                                  escritura="propuestas", franjas=FRANJAS, hoy=HOY)
-    assert r == [("pedido_tomado", "propuesta")]
-    (inter,) = ses.added
-    assert isinstance(inter, Intervencion) and inter.motivo == ex.MOTIVO_PROPUESTA
-    assert inter.propuesta["tipo"] == "pedido_tomado" and inter.propuesta["items"][0]["variante_id"] == 11
-    assert inter.propuesta["evidencia_mensaje_id"] == 3 and inter.mensaje_cliente == "quiero quesillo"
-    assert "2 × Quesillo" in inter.detalle and "¿correcto?" in inter.detalle and "10:02" in inter.detalle
-    assert ses.commits == 1
+    for escritura in ("propuestas", "auto"):
+        r = await ex.procesar_ventana(lambda: ses, TEL, _ventana_pedido(), contexto, llm=llm, modelo="m",
+                                      escritura=escritura, franjas=FRANJAS, hoy=HOY)
+        assert r == [("pedido_tomado", "lo_sigue_alejandra")]
+    assert ses.added == [] and ses.commits == 0
 
 
-async def test_una_propuesta_pendiente_igual_no_se_duplica(contexto):
-    ya = SimpleNamespace(propuesta={"tipo": "pedido_tomado", "evidencia_mensaje_id": 3})
+async def test_un_pago_pendiente_igual_no_se_duplica(contexto):
+    ya = SimpleNamespace(propuesta={"tipo": "pago_confirmado", "evidencia_mensaje_id": 3})
     ses = _Sesion(pendientes=[ya])
-    llm = _llm_con({"eventos": [{"tipo": "pedido_tomado", "items": [{"nombre_literal": "quesillos", "cantidad_literal": "2"}],
-                                 "total_literal": "36$", "evidencia": "te anoté 2 quesillos, son 36$"}]})
+    llm = _llm_con({"eventos": [{"tipo": "pago_confirmado", "evidencia": "son 36$"}]})
     r = await ex.procesar_ventana(lambda: ses, TEL, _ventana_pedido(), contexto, llm=llm, modelo="m",
                                   escritura="propuestas", franjas=FRANJAS, hoy=HOY)
-    assert r == [("pedido_tomado", "repetida")] and ses.added == []
+    assert r == [("pago_confirmado", "repetida")] and ses.added == []
 
 
-async def test_en_auto_lo_claro_se_escribe_y_lo_dudoso_se_propone(contexto, monkeypatch):
+async def test_del_lector_solo_el_pago_va_a_la_bandeja(contexto, monkeypatch):
     aplicado = AsyncMock(return_value={"tipo": "pedido_tomado", "pedido_id": 901})
     monkeypatch.setattr(ex, "aplicar_propuesta", aplicado)
     ses = _Sesion()
@@ -497,10 +494,22 @@ async def test_en_auto_lo_claro_se_escribe_y_lo_dudoso_se_propone(contexto, monk
     ]})
     r = await ex.procesar_ventana(lambda: ses, TEL, _ventana_pedido(), contexto, llm=llm, modelo="m",
                                   escritura="auto", franjas=FRANJAS, hoy=HOY)
-    assert r == [("pedido_tomado", "escribe"), ("pago_confirmado", "propuesta"), ("nada", "descarta")]
-    aplicado.assert_awaited_once()
-    assert aplicado.await_args.kwargs["usuario"] == "extractor"
+    assert r == [("pedido_tomado", "lo_sigue_alejandra"), ("pago_confirmado", "propuesta"), ("nada", "descarta")]
+    aplicado.assert_not_awaited()  # en `auto` ya no escribe pedidos solo
     assert [a.motivo for a in ses.added] == [ex.MOTIVO_PROPUESTA]  # solo el pago fue a la Bandeja
+    assert ses.added[0].propuesta["tipo"] == "pago_confirmado"
+
+
+async def test_lo_que_no_esta_en_el_catalogo_se_sigue_avisando(contexto):
+    ses = _Sesion()
+    llm = _llm_con({"eventos": [{"tipo": "pedido_tomado", "items": [{"nombre_literal": "granola", "cantidad_literal": "1"}],
+                                 "evidencia": "te anoté 1 granola"}]})
+    ventana = ex.Ventana(owner=[_msg(3, "owner", "te anoté 1 granola", 2)], ultimo_cliente="quiero granola")
+    fuera: list[str] = []
+    await ex.procesar_ventana(lambda: ses, TEL, ventana, contexto, llm=llm, modelo="m",
+                              escritura="propuestas", franjas=FRANJAS, hoy=HOY, fuera_de_catalogo=fuera)
+    assert fuera and "granola" in " ".join(fuera).lower()
+    assert ses.added == []
 
 
 async def test_un_contrato_invalido_del_modelo_no_tumba_nada(contexto):

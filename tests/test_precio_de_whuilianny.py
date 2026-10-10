@@ -51,13 +51,23 @@ class _Res:
     def scalar_one_or_none(self):
         return self._uno
 
+    def scalar(self):
+        return self._uno
+
 
 class _Sesion:
     """Contesta según la TABLA de la consulta. Los pedidos de la dueña (los que filtran por
     `origen`) y los abiertos se configuran aparte; el candado del duplicado ve los de la dueña."""
 
-    def __init__(self, mensajes_duena=(), de_la_duena=(), abiertos=(), zona=None, falla_mensajes=False):
-        self.mensajes = list(mensajes_duena)
+    def __init__(self, mensajes_duena=(), de_la_duena=(), abiertos=(), zona=None, falla_mensajes=False,
+                 cierre_pago=None):
+        # La charla en orden: un texto suelto es de ella; (rol, texto) para la clienta. La consulta
+        # real la devuelve de la más nueva a la más vieja: por eso se invierte.
+        self.mensajes = [
+            (m[0], m[1], None) if isinstance(m, tuple) else ("owner", m, None) for m in mensajes_duena
+        ][::-1]
+        self.cierre_pago = cierre_pago
+        self.sql_mensajes = ""
         self.de_la_duena = list(de_la_duena)
         self.abiertos = list(abiertos)
         self.zona = zona
@@ -73,11 +83,12 @@ class _Sesion:
         if "FROM mensajes" in sql:
             if self.falla_mensajes:
                 raise RuntimeError("la base tosió")
+            self.sql_mensajes = str(q.compile(compile_kwargs={"literal_binds": True}))
             return _Res(self.mensajes)
         if "FROM clientes" in sql:
             return _Res(uno=SimpleNamespace(telefono=TEL))
         if "FROM pagos" in sql:
-            return _Res([])
+            return _Res([], uno=self.cierre_pago if "max(" in sql else None)
         if "FROM pedidos" in sql:
             if "pedidos.origen =" in sql or "NOT IN" in sql:
                 return _Res(self.de_la_duena)
@@ -494,3 +505,89 @@ async def test_un_si_tardio_en_la_bandeja_no_crea_el_gemelo_de_lo_que_ya_registr
     del_bot = SimpleNamespace(id=777, items=[{"variante_id": 21, "cantidad": 1}])
     with pytest.raises(ValueError, match="#777"):
         await expediente._crear_pedido_duena(_SesionGemelo([del_bot]), _propuesta(32.0), "prueba")
+
+
+# ══ 8) LA ACEPTACIÓN CLARA (Maired, 10-oct) ═════════════════════════════════════════
+#
+# "¿me la dejas en 30?" + "sí nena, te la dejo en ese precio" → vale el 30. Un "ok nena" suelto no.
+
+def test_que_cuenta_como_aceptacion_clara():
+    for si in ("sí nena, te la dejo en ese precio", "Trato hecho mi amor", "Así te la dejo, bella",
+               "dale, en ese precio", "te lo acepto", "ok, acepto el precio"):
+        assert montos_duena.acepta_lo_propuesto(si), si
+    for no in ("ok nena", "dale", "sí", "Ok bb está bien", "el lunes te la dejo", "te la dejo mañana"):
+        assert not montos_duena.acepta_lo_propuesto(no), no
+
+
+async def test_si_ella_acepta_claro_el_precio_de_la_clienta_se_registra():
+    ses = _Sesion(mensajes_duena=[("user", "hola, me la dejas en 30?"), "sí nena, te la dejo en ese precio"])
+    r = await tools.registrar_pedido(ses, TEL, [{"variante_id": 21, "cantidad": 1, "precio_acordado": 30}])
+    assert r["ok"] is True and r["total_usd"] == 30.0
+
+
+async def test_con_un_ok_nena_el_precio_de_la_clienta_no_vale():
+    ses = _Sesion(mensajes_duena=[("user", "me la dejas en 30?"), "ok nena"])
+    r = await tools.registrar_pedido(ses, TEL, [{"variante_id": 21, "cantidad": 1, "precio_acordado": 30}])
+    assert r["ok"] is False and "acuerdo_especial" in r["nota"] and ses.agregados == []
+
+
+async def test_el_lunes_te_la_dejo_no_es_aceptar_un_precio():
+    ses = _Sesion(mensajes_duena=[("user", "me la dejas en 30?"), "el lunes te la dejo"])
+    r = await tools.registrar_pedido(ses, TEL, [{"variante_id": 21, "cantidad": 1, "precio_acordado": 30}])
+    assert r["ok"] is False
+
+
+def test_la_red_tambien_acepta_lo_que_ella_acepto_aunque_el_bot_hable_en_medio():
+    historial = [
+        {"role": "user", "content": "me la dejas en 30?"},
+        {"role": "assistant", "content": "Déjame ver, un momentico"},  # el bot no corta la pareja
+        {"role": "assistant", "content": mensaje_owner_para_historial("sí nena, te la dejo en ese precio")},
+    ]
+    assert 30.0 in montos_duena.montos_de_la_duena_en_el_turno(historial)
+    historial[-1] = {"role": "assistant", "content": mensaje_owner_para_historial("ok nena")}
+    assert 30.0 not in montos_duena.montos_de_la_duena_en_el_turno(historial)
+
+
+def test_la_red_lee_la_aceptacion_en_el_punto_de_partida():
+    dinamico = (
+        "ESTADO DEL CLIENTE:\n"
+        f"  · 09/10 {montos_duena.MARCA_CLIENTE}me la dejas en 30?»\n"
+        f"  · 09/10 {montos_duena.MARCA_ELLA}sí nena, en ese precio»"
+    )
+    assert 30.0 in montos_duena.montos_de_la_duena_en_el_turno([], dinamico)
+
+
+# ══ 9) VALE HASTA PAGAR O ENTREGAR (Maired, 10-oct) ═════════════════════════════════
+
+async def test_lo_que_se_hablo_antes_de_un_pago_confirmado_ya_no_vale():
+    """Ella dio el 32 para una venta que ya se pagó: en la compra siguiente, catálogo. La lectura arranca
+    en el cierre (el pago confirmado), no 14 días atrás."""
+    from datetime import timedelta
+
+    from app.models import now_utc
+
+    cierre = now_utc() - timedelta(hours=3)
+    ses = _Sesion(mensajes_duena=["te la dejo en 32"], cierre_pago=cierre)
+    await montos_de_la_duena(ses, TEL)
+    assert cierre.strftime("%Y-%m-%d %H:%M:%S") in ses.sql_mensajes
+
+
+async def test_sin_ventas_cerradas_se_miran_14_dias():
+    from datetime import timedelta
+
+    from app.models import now_utc
+
+    ses = _Sesion(mensajes_duena=["te la dejo en 32"])
+    await montos_de_la_duena(ses, TEL)
+    hace_14 = (now_utc() - timedelta(days=14)).strftime("%Y-%m-%d")
+    assert hace_14 in ses.sql_mensajes
+
+
+async def test_un_cierre_de_hace_un_mes_no_alarga_la_ventana():
+    from datetime import timedelta
+
+    from app.models import now_utc
+
+    viejo = now_utc() - timedelta(days=30)
+    desde = await montos_duena._desde(_Sesion(cierre_pago=viejo), TEL, 14)
+    assert desde > viejo and (now_utc() - desde) <= timedelta(days=14, minutes=1)

@@ -64,6 +64,10 @@ HUECO_VENTANA_MIN = 5
 # sobre las conversaciones reales tiene que dar ≥0,98 de precisión en lo escrito (puerta G6).
 ESCRITURA_DEFAULT = "auto"
 ESCRITURAS = ("off", "propuestas", "auto")
+# 🧠 10-oct (SESIONES (48), Maired: "un solo cerebro"): de lo que lee el lector, solo los PAGOS siguen a la
+# Bandeja y a la pregunta por WhatsApp. Pedidos, precios y entregas los entiende Alejandra leyendo el chat
+# (medido: el lector anotaba mal 3 de cada 4 cosas). Vale para `propuestas` y `auto`; `off` apaga todo.
+TIPOS_DEL_LECTOR = ("pago_confirmado",)
 UMBRAL_AUTO = 0.8
 MARCA_VOZ = "🎤"
 
@@ -660,6 +664,13 @@ async def procesar_ventana(
         if v.accion == "descarta" or v.propuesta is None:
             logger.info("Expediente %s: %s descartado (%s)", telefono, ev.tipo, v.motivo)
             resultados.append((ev.tipo, "descarta"))
+            continue
+        if ev.tipo not in TIPOS_DEL_LECTOR:
+            # 🧠 UN SOLO CEREBRO (Maired, 10-oct): la venta la entiende y la sigue Alejandra leyendo el
+            # chat. El lector ya no deja tarjetas de pedidos, precios ni entregas que nadie confirma y
+            # que chocaban con ella; solo pagos (y el aviso de lo que no está en el catálogo, arriba).
+            logger.info("Expediente %s: %s lo sigue Alejandra (sin tarjeta)", telefono, ev.tipo)
+            resultados.append((ev.tipo, "lo_sigue_alejandra"))
             continue
         p = v.propuesta
         p.resumen = resumen_humano(

@@ -156,8 +156,9 @@ TOOL_SCHEMAS = [
                                         "este cliente un PRECIO POR UNIDAD distinto al del "
                                         "catálogo para este producto (ej. 'el chocolate te lo "
                                         "dejo en 32'): pon ese número, en dólares. Ese precio "
-                                        "manda. Si lo propuso el cliente y ella no lo repitió, NO "
-                                        "lo pongas. El código comprueba que ella lo dijo."
+                                        "manda. También vale si el cliente propuso el número y "
+                                        "ella lo ACEPTÓ con palabras claras ('te la dejo en ese "
+                                        "precio'); un 'ok' suelto NO. El código lo comprueba."
                                     ),
                                 },
                             },
@@ -171,8 +172,9 @@ TOOL_SCHEMAS = [
                             "historial (texto o 🎤 nota de voz), le dijo a este cliente el TOTAL "
                             "de esta compra (ej. 'ok nena, son 36, te lo llevo mañana'): pon ese "
                             "número, en dólares. Ese total manda: no se recalcula ni se le suma el "
-                            "envío. Si lo propuso el cliente y ella no lo repitió, NO lo pongas. "
-                            "El código comprueba que ella lo dijo."
+                            "envío. También vale si el cliente propuso el total y ella lo ACEPTÓ "
+                            "con palabras claras ('trato hecho', 'en ese precio'); un 'ok' suelto "
+                            "NO. El código lo comprueba."
                         ),
                     },
                     "pedido_id": {
@@ -3023,8 +3025,8 @@ def _precio_no_dicho(que: str) -> dict:
         "necesita_ayuda": True,
         "nota": (
             f"⛔ No encuentro {que} en los mensajes de la persona del negocio a este cliente: NO lo "
-            "registres. Un precio distinto al del catálogo solo vale si ELLA lo dijo (que lo pida o "
-            "lo proponga el cliente no cuenta). Dile con naturalidad que lo revisas un momentico, "
+            "registres. Un precio distinto al del catálogo solo vale si ELLA lo dijo, o si aceptó "
+            "con palabras claras el que propuso el cliente (un 'ok' suelto no cuenta). Dile con naturalidad que lo revisas un momentico, "
             "sin nombrar a nadie, y llama a pedir_ayuda (motivo 'acuerdo_especial') diciendo qué "
             "precio se habló. NO le digas un monto."
         ),

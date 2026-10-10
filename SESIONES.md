@@ -54,7 +54,21 @@ relevo); su precio es FINAL: sin el 20% de pagar en dólares.
     lee esa misma sección (`montos_de_la_duena_en_el_turno`).
   - Un "Sí" tardío en la Bandeja ya no crea el gemelo de un pedido que el bot ya registró abierto con los
     mismos productos (`_pedido_abierto_igual`).
-- Tests: `test_precio_de_whuilianny.py` (32). Suite 1428/0.
+- **La lógica cerrada con Maired (10-oct, "para producción, sin cambiar a cada rato"):**
+  - Hallazgo del corpus real (313 conversaciones, 10.555 mensajes de ella, 210 audios; sin IA): "te lo dejo
+    en…" a una clienta = 0 veces por escrito; clientas pidiendo rebaja = 1. Lo normal es "ok nena" y los
+    datos de la venta en los mensajes de la CLIENTA. El precio especial es raro; lo central es que Alejandra
+    lea la venta completa.
+  - 🤝 Aceptación clara: si la clienta propone el número y ella lo acepta con frases fijas ("ese precio",
+    "así te la dejo", "trato hecho", "te lo acepto", "acepto el precio"), vale. "ok/dale/sí" suelto no, y
+    "el lunes te la dejo" tampoco (`montos_duena.acepta_lo_propuesto`, `montos_de_la_charla`).
+  - ⏳ Vale hasta pagar o entregar: la lectura del chat (`_leer_charla`) arranca en el último cierre de una
+    venta de esa clienta (pago confirmado o pedido entregado), con tope de 14 días. El candado y el punto de
+    partida leen lo mismo. `PATCH /pedidos` ahora sella `updated_at` (el "entregado" del panel marca cierre).
+  - 🧠 Un solo cerebro: el lector (`procesar_ventana`) ya no deja tarjetas de pedidos, precios ni entregas
+    (`TIPOS_DEL_LECTOR = ("pago_confirmado",)`); sigue preguntando los pagos por WhatsApp y avisando lo que no
+    está en el catálogo. En `auto` ya no escribe pedidos solo.
+- Tests: `test_precio_de_whuilianny.py` (41) + lector actualizado. Suite 1438/0.
 
 **Sigue:** fusionar → desplegar worker + bot en pruebas (migración 042) → prueba en vivo: desde el número de
 Whuilianny un audio "te la dejo en treinta y dos", y como clienta pedir pagar → cobra $32.

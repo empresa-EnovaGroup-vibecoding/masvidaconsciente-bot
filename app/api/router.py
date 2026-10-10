@@ -467,6 +467,9 @@ async def cambiar_estado(pedido_id: int, datos: EstadoIn, _: str = Depends(usuar
         if pedido is None:
             raise HTTPException(status_code=404, detail="Pedido no encontrado")
         pedido.estado = datos.estado
+        # Sello del cierre: "entregado" desde el panel marca hasta dónde vale lo que Whuilianny
+        # acordó en el chat (montos_duena._desde, SESIONES (48)).
+        pedido.updated_at = now_utc()
         await session.commit()
     return {"ok": True}
 
