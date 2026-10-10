@@ -9,10 +9,10 @@ Este módulo es la ÚNICA fuente de "qué montos dijo ella": los números que ap
 de los últimos días, escritos con cifras ("32", "36$", "son 64") o con palabras, como salen las
 transcripciones de sus audios ("treinta y dos", "treinta y seis con cincuenta").
 
-🔒 Sirve de CANDADO, no de permiso amplio: `registrar_pedido` acepta un precio o un total acordado
-SOLO si el número está aquí. Lo que propuso la CLIENTA ("¿me la dejas en 30?") cuenta solo si
-Whuilianny lo ACEPTA con palabras claras ("te la dejo en ese precio"); un "ok nena" suelto no, porque
-a veces contesta otra cosa (Maired, 10-oct). Y vale hasta que esa venta se pague o se entregue. $0.
+🔒 Sirve de CANDADO contra lo INVENTADO, no de intérprete: `registrar_pedido` acepta un precio o un total
+acordado SOLO si ese número salió en la conversación de esta venta entre la clienta y Whuilianny (y ella
+participó). Qué significa lo que dijeron ("¿me la dejas en 30?" + "ok nena" = sí) lo entiende Alejandra
+leyendo la conversación (SESIONES (49)). Vale hasta que esa venta se pague o se entregue. $0.
 """
 from __future__ import annotations
 
@@ -106,36 +106,21 @@ def montos_dichos(*textos: str) -> set[float]:
     return montos
 
 
-# ─── 🤝 LA ACEPTACIÓN CLARA (10-oct, decisión de Maired) ─────────────────────────────────────
+# ─── 🧠 ENTENDER ES DE ALEJANDRA; EL CÓDIGO SOLO IMPIDE INVENTAR (Maired, 10-oct) ─────────────
 #
-# La clienta propone ("¿me la dejas en 30?") y Whuilianny acepta con palabras claras ("sí nena, te la
-# dejo en ese precio"): ese número cuenta como suyo. Un "ok nena" / "dale" / "sí" suelto NO (a veces
-# contesta otra cosa), y "el lunes te la dejo" tampoco (es de entrega). Frases FIJAS a propósito: con
-# dinero, una regla que se lee igual siempre.
-_ACEPTA = re.compile(
-    r"(ese precio|asi te (lo|la|los|las) dejo|trato hecho|te (lo|la) acepto|acepto el precio)"
-)
-
-
-def acepta_lo_propuesto(texto: str) -> bool:
-    """¿Este mensaje de la dueña ACEPTA con palabras claras lo que acababa de proponer la clienta?"""
-    return bool(_ACEPTA.search(_sin_acentos(texto)))
-
+# Hasta #76 el código interpretaba: el número tenía que estar en un mensaje de ella o ella tenía que
+# usar frases fijas ("ese precio"), y un "ok nena" no contaba. Eso era encasillar: Whuilianny contesta
+# corto ("ok nena", "dale", "sí bb") o por audio, de mil maneras, y ninguna lista las cubre. A QUÉ le
+# está respondiendo lo entiende Alejandra, que lee la conversación completa de las dos. Aquí solo se
+# comprueba que el número SALIÓ en esa conversación (de la clienta o de ella), y que ella participó.
 
 def montos_de_la_charla(charla) -> set[float]:
-    """Los montos que valen como dichos por la dueña en una charla [(rol, texto)] en orden: los de SUS
-    mensajes, y los del mensaje de la clienta que ella acepta con palabras claras justo después. Los
-    mensajes del bot no cortan la pareja ("¿me la dejas en 30?" → bot → "sí nena, en ese precio")."""
-    textos: list[str] = []
-    ultimo_cliente: str | None = None
-    for rol, texto in charla:
-        if rol == "user":
-            ultimo_cliente = texto
-        elif rol == "owner":
-            textos.append(texto)
-            if ultimo_cliente and acepta_lo_propuesto(texto):
-                textos.append(ultimo_cliente)
-            ultimo_cliente = None  # cada propuesta de la clienta se acepta UNA vez, la siguiente
+    """Los montos de una charla [(rol, texto)] entre la clienta y la dueña: todos los números que
+    aparecen en los mensajes de las dos, siempre que la dueña haya escrito al menos una vez. Sin
+    ella en la conversación no hay nada "acordado" que seguir: vacío."""
+    textos = [t for rol, t in charla if rol in ("user", "owner")]
+    if not any(rol == "owner" for rol, _ in charla):
+        return set()
     return montos_dichos(*textos)
 
 
