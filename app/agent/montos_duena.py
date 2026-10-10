@@ -148,6 +148,91 @@ async def montos_de_la_duena(session, telefono: str, dias: int = DIAS_ACUERDO) -
     return montos_dichos(*(str(c or "") for c in filas if str(c or "").strip() != PLACEHOLDER_AUDIO))
 
 
+# ─── 🧭 EL PUNTO DE PARTIDA (10-oct, pregunta de Maired antes de fusionar #76) ─────────────
+#
+# Alejandra ve solo los últimos 20 mensajes (`MAX_TURNOS_HISTORIAL`). Si lo que Whuilianny acordó
+# quedó más atrás, no sabría desde dónde arranca la venta. Aquí se leen de la base sus últimos
+# mensajes del chat, cada uno con lo que la clienta había dicho justo antes, para el bloque de
+# ESTADO DEL CLIENTE. Esa misma línea la lee la red del dinero (`textos_de_la_duena_en_estado`).
+
+MARCA_ELLA = "la persona del negocio: «"
+MARCA_CLIENTE = "el cliente: «"
+_RECORTE = 300
+
+
+def _limpio(texto: str) -> str:
+    """Una línea, sin las comillas que delimitan el literal, recortada."""
+    t = " ".join(str(texto or "").split()).replace("«", '"').replace("»", '"')
+    return t if len(t) <= _RECORTE else t[: _RECORTE - 1] + "…"
+
+
+async def punto_de_partida(session, telefono: str, dias: int = DIAS_ACUERDO, cuantos: int = 4) -> list[str]:
+    """Las líneas del PUNTO DE PARTIDA: los últimos `cuantos` mensajes de la dueña en este chat (texto
+    o 🎤), cada uno con el mensaje del cliente justo anterior. [] si ella no escribió o si la lectura
+    falla (sin dato, la sección no sale; el bot sigue con el historial)."""
+    from sqlalchemy import select
+
+    from app.models import Mensaje, now_utc
+    from app.webhook.parser import PLACEHOLDER_AUDIO
+
+    try:
+        filas = (
+            await session.execute(
+                select(Mensaje.rol, Mensaje.contenido, Mensaje.created_at)
+                .where(
+                    Mensaje.cliente_telefono == telefono,
+                    Mensaje.rol.in_(("user", "owner")),
+                    Mensaje.tipo.in_(("text", "audio")),
+                    Mensaje.created_at >= now_utc() - timedelta(days=dias),
+                )
+                .order_by(Mensaje.created_at.desc())
+                .limit(150)
+            )
+        ).all()
+        filas = [
+            (str(rol), str(contenido or ""), creado)
+            for rol, contenido, creado in reversed(filas)
+            if str(contenido or "").strip() and str(contenido or "").strip() != PLACEHOLDER_AUDIO
+        ]
+    except Exception:  # noqa: BLE001 — sin lectura no hay sección; el turno sigue
+        logger.exception("punto_de_partida: no se pudo leer el chat de %s", telefono)
+        return []
+
+    pares: list[tuple[str, str | None, str]] = []
+    ultimo_cliente: str | None = None
+    for rol, contenido, creado in filas:
+        if rol == "user":
+            ultimo_cliente = contenido
+            continue
+        try:
+            fecha = (creado - timedelta(hours=4)).strftime("%d/%m")
+        except (TypeError, ValueError, AttributeError):
+            fecha = ""
+        pares.append((fecha, ultimo_cliente, contenido))
+        ultimo_cliente = None  # cada pregunta del cliente acompaña a UNA respuesta de ella
+    lineas: list[str] = []
+    for fecha, del_cliente, de_ella in pares[-cuantos:]:
+        cuando = f"{fecha} " if fecha else ""
+        if del_cliente:
+            lineas.append(f"  · {cuando}{MARCA_CLIENTE}{_limpio(del_cliente)}»")
+        lineas.append(f"  · {cuando}{MARCA_ELLA}{_limpio(de_ella)}»")
+    return lineas
+
+
+def textos_de_la_duena_en_estado(texto: str) -> list[str]:
+    """Lo que dijo la dueña según el PUNTO DE PARTIDA del bloque de estado (la parte dinámica del
+    prompt): para que la red del dinero lea lo mismo que lee Alejandra."""
+    return re.findall(re.escape(MARCA_ELLA) + r"(.*?)»", texto or "")
+
+
+def montos_de_la_duena_en_el_turno(historial, dinamico: str = "") -> set[float]:
+    """Los montos que dijo la dueña según lo que Alejandra tiene delante en ESTE turno: su historial
+    y el PUNTO DE PARTIDA del bloque de estado. Es lo que autoriza la red del dinero."""
+    return montos_dichos(
+        *textos_de_la_duena_en_historial(historial), *textos_de_la_duena_en_estado(dinamico)
+    )
+
+
 def lo_dijo_la_duena(monto, montos: set[float]) -> Decimal | None:
     """El monto como Decimal si es mayor que cero y ella lo dijo TAL CUAL; si no, None."""
     try:

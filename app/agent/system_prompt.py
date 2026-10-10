@@ -12,6 +12,7 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select
 
+from app.agent.montos_duena import punto_de_partida
 from app.agent.tools import _MONEDA_POR_TIPO, _fmt_bs, _tipo_canonico
 from app.config import get_settings
 from app.models import (
@@ -711,13 +712,25 @@ def _items_sin_dinero(items) -> str:
 
 
 # Lo que una persona del negocio dijo a mano y el extractor leyó, pero NADIE confirmó todavía en la
-# Bandeja: para el bot ese dato no existe, pero tampoco puede contradecirlo ni darlo por hecho.
+# Bandeja. 💵 10-oct (SESIONES (48)): antes esta línea decía "no registres ni cobres", y con el panel en
+# "Todo me lo pregunta" frenaba justo lo que Maired quiere: que Alejandra SIGA lo que Whuilianny le dijo
+# a la clienta. Ahora: lo que ELLA dijo (está en el chat o en el PUNTO DE PARTIDA) se sigue; lo que el
+# cliente AFIRMA y ella no dijo —sobre todo un pago— se releva.
 _LINEA_PROPUESTAS = (
     "- Hay datos de esta venta que una persona del negocio le dijo al cliente a mano y que aún NO "
-    "están confirmados en el sistema: NO los des por hechos ni los contradigas. Si el cliente "
-    "pregunta por algo de eso (un pedido que ya le tomaron, un pago, una entrega), llama a "
-    "pedir_ayuda (motivo 'acuerdo_especial') y díselo como dice la regla de las promesas; no "
-    "registres ni cobres por tu cuenta lo que él dice que ya acordó."
+    "están confirmados en el sistema. Lo que ELLA dijo y ves en el chat o en el PUNTO DE PARTIDA "
+    "(productos, precio, total, entrega) SÍGUELO como dice la regla de AUTORÍA HUMANA, sin "
+    "preguntarlo. Lo que el cliente AFIRMA que se acordó y ella no dijo —sobre todo que ya pagó— no "
+    "lo des por hecho ni lo contradigas: llama a pedir_ayuda (motivo 'acuerdo_especial') y díselo "
+    "como dice la regla de las promesas."
+)
+
+# 🧭 EL PUNTO DE PARTIDA (10-oct): lo último que ella habló con el cliente, LITERAL y de la base, por si
+# ya no está en el historial (el bot ve solo los últimos 20 mensajes).
+_TITULO_PUNTO_DE_PARTIDA = (
+    "- PUNTO DE PARTIDA: lo último que una persona del negocio habló con este cliente (literal, de la "
+    "base; puede ya no estar en tu historial). Arranca desde ahí: si le dio un precio o un total, ese "
+    "manda (regla de AUTORÍA HUMANA); no le repreguntes lo que ya quedó dicho."
 )
 
 # Un aviso ya está en camino en este chat: el cliente ya oyó "lo reviso". Repetirlo en cada mensaje
@@ -938,15 +951,18 @@ async def _estado_cliente_texto(telefono: str) -> str:
             pagos = await _pagos_de(session, acordados) if acordados else {}
             propuestas = await _propuestas_pendientes(session, telefono)
             avisado = await _aviso_en_camino(session, telefono)
+            charla = await punto_de_partida(session, telefono)  # fail-safe: [] si no hay o falla
     except Exception:  # noqa: BLE001 — leer el estado nunca debe romper el bot
         return ""
-    if not pedidos and not propuestas and not avisado:
+    if not pedidos and not propuestas and not avisado and not charla:
         return ""
+    partida = [_TITULO_PUNTO_DE_PARTIDA, *charla] if charla else []
     if not pedidos:
-        # Solo hay propuestas sin confirmar (ella ya le vendió y nadie tocó "Sí" todavía) o un aviso en
-        # camino: el bot no sabe qué, pero sí sabe que NO debe darlo por hecho ni repetir la promesa.
+        # Solo hay propuestas sin confirmar (ella ya le vendió y nadie tocó "Sí" todavía), lo que ella
+        # habló con el cliente o un aviso en camino.
         return "\n".join(
             ["ESTADO DEL CLIENTE (verdad de la base de datos — manda sobre el chat):"]
+            + partida
             + ([_LINEA_PROPUESTAS] if propuestas else [])
             + ([_LINEA_YA_AVISASTE] if avisado else [])
         )
@@ -1043,6 +1059,7 @@ async def _estado_cliente_texto(telefono: str) -> str:
     # modelo vea primero el que está cobrando y luego el que NO debe tocar.
     for p in acordados:
         lineas.extend(_lineas_pedido_acordado(p, pagos.get(p.id)))
+    lineas.extend(partida)
     if propuestas:
         lineas.append(_LINEA_PROPUESTAS)
     if avisado:

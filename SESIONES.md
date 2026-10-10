@@ -44,7 +44,17 @@ relevo); su precio es FINAL: sin el 20% de pagar en dólares.
   abierto; la lista cerrada del pago no cambia).
 - Prompt: la regla de AUTORÍA HUMANA ya no dice "no vuelvas a cobrar lo que una persona acordó" (chocaba con
   #75): su precio manda y se pasa en `precio_acordado` / `total_acordado`.
-- Tests: `test_precio_de_whuilianny.py` (26). Suite 1422/0.
+- **Revisión antes de fusionar (pregunta de Maired: "¿sabe qué pidió la clienta y en qué punto quedó?"):**
+  Alejandra ve solo los últimos 20 mensajes + el bloque de estado. Dos huecos, cerrados en el mismo PR:
+  - `_LINEA_PROPUESTAS` decía "no registres ni cobres" cuando hay propuestas sin confirmar (pruebas está en
+    "Todo me lo pregunta"): frenaba justo este caso. Ahora: lo que ELLA dijo se sigue; lo que el cliente
+    AFIRMA y ella no dijo (sobre todo "ya pagué") se releva.
+  - 🧭 PUNTO DE PARTIDA (`montos_duena.punto_de_partida`): en el bloque de estado, los últimos 4 mensajes de
+    ella (14 días, literales, texto o 🎤), cada uno con el mensaje de la clienta de antes. La red del dinero
+    lee esa misma sección (`montos_de_la_duena_en_el_turno`).
+  - Un "Sí" tardío en la Bandeja ya no crea el gemelo de un pedido que el bot ya registró abierto con los
+    mismos productos (`_pedido_abierto_igual`).
+- Tests: `test_precio_de_whuilianny.py` (32). Suite 1428/0.
 
 **Sigue:** fusionar → desplegar worker + bot en pruebas (migración 042) → prueba en vivo: desde el número de
 Whuilianny un audio "te la dejo en treinta y dos", y como clienta pedir pagar → cobra $32.

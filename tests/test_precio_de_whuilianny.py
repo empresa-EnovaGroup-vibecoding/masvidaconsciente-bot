@@ -18,7 +18,7 @@ Lo que fijan estos tests (sin red ni base):
 from decimal import Decimal
 from types import SimpleNamespace
 
-from app.agent import agent, expediente, tools
+from app.agent import agent, expediente, montos_duena, tools
 from app.agent.contratos_atencion import ItemPropuesto, PropuestaExpediente
 from app.agent.montos_duena import (
     lo_dijo_la_duena,
@@ -380,6 +380,117 @@ def test_la_red_deja_decir_el_precio_de_ella_y_frena_lo_demas():
 def test_las_tres_puertas_de_la_red_leen_a_la_duena():
     import inspect
 
-    assert "textos_de_la_duena_en_historial(historial)" in inspect.getsource(agent.responder)
+    assert "montos_de_la_duena_en_el_turno(historial, dinamico)" in inspect.getsource(agent.responder)
     fuente = inspect.getsource(agent)
-    assert fuente.count("textos_de_la_duena_en_historial(historial)") >= 3
+    assert fuente.count("montos_de_la_duena_en_el_turno(historial, dinamico)") >= 3
+
+
+# ══ 7) EL PUNTO DE PARTIDA: Alejandra sabe desde dónde arranca la venta ═════════════
+#
+# Pregunta de Maired antes de fusionar (10-oct): ¿sabe qué pidió la clienta y en qué punto quedó?
+# El bot ve solo los últimos 20 mensajes; lo de ella puede haber quedado más atrás. Y con el panel en
+# "Todo me lo pregunta", la línea de propuestas le decía "no registres ni cobres".
+
+def _fila(rol, contenido, hace_min):
+    from datetime import timedelta
+
+    from app.models import now_utc
+
+    return (rol, contenido, now_utc() - timedelta(minutes=hace_min))
+
+
+# La conversación real, de la más NUEVA a la más vieja (como la devuelve la consulta).
+CHARLA = [
+    _fila("user", "listo, cómo te pago?", 1),
+    _fila("owner", "[nota de voz]", 30),
+    _fila("owner", "🎤 sí nena, la de chocolate te la dejo en treinta y dos", 60),
+    _fila("user", "tienen torta de chocolate? cuánto sale?", 61),
+]
+
+
+class _SesionCharla:
+    def __init__(self, filas=(), pedidos=(), propuestas=0, falla=False):
+        self.filas, self.pedidos, self.propuestas, self.falla = list(filas), list(pedidos), propuestas, falla
+
+    def __call__(self):
+        return self
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_a):
+        return False
+
+    async def execute(self, q):
+        sql = str(q)
+        if "FROM mensajes" in sql:
+            if self.falla:
+                raise RuntimeError("la base tosió")
+            return _Res(self.filas)
+        if "FROM pedidos" in sql:
+            return _Res(self.pedidos)
+        if "FROM intervenciones" in sql:
+            n = self.propuestas if "propuesta_expediente" in str(
+                q.compile(compile_kwargs={"literal_binds": True})
+            ) and "NOT IN" not in sql else 0
+            return SimpleNamespace(scalar_one=lambda: n)
+        return _Res([])
+
+
+async def test_el_punto_de_partida_trae_lo_que_pidio_la_clienta_y_lo_que_ella_contesto():
+    lineas = await montos_duena.punto_de_partida(_SesionCharla(CHARLA), TEL)
+    texto = "\n".join(lineas)
+    assert "el cliente: «tienen torta de chocolate? cuánto sale?»" in texto
+    assert "la persona del negocio: «🎤 sí nena, la de chocolate te la dejo en treinta y dos»" in texto
+    assert "[nota de voz]" not in texto  # la que aún no se transcribe no dice nada
+    assert texto.index("tienen torta") < texto.index("treinta y dos")  # en orden
+
+
+async def test_si_la_base_falla_no_hay_punto_de_partida():
+    assert await montos_duena.punto_de_partida(_SesionCharla(falla=True), TEL) == []
+
+
+async def test_el_bloque_de_estado_lo_muestra_y_ya_no_frena_lo_que_ella_dijo(monkeypatch):
+    from app.agent import system_prompt as sp
+
+    monkeypatch.setattr(sp, "get_session_factory", lambda: _SesionCharla(CHARLA, propuestas=1))
+    texto = await sp._estado_cliente_texto(TEL)
+    assert "PUNTO DE PARTIDA" in texto and "treinta y dos" in texto
+    # 🔴 Antes: "no registres ni cobres por tu cuenta lo que él dice que ya acordó".
+    assert "no registres ni cobres" not in texto
+    assert "SÍGUELO" in texto and "sobre todo que ya pagó" in texto and "pedir_ayuda" in texto
+
+
+async def test_sin_mensajes_de_ella_no_sale_nada(monkeypatch):
+    from app.agent import system_prompt as sp
+
+    monkeypatch.setattr(sp, "get_session_factory", lambda: _SesionCharla([_fila("user", "hola", 1)]))
+    assert await sp._estado_cliente_texto(TEL) == ""
+
+
+async def test_la_red_lee_el_punto_de_partida_aunque_no_este_en_el_historial():
+    lineas = await montos_duena.punto_de_partida(_SesionCharla(CHARLA), TEL)
+    dinamico = "ESTADO DEL CLIENTE:\n" + "\n".join(lineas)
+    montos = montos_duena.montos_de_la_duena_en_el_turno([], dinamico)
+    assert 32.0 in montos
+    # Lo que preguntó la clienta no cuenta como dicho por ella.
+    assert montos_duena.textos_de_la_duena_en_estado(dinamico) == [
+        "🎤 sí nena, la de chocolate te la dejo en treinta y dos"
+    ]
+
+
+class _SesionGemelo(_SesionExpediente):
+    def __init__(self, abiertos):
+        super().__init__()
+        self.abiertos = abiertos
+
+    async def execute(self, q):
+        return _Res([] if "NOT IN" in str(q) else self.abiertos)
+
+
+async def test_un_si_tardio_en_la_bandeja_no_crea_el_gemelo_de_lo_que_ya_registro_el_bot():
+    import pytest
+
+    del_bot = SimpleNamespace(id=777, items=[{"variante_id": 21, "cantidad": 1}])
+    with pytest.raises(ValueError, match="#777"):
+        await expediente._crear_pedido_duena(_SesionGemelo([del_bot]), _propuesta(32.0), "prueba")

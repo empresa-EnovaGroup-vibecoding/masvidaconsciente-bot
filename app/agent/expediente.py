@@ -40,7 +40,7 @@ from app.agent.contratos_atencion import (
     PropuestaExpediente,
 )
 from app.agent.resolver_atencion import consta, fecha_del_cliente, normalizar
-from app.agent.tools import _matchear_franja, _pedido_igual_reciente, pago_cuadra
+from app.agent.tools import _firma_de_items, _matchear_franja, _pedido_igual_reciente, pago_cuadra
 from app.models import (
     ESTADOS_ACORDADOS,
     ORIGEN_DUENA,
@@ -715,6 +715,28 @@ def _items_json(p: PropuestaExpediente) -> list[dict]:
     } for i in p.items]
 
 
+async def _pedido_abierto_igual(session, p: PropuestaExpediente):
+    """El pedido ABIERTO (pendiente / esperando pago) de este cliente con los mismos productos, de los
+    últimos 14 días — o None. Si la lectura falla, None (vender > bloquear, como el otro candado)."""
+    from app.agent.montos_duena import DIAS_ACUERDO
+
+    firma = _firma_de_items([{"variante_id": i.variante_id, "cantidad": i.cantidad} for i in p.items])
+    try:
+        abiertos = (
+            await session.execute(
+                select(Pedido).where(
+                    Pedido.cliente_telefono == p.telefono,
+                    Pedido.estado.in_(("pendiente", "esperando_pago")),
+                    Pedido.created_at >= now_utc() - timedelta(days=DIAS_ACUERDO),
+                )
+            )
+        ).scalars().all()
+    except Exception:  # noqa: BLE001
+        logger.exception("_pedido_abierto_igual: no se pudo leer; se deja aplicar")
+        return None
+    return next((x for x in abiertos if _firma_de_items(x.items or []) == firma), None)
+
+
 async def _crear_pedido_duena(session, p: PropuestaExpediente, usuario: str) -> Pedido:
     if not p.items:
         raise ValueError("un pedido sin productos no existe")
@@ -731,6 +753,15 @@ async def _crear_pedido_duena(session, p: PropuestaExpediente, usuario: str) -> 
         raise ValueError(
             f"ya existe el pedido #{repetido.id} con estos mismos productos (tomado hace menos de 24 h): "
             f"si es el mismo, descarta esta propuesta"
+        )
+    # 💵 10-oct (SESIONES (48)): Alejandra ahora SIGUE lo que ella dijo aunque la propuesta siga sin
+    # confirmar, así que la venta puede estar ya registrada por el bot (abierta, sin pago). Un "Sí" tardío
+    # en la Bandeja no puede fabricarle el gemelo.
+    abierto = await _pedido_abierto_igual(session, p)
+    if abierto is not None:
+        raise ValueError(
+            f"el bot ya registró esta venta como el pedido #{abierto.id} con los mismos productos: "
+            f"si es la misma, descarta esta propuesta"
         )
     catalogo = (
         sum(Decimal(str(i.precio_unitario)) * i.cantidad for i in p.items)
