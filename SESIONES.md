@@ -17,6 +17,34 @@
 
 ---
 
+## 2026-10-10 (49) — 🧠 ALEJANDRA ENTIENDE LA CONVERSACIÓN DE LAS DOS; el código solo impide inventar
+
+**Antes:** #76 fusionado (`e911b90`) y desplegado en pruebas (`/root/deploy_pr76.sh`, worker → bot; migración
+042 aplicada; `/salud` 200).
+
+**Por qué (Maired, 10-oct):** "Yo quiero que entienda qué es lo que están diciendo ambas para que siga el hilo de
+la conversación." En #76 metí la interpretación en reglas fijas: el número tenía que estar en un mensaje de ella,
+o ella tenía que usar frases fijas ("ese precio"), y "¿me la dejas en 30?" + "ok nena" NO contaba. Eso era
+encasillar: ella contesta corto o por audio, de mil maneras. Error de diseño mío.
+
+**Principio:** entender es de la IA (Alejandra lee la conversación completa de las dos); el código solo impide
+INVENTAR un número que no salió en esa conversación y COBRAR DOS VECES lo ya pagado.
+
+**Qué se hizo** (rama `alejandra-entiende-la-charla`):
+- `montos_duena.montos_de_la_charla`: todos los números de la conversación de esta venta (clienta + ella, texto y
+  🎤), si ella participó. Se quitan `_ACEPTA` / `acepta_lo_propuesto`.
+- Prompt (AUTORÍA HUMANA) y schemas de `precio_acordado` / `total_acordado`: "lee la conversación como otra persona
+  del negocio; entiende A QUÉ le responde". Fuera "un 'ok' suelto no cuenta".
+- 📝 Red de seguridad aprobada por Maired: cuando Alejandra sigue con un precio o total distinto al del catálogo, a
+  Whuilianny le llega un aviso corto ("Seguí con María: torta a $30 (catálogo $36), como lo hablaron. Si no es
+  así, entra al chat y corrígelo."), una vez por pedido y monto, sin fila en la Bandeja
+  (`tools._avisar_precio_acordado`).
+- Tests: `test_precio_de_whuilianny.py` reescrito para la regla nueva. Suite 1448/0.
+
+**Sigue:** fusionar → desplegar worker + bot en pruebas → guion de la torta.
+
+---
+
 ## 2026-10-10 (48) — 💵 EL PRECIO QUE DIO WHUILIANNY MANDA (texto o nota de voz), y su pedido se completa sin rehacerse
 
 **Por qué (Maired, 10-oct):** si Whuilianny le dice a la clienta "el chocolate te lo dejo en 32" (vale 36),
