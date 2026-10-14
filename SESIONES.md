@@ -17,6 +17,41 @@
 
 ---
 
+## 2026-10-14 (50) — 💾 COSTO: la caché SÍ funciona hoy; pruebas corría con GPT-4.1; se anota la escritura de caché
+
+**Antes:** #77 fusionado (`be0dc86`) y desplegado en pruebas (`/root/deploy_pr77.sh`).
+
+**Por qué:** Maired ("me está desangrando") pidió el workflow `/claude-api cost-optimize` en orden. Lo que se
+encontró:
+- **Pruebas corría con GPT-4.1, no con Claude.** `modelo_ia` estaba en `anthropic/claude-sonnet-5.5` desde el
+  9-oct. El bot manda `temperature: 0.15` con `provider.require_parameters`, Sonnet 5.5 no acepta temperatura
+  distinta a la de fábrica, OpenRouter devolvía 404 y el bot caía al respaldo. Se devolvió `modelo_ia` a
+  `anthropic/claude-sonnet-4.6` (configuración de PRUEBAS, valor anterior anotado).
+- **Sonda de caché** (`scripts/sonda_cache.py`, $0,34 de $0,70 aprobados, ruta "Claude Platform on AWS"):
+  - (a) 2 llamadas seguidas → la 2ª lee 26.094 tokens ($0,16 escribir con tarifa de 1 h, $0,011 leer);
+  - (b) la 2ª a los 6,5 min → SIGUE leyendo: **la caché de 1 h se respeta**;
+  - (d) Sonnet 5.5 sin temperatura → funciona y cachea: 35.673 tokens (+33%), $0,006 la que lee (−41%),
+    74-108 tokens de pensamiento, +1,2 s.
+- La hipótesis del 29-sep ("se comporta como de 5 min") queda **descartada**. Los fallos dentro del mismo turno
+  (34 de 164: escribe y a los 3 s vuelve a fallar = el texto cambiaba en medio del turno) son casi todos de fines
+  de agosto / inicios de septiembre, antes de #37 (6-sep, que sacó "fotos ya enviadas" de la parte estable).
+  Después casi no hubo tráfico para medir.
+
+**Qué se hizo** (rama `costo-cache`):
+- Migración 043 `llamadas_ia.tokens_cache_escritura` + `telemetria._tomar_usage` lee
+  `prompt_tokens_details.cache_write_tokens`. Con tráfico real ya se puede ver un fallo de caché.
+- `scripts/sonda_cache.py` en el repo (`--modelo`, `--sin-temperatura`, `--max-tokens`): la sonda para que
+  cualquiera vea el antes y el después.
+- `docs/CONTINUIDAD-WHUILIANNY.md`: el objetivo de la continuidad y las decisiones de Maired, para que Claude,
+  Codex y ChatGPT trabajen con la misma meta.
+- Tests: `test_telemetria_cache.py` (con el `usage` real de la sonda). Suite 1452/0.
+
+**Sigue:** fusionar → desplegar (worker → bot; migración 043) → guion de la torta en pruebas (ya con Sonnet 4.6) →
+leer en `llamadas_ia` lectura/escritura de caché por mensaje → eval (28 casos, ~$1,15) → con el eval, 4.6 contra
+5.5 (5.5 requiere quitar `temperature`).
+
+---
+
 ## 2026-10-10 (49) — 🧠 ALEJANDRA ENTIENDE LA CONVERSACIÓN DE LAS DOS; el código solo impide inventar
 
 **Antes:** #76 fusionado (`e911b90`) y desplegado en pruebas (`/root/deploy_pr76.sh`, worker → bot; migración
