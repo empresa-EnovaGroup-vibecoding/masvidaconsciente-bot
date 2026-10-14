@@ -103,6 +103,9 @@ def _tomar_usage(datos: dict | None) -> dict:
         "tokens_entrada": int(u.get("prompt_tokens") or 0),
         "tokens_salida": int(u.get("completion_tokens") or 0),
         "tokens_cache": int(detalle.get("cached_tokens") or 0),
+        # 💾 Lo que se ESCRIBIÓ en la caché (043): la firma de un fallo de caché (verificado con la
+        # sonda del 14-oct, `scripts/sonda_cache.py`).
+        "tokens_cache_escritura": int(detalle.get("cache_write_tokens") or 0),
         "costo_usd": (
             Decimal(str(costo))
             if isinstance(costo, int | float) and not isinstance(costo, bool)

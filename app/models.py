@@ -553,6 +553,9 @@ class LlamadaIA(Base):
     # `prompt_tokens_details.cached_tokens`: lo que el `cache_control` del prompt estable AHORRÓ.
     # Hoy ese ahorro se da por supuesto y nadie lo ha visto nunca.
     tokens_cache: Mapped[int] = mapped_column(Integer, default=0)
+    # `prompt_tokens_details.cache_write_tokens` (043): lo que se ESCRIBIÓ en la caché, a 2× con la
+    # de 1 hora. Una llamada con escritura alta y lectura cero es un FALLO de caché.
+    tokens_cache_escritura: Mapped[int] = mapped_column(Integer, default=0)
     # (14,10) y no (12,8): un embedding cuesta 0.00000006 y ya está al filo de 8 decimales. Es la
     # columna del dinero — un redondeo silencioso a cero es justo lo que `NULL` vino a evitar.
     costo_usd: Mapped[Decimal | None] = mapped_column(Numeric(14, 10), nullable=True)
