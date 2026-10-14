@@ -219,9 +219,9 @@ async def test_un_precio_que_ella_no_dijo_no_se_registra():
     assert ses.agregados == [] and ses.commits == 0
 
 
-async def test_lo_que_propuso_la_clienta_con_un_ok_nena_no_cuenta():
-    """Decisión de Maired (10-oct): "¿me lo dejas en 32?" + "ok nena" NO vale; se releva."""
-    ses = _Sesion(mensajes_duena=["ok nena"])  # el 32 solo está en el mensaje de la clienta
+async def test_un_numero_que_nadie_dijo_no_se_registra():
+    """Ella solo dijo "ok nena" y nadie mencionó el 32 en la conversación: inventado → relevo."""
+    ses = _Sesion(mensajes_duena=["ok nena"])
     r = await tools.registrar_pedido(
         ses, TEL, [{"variante_id": 21, "cantidad": 1, "precio_acordado": 32}]
     )
@@ -513,54 +513,103 @@ async def test_un_si_tardio_en_la_bandeja_no_crea_el_gemelo_de_lo_que_ya_registr
         await expediente._crear_pedido_duena(_SesionGemelo([del_bot]), _propuesta(32.0), "prueba")
 
 
-# ══ 8) LA ACEPTACIÓN CLARA (Maired, 10-oct) ═════════════════════════════════════════
+# ══ 8) ENTENDER ES DE ALEJANDRA; EL CÓDIGO SOLO IMPIDE INVENTAR (Maired, 10-oct) ═════
 #
-# "¿me la dejas en 30?" + "sí nena, te la dejo en ese precio" → vale el 30. Un "ok nena" suelto no.
+# "Yo quiero que entienda qué es lo que están diciendo ambas para que siga el hilo." Whuilianny
+# contesta corto ("ok nena", "dale", "sí bb") o por audio: a QUÉ responde lo entiende Alejandra. El
+# código solo comprueba que el número salió en la conversación de las dos.
 
-def test_que_cuenta_como_aceptacion_clara():
-    for si in ("sí nena, te la dejo en ese precio", "Trato hecho mi amor", "Así te la dejo, bella",
-               "dale, en ese precio", "te lo acepto", "ok, acepto el precio"):
-        assert montos_duena.acepta_lo_propuesto(si), si
-    for no in ("ok nena", "dale", "sí", "Ok bb está bien", "el lunes te la dejo", "te la dejo mañana"):
-        assert not montos_duena.acepta_lo_propuesto(no), no
-
-
-async def test_si_ella_acepta_claro_el_precio_de_la_clienta_se_registra():
-    ses = _Sesion(mensajes_duena=[("user", "hola, me la dejas en 30?"), "sí nena, te la dejo en ese precio"])
+async def test_me_la_dejas_en_30_y_ok_nena_vale_30():
+    ses = _Sesion(mensajes_duena=[("user", "hola, me la dejas en 30?"), "ok nena"])
     r = await tools.registrar_pedido(ses, TEL, [{"variante_id": 21, "cantidad": 1, "precio_acordado": 30}])
     assert r["ok"] is True and r["total_usd"] == 30.0
 
 
-async def test_con_un_ok_nena_el_precio_de_la_clienta_no_vale():
+async def test_tambien_vale_si_ella_contesta_por_audio_o_con_otras_palabras():
+    for respuesta in ("🎤 sí mi amor, dale, así está bien", "dale bb", "sí nena, te la dejo en ese precio"):
+        ses = _Sesion(mensajes_duena=[("user", "me la puedes dejar en 30?"), respuesta])
+        r = await tools.registrar_pedido(ses, TEL, [{"variante_id": 21, "cantidad": 1, "precio_acordado": 30}])
+        assert r["ok"] is True, respuesta
+
+
+async def test_un_numero_que_no_salio_en_la_conversacion_no_se_registra():
     ses = _Sesion(mensajes_duena=[("user", "me la dejas en 30?"), "ok nena"])
-    r = await tools.registrar_pedido(ses, TEL, [{"variante_id": 21, "cantidad": 1, "precio_acordado": 30}])
+    r = await tools.registrar_pedido(ses, TEL, [{"variante_id": 21, "cantidad": 1, "precio_acordado": 25}])
     assert r["ok"] is False and "acuerdo_especial" in r["nota"] and ses.agregados == []
 
 
-async def test_el_lunes_te_la_dejo_no_es_aceptar_un_precio():
-    ses = _Sesion(mensajes_duena=[("user", "me la dejas en 30?"), "el lunes te la dejo"])
+async def test_sin_ella_en_la_conversacion_no_hay_nada_acordado():
+    """Lo que pide la clienta sola no es un acuerdo: sin un mensaje de la persona del negocio, catálogo."""
+    ses = _Sesion(mensajes_duena=[("user", "me la dejas en 30?")])
     r = await tools.registrar_pedido(ses, TEL, [{"variante_id": 21, "cantidad": 1, "precio_acordado": 30}])
     assert r["ok"] is False
 
 
-def test_la_red_tambien_acepta_lo_que_ella_acepto_aunque_el_bot_hable_en_medio():
+def test_la_red_deja_decir_lo_que_hablaron_las_dos_aunque_el_bot_hable_en_medio():
     historial = [
         {"role": "user", "content": "me la dejas en 30?"},
-        {"role": "assistant", "content": "Déjame ver, un momentico"},  # el bot no corta la pareja
-        {"role": "assistant", "content": mensaje_owner_para_historial("sí nena, te la dejo en ese precio")},
+        {"role": "assistant", "content": "Déjame ver, un momentico"},
+        {"role": "assistant", "content": mensaje_owner_para_historial("ok nena")},
     ]
     assert 30.0 in montos_duena.montos_de_la_duena_en_el_turno(historial)
-    historial[-1] = {"role": "assistant", "content": mensaje_owner_para_historial("ok nena")}
-    assert 30.0 not in montos_duena.montos_de_la_duena_en_el_turno(historial)
+    # Sin ella en la conversación, lo que dijo la clienta no es un acuerdo.
+    assert montos_duena.montos_de_la_duena_en_el_turno(historial[:2]) == set()
 
 
-def test_la_red_lee_la_aceptacion_en_el_punto_de_partida():
+def test_la_red_lee_la_charla_del_punto_de_partida():
     dinamico = (
         "ESTADO DEL CLIENTE:\n"
         f"  · 09/10 {montos_duena.MARCA_CLIENTE}me la dejas en 30?»\n"
-        f"  · 09/10 {montos_duena.MARCA_ELLA}sí nena, en ese precio»"
+        f"  · 09/10 {montos_duena.MARCA_ELLA}ok nena»"
     )
     assert 30.0 in montos_duena.montos_de_la_duena_en_el_turno([], dinamico)
+
+
+async def test_a_whuilianny_le_llega_el_aviso_corto_una_sola_vez(monkeypatch):
+    """📝 La red de seguridad: si Alejandra entendió mal, ella se entera a tiempo."""
+    from app.services import redis_client
+    from app.workers import tasks
+
+    enviados, vistos = [], set()
+
+    async def _una_vez(clave, _ttl):
+        nuevo = clave not in vistos
+        vistos.add(clave)
+        return nuevo
+
+    async def _mandar(destino, cuerpo, *, que):
+        enviados.append((destino, cuerpo))
+        return True
+
+    async def _duena():
+        return "573000000000"
+
+    monkeypatch.setattr(redis_client, "aviso_unico", _una_vez)
+    monkeypatch.setattr(tasks, "_whatsapp_a_la_duena", _mandar)
+    monkeypatch.setattr(tools, "telefono_de_la_duena", _duena)
+    for _ in range(2):  # el modelo re-registra el mismo pedido: el aviso sale UNA vez
+        ses = _Sesion(mensajes_duena=[("user", "me la dejas en 30?"), "ok nena"])
+        r = await tools.registrar_pedido(ses, TEL, [{"variante_id": 21, "cantidad": 1, "precio_acordado": 30}])
+        assert r["ok"] is True
+    assert len(enviados) == 1
+    destino, texto = enviados[0]
+    assert destino == "573000000000"
+    assert texto.startswith("📝 Seguí con") and "Torta de chocolate a $30 (catálogo $36)" in texto
+    assert "corrígelo" in texto
+
+
+async def test_a_precio_de_catalogo_no_hay_aviso(monkeypatch):
+    from app.workers import tasks
+
+    enviados = []
+
+    async def _mandar(*a, **k):
+        enviados.append(a)
+        return True
+
+    monkeypatch.setattr(tasks, "_whatsapp_a_la_duena", _mandar)
+    r = await tools.registrar_pedido(_Sesion(), TEL, [{"variante_id": 21, "cantidad": 1}])
+    assert r["ok"] is True and enviados == []
 
 
 # ══ 9) VALE HASTA PAGAR O ENTREGAR (Maired, 10-oct) ═════════════════════════════════

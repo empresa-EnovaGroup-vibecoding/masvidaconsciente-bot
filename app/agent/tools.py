@@ -151,14 +151,13 @@ TOOL_SCHEMAS = [
                                 "precio_acordado": {
                                     "type": "number",
                                     "description": (
-                                        "OPCIONAL. SOLO si una persona del negocio, en un mensaje "
-                                        "suyo del historial (texto o 🎤 nota de voz), le dio a "
-                                        "este cliente un PRECIO POR UNIDAD distinto al del "
-                                        "catálogo para este producto (ej. 'el chocolate te lo "
-                                        "dejo en 32'): pon ese número, en dólares. Ese precio "
-                                        "manda. También vale si el cliente propuso el número y "
-                                        "ella lo ACEPTÓ con palabras claras ('te la dejo en ese "
-                                        "precio'); un 'ok' suelto NO. El código lo comprueba."
+                                        "OPCIONAL. El PRECIO POR UNIDAD de este producto que "
+                                        "quedó ACORDADO entre el cliente y una persona del negocio "
+                                        "en el historial (texto o 🎤 nota de voz), si es distinto "
+                                        "al del catálogo: que ella lo diera ('te la dejo en 32') o "
+                                        "que aceptara el que pidió el cliente ('me la dejas en "
+                                        "30?' → 'ok nena'). Entiende la conversación: pon el "
+                                        "número que acordaron, en dólares. Ese precio manda."
                                     ),
                                 },
                             },
@@ -168,13 +167,11 @@ TOOL_SCHEMAS = [
                     "total_acordado": {
                         "type": "number",
                         "description": (
-                            "OPCIONAL. SOLO si una persona del negocio, en un mensaje suyo del "
-                            "historial (texto o 🎤 nota de voz), le dijo a este cliente el TOTAL "
-                            "de esta compra (ej. 'ok nena, son 36, te lo llevo mañana'): pon ese "
-                            "número, en dólares. Ese total manda: no se recalcula ni se le suma el "
-                            "envío. También vale si el cliente propuso el total y ella lo ACEPTÓ "
-                            "con palabras claras ('trato hecho', 'en ese precio'); un 'ok' suelto "
-                            "NO. El código lo comprueba."
+                            "OPCIONAL. El TOTAL de esta compra que quedó ACORDADO entre el "
+                            "cliente y una persona del negocio en el historial (texto o 🎤 nota de "
+                            "voz): que ella lo dijera ('ok nena, son 36, te lo llevo mañana') o que "
+                            "aceptara el que propuso el cliente. Pon ese número, en dólares. Ese "
+                            "total manda: no se recalcula ni se le suma el envío."
                         ),
                     },
                     "ya_pagado_a_mano": {
@@ -3033,11 +3030,11 @@ def _precio_no_dicho(que: str) -> dict:
         "ok": False,
         "necesita_ayuda": True,
         "nota": (
-            f"⛔ No encuentro {que} en los mensajes de la persona del negocio a este cliente: NO lo "
-            "registres. Un precio distinto al del catálogo solo vale si ELLA lo dijo, o si aceptó "
-            "con palabras claras el que propuso el cliente (un 'ok' suelto no cuenta). Dile con naturalidad que lo revisas un momentico, "
-            "sin nombrar a nadie, y llama a pedir_ayuda (motivo 'acuerdo_especial') diciendo qué "
-            "precio se habló. NO le digas un monto."
+            f"⛔ {que} no aparece en la conversación de esta venta entre el cliente y la persona del "
+            "negocio: NO lo registres. Un precio distinto al del catálogo tiene que haber salido de "
+            "lo que hablaron ellos dos. Si no está claro qué acordaron, dile con naturalidad que lo "
+            "revisas un momentico, sin nombrar a nadie, y llama a pedir_ayuda (motivo "
+            "'acuerdo_especial') diciendo qué precio se habló. NO le digas un monto."
         ),
     }
 
@@ -3053,12 +3050,58 @@ def _completar_el_de_ella(pedido) -> str:
     )
 
 
+async def _avisar_precio_acordado(session, telefono, pedido) -> None:
+    """📝 La red de seguridad del "entender" (Maired, 10-oct): cuando Alejandra sigue una venta con un
+    precio o total distinto al del catálogo porque entendió que la persona del negocio lo acordó, a
+    ella le llega un aviso corto, solo para que se entere ("Seguí con María: torta a $30 (catálogo
+    $36)…"). UNA vez por pedido y monto. Sin fila en la Bandeja a propósito: no es un relevo y no debe
+    contar como "ya avisaste". El pedido que tomó ella misma no se le avisa. Nunca lanza."""
+    try:
+        if str(getattr(pedido, "origen", "") or "") == ORIGEN_DUENA:
+            return
+        items = [i for i in (pedido.items or []) if isinstance(i, dict)]
+        acordados = [i for i in items if i.get("precio_acordado")]
+        pactado = getattr(pedido, "total_acordado", None)
+        if not acordados and pactado is None:
+            return
+        from app.services.redis_client import aviso_unico
+
+        if not await aviso_unico(f"aviso_precio:{pedido.id}:{pedido.total}", 14 * 24 * 3600):
+            return
+        if pactado is not None:
+            lleva = ", ".join(f"{i['cantidad']} × {i['producto']}" for i in items)
+            detalle = f"{lleva} por {_fmt_usd(pactado)} en total"
+        else:
+            detalle = ", ".join(
+                f"{i['producto']} a {_fmt_usd(i['precio_unitario'])}"
+                + (f" (catálogo {_fmt_usd(i['precio_catalogo'])})" if i.get("precio_catalogo") is not None else "")
+                for i in acordados
+            )
+        nombre = (
+            await session.execute(select(Cliente.nombre).where(Cliente.telefono == telefono))
+        ).scalars().first()
+        quien = nombre or telefono
+        destino = await telefono_de_la_duena()
+        if not destino:
+            return
+        from app.workers.tasks import _whatsapp_a_la_duena
+
+        await _whatsapp_a_la_duena(
+            destino,
+            f"📝 Seguí con {quien}: {detalle}, como lo hablaron. Si no es así, entra al chat y corrígelo.",
+            que=f"precio acordado de {telefono}",
+        )
+    except Exception:  # noqa: BLE001 — el aviso es un extra: que nunca tumbe el registro
+        logger.exception("No se pudo avisar el precio acordado de %s", telefono)
+
+
 async def _lo_que_ya_cobro(session, telefono, pedido, respuesta: dict, ya_pagado: bool) -> dict:
     """💵 Después de registrar: si la dueña ya cobró esto (lo dijo y el lector lo oyó, o Alejandra lo
     leyó en el chat → `ya_pagado`), la respuesta dice "NO cobres, sigue con la entrega" en vez de
     "para cobrar…", y la cola le pregunta a ella si el pago es por este pedido."""
     if not respuesta.get("ok"):
         return respuesta
+    await _avisar_precio_acordado(session, telefono, pedido)
     try:
         pendientes = await pagos_de_la_duena_por_confirmar(session, telefono, pedido)
         if not pendientes and ya_pagado:
