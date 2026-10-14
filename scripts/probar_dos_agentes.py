@@ -62,12 +62,14 @@ async def main() -> None:
 
     print("\n2) NO SE TOCÓ NI UNA TEMPERATURA")
     src = inspect.getsource(ag)
-    check('el Operador sigue a 0.15 (con tools, el carril del dinero)', '"temperature": 0.15' in src)
-    check('la Voz sigue a 0.7 (sin tools)', '"temperature": 0.7' in src)
+    # 🌡️ 14-oct (SESIONES (51)): las temperaturas pasan por `_con_temperatura`, que la omite en los
+    # modelos de Claude que no la aceptan (Sonnet 5.5…). Los valores no cambian.
+    check('el Operador sigue a 0.15 (con tools, el carril del dinero)', '}, 0.15)' in src)
+    check('la Voz sigue a 0.7 (sin tools)', '"messages": messages}, 0.7)' in src)
     check(
         "no hay ninguna temperatura NUEVA",
-        len(re.findall(r'"temperature":\s*[\d.]+', src)) == 4,  # 0.15 · 0.7 · 0 (audio) · 0 (visión)
-        str(re.findall(r'"temperature":\s*[\d.]+', src)),
+        len(re.findall(r"(?<!def )_con_temperatura\(", src)) == 4,  # 0.15 · 0.7 · 0 (audio) · 0 (visión)
+        str(re.findall(r"_con_temperatura\([^)]*\)", src)),
     )
 
     print("\n3) EL REPARTO DE LAS REGLAS")

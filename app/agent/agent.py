@@ -74,6 +74,35 @@ _CACHE_CONTROL = {"type": "ephemeral", "ttl": "1h"}
 _TOOLS_PARA_REDACCION: ContextVar[list | None] = ContextVar("tools_para_redaccion", default=None)
 RESPUESTA_SEGURA = "Dame un momentito y te confirmo 😊"
 
+# 🌡️ LOS MODELOS DE CLAUDE QUE NO ACEPTAN TEMPERATURA (14-oct, SESIONES (51)). Desde la generación 4.7
+# (Fable, Opus 5.x/4.8/4.7, Sonnet 5.x, Haiku 5.x) la API rechaza una `temperature` distinta a la de
+# fábrica. Con `provider.require_parameters`, OpenRouter no encontraba proveedor y respondía 404: del 9 al
+# 14-oct pruebas tuvo `modelo_ia=sonnet-5.5` y el bot contestó en silencio con el respaldo (GPT-4.1).
+# Sonnet 4.6, los modelos anteriores y los de otras marcas la siguen recibiendo como siempre.
+_SIN_TEMPERATURA = re.compile(r"anthropic/claude-(fable|mythos|opus-5|opus-4\.[78]|sonnet-5|haiku-5)")
+
+
+def _con_temperatura(cuerpo: dict, temperatura: float) -> dict:
+    """Pone `temperature` en el cuerpo solo si el modelo la acepta (ver `_SIN_TEMPERATURA`)."""
+    if not _SIN_TEMPERATURA.search(str(cuerpo.get("model") or "")):
+        cuerpo["temperature"] = temperatura
+    return cuerpo
+
+
+# 🛟 EL RESPALDO ES OTRO CLAUDE (14-oct, Maired). Si el modelo de Alejandra falla, primero se intenta el
+# otro Sonnet —misma marca, misma forma de hablar— y solo si ese también falla, el respaldo de la variable
+# de entorno (`OPENROUTER_MODEL_FALLBACK`, hoy GPT-4.1). Va en código y no en la variable a propósito: las
+# variables de Coolify van cifradas y cambiarlas a mano ya rompió despliegues (lección del 3-sep).
+_CLAUDE_RESPALDO = "anthropic/claude-sonnet-4.6"
+_CLAUDE_RESPALDO_DEL_RESPALDO = "anthropic/claude-sonnet-5.5"
+
+
+def _respaldos(modelo: str) -> list[str]:
+    """Los modelos a probar, en orden, cuando falla `modelo`. Sin repetir el que ya falló."""
+    claude = _CLAUDE_RESPALDO if modelo != _CLAUDE_RESPALDO else _CLAUDE_RESPALDO_DEL_RESPALDO
+    orden = [claude, settings.openrouter_model_fallback]
+    return [m for i, m in enumerate(orden) if m and m != modelo and m not in orden[:i]]
+
 
 def _sin_acentos(texto: str) -> str:
     t = unicodedata.normalize("NFKD", (texto or "").lower())
@@ -371,13 +400,12 @@ async def _llamar_openrouter(messages: list, tools: list, model: str) -> dict:
                 # TODO lo que mandamos (en especial las `tools`). Sin esto podía caer en un proveedor
                 # que IGNORA las herramientas en silencio → el bot "dice" que agendó/cobró SIN llamar
                 # a la herramienta (el bug del "te agendo" por la puerta del proveedor). Blinda el cobro.
-                json={
+                json=_con_temperatura({
                     "model": model,
                     "messages": messages,
                     "tools": tools,
-                    "temperature": 0.15,
                     "provider": {"require_parameters": True},
-                },
+                }, 0.15),
             )
             resp.raise_for_status()
             datos = resp.json()
@@ -446,11 +474,17 @@ async def _llamar_con_fallback(messages: list, llm, modelo: str, tools: list) ->
     except Exception as e:  # noqa: BLE001
         logger.warning("Modelo principal (%s) falló (%s), usando fallback", modelo, e)
         await _anotar_si_es_falta_de_saldo(e, modelo)
+        ultimo: Exception = e
+    # 🛟 Primero el otro Claude, después el respaldo de la variable (`_respaldos`). Si todos fallan, sube
+    # el error del ÚLTIMO, igual que antes subía el del único respaldo.
+    for respaldo in _respaldos(modelo):
         try:
-            return await llm(messages, tools, settings.openrouter_model_fallback)
-        except Exception as e2:  # noqa: BLE001 — se anota y se deja subir EXACTAMENTE igual que antes
-            await _anotar_si_es_falta_de_saldo(e2, settings.openrouter_model_fallback)
-            raise
+            return await llm(messages, tools, respaldo)
+        except Exception as e2:  # noqa: BLE001 — se anota y se prueba el siguiente
+            logger.warning("Respaldo (%s) también falló (%s)", respaldo, e2)
+            await _anotar_si_es_falta_de_saldo(e2, respaldo)
+            ultimo = e2
+    raise ultimo
 
 
 _SALUDOS = (
@@ -3847,7 +3881,7 @@ async def _pedir_redaccion(messages: list, modelo: str) -> str:
     # (sigue siendo pura redacción, temperatura 0.7). Fuera de ese carril el ContextVar está en
     # None y el cuerpo es el de siempre: la Voz del modo dos y los dobles no cambian ni un byte.
     t0 = time.monotonic()
-    cuerpo: dict = {"model": modelo, "messages": messages, "temperature": 0.7}
+    cuerpo: dict = _con_temperatura({"model": modelo, "messages": messages}, 0.7)
     tools = _TOOLS_PARA_REDACCION.get()
     if tools:
         cuerpo["tools"] = tools
@@ -4123,7 +4157,7 @@ async def transcribir_audio(contenido: bytes, mime: str = "audio/ogg") -> str:
             resp = await client.post(
                 OPENROUTER_URL,
                 headers={"Authorization": f"Bearer {settings.openrouter_api_key}"},
-                json={"model": settings.openrouter_model_audio, "messages": messages, "temperature": 0},
+                json=_con_temperatura({"model": settings.openrouter_model_audio, "messages": messages}, 0),
             )
             resp.raise_for_status()
             data = resp.json()
@@ -4287,7 +4321,7 @@ async def leer_comprobante(
             resp = await client.post(
                 OPENROUTER_URL,
                 headers={"Authorization": f"Bearer {settings.openrouter_api_key}"},
-                json={"model": settings.openrouter_model_audio, "messages": messages, "temperature": 0},
+                json=_con_temperatura({"model": settings.openrouter_model_audio, "messages": messages}, 0),
             )
             resp.raise_for_status()
             data = resp.json()

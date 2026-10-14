@@ -17,6 +17,28 @@
 
 ---
 
+## 2026-10-14 (51) — 🌡️ SONNET 5.5 SIN ROMPER NADA + el respaldo es otro Claude
+
+**Por qué (Maired, 14-oct: "vamos a hacer todo lo que me dices"):** recomendación senior, pasar a Sonnet 5.5 de forma
+segura. Es 41% más barato por mensaje normal (medido con la sonda), dos generaciones más nuevo y piensa poco
+(74-108 tokens). El riesgo es la voz de Alejandra: se revisa en pruebas y 4.6 queda de respaldo.
+
+**Qué se hizo** (rama `sonnet-5-5`, sobre `costo-cache`):
+- `agent._con_temperatura`: la temperatura (0,15 agente · 0,7 voz · 0 audio y visión) se omite SOLO en los Claude
+  que no la aceptan (`_SIN_TEMPERATURA`: Fable, Mythos, Opus 5.x/4.8/4.7, Sonnet 5.x, Haiku 5.x). Sonnet 4.6 y las
+  otras marcas la reciben igual que antes.
+- `agent._respaldos` + `_llamar_con_fallback`: si el modelo falla, primero se prueba el otro Sonnet (5.5 → 4.6, o
+  4.6 → 5.5) y después la variable `OPENROUTER_MODEL_FALLBACK` (GPT-4.1). Va en código para no tocar las variables
+  cifradas de Coolify.
+- Banco `probar_dos_agentes` adaptado (los mismos 4 valores de temperatura). Tests: `test_modelo_sonnet_55.py`
+  (15). Suite 1467/0.
+
+**Sigue:** fusionar #78 y este → desplegar (worker → bot) → poner `modelo_ia=anthropic/claude-sonnet-5.5` en
+PRUEBAS → guion de la torta (continuidad + voz de 5.5) → si la voz gusta, se queda; si no, vuelve a 4.6 desde el
+panel. Producción no se toca.
+
+---
+
 ## 2026-10-14 (50) — 💾 COSTO: la caché SÍ funciona hoy; pruebas corría con GPT-4.1; se anota la escritura de caché
 
 **Antes:** #77 fusionado (`be0dc86`) y desplegado en pruebas (`/root/deploy_pr77.sh`).
