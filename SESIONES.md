@@ -17,6 +17,33 @@
 
 ---
 
+## 2026-10-16 (52) — 🎂 LO QUE SALIÓ DEL GUION DE LA TORTA: dirección como la pide Whuilianny, asesora del equipo, preguntar si no está
+
+**Antes:** #78 + #79 fusionados (`5c5bf8a`) y desplegados en pruebas (`/root/deploy_pr79.sh`); `modelo_ia` de PRUEBAS en
+`anthropic/claude-sonnet-5.5`; una llamada por el camino real contestó 5.5.
+
+**El guion (14-oct, Sonnet 5.5):**
+- "¿me dejas la torta en 30?" → relevo con `precio_del_dia` → "Sí, te la dejo en ese precio" → vuelve el bot 2 h después
+  → siguió con los 30 sin preguntar, preguntó el tamaño (nadie lo había dicho), fecha real, entendió la nota de voz.
+- Costo de toda la conversación: $0,34. Casi todo son dos escrituras de caché ($0,15 c/u): el cambio de modelo y un
+  hueco de más de 1 hora. Cada mensaje seguido, ~$0,01.
+
+**Lo que se corrigió (decisiones de Maired, 16-oct), buscando la CAUSA en lo que lee el modelo:**
+- "te la llevo": el propio sistema le daba de ejemplo "¿a qué punto de referencia te lo llevo?". Se quitó de las notas,
+  del schema y de la regla de AUTORÍA.
+- La lista de zonas: una regla vieja ordenaba "primero el sector" y decía que la ubicación "nunca se exige". Regla nueva,
+  sacada del corpus (Whuilianny escribe "pásame la ubicación"): Alejandra pide "pásame tu ubicación o la dirección", la
+  zona sale de ahí, y si no queda clara pregunta solo entre las posibles. Cambiaron la regla, el bloque de zonas, el
+  schema `zona_id`, las dos notas de la caja, la línea del estado y `mensajes._frase_entrega`.
+- "el precio lo defino yo" → regla nueva HABLAS COMO ASESORA DEL EQUIPO.
+- Eligió keto sin preguntar → regla nueva SI NO ESTÁ EN EL CHAT, PREGUNTA.
+- Funcionalidad futura aprobada: MAPA DE ZONAS (el pin cae solo en su zona). Anotada en `docs/CONTINUIDAD-WHUILIANNY.md`.
+- Tests: `test_guion_torta_ajustes.py` (5) + `test_entrega_completa` adaptado. Suite 1472/0.
+
+**Sigue:** fusionar → desplegar (worker → bot) → repetir el guion (la dirección y la variante "la de 500 g en 30").
+
+---
+
 ## 2026-10-14 (51) — 🌡️ SONNET 5.5 SIN ROMPER NADA + el respaldo es otro Claude
 
 **Por qué (Maired, 14-oct: "vamos a hacer todo lo que me dices"):** recomendación senior, pasar a Sonnet 5.5 de forma

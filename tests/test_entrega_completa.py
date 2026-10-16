@@ -241,7 +241,8 @@ def test_con_la_franja_ya_elegida_no_se_repregunta():
 
 def test_delivery_sin_direccion_la_pide_en_el_mismo_cierre():
     texto = _frase_entrega("Barquisimeto centro", False, None, franjas=FRANJAS, falta_referencia=True)
-    assert "referencia" in texto
+    # 16-oct (SESIONES (52)): como la pide Whuilianny, "pásame tu ubicación o la dirección".
+    assert "ubicación o la dirección" in texto
 
 
 def test_los_llamadores_viejos_siguen_igual():

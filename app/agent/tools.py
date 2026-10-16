@@ -169,7 +169,7 @@ TOOL_SCHEMAS = [
                         "description": (
                             "OPCIONAL. El TOTAL de esta compra que quedó ACORDADO entre el "
                             "cliente y una persona del negocio en el historial (texto o 🎤 nota de "
-                            "voz): que ella lo dijera ('ok nena, son 36, te lo llevo mañana') o que "
+                            "voz): que ella lo dijera ('ok nena, son 36 con el delivery') o que "
                             "aceptara el que propuso el cliente. Pon ese número, en dólares. Ese "
                             "total manda: no se recalcula ni se le suma el envío."
                         ),
@@ -222,10 +222,10 @@ TOOL_SCHEMAS = [
                             "igual que el del producto: el COSTO DEL ENVÍO lo pone el sistema a "
                             "partir de este id, y lo SUMA al total. TÚ NUNCA sumas ni estimas el "
                             "envío. Si el cliente lo retira, usa el id de la zona de RETIRO (sale "
-                            "sin costo). Si el sitio que dice el cliente no calza claramente con "
-                            "una zona, LÉELE las zonas y pregúntale en cuál está; si aun así no "
-                            "calza, llama a `pedir_ayuda`. JAMÁS adivines la zona ni elijas la más "
-                            "barata para cerrar la venta."
+                            "sin costo). La zona sale de la ubicación o la dirección del cliente: "
+                            "si dice claro el sector, usa esa; si no, pregúntale solo entre las "
+                            "que podrían ser; si no calza con ninguna, llama a `pedir_ayuda`. "
+                            "JAMÁS adivines la zona ni elijas la más barata para cerrar la venta."
                         ),
                     },
                     "referencia": {
@@ -2498,7 +2498,7 @@ async def _falta_referencia(session, pedido) -> bool:
 
 
 _NOTA_FALTA_REFERENCIA = (
-    "⚠️ Es DELIVERY y el pedido NO tiene dirección: pídele al cliente un punto de referencia "
+    "⚠️ Es DELIVERY y el pedido NO tiene dirección: pídele al cliente su ubicación o la dirección "
     "(una línea, sin formulario) y guárdalo con anotar_entrega (o pásalo en `referencia` al "
     "volver a registrar) ANTES de cobrar — generar_datos_pago lo va a exigir."
 )
@@ -2897,7 +2897,7 @@ def _respuesta_registro(
         "Para cobrar, llama a generar_datos_pago con este mismo `pedido_id`."
     )
     # 🔴 La dirección se pide AQUÍ, al registrar, y no recién cuando la caja la exige: así el
-    # modelo la pide en el turno natural ("¿y a qué punto de referencia te lo llevo?") en vez de
+    # modelo la pide en el turno natural ("pásame tu ubicación o la dirección") en vez de
     # chocar con el rechazo de generar_datos_pago con el cliente ya esperando los datos.
     if falta_referencia:
         nota += " " + _NOTA_FALTA_REFERENCIA
@@ -4219,8 +4219,9 @@ async def generar_datos_pago(session, telefono, pedido_id=None, metodo=None):
             "ok": False,
             "nota": (
                 "todavía NO le puedes cobrar: falta la ZONA. Si el cliente YA dijo que quiere "
-                "delivery, NO le vuelvas a ofrecer retiro: pregúntale solo en qué zona está y "
-                "nómbrale únicamente las zonas de delivery con su costo. Si ya dijo que retira, "
+                "delivery, NO le vuelvas a ofrecer retiro: pídele su ubicación o la dirección (sin "
+                "leerle la lista de zonas) y de ahí saca la zona; si no queda claro, pregúntale solo "
+                "entre las que podrían ser. Si ya dijo que retira, "
                 "usa la zona de retiro. Solo si no ha dicho cómo lo recibe, pregúntale si lo "
                 "retira o quiere delivery. Después vuelve a registrar el pedido COMPLETO pasando "
                 "el `zona_id` que corresponda. NUNCA sumes tú el envío ni lo estimes: el costo lo "
@@ -4242,8 +4243,8 @@ async def generar_datos_pago(session, telefono, pedido_id=None, metodo=None):
             "falta_referencia": True,
             "nota": (
                 "todavía NO le puedes cobrar: es DELIVERY y falta la DIRECCIÓN. Pídele al "
-                "cliente un punto de referencia (una línea, con naturalidad: '¿y a qué punto de "
-                "referencia te lo llevo?'), guárdalo con anotar_entrega y recién entonces cobra. "
+                "cliente su ubicación o la dirección en una línea ('pásame tu ubicación o la "
+                "dirección para enviártela'), guárdala con anotar_entrega y recién entonces cobra. "
                 "NO le des los datos de pago sin eso."
             ),
         }
