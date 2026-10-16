@@ -3039,6 +3039,39 @@ def _precio_no_dicho(que: str) -> dict:
     }
 
 
+async def _zona_contra_el_pin(session, telefono, zona) -> dict | None:
+    """📍 EL CANDADO DE LA ZONA (SESIONES (53)): si la clienta mandó su pin y las zonas tienen sus sectores en
+    el mapa, la zona que se anota es la del pin. Devuelve el rechazo o None. Retirar siempre se puede. Falla
+    abierta: sin pin o sin mapa, todo sigue como antes."""
+    if zona is None or getattr(zona, "es_retiro", False):
+        return None
+    from app.services.zonas_geo import zona_del_pin
+
+    pin = await zona_del_pin(session, telefono)
+    if not pin:
+        return None
+    if not pin.get("dentro"):
+        return {
+            "ok": False,
+            "necesita_ayuda": True,
+            "nota": (
+                "la ubicación que mandó el cliente queda FUERA de las zonas de delivery: NO la registres con "
+                "una zona ni le digas un costo de envío. Dile con naturalidad que lo revisas un momentico y "
+                "llama a pedir_ayuda (motivo 'no_se') diciendo que su ubicación está fuera de las zonas."
+            ),
+        }
+    if pin["zona_id"] != zona.id:
+        return {
+            "ok": False,
+            "nota": (
+                f"según su ubicación (el pin que mandó), el cliente está en la zona «{pin['zona']}», no en "
+                f"«{zona.nombre}». Vuelve a registrar el pedido COMPLETO con zona_id={pin['zona_id']}."
+            ),
+            "zona_del_pin": pin,
+        }
+    return None
+
+
 def _completar_el_de_ella(pedido) -> str:
     """La coletilla de la caja para el pedido que dejó Whuilianny: se completa ESE, no se rehace."""
     if str(getattr(pedido, "origen", "") or "") != ORIGEN_DUENA:
@@ -3240,6 +3273,9 @@ async def _completar_pedido_de_la_duena(
         zona, rechazo = await _zona_valida(session, zona_id)
         if rechazo is not None:
             return rechazo
+        rechazo = await _zona_contra_el_pin(session, pedido.cliente_telefono, zona)
+        if rechazo is not None:
+            return rechazo
     fecha = None
     if entrega_fecha:
         fecha, rechazo = await _fecha_valida(session, entrega_fecha, pedido.items or [])
@@ -3365,6 +3401,9 @@ async def registrar_pedido(
     zona = None
     if zona_id is not None:
         zona, rechazo = await _zona_valida(session, zona_id)
+        if rechazo is not None:
+            return rechazo
+        rechazo = await _zona_contra_el_pin(session, telefono, zona)
         if rechazo is not None:
             return rechazo
 

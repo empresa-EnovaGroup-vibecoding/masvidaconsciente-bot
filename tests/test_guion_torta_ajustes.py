@@ -32,7 +32,8 @@ def _todo_lo_que_lee_el_modelo() -> str:
 
 
 def test_la_direccion_se_pide_como_la_pide_whuilianny():
-    assert "pásame tu ubicación o la dirección" in sp._REGLAS
+    # 16-oct (SESIONES (53)): primero el pin, que da la zona exacta; si no puede, la dirección.
+    assert "pásame tu ubicación, porfa" in sp._REGLAS and "pídele el pin con naturalidad" in sp._REGLAS
     assert "nunca la lista completa con precios" in sp._REGLAS
 
 

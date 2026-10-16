@@ -37,6 +37,7 @@ from app.models import (
     hoy_venezuela,
 )
 from app.services.db import get_session_factory
+from app.services.zonas_geo import zona_del_pin
 
 settings = get_settings()
 
@@ -139,7 +140,7 @@ Si dos reglas parecen pedirte cosas distintas, gana la de número más bajo: es 
 !v - LA FECHA SE AFIRMA, NO SE PONE A VOTACIÓN. Cuando sepas para cuándo puedes, díselo con naturalidad ("te lo dejo para el lunes"). No le ofrezcas dos días para que elija ni le preguntes qué día prefiere: tú sabes cuál se puede y él no. Si ÉL pide otro día, ahí sí lo conversas.
 !v - LA EXCEPCIÓN NO LA DAS TÚ. Nunca te inventes una entrega fuera de lo que dice el calendario, ni "por esta vez", ni porque el día esté flojo, ni porque el cliente insista o te dé lástima. Una entrega fuera de horario existe SOLO si el negocio la autorizó, y eso te llega por el sistema: si no te llega, no existe. Y aunque llegara, seguirías teniendo que comprobar el producto, la capacidad, la zona y la hora — una autorización no vuelve posible cualquier cosa. Si te lo piden para hoy y hoy no se puede, ofrécele la próxima fecha con naturalidad, sin dramatizarlo; si de verdad crees que hay una salida, no la prometas: pide ayuda.
 !v - EL NEGOCIO NO CIERRA: es ONLINE y tú atiendes y vendes a cualquier hora. Lo que termina a las 6 de la tarde son las ENTREGAS del día, no la atención. Jamás digas "ya cerramos" ni "estamos cerrados": di que hoy ya no salen entregas y ofrece la próxima fecha.
-!v - LA DIRECCIÓN SE PIDE COMO LA PIDE EL NEGOCIO. Si es delivery, en UNA línea pídele su ubicación o la dirección ("pásame tu ubicación o la dirección, porfa"): el pin de WhatsApp o lo que escriba es lo que necesita el repartidor. De ahí sacas la ZONA: si la dirección o el pin dicen claro el sector, usa esa zona sin preguntarle; si no queda claro, pregúntale SOLO esa duda nombrando las zonas que podrían ser ("eso queda en el este o en el centro?"), nunca la lista completa con precios. La franja va ya con el pago aprobado; quién recibe, solo si es otra persona. Un dato a la vez: un mensaje pidiendo cinco cosas es un formulario.
+!v - LA DIRECCIÓN SE PIDE COMO LA PIDE EL NEGOCIO. Si es delivery, en UNA línea pídele su ubicación de WhatsApp ("pásame tu ubicación, porfa"): con el pin el sistema sabe la zona exacta y te la dice en el ESTADO DEL CLIENTE; esa manda, no la preguntes. Si solo escribe la dirección, pídele el pin con naturalidad; si no puede mandarlo, saca la zona de la dirección y, si no queda claro, pregúntale SOLO esa duda nombrando las zonas que podrían ser ("eso queda en el este o en el centro?"), nunca la lista completa con precios. La franja va ya con el pago aprobado; quién recibe, solo si es otra persona. Un dato a la vez: un mensaje pidiendo cinco cosas es un formulario.
 !v - HABLAS COMO ASESORA DEL EQUIPO. Los precios, las rebajas y las entregas los pone y los hace el negocio, no tú: nunca digas que tú defines un precio ("el precio depende del tamaño y el sabor", no "lo defino yo") ni que tú lo llevas o lo preparas; habla del equipo ("te la enviamos", "te la preparamos").
 !a - SI NO ESTÁ EN EL CHAT, PREGUNTA. Cuando lo que dijo el cliente calza con MÁS DE UN producto (ej. "la torta de chocolate" y hay torta keto y torta baja en carbohidratos) o falta un dato del pedido, pregúntale cuál en una línea: no elijas por él. Lo que ya dijo él, o la persona del negocio en el chat, no se repregunta.
 !v - AL CERRAR LA COMPRA, remátalo con UN detalle útil de cómo conservarlo o con qué acompañarlo, en una línea ("se te mantiene fresco una semana en la nevera"). SOLO si ese dato está en la ficha: si no lo trae, cierras sin el tip y no te inventas ninguno. Va UNA vez y al final, nunca en medio de la venta ni pegado a los datos de pago.
@@ -741,6 +742,25 @@ _LINEA_YA_LE_PAGO = (
     "dirección, el día."
 )
 
+def _lineas_del_pin(pin: dict | None) -> list[str]:
+    """📍 La zona del envío que salió del pin de la clienta (SESIONES (53)). Sin cifra en dólares, como manda
+    la regla del bloque: el costo de cada zona ya lo trae el bloque de ZONAS DE ENTREGA."""
+    if not pin:
+        return []
+    if pin.get("dentro"):
+        cerca = f" (cerca de {pin['sector']})" if pin.get("sector") else ""
+        return [
+            f"- UBICACIÓN DEL CLIENTE: su pin cae en la zona «{pin['zona']}»{cerca}. Esa es su zona de envío: "
+            f"usa zona_id={pin['zona_id']} en registrar_pedido y díselo con naturalidad (\"tu ubicación queda "
+            f"en {pin['zona']}\") junto con el costo de esa zona. NO le preguntes la zona."
+        ]
+    return [
+        "- UBICACIÓN DEL CLIENTE: su pin queda FUERA de las zonas de delivery. NO adivines la zona ni el costo: "
+        "dile con naturalidad que lo revisas un momentico y llama a pedir_ayuda (motivo 'no_se') diciendo que "
+        "su ubicación está fuera de las zonas de envío."
+    ]
+
+
 # 🧭 EL PUNTO DE PARTIDA (10-oct): lo último que ella habló con el cliente, LITERAL y de la base, por si
 # ya no está en el historial (el bot ve solo los últimos 20 mensajes).
 _TITULO_PUNTO_DE_PARTIDA = (
@@ -969,11 +989,16 @@ async def _estado_cliente_texto(telefono: str) -> str:
             avisado = await _aviso_en_camino(session, telefono)
             charla = await punto_de_partida(session, telefono)  # fail-safe: [] si no hay o falla
             ya_pago = bool(await pagos_de_la_duena_por_confirmar(session, telefono))  # fail-safe
+            pin = await zona_del_pin(session, telefono)  # 📍 fail-safe: None si no hay pin o mapa
     except Exception:  # noqa: BLE001 — leer el estado nunca debe romper el bot
         return ""
-    if not pedidos and not propuestas and not avisado and not charla and not ya_pago:
+    if not pedidos and not propuestas and not avisado and not charla and not ya_pago and not pin:
         return ""
-    partida = ([_TITULO_PUNTO_DE_PARTIDA, *charla] if charla else []) + ([_LINEA_YA_LE_PAGO] if ya_pago else [])
+    partida = (
+        ([_TITULO_PUNTO_DE_PARTIDA, *charla] if charla else [])
+        + ([_LINEA_YA_LE_PAGO] if ya_pago else [])
+        + _lineas_del_pin(pin)
+    )
     if not pedidos:
         # Solo hay propuestas sin confirmar (ella ya le vendió y nadie tocó "Sí" todavía), lo que ella
         # habló con el cliente o un aviso en camino.

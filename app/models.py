@@ -271,6 +271,12 @@ class ZonaEntrega(Base):
     es_retiro: Mapped[bool] = mapped_column(Boolean, default=False)
     disponible: Mapped[bool] = mapped_column(Boolean, default=True)
     orden: Mapped[int] = mapped_column(Integer, default=0)
+    # 📍 LOS SECTORES EN EL MAPA (044, SESIONES (53)): cada sector de `referencias` ubicado en OpenStreetMap
+    # ([{"sector", "lat", "lon"}]) y los que no se encontraron, para que el panel los marque. El pin de la
+    # clienta cae en la zona del sector más cercano (`services/zonas_geo.py`).
+    puntos: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    sin_ubicar: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    puntos_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 

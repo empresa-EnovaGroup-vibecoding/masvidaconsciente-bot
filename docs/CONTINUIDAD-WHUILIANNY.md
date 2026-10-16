@@ -33,7 +33,7 @@ Whuilianny contesta "ok nena", es un sí.
 | Pagos | Siempre los confirma una persona (Whuilianny por WhatsApp). |
 | El lector (expediente) | Solo pregunta los pagos y avisa lo que no está en el catálogo. No crea tarjetas de pedidos ni de precios. |
 | Abonos (14-oct, todavía NO construido) | Alejandra sigue la venta. Se cobra solo lo nuevo. El saldo se paga al entregar y se menciona solo cuando viene al caso. Whuilianny confirma cada abono por WhatsApp. Alejandra nunca ofrece fiar ni pagar en partes por su cuenta. |
-| Dirección (16-oct) | Como la pide Whuilianny: "pásame tu ubicación o la dirección". La zona sale de ahí. Si no queda clara, se pregunta SOLO entre las zonas posibles, nunca la lista completa. **Más adelante: mapa de zonas** (el pin cae solo en su zona). |
+| Dirección y zona (16-oct) | Alejandra pide el pin de WhatsApp ("pásame tu ubicación, porfa"). El sistema busca el sector conocido más cercano (cada zona lista sus sectores en el panel; el sistema los ubica en OpenStreetMap) y le dice a Alejandra la zona; esa manda, y el pedido no se puede anotar con otra. Si el pin cae lejos de todo, se le avisa a Whuilianny. Si la clienta solo escribe la dirección, se le pide el pin. |
 | Cómo habla Alejandra (16-oct) | Como asesora del equipo: "te la enviamos". Los precios los pone el negocio, no ella. |
 | Si no está en el chat (16-oct) | Pregunta. Si encaja con más de un producto (torta keto o baja en carbohidratos), no elige por la clienta. |
 | Delivery y precio de Whuilianny (16-oct) | "La torta en 30" = la torta. El delivery va aparte (30 + 3). Si ella da el total ("son 33 con delivery"), ese total manda. |

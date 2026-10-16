@@ -17,6 +17,41 @@
 
 ---
 
+## 2026-10-16 (53) — 📍 LA ZONA DEL ENVÍO SALE DEL PIN
+
+**Antes:** #80 fusionado (`418b4f0`) y desplegado en pruebas (`/root/deploy_pr80.sh`).
+
+**Por qué (Maired, 16-oct):** el objetivo de Whuilianny es olvidarse del envío. La clienta manda su ubicación y
+Alejandra dice sola "tu ubicación queda en Barquisimeto Centro" y cobra el envío de esa zona.
+- 5-20 envíos por semana.
+- La tarifa la pone el repartidor por zona y es la del panel.
+- Si el pin cae fuera de las zonas, se le avisa a Whuilianny.
+- Si la clienta escribe la dirección, se le pide el pin.
+- Investigación web: NO existe un mapa de "Barquisimeto Este/Centro/Oeste" (es la organización del repartidor), y los
+  límites de parroquias de OpenStreetMap tienen errores conocidos. Por eso se usan **sectores**: cada zona lista los
+  suyos en el panel (campo `referencias`, que ya existía) y se ubican en OpenStreetMap.
+- Prueba real de Nominatim: Nueva Segovia, Cerritos Blancos, Santa Elena y Los Cardones salieron, cada uno con su punto.
+
+**Qué se hizo** (bot `zona-desde-el-pin` + panel PR #17):
+- Migración 044 `zonas_entrega.puntos/sin_ubicar/puntos_at`.
+- `app/services/zonas_geo.py`:
+  - `sectores_de` y `coordenadas_de` (lee el enlace del pin que arma `parser.py`);
+  - `distancia_km` (haversine), `zona_mas_cercana` (radio `geo_radio_km`=2);
+  - `ubicar_sectores` (Nominatim acotado con `geo_viewbox`, 1 por segundo, reutiliza los ya ubicados);
+  - `zona_del_pin` (último pin de esta venta).
+- Tarea `ubicar_zona`, encolada por el panel al crear una zona o cambiar sus sectores.
+- Ficha de Alejandra (`_lineas_del_pin`): "su pin cae en la zona «X»… usa zona_id=…, NO le preguntes la zona", o FUERA →
+  `pedir_ayuda`. Sin cifra en dólares.
+- Candado `_zona_contra_el_pin` en `registrar_pedido` y en `_completar_pedido_de_la_duena`: no se anota otra zona que la
+  del pin, y fuera de las zonas se releva. El retiro siempre se puede. Sin pin o sin mapa, todo sigue como antes.
+- Regla de la dirección: primero el pin; si solo escribe la dirección, se le pide el pin.
+- Tests: `test_zona_desde_el_pin.py` (17, con coordenadas reales de OpenStreetMap). Suite 1487/0.
+
+**Sigue:** fusionar bot → panel → desplegar worker → bot → panel → Whuilianny o el repartidor corrigen el BORRADOR de
+sectores → cargarlos en el panel → pines de prueba desde WhatsApp ("elegir en el mapa").
+
+---
+
 ## 2026-10-16 (52) — 🎂 LO QUE SALIÓ DEL GUION DE LA TORTA: dirección como la pide Whuilianny, asesora del equipo, preguntar si no está
 
 **Antes:** #78 + #79 fusionados (`5c5bf8a`) y desplegados en pruebas (`/root/deploy_pr79.sh`); `modelo_ia` de PRUEBAS en

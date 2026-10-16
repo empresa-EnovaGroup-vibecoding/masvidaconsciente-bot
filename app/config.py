@@ -66,6 +66,15 @@ class Settings(BaseSettings):
     # Es una MEJORA: si falla, el bot cae a la búsqueda léxica (pg_trgm) y sigue.
     openrouter_model_embedding: str = "openai/text-embedding-3-small"
 
+    # 📍 LA ZONA SALE DEL PIN (16-oct, SESIONES (53)). Los sectores de cada zona (campo `referencias` del
+    # panel) se ubican UNA vez en OpenStreetMap (Nominatim, gratis) y el pin de la clienta cae en la zona del
+    # sector más cercano. `geo_contexto` se le pega a cada sector al buscarlo; `geo_viewbox` (izq,arriba,
+    # der,abajo) acota la búsqueda a la ciudad para que "Santa Elena" no salga en otro estado; un pin a más de
+    # `geo_radio_km` de todo sector conocido queda FUERA y lo decide la dueña.
+    geo_contexto: str = "Barquisimeto, Lara"
+    geo_viewbox: str = "-69.50,10.20,-69.10,9.90"
+    geo_radio_km: float = 2.0
+
     # Almacenamiento de fotos/videos de productos en Cloudflare R2 (S3-compatible).
     # En la BD se guarda solo la RUTA del archivo; el archivo vive en R2. Si estas
     # variables faltan, la subida/envío de media se desactiva solo (no rompe el bot).

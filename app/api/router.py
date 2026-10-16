@@ -3247,7 +3247,22 @@ def _zona_json(z: ZonaEntrega) -> dict:
         "es_retiro": z.es_retiro,
         "disponible": z.disponible,
         "orden": z.orden,
+        # 📍 (044) Cuántos sectores quedaron en el mapa y cuáles no se encontraron (el panel los marca).
+        "sectores_ubicados": len(z.puntos or []),
+        "sin_ubicar": list(z.sin_ubicar or []),
+        "puntos_at": z.puntos_at.isoformat() if z.puntos_at else None,
     }
+
+
+def _encolar_ubicar_zona(zona_id: int) -> None:
+    """📍 Ubica los sectores en el mapa en segundo plano (OpenStreetMap, uno por segundo): guardar en el panel
+    no se queda esperando. Si el broker no está, la zona sigue funcionando como antes (sin pin)."""
+    try:
+        from app.workers.tasks import ubicar_zona
+
+        ubicar_zona.apply_async(args=[zona_id])
+    except Exception:  # noqa: BLE001
+        logger.warning("No se pudo encolar la ubicación de la zona %s", zona_id)
 
 
 @router.get("/zonas")
@@ -3295,6 +3310,7 @@ async def crear_zona(datos: ZonaIn, _: str = Depends(usuario_actual)):
         session.add(zona)
         await session.commit()
         await session.refresh(zona)
+        _encolar_ubicar_zona(zona.id)
         return _zona_json(zona)
 
 
@@ -3324,13 +3340,17 @@ async def editar_zona(zona_id: int, datos: ZonaIn, _: str = Depends(usuario_actu
             raise HTTPException(status_code=400, detail="El costo del envío no puede ser negativo.")
         zona.nombre = datos.nombre.strip()
         zona.costo = Decimal(str(datos.costo))
-        zona.referencias = (datos.referencias or "").strip() or None
+        nuevas = (datos.referencias or "").strip() or None
+        cambiaron_sectores = nuevas != zona.referencias or not zona.puntos_at
+        zona.referencias = nuevas
         zona.es_retiro = datos.es_retiro
         zona.disponible = datos.disponible
         zona.orden = datos.orden
         zona.updated_at = now_utc()
         await session.commit()
         await session.refresh(zona)
+        if cambiaron_sectores:
+            _encolar_ubicar_zona(zona.id)
         return _zona_json(zona)
 
 
