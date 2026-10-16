@@ -3033,6 +3033,15 @@ def preguntar_pagos_pendientes(telefono=None):
     _run(_preguntar_pagos_a_la_duena(telefono))
 
 
+@celery_app.task(name="ubicar_zona")
+def ubicar_zona(zona_id):
+    """📍 Tarea: ubica en el mapa los sectores de una zona (OpenStreetMap, uno por segundo). Se encola cuando
+    el panel guarda la zona, para que guardar no se quede esperando (SESIONES (53))."""
+    from app.services.zonas_geo import ubicar_zona as _ubicar
+
+    _run(_ubicar(int(zona_id)))
+
+
 @celery_app.task(name="responder_pago_duena")
 def responder_pago_duena(texto, context_id, message_id):
     """Tarea: aplica o descarta una propuesta de pago según el SÍ/NO que la dueña respondió por
