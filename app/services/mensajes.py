@@ -141,7 +141,7 @@ def _frase_entrega(
         texto += " y pregúntale a qué hora le queda bien."
     if falta_referencia:
         texto += (
-            " Y pídele un punto de referencia de la dirección (una línea) y guárdalo con "
+            " Y pídele su ubicación o la dirección (una línea) y guárdala con "
             "anotar_entrega: sin eso no hay a dónde llevarlo."
         )
     return texto
